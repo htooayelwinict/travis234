@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Envelope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     request_id: str
     raw_input: str
     normalized_input: str
@@ -20,13 +22,9 @@ class Envelope(BaseModel):
 
     artifacts: list[dict[str, Any]] = Field(default_factory=list)
     context_needed: list[str] = Field(default_factory=list)
-    execution_hints: list[str] = Field(default_factory=list)
+    constraints: list[str] = Field(default_factory=list)
 
-    planner_hint: str | None = None
-    planner_confidence: float = 0.0
-    planner_alternatives: list[str] = Field(default_factory=list)
-
-    budget_hint: str = "medium"
+    complexity_hint: str = "medium"
     confidence: float = 0.0
 
     ambiguity: list[str] = Field(default_factory=list)

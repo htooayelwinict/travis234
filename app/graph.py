@@ -10,8 +10,10 @@ from app.schemas import Envelope, Plan, Result, RuntimeState
 from app.worker_kernel.runtime import WorkerKernelRuntime
 
 
-def build_graph():
-    decompressor_runtime = DecompressorRuntime.from_env()
+def build_graph(*, decompressor_runtime=None, client_factory=None):
+    if decompressor_runtime is None:
+        client_options = {"client_factory": client_factory} if client_factory is not None else {}
+        decompressor_runtime = DecompressorRuntime.from_env(**client_options)
     planner_runtime = PlannerRuntime()
     worker_kernel_runtime = WorkerKernelRuntime()
 

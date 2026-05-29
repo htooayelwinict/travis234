@@ -6,7 +6,11 @@ Verify LLM-mode envelopes remain compatible with planner selection and that the 
 
 ## Status
 
-Completed. Added planner integration tests for high-confidence, low-confidence, and invalid LLM planner hints, plus a graph test guard that default invocation has no prompt-chain metadata.
+Completed. Added planner integration tests for semantic LLM envelopes and observe-first precedence, plus a graph test guard that default invocation has no prompt-chain metadata.
+
+2026-05-29 update: Planner selection no longer reads decompressor strategy leaks. It infers fallback/observe-first planning from descriptive ambiguity signals (`ambiguous_request`, `ambiguous_scope`, `scope_clarification`, low confidence, and target-scope constraints) while graph invocation remains model-free by default.
+
+2026-05-29 coalesced update: Planner and graph integration tests now use one coalesced `decompress_request` fake response. Focused verification passes with `31 passed`.
 
 ## Files
 
@@ -16,8 +20,8 @@ Completed. Added planner integration tests for high-confidence, low-confidence, 
 
 ## Tasks
 
-1. Test that valid high-confidence planner hints from an LLM envelope are honored by existing selector behavior.
-2. Test that invalid or low-confidence hints do not override deterministic selector fallback.
+1. Test that semantic fields from an LLM envelope route to the same planners as deterministic decompression.
+2. Test that observe-first semantics take precedence over mutation routing when ambiguity is present.
 3. Test that default graph invocation does not require or call a model client.
 4. Reconfirm graph node keys remain `decompressor_node`, `planner_node`, and `worker_kernel_node`.
 

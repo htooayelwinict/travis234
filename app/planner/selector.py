@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from app.planner.base import BasePlanner
 from app.planner.planners import (
     CodePlanner,
@@ -36,30 +38,45 @@ class PlannerSelector:
         }
 
     def select(self, envelope: Envelope) -> BasePlanner:
-        if envelope.planner_hint and envelope.planner_confidence >= 0.70:
-            planner = self._registry.get(envelope.planner_hint)
-            if planner is not None:
-                return planner
-
-        if "observe_first" in envelope.intents or "observe_first_required" in envelope.execution_hints:
+        if self._needs_observe_first(envelope):
             return self._fallback
 
-        if envelope.input_type == "question" and not envelope.artifacts:
+        if _has_text(envelope.input_type, "question") and not envelope.artifacts:
             return self._direct
 
-        if envelope.input_type == "ambiguous_request" or envelope.confidence < 0.55:
+        if envelope.confidence < 0.55:
             return self._fallback
 
-        if (
-            "code.fix" in envelope.intents
-            or ("code" in envelope.domains and "file_mutation" in envelope.risks)
+        if _has_signal(envelope.intents, "code") or (
+            _has_signal(envelope.domains, "code") and _has_signal(envelope.risks, "file mutation")
         ):
             return self._code
 
-        if any(intent.startswith("research.") for intent in envelope.intents) or "research" in envelope.domains:
+        if _has_signal(envelope.intents, "research") or _has_signal(envelope.domains, "research"):
             return self._research
 
-        if any(intent.startswith("infra.") for intent in envelope.intents) or "infra" in envelope.domains:
+        if _has_signal(envelope.intents, "infra") or _has_signal(envelope.domains, "infra"):
             return self._infra
 
         return self._fallback
+
+    def _needs_observe_first(self, envelope: Envelope) -> bool:
+        return (
+            _has_text(envelope.input_type, "ambiguous")
+            or _has_signal(envelope.risks, "ambiguous scope")
+            or _has_signal(envelope.context_needed, "scope clarification")
+            or _has_signal(envelope.constraints, "target scope must be identified before mutation")
+            or envelope.confidence < 0.55
+        )
+
+
+def _has_signal(values: list[str], needle: str) -> bool:
+    return any(_has_text(value, needle) for value in values)
+
+
+def _has_text(value: str, needle: str) -> bool:
+    return _normalize(needle) in _normalize(value)
+
+
+def _normalize(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()

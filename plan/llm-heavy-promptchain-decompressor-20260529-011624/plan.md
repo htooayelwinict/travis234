@@ -2,49 +2,54 @@
 
 ## Goal
 
-Implement an optional, injectable LLM-powered prompt-chain mode inside `DecompressorRuntime` that preserves the existing `DecompressorRuntime.run(user_input: str) -> Envelope` boundary, existing LangGraph topology, and deterministic fallback path.
+Implement an injectable LLM-only `DecompressorRuntime` that preserves the existing `DecompressorRuntime.run(user_input: str) -> Envelope` boundary and existing LangGraph topology without deterministic/static Envelope generation.
 
 ## Acceptance criteria
 
-- `DecompressorRuntime()` with no constructor arguments keeps current deterministic behavior and passes all existing tests.
-- `DecompressorRuntime(model_client=...)` or an equivalent explicit injection enables an LLM prompt-chain path without requiring provider SDK dependencies in the decompressor runtime.
-- The prompt-chain path validates every stage output through small Pydantic models before assembling the final `Envelope`.
-- Unknown or invalid labels for input type, planner hint, budget hint, intents, domains, risks, and execution hints are dropped, mapped, or clamped deterministically before returning an `Envelope`.
-- If any model stage fails with invalid JSON, schema validation errors, exceptions, or timeout-like errors, the runtime falls back safely to deterministic decompression for the affected stage or whole chain.
+- `DecompressorRuntime(model_client=...)` or an equivalent explicit injection enables the LLM prompt-chain path without requiring provider SDK dependencies in the decompressor runtime.
+- `DecompressorRuntime()` with no constructor arguments fails fast because the runtime is LLM-only.
+- The prompt-chain path validates coalesced structured output through Pydantic before assembling the final `Envelope`.
+- Open-ended semantic strings from the LLM are preserved; boundary cleanup only deduplicates, strips planner/kernel leaks, removes unsafe assumptions, clamps confidence and complexity, and guards underspecified pronoun-only input.
+- If any model stage fails with invalid JSON, schema validation errors, exceptions, or timeout-like errors after one repair attempt, the runtime raises a prompt-chain error instead of creating a static fallback Envelope.
 - The graph remains unchanged in topology: `decompressor_node -> planner_node -> worker_kernel_node -> END`.
 - Tests use fake model clients with canned JSON and never call live model providers.
 - Model prompts redact common API key, token, password, and secret patterns before calling the injected client.
 - `Envelope.metadata` may contain sanitized chain diagnostics such as mode, stage names, and fallback names, but never raw prompts, full model responses, credentials, or large file contents.
 
+2026-05-29 boundary update: The requested refactor in `research/decompressor-envelope-boundary-20260529-194314.md` has been implemented on top of this completed plan. The active envelope boundary is now descriptive-only and LLM-only: `constraints` replaces `execution_hints`, `complexity_hint` replaces `budget_hint`, planner/kernel fields are forbidden at the `Envelope` boundary, and runtime code no longer injects deterministic/static scenario semantics.
+
+2026-05-29 coalesced update: The multi-stage prompt chain has been replaced by a single `decompress_request` structured-output call plus one optional `repair_decompressed_envelope` call after validation failure. Static label taxonomy code was removed from runtime semantics. Verification: `uv run pytest tests/test_decompressor.py tests/test_planner.py tests/test_graph.py -q` and `uv run pytest -q` pass.
+
 ## Existing patterns
 
-- `app/decompressor/runtime.py` already has deterministic stage boundaries matching the proposed prompt-chain seams: `_normalize_request`, `_extract_artifacts`, `_classify_request`, `_infer_context_and_risk`, `_recommend_planner`, and `_validate_envelope`.
-- `app/schemas.py` already defines an enriched `Envelope` with fields needed for model-backed decompression: `user_goal`, `context_needed`, `execution_hints`, `planner_hint`, `planner_confidence`, `planner_alternatives`, `budget_hint`, `ambiguity`, `assumptions`, and `metadata`.
-- `app/planner/selector.py` already treats `planner_hint` as advisory and only honors it when `planner_confidence >= 0.70` and the hint exists in the registry.
+- `app/decompressor/runtime.py` now owns only LLM prompt-chain wiring and request ID creation.
+- `app/decompressor/prompt_chain.py` now performs one coalesced `decompress_request` model call and one bounded repair call only when validation fails.
+- `app/schemas.py` defines an enriched descriptive `Envelope` with `user_goal`, `context_needed`, `constraints`, `complexity_hint`, `ambiguity`, `assumptions`, and `metadata`.
+- `app/planner/selector.py` chooses planners from semantic envelope fields such as `input_type`, `intents`, `domains`, `risks`, `constraints`, and `confidence`.
 - `app/graph.py` has thin top-level nodes and module-level runtime instances; it currently calls only `_decompressor_runtime.run(...)` and serializes the returned envelope.
-- Existing tests in `tests/test_decompressor.py`, `tests/test_planner.py`, and `tests/test_graph.py` assert deterministic behavior and should remain valid.
+- Tests in `tests/test_decompressor.py`, `tests/test_planner.py`, and `tests/test_graph.py` use fake LLM clients with coalesced `decompress_request` JSON instead of deterministic decompressor behavior.
 - `pyproject.toml` already depends on `pydantic>=2.0`; use Pydantic v2 APIs such as `model_validate_json`, `model_validate`, and `model_json_schema`.
 
 ## Files to change
 
 ### Primary implementation files
 
-- `app/decompressor/runtime.py` — add backward-compatible constructor injection, route between deterministic and LLM prompt-chain mode, keep deterministic methods as fallback.
-- `app/decompressor/contracts.py` — new internal Pydantic models/protocols for staged LLM outputs and the minimal model-client interface.
-- `app/decompressor/labels.py` — new allowed-label constants and deterministic sanitization/clamping helpers.
-- `app/decompressor/prompt_chain.py` — new internal prompt-chain orchestrator, prompt construction, stage execution, JSON validation, assembly, and fallback tracking.
+- `app/decompressor/runtime.py` — LLM-only constructor injection and environment wiring.
+- `app/decompressor/contracts.py` — coalesced `DecompressedEnvelope` structured-output model and the minimal model-client interface.
+- `app/decompressor/canonicalize.py` — boundary cleanup for leak stripping, deduplication, unsafe-assumption removal, confidence/complexity clamping, and underspecified-input guards.
+- `app/decompressor/prompt_chain.py` — coalesced prompt-chain orchestrator, prompt construction, JSON validation, assembly, bounded repair, and diagnostics.
 - `app/decompressor/redaction.py` — new secret/token redaction helpers for prompt inputs.
 - `app/decompressor/__init__.py` — export only stable objects if needed; avoid exposing internal implementation details unnecessarily.
 
 ### Tests
 
-- `tests/test_decompressor.py` — keep current deterministic tests and add LLM-mode tests with fake clients.
-- `tests/test_planner.py` — add or adjust selector-oriented tests if LLM envelopes need coverage through planner runtime.
+- `tests/test_decompressor.py` — use fake clients for all decompressor behavior tests.
+- `tests/test_planner.py` — add or adjust selector-oriented tests so LLM envelopes route through semantic planner selection.
 - `tests/test_graph.py` — add a guard that default graph invocation does not require or invoke a model client, while keeping node topology assertions.
 
 ### Files expected to remain topology-stable
 
-- `app/graph.py` — ideally unchanged; only consider optional dependency-injection factory later if needed, without adding prompt-chain graph nodes.
+- `app/graph.py` — topology remains unchanged; accepts optional test injection for the LLM runtime/client factory.
 - `app/schemas.py` — no schema changes expected; only change if implementation uncovers a missing field that planners actually consume.
 - `app/planner/selector.py` — no structural change expected; may add tests around low-confidence or invalid hints if not already covered.
 - `pyproject.toml` — no provider SDK dependency expected for the minimal injectable protocol approach.
@@ -53,7 +58,7 @@ Implement an optional, injectable LLM-powered prompt-chain mode inside `Decompre
 
 ### Phase 1 — Internal contracts, labels, redaction, and fake-client test scaffolding
 
-Create the internal stage-output models, model-client protocol, allowed-label constants, redaction helper, and fake client patterns in tests. Do not change default runtime behavior yet.
+Create the internal structured-output model, model-client protocol, redaction helper, and fake client patterns in tests.
 
 Independent verification:
 
@@ -62,9 +67,9 @@ Independent verification:
 
 Rollback: remove the new internal decompressor modules and any new tests added for them.
 
-### Phase 2 — Prompt-chain orchestrator with deterministic validation and safe fallback
+### Phase 2 — Prompt-chain orchestrator with validation and bounded repair
 
-Implement the internal LLM prompt-chain component that executes staged `complete_json(...)` calls, validates each stage with Pydantic, clamps labels, assembles an `Envelope`, and records sanitized fallback diagnostics.
+Implement the internal LLM prompt-chain component that executes a coalesced `complete_json(...)` call, validates with Pydantic, assembles an `Envelope`, and records sanitized diagnostics. Use one repair call only after validation failure.
 
 Independent verification:
 
@@ -74,7 +79,7 @@ Rollback: remove `app/decompressor/prompt_chain.py` and restore tests to determi
 
 ### Phase 3 — Backward-compatible `DecompressorRuntime` wiring
 
-Add constructor injection to `DecompressorRuntime` and route to LLM prompt-chain mode only when an explicit model client or chain is provided. Preserve deterministic mode as the no-argument default and as the chain fallback.
+Add constructor injection to `DecompressorRuntime` and require an explicit model client or chain. No no-argument deterministic mode remains.
 
 Independent verification:
 
@@ -84,7 +89,7 @@ Rollback: revert `app/decompressor/runtime.py` constructor/routing changes while
 
 ### Phase 4 — Integration and graph-boundary protection tests
 
-Verify LLM envelopes flow safely into planner selection, low-confidence/invalid hints do not override the selector, and graph tests remain deterministic with no implicit model calls.
+Verify LLM envelopes flow safely into planner selection through semantic fields, and graph tests remain deterministic with no implicit model calls.
 
 Independent verification:
 
@@ -109,8 +114,8 @@ Rollback: revert documentation-only changes.
 - **Latency/cost of heavy chaining:** Multiple model calls can be expensive; keep the feature explicit/injected and consider future gating or shadow mode.
 - **Prompt injection:** User input may attempt to override JSON/schema instructions. Pydantic validation and allowed-label clamps must be authoritative.
 - **Secret leakage:** Redaction must happen before model calls, and metadata must never persist raw prompts or full responses.
-- **Fallback granularity:** Stage-level fallback is ideal, but whole-chain deterministic fallback is the smallest safe first implementation. Prefer simple safe fallback before complex repair loops.
-- **Test brittleness:** Existing deterministic tests assert exact labels. Keep LLM-mode tests separate and fixture-driven.
+- **Prompt-chain failures:** A stage failure after repair raises instead of fabricating an Envelope. Callers must surface the error cleanly.
+- **Test brittleness:** Fake-client tests assert exact labels emitted by canned LLM responses.
 - **Graph singleton runtime:** `app/graph.py` currently creates module-level runtimes. Avoid changing this unless dependency injection is needed for future integration tests.
 - **Request IDs:** Preserve runtime-owned request ID creation; never trust model-generated IDs.
 
@@ -119,7 +124,6 @@ Rollback: revert documentation-only changes.
 Run from repository root:
 
 ```bash
-uv run python -c "from app.decompressor.runtime import DecompressorRuntime; print(DecompressorRuntime().run('what is docker').input_type)"
 uv run python -c "from app.decompressor.contracts import RequestClassification; print(RequestClassification.model_json_schema()['title'])"
 uv run pytest tests/test_decompressor.py -q
 uv run pytest tests/test_planner.py -q
@@ -133,15 +137,15 @@ Begin with Phase 1 by creating `app/decompressor/contracts.py`, `app/decompresso
 
 ## Detailed order of operations
 
-1. Add internal Pydantic stage models: `NormalizedRequest`, `ArtifactExtraction`, `RequestClassification`, `RiskContextInference`, and `PlannerRecommendation`.
+1. Add an internal Pydantic structured-output model: `DecompressedEnvelope`.
 2. Add `PromptChainModelClient` protocol with `complete_json(*, stage: str, prompt: str, schema: dict[str, Any]) -> str`.
-3. Add label constants and clamping helpers based on current runtime/test labels.
+3. Add boundary canonicalization for forbidden-field removal, deduplication, confidence/complexity clamping, unsafe assumption removal, and underspecified input guards.
 4. Add redaction helper and tests for token/password/API-key-like strings.
-5. Add `LLMPromptChainDecompressor` or equivalent internal component that accepts a model client and deterministic fallback runtime/callback.
-6. Implement staged calls using `Model.model_json_schema()` and `Model.model_validate_json(...)`.
+5. Add `LLMPromptChainDecompressor` or equivalent internal component that accepts a model client.
+6. Implement coalesced and repair calls using `Model.model_json_schema()` and `Model.model_validate_json(...)`.
 7. Assemble final `Envelope` using runtime-owned `request_id` and original raw input, then validate with `Envelope.model_validate(...)`.
-8. Wire `DecompressorRuntime.__init__` so no-argument behavior is unchanged and injected model-client behavior is explicit.
-9. Add fake-client tests for valid staged responses, invalid JSON fallback, invalid labels, low planner confidence, vague mutation observe-first hints, redaction, and prompt-injection resistance.
+8. Wire `DecompressorRuntime.__init__` so injected model-client behavior is explicit and no-argument construction fails fast.
+9. Add fake-client tests for valid coalesced responses, invalid JSON/repair failure, open-ended semantic preservation, vague mutation ambiguity, redaction, and prompt-injection resistance.
 10. Run full verification and update documentation/comments.
 
 ## Plan folder path

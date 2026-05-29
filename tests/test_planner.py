@@ -14,38 +14,65 @@ class FakePromptChainClient:
 
 
 def _plan_for(text: str):
-    envelope = DecompressorRuntime().run(text)
+    envelope = DecompressorRuntime(model_client=FakePromptChainClient(_llm_responses_for(text))).run(text)
     return PlannerRuntime().run(envelope)
 
 
-def _llm_code_fix_responses(planner_hint: str, planner_confidence: float) -> dict[str, Any]:
-    return {
-        "normalize_request": {
-            "normalized_input": "fix service.py",
-            "user_goal": "Repair the service.",
-            "ambiguity": [],
-            "assumptions": [],
-        },
-        "extract_artifacts": {
-            "artifacts": [{"type": "file_hint", "path": "service.py", "language_hint": "python"}]
-        },
-        "classify_request": {
-            "input_type": "mutation_request",
+def _llm_responses_for(text: str) -> dict[str, Any]:
+    if text == "what is docker":
+        return {
+            "decompress_request": {
+                "normalized_input": "what is docker",
+                "user_goal": "Answer the user's question.",
+                "input_type": "question",
+                "intents": ["question.answer"],
+                "domains": ["infra"],
+                "risks": [],
+                "artifacts": [],
+                "context_needed": [],
+                "constraints": [],
+                "complexity_hint": "low",
+                "confidence": 0.9,
+                "ambiguity": [],
+                "assumptions": [],
+            },
+        }
+    if text == "fix the app":
+        responses = _llm_code_fix_responses(intents=["code.fix"], domains=["code"])
+        responses["decompress_request"].update({
+            "input_type": "ambiguous_request",
             "intents": ["code.fix"],
             "domains": ["code"],
-            "budget_hint": "medium",
-            "confidence": 0.9,
-        },
-        "infer_context_and_risk": {
+            "risks": ["ambiguous_scope", "ambiguous_mutation"],
+            "artifacts": [],
+            "context_needed": ["repo_tree", "scope_clarification"],
+            "constraints": ["target_scope_must_be_identified_before_mutation"],
+            "ambiguity": ["The request does not identify a concrete target or failure."],
+            "complexity_hint": "medium",
+            "confidence": 0.61,
+        })
+        return responses
+    if text == "fix terraform apply error":
+        return _llm_code_fix_responses(intents=["infra.debug"], domains=["infra"])
+    return _llm_code_fix_responses()
+
+
+def _llm_code_fix_responses(*, intents: list[str] | None = None, domains: list[str] | None = None) -> dict[str, Any]:
+    return {
+        "decompress_request": {
+            "normalized_input": "fix service.py",
+            "user_goal": "Repair the service.",
+            "input_type": "mutation_request",
+            "intents": intents or ["code.fix"],
+            "domains": domains or ["code"],
             "risks": ["mutation_requested", "file_mutation", "needs_verification"],
+            "artifacts": [{"type": "file_hint", "path": "service.py", "language_hint": "python"}],
             "context_needed": ["repo_tree", "target_file"],
-            "execution_hints": ["inspect_target_file_before_patch", "verify_after_patch"],
+            "constraints": ["target_locations_must_be_identified_before_mutation", "mutation_requires_verification"],
             "ambiguity": [],
-        },
-        "recommend_planner": {
-            "planner_hint": planner_hint,
-            "planner_confidence": planner_confidence,
-            "planner_alternatives": ["code_planner"],
+            "assumptions": [],
+            "complexity_hint": "medium",
+            "confidence": 0.9,
         },
     }
 
@@ -57,6 +84,32 @@ def test_planner_selects_direct_for_question() -> None:
     assert len(plan.steps) == 1
     assert plan.steps[0].worker_type == "direct_worker"
     assert plan.strategy == "direct_answer"
+
+
+def test_planner_observes_for_pronoun_only_request() -> None:
+    responses = _llm_responses_for("what is docker")
+    responses["decompress_request"] = {
+        "normalized_input": "it",
+        "user_goal": "Answer the user's question.",
+        "input_type": "question",
+        "intents": ["question.answer"],
+        "domains": ["general"],
+        "risks": [],
+        "artifacts": [],
+        "context_needed": [],
+        "constraints": [],
+        "complexity_hint": "low",
+        "confidence": 0.95,
+        "ambiguity": [],
+        "assumptions": [],
+    }
+    envelope = DecompressorRuntime(model_client=FakePromptChainClient(responses)).run("it")
+
+    plan = PlannerRuntime().run(envelope)
+
+    assert plan.planner == "fallback"
+    assert plan.strategy == "observe_first"
+    assert plan.steps[0].worker_type == "repo_worker"
 
 
 def test_planner_selects_code_for_file_fix() -> None:
@@ -80,31 +133,18 @@ def test_planner_handles_vague_fix_with_observe_first() -> None:
     assert plan.steps[0].permissions.get("write_files") is False
 
 
-def test_planner_selector_honors_valid_high_confidence_hint() -> None:
-    envelope = DecompressorRuntime().run("fix terraform apply error")
-
-    assert envelope.planner_hint == "infra_planner"
-
-    plan = PlannerRuntime().run(envelope)
-
-    assert plan.planner == "infra"
-
-
-def test_planner_honors_valid_high_confidence_hint_from_llm_envelope() -> None:
-    runtime = DecompressorRuntime(
-        model_client=FakePromptChainClient(_llm_code_fix_responses("infra_planner", 0.91))
-    )
-    envelope = runtime.run("fix service.py")
+def test_planner_selects_infra_from_semantic_signals() -> None:
+    envelope = DecompressorRuntime(
+        model_client=FakePromptChainClient(_llm_responses_for("fix terraform apply error"))
+    ).run("fix terraform apply error")
 
     plan = PlannerRuntime().run(envelope)
 
     assert plan.planner == "infra"
 
 
-def test_planner_rejects_low_confidence_llm_hint_and_uses_envelope_labels() -> None:
-    runtime = DecompressorRuntime(
-        model_client=FakePromptChainClient(_llm_code_fix_responses("infra_planner", 0.2))
-    )
+def test_planner_selects_code_from_llm_semantic_envelope() -> None:
+    runtime = DecompressorRuntime(model_client=FakePromptChainClient(_llm_code_fix_responses()))
     envelope = runtime.run("fix service.py")
 
     plan = PlannerRuntime().run(envelope)
@@ -112,13 +152,41 @@ def test_planner_rejects_low_confidence_llm_hint_and_uses_envelope_labels() -> N
     assert plan.planner == "code"
 
 
-def test_planner_rejects_invalid_llm_hint_and_uses_envelope_labels() -> None:
+def test_planner_selects_infra_from_llm_semantic_envelope() -> None:
     runtime = DecompressorRuntime(
-        model_client=FakePromptChainClient(_llm_code_fix_responses("unknown_planner", 0.99))
+        model_client=FakePromptChainClient(
+            _llm_code_fix_responses(intents=["infra.debug"], domains=["infra"])
+        )
     )
     envelope = runtime.run("fix service.py")
 
     plan = PlannerRuntime().run(envelope)
 
-    assert envelope.planner_hint is None
-    assert plan.planner == "code"
+    assert plan.planner == "infra"
+
+
+def test_planner_prefers_descriptive_ambiguity_over_code_semantics() -> None:
+    runtime = DecompressorRuntime(
+        model_client=FakePromptChainClient(
+            {
+                **_llm_code_fix_responses(intents=["code.fix"], domains=["code"]),
+                "decompress_request": {
+                    **_llm_code_fix_responses(intents=["code.fix"], domains=["code"])["decompress_request"],
+                    "input_type": "ambiguous_request",
+                    "intents": ["code.fix"],
+                    "domains": ["code"],
+                    "risks": ["ambiguous_scope", "ambiguous_mutation"],
+                    "context_needed": ["repo_tree", "scope_clarification"],
+                    "constraints": ["target_scope_must_be_identified_before_mutation"],
+                    "ambiguity": ["The request does not identify a concrete target or failure."],
+                    "complexity_hint": "medium",
+                    "confidence": 0.61,
+                },
+            }
+        )
+    )
+    envelope = runtime.run("fix service.py")
+
+    plan = PlannerRuntime().run(envelope)
+
+    assert plan.planner == "fallback"

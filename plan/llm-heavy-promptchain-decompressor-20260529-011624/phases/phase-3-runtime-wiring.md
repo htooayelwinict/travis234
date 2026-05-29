@@ -2,11 +2,15 @@
 
 ## Goal
 
-Wire optional LLM prompt-chain mode into `DecompressorRuntime` while keeping no-argument behavior unchanged.
+Wire LLM prompt-chain mode into `DecompressorRuntime` without no-argument deterministic behavior.
 
 ## Status
 
-Completed. `DecompressorRuntime()` remains deterministic, while `DecompressorRuntime(model_client=...)` explicitly enables the internal prompt chain with a deterministic fallback callback that avoids recursion.
+Completed. `DecompressorRuntime(model_client=...)` or `DecompressorRuntime(prompt_chain=...)` is required; no-argument construction fails fast because the decompressor is now LLM-only.
+
+2026-05-29 update: Removed deterministic/static Envelope assembly. The runtime owns request IDs and prompt-chain wiring only; the LLM prompt-chain emits the descriptive Envelope, and boundary cleanup validates/sanitizes it without injecting scenario semantics.
+
+2026-05-29 coalesced update: Runtime wiring now routes through the one-call `LLMPromptChainDecompressor`; fake clients respond to `decompress_request` and optional `repair_decompressed_envelope` stages.
 
 ## Files
 
@@ -16,11 +20,11 @@ Completed. `DecompressorRuntime()` remains deterministic, while `DecompressorRun
 
 ## Tasks
 
-1. Add backward-compatible constructor parameters such as `model_client=None` or `prompt_chain=None`.
-2. Preserve deterministic methods and no-argument `run(...)` behavior.
-3. Route to prompt-chain mode only when explicitly configured.
-4. Ensure deterministic fallback can call existing stage methods or a deterministic runtime path without recursion mistakes.
-5. Add tests proving default deterministic behavior remains unchanged.
+1. Add explicit constructor parameters such as `model_client=None` or `prompt_chain=None`.
+2. Reject no-argument construction.
+3. Route all runtime calls through the prompt chain.
+4. Ensure stage failures raise after repair instead of falling back to static output.
+5. Add tests proving fake LLM clients drive all decompressor behavior.
 
 ## Risks
 
