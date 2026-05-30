@@ -1,0 +1,78 @@
+{
+  "failure_count": 1,
+  "generated_at": "2026-05-30T17:09:31.324145+00:00",
+  "run_count": 1,
+  "runs": [
+    {
+      "attempts": 3,
+      "envelope": {
+        "ambiguity": [
+          "nature of card malfunction unknown.",
+          "no card details or error messages provided."
+        ],
+        "artifacts": [
+          {
+            "name": "mrt_card",
+            "type": "transit_card"
+          }
+        ],
+        "assumptions": [
+          "MRT refers to mass rapid transit transit card."
+        ],
+        "complexity_hint": "low",
+        "confidence": 0.4,
+        "constraints": [
+          "issue_details_required_for_diagnosis"
+        ],
+        "context_needed": [
+          "error_description",
+          "card_provider",
+          "location"
+        ],
+        "domains": [
+          "transit",
+          "customer_service"
+        ],
+        "input_type": "mrt_card_fix_request",
+        "intents": [
+          "card.fix",
+          "commute.assistance"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 11396.316,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 11396.316,
+            "latency_ms_p95": 11396.316,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "MRT card not working; need help fixing it to commute to work tomorrow without a car.",
+        "raw_input": "my mrt card is not working, can you help me fix it? because i need to go to work tomorrow and i need to use the mrt to get there and i dont have a car",
+        "request_id": "req_003",
+        "risks": [
+          "ambiguous_scope",
+          "needs_verification"
+        ],
+        "user_goal": "Fix MRT card for work commute"
+      },
+      "error": "PlannerPromptChainError: planner prompt chain failed after repair: {\"budget_auto_aligned\": false, \"envelope_complexity_hint\": \"low\", \"envelope_input_type\": \"mrt_card_fix_request\", \"mode\": \"failed\", \"model_calls\": 3, \"repair_attempted\": true, \"resolved_validation_errors\": [{\"msg\": \"phase-aware plans must populate step.phase for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate step.mode for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate non-empty step.task_id for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate plan.execution_pattern\", \"type\": \"planner_validation\"}, {\"msg\": \"step step_discover_context input_artifact 'mrt_card' is not produced by an earlier step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate step.phase for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate step.mode for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate non-empty step.task_id for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate plan.execution_pattern\", \"type\": \"planner_validation\"}], \"stages\": [\"draft_plan\", \"validate_plan\", \"repair_plan_1\", \"validate_plan\", \"repair_plan_2\", \"validate_plan\"], \"validation_errors\": [{\"msg\": \"phase-aware plans must populate step.phase for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate step.mode for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate non-empty step.task_id for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate plan.execution_pattern\", \"type\": \"planner_validation\"}]}",
+      "index": 1,
+      "plan": null,
+      "prompt": "my mrt card is not working, can you help me fix it? because i need to go to work tomorrow and i need to use the mrt to get there and i dont have a car",
+      "status": "failed"
+    }
+  ],
+  "success_count": 0
+}

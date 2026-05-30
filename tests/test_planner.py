@@ -262,6 +262,36 @@ def _complex_multi_intent_plan(request_id: str = "req_123") -> dict[str, Any]:
     }
 
 
+def _direct_support_plan(request_id: str = "req_123") -> dict[str, Any]:
+    return {
+        "plan_id": f"plan_{request_id}_direct_support",
+        "request_id": request_id,
+        "planner": "direct_support_planner",
+        "objective": "Provide clarification-first direct support without runtime tools.",
+        "strategy": "phase_aware_direct_support",
+        "execution_pattern": "finalize",
+        "global_invariants": ["no_tools", "no_file_access", "answer_from_user_input_only"],
+        "steps": [
+            {
+                "step_id": "direct_support_response",
+                "worker_type": "direct_worker",
+                "phase": "FINALIZE",
+                "mode": "summarize_only",
+                "task_id": "direct_support",
+                "instruction": "Ask concise clarifying questions and provide immediate harmless guidance from the user input only.",
+                "input_artifacts": [],
+                "output_artifacts": ["direct_guidance"],
+                "max_tool_calls": 0,
+                "max_model_calls": 1,
+                "permissions": {"read_files": False, "write_files": False, "run_commands": False},
+            }
+        ],
+        "budget": {"max_tool_calls": 0, "max_model_calls": 1, "max_workers": 1, "max_retries": 0},
+        "success_criteria": ["User receives immediate guidance and focused clarifying questions."],
+        "metadata": {},
+    }
+
+
 def test_validator_accepts_observe_only_plan() -> None:
     plan = _observe_only_plan()
     envelope = _envelope(constraints=[], context_needed=[], confidence=0.9)
@@ -277,6 +307,31 @@ def test_validator_accepts_observe_patch_verify_plan() -> None:
     validated = PlannerPlanValidator().validate(envelope, plan)
     assert validated.steps[-2].worker_type == "verify_worker"
     assert validated.steps[-1].phase == "FINALIZE"
+
+
+def test_validator_accepts_phase_aware_direct_support_plan() -> None:
+    envelope = _envelope(
+        raw_input="my transit card is not working",
+        normalized_input="Transit card is not working.",
+        user_goal="Get help troubleshooting a transit card.",
+        input_type="transit_card_troubleshoot",
+        intents=["transit.fix"],
+        domains=["transit", "general"],
+        risks=["ambiguous_scope"],
+        artifacts=[{"name": "transit_card", "type": "transit_card"}],
+        context_needed=["error_message", "card_type"],
+        constraints=["specific_issue_must_be_described_before_assistance"],
+        complexity_hint="low",
+        confidence=0.4,
+    )
+    plan = Plan.model_validate(_direct_support_plan())
+
+    validated = PlannerPlanValidator().validate(envelope, plan)
+
+    assert validated.steps[0].worker_type == "direct_worker"
+    assert validated.steps[0].phase == "FINALIZE"
+    assert validated.steps[0].mode == "summarize_only"
+    assert validated.steps[0].input_artifacts == []
 
 
 def test_validator_rejects_unknown_worker_type() -> None:
@@ -481,6 +536,32 @@ def test_prompt_chain_draft_valid_plan_succeeds() -> None:
     assert plan.metadata["llm_planner"]["resolved_validation_errors"] == []
     assert plan.metadata["llm_planner"]["budget_auto_aligned"] is False
     assert plan.steps[0].worker_type == "repo_worker"
+
+
+def test_prompt_chain_draft_valid_direct_support_plan_succeeds() -> None:
+    envelope = _envelope(
+        raw_input="my transit card is not working",
+        normalized_input="Transit card is not working.",
+        user_goal="Get help troubleshooting a transit card.",
+        input_type="transit_card_troubleshoot",
+        intents=["transit.fix"],
+        domains=["transit", "general"],
+        risks=["ambiguous_scope"],
+        artifacts=[{"name": "transit_card", "type": "transit_card"}],
+        context_needed=["error_message", "card_type"],
+        constraints=["specific_issue_must_be_described_before_assistance"],
+        complexity_hint="low",
+        confidence=0.4,
+    )
+    client = FakePlannerClient({"draft_plan": _direct_support_plan()})
+
+    plan = LLMPlanCompiler(model_client=client).run(envelope)
+
+    assert [call["stage"] for call in client.calls] == ["draft_plan"]
+    assert plan.metadata["llm_planner"]["mode"] == "completed"
+    assert plan.execution_pattern == "finalize"
+    assert plan.steps[0].phase == "FINALIZE"
+    assert plan.steps[0].input_artifacts == []
 
 
 def test_prompt_chain_auto_aligns_budget_without_repair_when_only_budget_is_invalid() -> None:
@@ -691,6 +772,48 @@ def test_prompt_contains_worker_catalog_and_envelope() -> None:
     assert "bounded_mutation" in draft_prompt
     assert "repo_worker" in draft_prompt
     assert "async_sdk_performance_refactor_request" in draft_prompt
+
+
+def test_prompt_contains_direct_support_archetype_and_artifact_mapping_rules() -> None:
+    envelope = _envelope(
+        raw_input="my transit card is not working",
+        normalized_input="Transit card is not working.",
+        user_goal="Get help troubleshooting a transit card.",
+        input_type="transit_card_troubleshoot",
+        intents=["transit.fix"],
+        domains=["transit", "general"],
+        risks=["ambiguous_scope"],
+        artifacts=[{"name": "transit_card", "type": "transit_card"}],
+        context_needed=["error_message", "card_type"],
+        constraints=["specific_issue_must_be_described_before_assistance"],
+        complexity_hint="low",
+        confidence=0.4,
+    )
+    client = FakePlannerClient({"draft_plan": _direct_support_plan()})
+
+    LLMPlanCompiler(model_client=client).run(envelope)
+
+    draft_prompt = client.calls[0]["prompt"]
+    assert "direct_support" in draft_prompt
+    assert "phase-aware direct_support archetype" in draft_prompt
+    assert "direct_support_plan_template" in draft_prompt
+    assert "Do not output null or omitted step.phase" in draft_prompt
+    assert "Never copy envelope.artifacts into step.input_artifacts" in draft_prompt
+    assert "direct_support plans should use an empty list" in draft_prompt
+
+
+def test_prompt_direct_support_guidance_does_not_override_runtime_actions() -> None:
+    envelope = _envelope()
+    client = FakePlannerClient({"draft_plan": _complex_multi_intent_plan()})
+
+    LLMPlanCompiler(model_client=client).run(envelope)
+
+    draft_prompt = client.calls[0]["prompt"]
+    assert "Never use direct_support" in draft_prompt
+    assert "All newly generated plans must be phase-aware" in draft_prompt
+    assert "mutation_requested" in draft_prompt
+    assert "code.fix" in draft_prompt
+    assert "rollback or verification" in draft_prompt
 
 
 def test_runtime_uses_injected_compiler() -> None:

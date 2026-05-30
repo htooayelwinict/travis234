@@ -1,0 +1,153 @@
+{
+  "failure_count": 0,
+  "generated_at": "2026-05-30T18:42:37.001288+00:00",
+  "run_count": 1,
+  "runs": [
+    {
+      "attempts": 1,
+      "envelope": {
+        "ambiguity": [
+          "No location or neighborhood details were provided.",
+          "No timeline beyond 'one day it ran away' was provided.",
+          "No identification details (microchip, collar, tags) were provided.",
+          "No information on whether search actions have already been taken."
+        ],
+        "artifacts": [
+          {
+            "name": "cat",
+            "type": "pet"
+          },
+          {
+            "name": "Chaw",
+            "type": "pet_name"
+          }
+        ],
+        "assumptions": [
+          "Chaw is currently missing.",
+          "The user is seeking general recovery advice rather than legal or veterinary emergency support."
+        ],
+        "complexity_hint": "low",
+        "confidence": 0.94,
+        "constraints": [
+          "avoid_unverified_claims_about_pet_location",
+          "recommendations_should_prioritize_pet_and_owner_safety",
+          "guidance_should_account_for_missing_context_before_specific_actions"
+        ],
+        "context_needed": [
+          "last_known_location",
+          "time_since_missing",
+          "indoor_or_outdoor_cat_profile",
+          "microchip_or_collar_status",
+          "recent_sightings",
+          "local_area_type"
+        ],
+        "domains": [
+          "pet_care",
+          "general"
+        ],
+        "input_type": "lost_pet_search_guidance",
+        "intents": [
+          "advice.seek",
+          "pet_recovery.investigate"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 10036.606,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 10036.606,
+            "latency_ms_p95": 10036.606,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "The user\u2019s cat, named Chaw, ran away and they want advice on how to find it.",
+        "raw_input": "i have a cat and i named it chaw, one day it ran away, how can i find it?",
+        "request_id": "req_001",
+        "risks": [
+          "time_sensitive_outcome",
+          "location_context_missing",
+          "identification_details_missing"
+        ],
+        "user_goal": "Get practical guidance to locate a missing cat named Chaw."
+      },
+      "index": 1,
+      "plan": {
+        "budget": {
+          "max_model_calls": 1,
+          "max_retries": 0,
+          "max_tool_calls": 0,
+          "max_workers": 1
+        },
+        "execution_pattern": "finalize",
+        "global_invariants": [
+          "no_tools",
+          "no_file_access",
+          "answer_from_user_input_only"
+        ],
+        "metadata": {
+          "archetype": "direct_support",
+          "llm_planner": {
+            "budget_auto_aligned": false,
+            "envelope_complexity_hint": "low",
+            "envelope_input_type": "lost_pet_search_guidance",
+            "mode": "completed",
+            "model_calls": 1,
+            "repair_attempted": false,
+            "resolved_validation_errors": [],
+            "stages": [
+              "draft_plan",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Provide direct, safe, and practical guidance to help the user find their missing cat (Chaw) using only the provided user context.",
+        "plan_id": "plan_req_001_direct_support",
+        "planner": "direct_support_planner",
+        "request_id": "req_001",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Ask concise clarifying questions about last known location, time since missing, indoor/outdoor profile, identification status, sightings, and area type, then provide immediate safe next-step guidance the user can take now to search for Chaw while prioritizing pet and owner safety and avoiding unverified claims.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "direct_guidance"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "direct_support_response",
+            "task_id": "direct_support",
+            "worker_type": "direct_worker"
+          }
+        ],
+        "strategy": "phase_aware_direct_support",
+        "success_criteria": [
+          "User receives concise clarifying questions and immediate safe, actionable guidance to begin locating Chaw despite missing context."
+        ]
+      },
+      "prompt": "i have a cat and i named it chaw, one day it ran away, how can i find it?",
+      "status": "success"
+    }
+  ],
+  "success_count": 1
+}

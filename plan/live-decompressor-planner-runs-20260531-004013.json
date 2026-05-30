@@ -1,0 +1,167 @@
+{
+  "failure_count": 0,
+  "generated_at": "2026-05-30T18:10:13.681045+00:00",
+  "run_count": 1,
+  "runs": [
+    {
+      "attempts": 1,
+      "envelope": {
+        "ambiguity": [
+          "No transit city/operator is specified.",
+          "Failure mode is unspecified (hardware damage, insufficient balance, expired pass, backend block, reader issue, etc.).",
+          "Card type is unspecified (stored-value, monthly pass, mobile wallet, concession card).",
+          "No prior troubleshooting attempts are provided."
+        ],
+        "artifacts": [
+          {
+            "name": "mrt card",
+            "type": "transit_card"
+          },
+          {
+            "name": "MRT",
+            "type": "rail_transit_system"
+          },
+          {
+            "name": "work tomorrow",
+            "type": "time_constraint"
+          },
+          {
+            "name": "car",
+            "type": "transport_alternative"
+          }
+        ],
+        "assumptions": [
+          "User is referring to a public rail transit fare card used for MRT entry.",
+          "User needs a near-term resolution due to a next-day commute requirement.",
+          "User currently lacks a private car as fallback transport."
+        ],
+        "complexity_hint": "low",
+        "confidence": 0.93,
+        "constraints": [
+          "do_not_assume_root_cause_without_evidence",
+          "preserve_user_urgency_and_commute_deadline",
+          "recommendations_must_align_with_official_transit_policies",
+          "diagnosis_requires_concrete_error_details_before_action"
+        ],
+        "context_needed": [
+          "card issuer/operator",
+          "specific failure symptoms (e.g., tap rejected, unreadable, blocked)",
+          "recent usage/top-up history",
+          "current stored value or pass validity",
+          "location/station where failure occurred",
+          "whether issue is reproducible across gates/readers",
+          "availability of proof of purchase or card registration"
+        ],
+        "domains": [
+          "transport",
+          "customer_support",
+          "general"
+        ],
+        "input_type": "mrt_card_access_issue",
+        "intents": [
+          "service.troubleshoot",
+          "transport.access_restore",
+          "urgent_commute_support"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 11221.459,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 11221.459,
+            "latency_ms_p95": 11221.459,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "The user's MRT transit card is not working and they need help resolving it before tomorrow so they can commute to work, since they have no car.",
+        "raw_input": "my mrt card is not working, can you help me fix it? because i need to go to work tomorrow and i need to use the mrt to get there and i dont have a car",
+        "request_id": "req_001",
+        "risks": [
+          "needs_verification",
+          "urgent_timeline",
+          "ambiguous_scope",
+          "limited_transport_alternative"
+        ],
+        "user_goal": "Restore MRT card usability in time for tomorrow's work commute."
+      },
+      "index": 1,
+      "plan": {
+        "budget": {
+          "max_model_calls": 1,
+          "max_retries": 0,
+          "max_tool_calls": 0,
+          "max_workers": 1
+        },
+        "execution_pattern": "finalize",
+        "global_invariants": [
+          "no_tools",
+          "no_file_access",
+          "answer_from_user_input_only"
+        ],
+        "metadata": {
+          "archetype": "direct_support",
+          "llm_planner": {
+            "budget_auto_aligned": false,
+            "envelope_complexity_hint": "low",
+            "envelope_input_type": "mrt_card_access_issue",
+            "mode": "completed",
+            "model_calls": 1,
+            "repair_attempted": false,
+            "resolved_validation_errors": [],
+            "stages": [
+              "draft_plan",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Provide direct support to help restore MRT card usability before tomorrow\u2019s commute using only user-provided context and safe immediate guidance.",
+        "plan_id": "plan_req_001_direct_support",
+        "planner": "direct_support_planner",
+        "request_id": "req_001",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Ask concise clarifying questions (city/operator, exact tap error behavior, card type, recent top-up/pass validity, and whether multiple gates/readers fail) and provide immediate safe next steps for tonight: check balance/pass expiry in official app or station machine, retry at a different gate/reader, top up if low balance, and if still failing go to station ticket/service counter with card and proof of purchase/ID to request inspection/replacement options for tomorrow commute.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "direct_guidance"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "direct_support_response",
+            "task_id": "direct_support",
+            "worker_type": "direct_worker"
+          }
+        ],
+        "strategy": "phase_aware_direct_support",
+        "success_criteria": [
+          "User receives concise clarification prompts plus safe, actionable steps that can be taken immediately to improve the chance of MRT access before tomorrow."
+        ]
+      },
+      "prompt": "my mrt card is not working, can you help me fix it? because i need to go to work tomorrow and i need to use the mrt to get there and i dont have a car",
+      "status": "success"
+    }
+  ],
+  "success_count": 1
+}

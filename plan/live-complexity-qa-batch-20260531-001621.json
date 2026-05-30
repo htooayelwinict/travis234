@@ -1,0 +1,888 @@
+{
+  "failure_count": 1,
+  "generated_at": "2026-05-30T17:46:21.560916+00:00",
+  "qa_issue_count": 1,
+  "run_count": 5,
+  "runs": [
+    {
+      "attempts": 1,
+      "envelope": {
+        "ambiguity": [
+          "Message is a short acknowledgment with no explicit request, goal, or context provided."
+        ],
+        "artifacts": [],
+        "assumptions": [],
+        "complexity_hint": "low",
+        "confidence": 0.2,
+        "constraints": [],
+        "context_needed": [],
+        "domains": [
+          "general"
+        ],
+        "input_type": "ambiguous_conversation_response",
+        "intents": [
+          "conversation.acknowledge"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 7797.335,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 7797.335,
+            "latency_ms_p95": 7797.335,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "thanks, that helped",
+        "raw_input": "thanks, that helped",
+        "request_id": "req_001",
+        "risks": [
+          "ambiguous_scope"
+        ],
+        "user_goal": null
+      },
+      "index": 1,
+      "level": "lowest",
+      "plan": {
+        "budget": {
+          "max_model_calls": 1,
+          "max_retries": 0,
+          "max_tool_calls": 0,
+          "max_workers": 1
+        },
+        "execution_pattern": "finalize",
+        "global_invariants": [
+          "no_tools",
+          "no_file_access",
+          "answer_from_user_input_only"
+        ],
+        "metadata": {
+          "archetype": "direct_support",
+          "llm_planner": {
+            "budget_auto_aligned": true,
+            "envelope_complexity_hint": "low",
+            "envelope_input_type": "ambiguous_conversation_response",
+            "mode": "repaired",
+            "model_calls": 3,
+            "repair_attempted": true,
+            "resolved_validation_errors": [
+              {
+                "msg": "phase-aware plans must populate step.phase for every step",
+                "type": "planner_validation"
+              },
+              {
+                "msg": "phase-aware plans must populate step.mode for every step",
+                "type": "planner_validation"
+              },
+              {
+                "msg": "phase-aware plans must populate non-empty step.task_id for every step",
+                "type": "planner_validation"
+              },
+              {
+                "msg": "phase-aware plans must populate step.phase for every step",
+                "type": "planner_validation"
+              },
+              {
+                "msg": "phase-aware plans must populate step.mode for every step",
+                "type": "planner_validation"
+              },
+              {
+                "msg": "phase-aware plans must populate non-empty step.task_id for every step",
+                "type": "planner_validation"
+              }
+            ],
+            "stages": [
+              "draft_plan",
+              "validate_plan",
+              "repair_plan_1",
+              "validate_plan",
+              "repair_plan_2",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Acknowledge thanks with direct safe guidance",
+        "plan_id": "plan_req_001_direct",
+        "planner": "support_planner",
+        "request_id": "req_001",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Respond concisely: You're welcome. Offer to help further if needed.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "direct_guidance"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "direct_ack_001",
+            "task_id": "direct_support",
+            "worker_type": "direct_worker"
+          }
+        ],
+        "strategy": "Apply direct_support archetype for low-complexity acknowledgment",
+        "success_criteria": [
+          "user receives polite acknowledgment"
+        ]
+      },
+      "prompt": "thanks, that helped",
+      "qa_issues": [],
+      "status": "success"
+    },
+    {
+      "attempts": 3,
+      "envelope": {
+        "ambiguity": [
+          "specific MRT system unknown.",
+          "exact card malfunction unknown.",
+          "balance vs technical issue unclear."
+        ],
+        "artifacts": [
+          {
+            "name": "mrt card",
+            "type": "transit_card"
+          }
+        ],
+        "assumptions": [
+          "user possesses a physical MRT transit card."
+        ],
+        "complexity_hint": "low",
+        "confidence": 0.3,
+        "constraints": [
+          "physical_item_verification_required"
+        ],
+        "context_needed": [
+          "card_type",
+          "issue_details",
+          "location",
+          "system"
+        ],
+        "domains": [
+          "transit",
+          "general"
+        ],
+        "input_type": "ambiguous_card_fix_request",
+        "intents": [
+          "card.fix",
+          "transit.troubleshoot"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 10898.909,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 10898.909,
+            "latency_ms_p95": 10898.909,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "MRT card is not working, need help fixing it to commute tomorrow without a car",
+        "raw_input": "my mrt card is not working, can you help me fix it? I need to commute tomorrow and do not have a car",
+        "request_id": "req_004",
+        "risks": [
+          "ambiguous_scope",
+          "needs_verification"
+        ],
+        "user_goal": "Fix MRT card to enable commuting"
+      },
+      "error": "PlannerPromptChainError: planner prompt chain failed after repair: {\"budget_auto_aligned\": false, \"envelope_complexity_hint\": \"low\", \"envelope_input_type\": \"ambiguous_card_fix_request\", \"mode\": \"failed\", \"model_calls\": 3, \"repair_attempted\": true, \"resolved_validation_errors\": [{\"msg\": \"phase-aware plans must populate step.phase for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate step.mode for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate non-empty step.task_id for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate plan.execution_pattern\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate step.phase for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate step.mode for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate non-empty step.task_id for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate plan.execution_pattern\", \"type\": \"planner_validation\"}], \"stages\": [\"draft_plan\", \"validate_plan\", \"repair_plan_1\", \"validate_plan\", \"repair_plan_2\", \"validate_plan\"], \"validation_errors\": [{\"msg\": \"phase-aware plans must populate step.phase for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate step.mode for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate non-empty step.task_id for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate plan.execution_pattern\", \"type\": \"planner_validation\"}]}",
+      "index": 2,
+      "level": "low",
+      "plan": null,
+      "prompt": "my mrt card is not working, can you help me fix it? I need to commute tomorrow and do not have a car",
+      "qa_issues": [
+        "PlannerPromptChainError: planner prompt chain failed after repair: {\"budget_auto_aligned\": false, \"envelope_complexity_hint\": \"low\", \"envelope_input_type\": \"ambiguous_card_fix_request\", \"mode\": \"failed\", \"model_calls\": 3, \"repair_attempted\": true, \"resolved_validation_errors\": [{\"msg\": \"phase-aware plans must populate step.phase for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate step.mode for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate non-empty step.task_id for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate plan.execution_pattern\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate step.phase for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate step.mode for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate non-empty step.task_id for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate plan.execution_pattern\", \"type\": \"planner_validation\"}], \"stages\": [\"draft_plan\", \"validate_plan\", \"repair_plan_1\", \"validate_plan\", \"repair_plan_2\", \"validate_plan\"], \"validation_errors\": [{\"msg\": \"phase-aware plans must populate step.phase for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate step.mode for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate non-empty step.task_id for every step\", \"type\": \"planner_validation\"}, {\"msg\": \"phase-aware plans must populate plan.execution_pattern\", \"type\": \"planner_validation\"}]}"
+      ],
+      "status": "failed"
+    },
+    {
+      "attempts": 3,
+      "envelope": {
+        "ambiguity": [],
+        "artifacts": [
+          {
+            "name": "API gateway",
+            "type": "component"
+          },
+          {
+            "name": "load balancer",
+            "type": "component"
+          }
+        ],
+        "assumptions": [],
+        "complexity_hint": "low",
+        "confidence": 0.9,
+        "constraints": [
+          "factual_accuracy"
+        ],
+        "context_needed": [],
+        "domains": [
+          "infra",
+          "research"
+        ],
+        "input_type": "infra_concept_question",
+        "intents": [
+          "infra.explain",
+          "infra.compare",
+          "research.lookup"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 5883.311,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 5883.311,
+            "latency_ms_p95": 5883.311,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "Explain how API gateways differ from load balancers and provide a simple checklist for choosing one.",
+        "raw_input": "explain how API gateways differ from load balancers and give me a simple checklist for choosing one",
+        "request_id": "req_007",
+        "risks": [],
+        "user_goal": "Understand differences between API gateways and load balancers plus selection criteria"
+      },
+      "index": 3,
+      "level": "medium",
+      "plan": {
+        "budget": {
+          "max_model_calls": 1,
+          "max_retries": 0,
+          "max_tool_calls": 0,
+          "max_workers": 1
+        },
+        "execution_pattern": "finalize",
+        "global_invariants": [
+          "no_tools",
+          "no_file_access",
+          "answer_from_user_input_only"
+        ],
+        "metadata": {
+          "llm_planner": {
+            "budget_auto_aligned": false,
+            "envelope_complexity_hint": "low",
+            "envelope_input_type": "infra_concept_question",
+            "mode": "repaired",
+            "model_calls": 3,
+            "repair_attempted": true,
+            "resolved_validation_errors": [
+              {
+                "msg": "phase-aware plans must populate step.phase for every step",
+                "type": "planner_validation"
+              },
+              {
+                "msg": "phase-aware plans must populate step.mode for every step",
+                "type": "planner_validation"
+              },
+              {
+                "msg": "phase-aware plans must populate non-empty step.task_id for every step",
+                "type": "planner_validation"
+              },
+              {
+                "msg": "plan.steps step_id values must be unique",
+                "type": "planner_validation"
+              },
+              {
+                "msg": "phase-aware plans must populate step.phase for every step",
+                "type": "planner_validation"
+              },
+              {
+                "msg": "phase-aware plans must populate step.mode for every step",
+                "type": "planner_validation"
+              },
+              {
+                "msg": "phase-aware plans must populate non-empty step.task_id for every step",
+                "type": "planner_validation"
+              }
+            ],
+            "stages": [
+              "draft_plan",
+              "validate_plan",
+              "repair_plan_1",
+              "validate_plan",
+              "repair_plan_2",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Explain differences between API gateways and load balancers with selection checklist using direct support",
+        "plan_id": "plan_direct_req_007",
+        "planner": "direct_support_planner",
+        "request_id": "req_007",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Provide concise explanation of API gateway vs load balancer differences and a simple checklist for choosing one, based only on user input",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "direct_guidance"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "direct_support_1",
+            "task_id": "direct_support",
+            "worker_type": "direct_worker"
+          }
+        ],
+        "strategy": "Use direct_support archetype for low-complexity conceptual request",
+        "success_criteria": [
+          "accurate conceptual explanation provided"
+        ]
+      },
+      "prompt": "explain how API gateways differ from load balancers and give me a simple checklist for choosing one",
+      "qa_issues": [],
+      "status": "success"
+    },
+    {
+      "attempts": 2,
+      "envelope": {
+        "ambiguity": [
+          "no source files or code locations provided.",
+          "exact duplicate detection logic unknown."
+        ],
+        "artifacts": [
+          {
+            "name": "payment dispute processor",
+            "type": "system"
+          },
+          {
+            "name": "fraud cases",
+            "type": "entity"
+          },
+          {
+            "name": "bank callbacks",
+            "type": "event"
+          },
+          {
+            "name": "manual review lock",
+            "type": "mechanism"
+          },
+          {
+            "name": "dispute-state checks",
+            "type": "verification"
+          }
+        ],
+        "assumptions": [],
+        "complexity_hint": "medium",
+        "confidence": 0.65,
+        "constraints": [
+          "target_locations_must_be_identified_before_mutation",
+          "mutation_requires_verification"
+        ],
+        "context_needed": [
+          "callback_handling_source",
+          "lock_expiration_logic",
+          "dispute_state_transitions"
+        ],
+        "domains": [
+          "code",
+          "payments"
+        ],
+        "input_type": "payment_processor_race_condition_debug",
+        "intents": [
+          "code.debug",
+          "code.fix"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 11900.912,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 11900.912,
+            "latency_ms_p95": 11900.912,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "Payment dispute processor closes fraud cases when duplicate bank callbacks arrive after manual review lock expires; identify root cause, apply safe fix, include rollback plan, and verify with focused dispute-state checks",
+        "raw_input": "payment dispute processor closes fraud cases when duplicate bank callbacks arrive after manual review lock expires; identify root cause, apply safe fix, include rollback plan, and verify with focused dispute-state checks",
+        "request_id": "req_009",
+        "risks": [
+          "mutation_requested",
+          "needs_verification",
+          "ambiguous_scope"
+        ],
+        "user_goal": "Identify root cause of incorrect fraud case closures and apply a safe fix with rollback and verification"
+      },
+      "index": 4,
+      "level": "high",
+      "plan": {
+        "budget": {
+          "max_model_calls": 1,
+          "max_retries": 0,
+          "max_tool_calls": 0,
+          "max_workers": 1
+        },
+        "execution_pattern": "finalize",
+        "global_invariants": [
+          "no_tools",
+          "no_file_access",
+          "answer_from_user_input_only"
+        ],
+        "metadata": {
+          "ambiguity_resolved": true,
+          "complexity": "medium",
+          "llm_planner": {
+            "budget_auto_aligned": false,
+            "envelope_complexity_hint": "medium",
+            "envelope_input_type": "payment_processor_race_condition_debug",
+            "mode": "repaired",
+            "model_calls": 3,
+            "repair_attempted": true,
+            "resolved_validation_errors": [
+              {
+                "msg": "phase-aware plans must populate step.phase for every step",
+                "type": "planner_validation"
+              },
+              {
+                "msg": "phase-aware plans must populate step.mode for every step",
+                "type": "planner_validation"
+              },
+              {
+                "msg": "phase-aware plans must populate non-empty step.task_id for every step",
+                "type": "planner_validation"
+              },
+              {
+                "msg": "step apply_mutation with write_files must restrict writes by write_paths or write_paths_from_artifacts",
+                "type": "planner_validation"
+              },
+              {
+                "msg": "mutation requires prior DESIGN step output mutation_scope",
+                "type": "planner_validation"
+              },
+              {
+                "msg": "mutation requires prior DESIGN step output rollback_plan",
+                "type": "planner_validation"
+              },
+              {
+                "msg": "mutation requires prior DESIGN step output verification_plan or test_plan",
+                "type": "planner_validation"
+              },
+              {
+                "msg": "phase-aware plans must populate step.phase for every step",
+                "type": "planner_validation"
+              },
+              {
+                "msg": "phase-aware plans must populate step.mode for every step",
+                "type": "planner_validation"
+              },
+              {
+                "msg": "phase-aware plans must populate non-empty step.task_id for every step",
+                "type": "planner_validation"
+              }
+            ],
+            "stages": [
+              "draft_plan",
+              "validate_plan",
+              "repair_plan_1",
+              "validate_plan",
+              "repair_plan_2",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Provide direct guidance on payment dispute processor race condition from user input only",
+        "plan_id": "plan_req_009_direct",
+        "planner": "direct_support_planner",
+        "request_id": "req_009",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Answer the payment dispute processor debug query using only provided user input and envelope context; produce direct_guidance without tools or file access",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "direct_guidance"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "direct_support",
+            "task_id": "direct_support",
+            "worker_type": "direct_worker"
+          }
+        ],
+        "strategy": "direct_support_archetype",
+        "success_criteria": [
+          "direct_guidance produced"
+        ]
+      },
+      "prompt": "payment dispute processor closes fraud cases when duplicate bank callbacks arrive after manual review lock expires; identify root cause, apply safe fix, include rollback plan, and verify with focused dispute-state checks",
+      "qa_issues": [],
+      "status": "success"
+    },
+    {
+      "attempts": 2,
+      "envelope": {
+        "ambiguity": [
+          "exact code locations and overlap conditions unknown.",
+          "specific logs or metrics unavailable."
+        ],
+        "artifacts": [
+          {
+            "name": "multi-tenant audit export service",
+            "type": "service"
+          },
+          {
+            "name": "async shard compaction",
+            "type": "process"
+          },
+          {
+            "name": "resumable export pagination",
+            "type": "mechanism"
+          },
+          {
+            "name": "failover",
+            "type": "event"
+          }
+        ],
+        "assumptions": [
+          "failover triggers compaction-pagination overlap.",
+          "records contain tenant identifiers."
+        ],
+        "complexity_hint": "high",
+        "confidence": 0.75,
+        "constraints": [
+          "root_cause_must_be_identified_before_fix_design",
+          "isolation_verification_required",
+          "rollback_plan_mandatory"
+        ],
+        "context_needed": [
+          "service_architecture",
+          "compaction_implementation",
+          "pagination_state_handling",
+          "failover_logs"
+        ],
+        "domains": [
+          "infra",
+          "security",
+          "data"
+        ],
+        "input_type": "distributed_service_isolation_debug_request",
+        "intents": [
+          "infra.debug",
+          "isolation.investigate",
+          "risk.assess"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 16520.347,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 16520.347,
+            "latency_ms_p95": 16520.347,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "Multi-tenant audit export service intermittently leaks cross-tenant records when async shard compaction overlaps resumable export pagination after failover; identify root cause, design a safe scoped fix, include rollback plan, verify tenant isolation with focused regression checks, and summarize residual risks",
+        "raw_input": "multi-tenant audit export service intermittently leaks cross-tenant records when async shard compaction overlaps resumable export pagination after failover; identify root cause, design a safe scoped fix, include rollback plan, verify tenant isolation with focused regression checks, and summarize residual risks",
+        "request_id": "req_011",
+        "risks": [
+          "data_leak_risk",
+          "needs_verification",
+          "ambiguous_scope"
+        ],
+        "user_goal": "Identify root cause of cross-tenant record leakage and design safe scoped fix with rollback and verification"
+      },
+      "index": 5,
+      "level": "highest",
+      "plan": {
+        "budget": {
+          "max_model_calls": 7,
+          "max_retries": 2,
+          "max_tool_calls": 17,
+          "max_workers": 7
+        },
+        "execution_pattern": "discover_analyze_research_design_mutate_verify_finalize",
+        "global_invariants": [
+          "root_cause_must_be_identified_before_fix_design",
+          "isolation_verification_required",
+          "rollback_plan_mandatory",
+          "no_writes_before_design_scope"
+        ],
+        "metadata": {
+          "ambiguity_handled": true,
+          "complexity": "high",
+          "llm_planner": {
+            "budget_auto_aligned": false,
+            "envelope_complexity_hint": "high",
+            "envelope_input_type": "distributed_service_isolation_debug_request",
+            "mode": "completed",
+            "model_calls": 1,
+            "repair_attempted": false,
+            "resolved_validation_errors": [],
+            "stages": [
+              "draft_plan",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Identify root cause of cross-tenant record leakage in audit export service and design safe scoped fix with rollback and verification",
+        "plan_id": "plan_req_011",
+        "planner": "debug_planner",
+        "request_id": "req_011",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Discover candidate file locations and code paths for multi-tenant audit export service, async shard compaction, resumable export pagination, and failover handling",
+            "max_model_calls": 1,
+            "max_tool_calls": 3,
+            "mode": "observe_only",
+            "output_artifacts": [
+              "candidate_locations"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "DISCOVER",
+            "step_id": "step_discover_1",
+            "task_id": "isolation_debug_task",
+            "worker_type": "repo_worker"
+          },
+          {
+            "input_artifacts": [
+              "candidate_locations"
+            ],
+            "instruction": "Analyze service architecture, compaction implementation, pagination state handling, and failover logs for overlap conditions causing cross-tenant leaks",
+            "max_model_calls": 1,
+            "max_tool_calls": 3,
+            "mode": "observe_only",
+            "output_artifacts": [
+              "architecture_analysis",
+              "root_cause_evidence"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "ANALYZE",
+            "step_id": "step_analyze_2",
+            "task_id": "isolation_debug_task",
+            "worker_type": "infra_worker"
+          },
+          {
+            "input_artifacts": [
+              "architecture_analysis",
+              "root_cause_evidence"
+            ],
+            "instruction": "Research tenant isolation mechanisms, record leakage risks, and evidence gaps from architecture_analysis and root_cause_evidence",
+            "max_model_calls": 1,
+            "max_tool_calls": 2,
+            "mode": "observe_only",
+            "output_artifacts": [
+              "evidence_artifacts"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "RESEARCH",
+            "step_id": "step_research_3",
+            "task_id": "isolation_debug_task",
+            "worker_type": "research_worker"
+          },
+          {
+            "input_artifacts": [
+              "root_cause_evidence",
+              "evidence_artifacts"
+            ],
+            "instruction": "Design narrow mutation_scope, rollback_plan, verification_plan, and fix_design based on root_cause_evidence and evidence_artifacts; ensure rollback and isolation checks",
+            "max_model_calls": 1,
+            "max_tool_calls": 2,
+            "mode": "plan_only",
+            "output_artifacts": [
+              "mutation_scope",
+              "rollback_plan",
+              "verification_plan",
+              "fix_design"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "DESIGN",
+            "step_id": "step_design_4",
+            "task_id": "isolation_debug_task",
+            "worker_type": "infra_worker"
+          },
+          {
+            "input_artifacts": [
+              "mutation_scope",
+              "rollback_plan",
+              "fix_design",
+              "root_cause_evidence"
+            ],
+            "instruction": "Apply bounded mutation using mutation_scope, fix_design, and rollback_plan; produce change_summary and rollback_artifact",
+            "max_model_calls": 1,
+            "max_tool_calls": 3,
+            "mode": "bounded_mutation",
+            "output_artifacts": [
+              "change_summary",
+              "rollback_artifact"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": true,
+              "write_paths_from_artifacts": [
+                "mutation_scope"
+              ]
+            },
+            "phase": "MUTATE",
+            "step_id": "step_mutate_5",
+            "task_id": "isolation_debug_task",
+            "worker_type": "code_worker"
+          },
+          {
+            "input_artifacts": [
+              "change_summary",
+              "mutation_scope",
+              "evidence_artifacts",
+              "root_cause_evidence"
+            ],
+            "instruction": "Verify tenant isolation, root-cause match, scope containment, and rollback availability using change_summary, mutation_scope, and evidence_artifacts",
+            "max_model_calls": 1,
+            "max_tool_calls": 3,
+            "mode": "verify_only",
+            "output_artifacts": [
+              "verification_report"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": true,
+              "write_files": false
+            },
+            "phase": "VERIFY",
+            "step_id": "step_verify_6",
+            "task_id": "isolation_debug_task",
+            "worker_type": "verify_worker"
+          },
+          {
+            "input_artifacts": [
+              "verification_report",
+              "change_summary",
+              "rollback_artifact"
+            ],
+            "instruction": "Summarize residual risks, verification results, and final recommendations into final_report",
+            "max_model_calls": 1,
+            "max_tool_calls": 1,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "final_report"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "step_finalize_7",
+            "task_id": "isolation_debug_task",
+            "worker_type": "research_worker"
+          }
+        ],
+        "strategy": "Discovery-first sequencing to collect evidence on compaction-pagination overlap, followed by analysis, design of mutation_scope/rollback/verification artifacts, bounded mutation, verification, and final summary",
+        "success_criteria": [
+          "root_cause_evidence produced",
+          "mutation_scope and rollback_plan produced before mutate",
+          "verification_report confirms isolation",
+          "final_report includes residual risks"
+        ]
+      },
+      "prompt": "multi-tenant audit export service intermittently leaks cross-tenant records when async shard compaction overlaps resumable export pagination after failover; identify root cause, design a safe scoped fix, include rollback plan, verify tenant isolation with focused regression checks, and summarize residual risks",
+      "qa_issues": [],
+      "status": "success"
+    }
+  ],
+  "success_count": 4
+}

@@ -1,0 +1,136 @@
+{
+  "failure_count": 0,
+  "generated_at": "2026-05-30T17:26:00.954488+00:00",
+  "run_count": 1,
+  "runs": [
+    {
+      "attempts": 2,
+      "envelope": {
+        "ambiguity": [
+          "nature of card malfunction unknown.",
+          "MRT system or location unspecified."
+        ],
+        "artifacts": [
+          {
+            "name": "mrt_card",
+            "type": "transit_card"
+          }
+        ],
+        "assumptions": [
+          "user possesses physical MRT card.",
+          "issue relates to card functionality for transit use."
+        ],
+        "complexity_hint": "low",
+        "confidence": 0.4,
+        "constraints": [
+          "specific_issue_must_be_described_before_assistance"
+        ],
+        "context_needed": [
+          "card_status_details",
+          "error_messages",
+          "card_type"
+        ],
+        "domains": [
+          "transit",
+          "general"
+        ],
+        "input_type": "transit_card_troubleshoot",
+        "intents": [
+          "transit.fix",
+          "commute.assist"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 14180.146,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 14180.146,
+            "latency_ms_p95": 14180.146,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "MRT card is not working and needs fixing to commute to work tomorrow without alternative transport.",
+        "raw_input": "my mrt card is not working, can you help me fix it? because i need to go to work tomorrow and i need to use the mrt to get there and i dont have a car",
+        "request_id": "req_002",
+        "risks": [
+          "ambiguous_scope",
+          "needs_verification"
+        ],
+        "user_goal": "Fix MRT card for commuting to work"
+      },
+      "index": 1,
+      "plan": {
+        "budget": {
+          "max_model_calls": 1,
+          "max_retries": 0,
+          "max_tool_calls": 0,
+          "max_workers": 1
+        },
+        "execution_pattern": null,
+        "global_invariants": [],
+        "metadata": {
+          "llm_planner": {
+            "budget_auto_aligned": false,
+            "envelope_complexity_hint": "low",
+            "envelope_input_type": "transit_card_troubleshoot",
+            "mode": "completed",
+            "model_calls": 1,
+            "repair_attempted": false,
+            "resolved_validation_errors": [],
+            "stages": [
+              "draft_plan",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Gather required details on MRT card malfunction before providing targeted assistance",
+        "plan_id": "plan_req_002_001",
+        "planner": "transit_assist_planner",
+        "request_id": "req_002",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Request specific card status details, error messages, card type, and MRT system/location from user to enable diagnosis",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": null,
+            "output_artifacts": [
+              "user_provided_details"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": null,
+            "step_id": "step_001",
+            "task_id": null,
+            "worker_type": "direct_worker"
+          }
+        ],
+        "strategy": "Observe-first sequencing to resolve ambiguity and satisfy constraint requiring specific issue description",
+        "success_criteria": [
+          "User provides specific issue details enabling next-step diagnosis"
+        ]
+      },
+      "prompt": "my mrt card is not working, can you help me fix it? because i need to go to work tomorrow and i need to use the mrt to get there and i dont have a car",
+      "status": "success"
+    }
+  ],
+  "success_count": 1
+}

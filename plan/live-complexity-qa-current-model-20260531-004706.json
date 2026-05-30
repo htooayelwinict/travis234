@@ -1,0 +1,1184 @@
+{
+  "failure_count": 0,
+  "generated_at": "2026-05-30T18:17:06.181413+00:00",
+  "qa_issue_count": 0,
+  "run_count": 5,
+  "runs": [
+    {
+      "attempts": 1,
+      "envelope": {
+        "ambiguity": [
+          "It is unclear whether the user wants to end the conversation or continue with another request."
+        ],
+        "artifacts": [],
+        "assumptions": [
+          "The message is a polite acknowledgment of prior assistance.",
+          "No further action is requested in this specific input."
+        ],
+        "complexity_hint": "low",
+        "confidence": 0.99,
+        "constraints": [
+          "Do not infer or initiate new execution work without an explicit follow-up request.",
+          "Treat the message as acknowledgment rather than a technical change request."
+        ],
+        "context_needed": [
+          "Any new task or follow-up request if additional assistance is desired."
+        ],
+        "domains": [
+          "general"
+        ],
+        "input_type": "gratitude_acknowledgment_message",
+        "intents": [
+          "conversation.express_gratitude",
+          "conversation.confirm_resolution",
+          "conversation.possible_closure"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 9336.786,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 9336.786,
+            "latency_ms_p95": 9336.786,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "User expresses appreciation and confirms prior help was useful.",
+        "raw_input": "thanks, that helped",
+        "request_id": "req_001",
+        "risks": [
+          "no_actionable_work_item",
+          "scope_not_specified_for_follow_up"
+        ],
+        "user_goal": "Acknowledge assistance and likely close the interaction unless further help is requested."
+      },
+      "index": 1,
+      "level": "lowest",
+      "plan": {
+        "budget": {
+          "max_model_calls": 1,
+          "max_retries": 0,
+          "max_tool_calls": 0,
+          "max_workers": 1
+        },
+        "execution_pattern": "finalize",
+        "global_invariants": [
+          "no_tools",
+          "no_file_access",
+          "answer_from_user_input_only"
+        ],
+        "metadata": {
+          "archetype": "direct_support",
+          "llm_planner": {
+            "budget_auto_aligned": false,
+            "envelope_complexity_hint": "low",
+            "envelope_input_type": "gratitude_acknowledgment_message",
+            "mode": "completed",
+            "model_calls": 1,
+            "repair_attempted": false,
+            "resolved_validation_errors": [],
+            "stages": [
+              "draft_plan",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Acknowledge the user\u2019s gratitude, confirm closure, and invite a clear follow-up request if more help is needed.",
+        "plan_id": "plan_req_001_direct_support",
+        "planner": "direct_support_planner",
+        "request_id": "req_001",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Thank the user briefly, acknowledge resolution, and ask a concise optional follow-up question inviting any new request while providing immediate safe closure guidance from the user input only.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "direct_guidance"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "direct_support_response",
+            "task_id": "direct_support",
+            "worker_type": "direct_worker"
+          }
+        ],
+        "strategy": "phase_aware_direct_support",
+        "success_criteria": [
+          "User receives a polite direct response that acknowledges thanks, confirms likely closure, and invites a specific follow-up request if needed."
+        ]
+      },
+      "prompt": "thanks, that helped",
+      "qa_issues": [],
+      "status": "success"
+    },
+    {
+      "attempts": 1,
+      "envelope": {
+        "ambiguity": [
+          "MRT system/location is unspecified.",
+          "Exact failure mode is unknown (not detected, insufficient balance, blocked card, damaged chip, etc.).",
+          "Card type and account linkage details are not provided.",
+          "No diagnostic steps already attempted are mentioned."
+        ],
+        "artifacts": [
+          {
+            "name": "MRT card",
+            "type": "transit_fare_card"
+          },
+          {
+            "name": "commute tomorrow",
+            "type": "time_constraint"
+          },
+          {
+            "name": "no car",
+            "type": "transportation_constraint"
+          }
+        ],
+        "assumptions": [
+          "The user is asking for legitimate troubleshooting help.",
+          "The issue concerns a public-transit fare card used for MRT travel.",
+          "The commute deadline (tomorrow) is a hard constraint."
+        ],
+        "complexity_hint": "medium",
+        "confidence": 0.91,
+        "constraints": [
+          "do_not_assume_root_cause_without_evidence",
+          "recommendations_must_align_with_transit_operator_policy",
+          "avoid_instructions_that_enable_fare_evasion",
+          "prioritize_safe_legal_commute_options_given_time_constraint"
+        ],
+        "context_needed": [
+          "city_or_transit_network",
+          "exact_card_type_or_brand",
+          "failure_symptoms_at_gate_or_reader",
+          "recent_top_up_or_balance_status",
+          "physical_card_condition",
+          "whether_card_works_at_other_stations_or_readers",
+          "linked_account_or_mobile_wallet_status_if_applicable",
+          "available_alternative_payment_or_ticket_options"
+        ],
+        "domains": [
+          "transportation",
+          "customer_support",
+          "general"
+        ],
+        "input_type": "ambiguous_transit_card_failure_support",
+        "intents": [
+          "support.troubleshoot",
+          "transportation.commute_continuity",
+          "urgency.time_sensitive_help"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 10915.252,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 10915.252,
+            "latency_ms_p95": 10915.252,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "User reports their MRT transit card is not working and asks for help fixing it because they must commute tomorrow and have no car.",
+        "raw_input": "my mrt card is not working, can you help me fix it? I need to commute tomorrow and do not have a car",
+        "request_id": "req_002",
+        "risks": [
+          "needs_verification",
+          "ambiguous_scope",
+          "time_sensitive",
+          "service_policy_dependent"
+        ],
+        "user_goal": "Restore MRT card usability (or find a reliable immediate commute alternative) before tomorrow."
+      },
+      "index": 2,
+      "level": "low",
+      "plan": {
+        "budget": {
+          "max_model_calls": 1,
+          "max_retries": 0,
+          "max_tool_calls": 0,
+          "max_workers": 1
+        },
+        "execution_pattern": "finalize",
+        "global_invariants": [
+          "no_tools",
+          "no_file_access",
+          "answer_from_user_input_only"
+        ],
+        "metadata": {
+          "archetype": "direct_support",
+          "llm_planner": {
+            "budget_auto_aligned": false,
+            "envelope_complexity_hint": "medium",
+            "envelope_input_type": "ambiguous_transit_card_failure_support",
+            "mode": "completed",
+            "model_calls": 1,
+            "repair_attempted": false,
+            "resolved_validation_errors": [],
+            "stages": [
+              "draft_plan",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Provide immediate, safe MRT card troubleshooting guidance and backup commute options for tomorrow using only the user-provided context.",
+        "plan_id": "plan_req_002_direct_support",
+        "planner": "direct_support_planner",
+        "request_id": "req_002",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Ask concise clarifying questions (city/transit network, card type, exact gate error/symptom, recent top-up/balance, and whether card works at other readers) and provide immediate harmless guidance for tonight: check card condition, confirm balance/top-up status, try another station/reloader if available, prepare legal backup fare options (single-ride ticket/contactless payment/mobile wallet where accepted), and contact official transit support channels for card replacement or unblock steps.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "direct_guidance"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "direct_support_response",
+            "task_id": "direct_support",
+            "worker_type": "direct_worker"
+          }
+        ],
+        "strategy": "phase_aware_direct_support",
+        "success_criteria": [
+          "User receives concise clarification questions plus safe, legal, immediate steps to maximize chance of commuting tomorrow even if the card is still failing."
+        ]
+      },
+      "prompt": "my mrt card is not working, can you help me fix it? I need to commute tomorrow and do not have a car",
+      "qa_issues": [],
+      "status": "success"
+    },
+    {
+      "attempts": 1,
+      "envelope": {
+        "ambiguity": [
+          "No specific platform, cloud provider, or stack is provided.",
+          "No workload scale, traffic profile, or security/compliance constraints are specified.",
+          "Unclear whether the user may need both components together versus one-or-the-other framing."
+        ],
+        "artifacts": [
+          {
+            "name": "API gateway",
+            "type": "component"
+          },
+          {
+            "name": "load balancer",
+            "type": "component"
+          },
+          {
+            "name": "selection checklist",
+            "type": "decision_aid"
+          }
+        ],
+        "assumptions": [
+          "The user is asking for conceptual guidance, not implementation steps.",
+          "The requested checklist should be high-level and broadly applicable.",
+          "No existing infrastructure constraints are implied in the prompt."
+        ],
+        "complexity_hint": "low",
+        "confidence": 0.97,
+        "constraints": [
+          "differences_must_be_technically_accurate_between_l4_l7_and_api_management_capabilities",
+          "guidance_should_not_assume_specific_cloud_vendor_or_product",
+          "checklist_should_remain_simple_and_non_prescriptive_without_missing_context"
+        ],
+        "context_needed": [
+          "application protocols and traffic patterns",
+          "whether API management features are required (auth, rate limiting, transformations)",
+          "deployment topology (single service, microservices, multi-region)",
+          "performance and latency priorities",
+          "operational ownership and security requirements"
+        ],
+        "domains": [
+          "infra",
+          "networking",
+          "architecture"
+        ],
+        "input_type": "api_gateway_vs_load_balancer_concept_comparison_with_selection_checklist",
+        "intents": [
+          "architecture.compare",
+          "infra.guidance",
+          "decision_support"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 39665.656,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 39665.656,
+            "latency_ms_p95": 39665.656,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "Explain the differences between API gateways and load balancers, and provide a simple checklist to decide which one to use.",
+        "raw_input": "explain how API gateways differ from load balancers and give me a simple checklist for choosing one",
+        "request_id": "req_003",
+        "risks": [
+          "ambiguous_scope",
+          "context_dependent_guidance",
+          "needs_environment_specific_validation"
+        ],
+        "user_goal": "Understand API gateway vs load balancer roles and get a practical decision checklist for selecting the right component."
+      },
+      "index": 3,
+      "level": "medium",
+      "plan": {
+        "budget": {
+          "max_model_calls": 1,
+          "max_retries": 0,
+          "max_tool_calls": 0,
+          "max_workers": 1
+        },
+        "execution_pattern": "finalize",
+        "global_invariants": [
+          "no_tools",
+          "no_file_access",
+          "answer_from_user_input_only"
+        ],
+        "metadata": {
+          "archetype": "direct_support",
+          "llm_planner": {
+            "budget_auto_aligned": false,
+            "envelope_complexity_hint": "low",
+            "envelope_input_type": "api_gateway_vs_load_balancer_concept_comparison_with_selection_checklist",
+            "mode": "completed",
+            "model_calls": 1,
+            "repair_attempted": false,
+            "resolved_validation_errors": [],
+            "stages": [
+              "draft_plan",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Provide a concise conceptual comparison of API gateways vs load balancers and a simple vendor-neutral selection checklist, with brief clarifying prompts for missing context.",
+        "plan_id": "plan_req_003_direct_support",
+        "planner": "direct_support_planner",
+        "request_id": "req_003",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Ask concise clarifying questions for missing context (protocols/traffic patterns, API management needs, topology, latency, security ownership) if needed, then provide immediate safe vendor-neutral guidance explaining API gateway vs load balancer differences and a simple non-prescriptive checklist.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "direct_guidance"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "direct_support_response",
+            "task_id": "direct_support",
+            "worker_type": "direct_worker"
+          }
+        ],
+        "strategy": "phase_aware_direct_support",
+        "success_criteria": [
+          "User receives a clear technically accurate comparison between L4/L7 load balancing and API management capabilities, plus a simple checklist and concise clarification prompts where context is missing."
+        ]
+      },
+      "prompt": "explain how API gateways differ from load balancers and give me a simple checklist for choosing one",
+      "qa_issues": [],
+      "status": "success"
+    },
+    {
+      "attempts": 1,
+      "envelope": {
+        "ambiguity": [
+          "No codebase, language, or service boundaries are specified.",
+          "Exact dispute states and allowed transitions are not provided.",
+          "Trigger conditions for lock expiry and callback ordering are unspecified.",
+          "Current rollback tooling/process is not described."
+        ],
+        "artifacts": [
+          {
+            "name": "payment dispute processor",
+            "type": "component"
+          },
+          {
+            "name": "fraud cases",
+            "type": "domain_entity"
+          },
+          {
+            "name": "duplicate bank callbacks",
+            "type": "event"
+          },
+          {
+            "name": "manual review lock",
+            "type": "state_lock"
+          },
+          {
+            "name": "review lock expiry",
+            "type": "timing_condition"
+          },
+          {
+            "name": "rollback plan",
+            "type": "change_control_artifact"
+          },
+          {
+            "name": "focused dispute-state checks",
+            "type": "validation_suite"
+          }
+        ],
+        "assumptions": [
+          "A defect exists in callback/state transition handling rather than external bank data correctness.",
+          "Duplicate callbacks can occur legitimately and must be safely tolerated.",
+          "Manual review lock expiry is a known system behavior, not necessarily the root cause by itself."
+        ],
+        "complexity_hint": "high",
+        "confidence": 0.91,
+        "constraints": [
+          "root cause must be evidenced before code mutation",
+          "state transitions must preserve fraud-case integrity",
+          "duplicate callbacks must be handled idempotently",
+          "fix must avoid unintended closure of protected/locked disputes",
+          "mutation requires focused verification of dispute-state outcomes",
+          "rollback path must be available for safe reversion"
+        ],
+        "context_needed": [
+          "affected service/repo location",
+          "current dispute state machine definition",
+          "callback idempotency and deduplication logic",
+          "manual review lock lifecycle and expiry rules",
+          "logs/traces showing duplicate callback sequence",
+          "criteria for valid fraud-case closure transitions",
+          "test harness or existing dispute-state tests",
+          "deployment and rollback mechanism details"
+        ],
+        "domains": [
+          "code",
+          "payments",
+          "risk_ops",
+          "state_management"
+        ],
+        "input_type": "payment_dispute_callback_race_condition_bugfix",
+        "intents": [
+          "debug.root_cause_analysis",
+          "code.fix",
+          "reliability.hardening",
+          "testing.state_transition_validation",
+          "change.rollback_preparedness"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 19212.702,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 19212.702,
+            "latency_ms_p95": 19212.702,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "Investigate why the payment dispute processor incorrectly closes fraud cases when duplicate bank callbacks arrive after a manual-review lock expires, implement a safe fix, provide a rollback option, and validate with targeted dispute-state checks.",
+        "raw_input": "payment dispute processor closes fraud cases when duplicate bank callbacks arrive after manual review lock expires; identify root cause, apply safe fix, include rollback plan, and verify with focused dispute-state checks",
+        "request_id": "req_004",
+        "risks": [
+          "mutation_requested",
+          "needs_verification",
+          "concurrency_timing_issue",
+          "business_logic_regression_risk",
+          "ambiguous_scope"
+        ],
+        "user_goal": "Determine and correct a state-handling defect in dispute processing so duplicate delayed callbacks do not close fraud cases, with safe recovery and focused verification."
+      },
+      "index": 4,
+      "level": "high",
+      "plan": {
+        "budget": {
+          "max_model_calls": 8,
+          "max_retries": 1,
+          "max_tool_calls": 24,
+          "max_workers": 7
+        },
+        "execution_pattern": "discover_analyze_research_design_mutate_verify_finalize",
+        "global_invariants": [
+          "evidence_before_mutation",
+          "no_write_outside_mutation_scope",
+          "state_transition_integrity_preserved",
+          "duplicate_callbacks_handled_idempotently",
+          "rollback_artifact_required_for_release",
+          "verify_after_write_before_finalize"
+        ],
+        "metadata": {
+          "archetype": "phase_aware_mutation",
+          "complexity": "high",
+          "domains": [
+            "code",
+            "payments",
+            "risk_ops",
+            "state_management"
+          ],
+          "llm_planner": {
+            "budget_auto_aligned": true,
+            "envelope_complexity_hint": "high",
+            "envelope_input_type": "payment_dispute_callback_race_condition_bugfix",
+            "mode": "completed",
+            "model_calls": 1,
+            "repair_attempted": false,
+            "resolved_validation_errors": [],
+            "stages": [
+              "draft_plan",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Identify and fix the dispute callback race condition so duplicate delayed bank callbacks cannot close protected fraud cases, with rollback readiness and focused dispute-state verification.",
+        "plan_id": "plan_req_004_dispute_callback_race_fix",
+        "planner": "phase_aware_mutation_planner_v1",
+        "request_id": "req_004",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Locate the payment dispute processor implementation, dispute state machine definitions, callback ingestion/dedup paths, manual-review lock lifecycle code, existing focused dispute-state tests, and deployment/rollback configuration; produce candidate locations only.",
+            "max_model_calls": 1,
+            "max_tool_calls": 4,
+            "mode": "observe_only",
+            "output_artifacts": [
+              "repo_inventory",
+              "candidate_paths",
+              "state_machine_sources",
+              "callback_flow_sources",
+              "existing_test_assets",
+              "deploy_rollback_assets"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "DISCOVER",
+            "step_id": "discover_dispute_processor_context",
+            "task_id": "dispute_callback_fix",
+            "worker_type": "repo_worker"
+          },
+          {
+            "input_artifacts": [
+              "candidate_paths",
+              "state_machine_sources",
+              "callback_flow_sources"
+            ],
+            "instruction": "Analyze discovered sources to reconstruct callback ordering and lock-expiry transition behavior, identify why duplicate callbacks can trigger invalid fraud-case closure, and produce concrete root-cause evidence; if evidence is insufficient, emit an evidence gap with exact missing signals.",
+            "max_model_calls": 1,
+            "max_tool_calls": 4,
+            "mode": "observe_only",
+            "output_artifacts": [
+              "root_cause_evidence",
+              "analysis_evidence",
+              "race_sequence_model",
+              "evidence_gap"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "ANALYZE",
+            "step_id": "analyze_race_and_root_cause",
+            "task_id": "dispute_callback_fix",
+            "worker_type": "research_worker"
+          },
+          {
+            "input_artifacts": [
+              "repo_inventory",
+              "race_sequence_model",
+              "analysis_evidence",
+              "existing_test_assets"
+            ],
+            "instruction": "Validate dependency and invariant context needed for safe change: idempotency/dedup mechanism, permitted fraud-case closure transitions, lock-expiry semantics, and callback side-effect boundaries; map focused verification scenarios for duplicate-callback timing.",
+            "max_model_calls": 1,
+            "max_tool_calls": 3,
+            "mode": "observe_only",
+            "output_artifacts": [
+              "dependency_artifacts",
+              "state_transition_invariants",
+              "focused_check_spec"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "RESEARCH",
+            "step_id": "research_dependency_and_invariant_checks",
+            "task_id": "dispute_callback_fix",
+            "worker_type": "repo_worker"
+          },
+          {
+            "input_artifacts": [
+              "candidate_paths",
+              "root_cause_evidence",
+              "dependency_artifacts",
+              "state_transition_invariants",
+              "focused_check_spec",
+              "deploy_rollback_assets",
+              "evidence_gap"
+            ],
+            "instruction": "Design a minimal, safe fix tied to evidence and invariants; define explicit mutation boundaries and rollback before any write. If evidence_gap is material, produce replan guidance instead of mutation scope.",
+            "max_model_calls": 1,
+            "max_tool_calls": 1,
+            "mode": "plan_only",
+            "output_artifacts": [
+              "fix_design",
+              "mutation_scope",
+              "rollback_plan",
+              "verification_plan",
+              "allowed_write_paths"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "DESIGN",
+            "step_id": "design_safe_fix_and_controls",
+            "task_id": "dispute_callback_fix",
+            "worker_type": "code_worker"
+          },
+          {
+            "input_artifacts": [
+              "mutation_scope",
+              "rollback_plan",
+              "fix_design",
+              "root_cause_evidence",
+              "dependency_artifacts"
+            ],
+            "instruction": "Implement the fix within scoped files only, enforcing idempotent duplicate-callback handling and protected-state transition guards so expired manual-review lock paths cannot close fraud cases incorrectly; generate rollback patch artifacts.",
+            "max_model_calls": 1,
+            "max_tool_calls": 4,
+            "mode": "bounded_mutation",
+            "output_artifacts": [
+              "change_summary",
+              "rollback_patch",
+              "updated_code_artifacts"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": true,
+              "write_files": true,
+              "write_paths_from_artifacts": [
+                "mutation_scope"
+              ]
+            },
+            "phase": "MUTATE",
+            "step_id": "mutate_implement_scoped_fix",
+            "task_id": "dispute_callback_fix",
+            "worker_type": "code_worker"
+          },
+          {
+            "input_artifacts": [
+              "change_summary",
+              "mutation_scope",
+              "root_cause_evidence",
+              "verification_plan",
+              "focused_check_spec",
+              "rollback_patch"
+            ],
+            "instruction": "Run targeted verification for dispute-state outcomes using the defined focused checks: confirm root-cause match, no invalid fraud-case closure on duplicate delayed callbacks, scope containment, and rollback applicability.",
+            "max_model_calls": 1,
+            "max_tool_calls": 6,
+            "mode": "verify_only",
+            "output_artifacts": [
+              "verification_results",
+              "focused_state_check_results",
+              "rollback_validation"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": true,
+              "write_files": false
+            },
+            "phase": "VERIFY",
+            "step_id": "verify_focused_dispute_state_outcomes",
+            "task_id": "dispute_callback_fix",
+            "worker_type": "verify_worker"
+          },
+          {
+            "input_artifacts": [
+              "change_summary",
+              "verification_results",
+              "focused_state_check_results",
+              "rollback_validation",
+              "rollback_patch"
+            ],
+            "instruction": "Produce final implementation report summarizing root cause, applied fix, verification evidence, residual risks, and explicit rollback execution guidance.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "final_report"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "finalize_report_and_release_guidance",
+            "task_id": "dispute_callback_fix",
+            "worker_type": "verify_worker"
+          }
+        ],
+        "strategy": "discovery_first_evidence_gated_mutation_with_scoped_writes_and_post_change_verification",
+        "success_criteria": [
+          "Root cause is evidenced for duplicate callback behavior after manual-review lock expiry.",
+          "A scoped fix prevents unintended closure of protected/locked fraud cases.",
+          "Mutation is limited to DESIGN-defined mutation_scope.",
+          "Focused dispute-state verification passes for duplicate delayed callback scenarios.",
+          "Rollback patch and execution guidance are produced and validated.",
+          "Final report captures evidence, fix rationale, verification outcomes, and rollback path."
+        ]
+      },
+      "prompt": "payment dispute processor closes fraud cases when duplicate bank callbacks arrive after manual review lock expires; identify root cause, apply safe fix, include rollback plan, and verify with focused dispute-state checks",
+      "qa_issues": [],
+      "status": "success"
+    },
+    {
+      "attempts": 1,
+      "envelope": {
+        "ambiguity": [
+          "technology stack and implementation language are unspecified.",
+          "exact storage engine and sharding model are not provided.",
+          "failure frequency, blast radius, and affected tenants are unknown.",
+          "current rollback mechanism and deployment topology are not described.",
+          "available observability data for reproducing overlap timing is unknown."
+        ],
+        "artifacts": [
+          {
+            "name": "multi-tenant audit export service",
+            "type": "component"
+          },
+          {
+            "name": "cross-tenant records",
+            "type": "data"
+          },
+          {
+            "name": "async shard compaction",
+            "type": "background_process"
+          },
+          {
+            "name": "resumable export pagination",
+            "type": "feature"
+          },
+          {
+            "name": "failover",
+            "type": "operational_event"
+          },
+          {
+            "name": "tenant isolation",
+            "type": "security_property"
+          },
+          {
+            "name": "rollback plan",
+            "type": "deliverable"
+          },
+          {
+            "name": "focused regression checks",
+            "type": "test_suite"
+          }
+        ],
+        "assumptions": [
+          "The leak is intermittent and associated with overlap between compaction and resumable pagination during/after failover.",
+          "The system is intended to enforce strict tenant isolation for all export outputs.",
+          "A code/config change is acceptable if it is safely scoped and reversible.",
+          "Targeted regression coverage can be added or run to verify tenant isolation behavior."
+        ],
+        "complexity_hint": "high",
+        "confidence": 0.92,
+        "constraints": [
+          "tenant isolation must never be weakened",
+          "fix scope should be minimal and limited to implicated paths",
+          "no unverified root cause claims without supporting evidence",
+          "rollback path must restore prior stable behavior quickly",
+          "regression checks must explicitly validate cross-tenant non-leakage",
+          "changes should preserve resumable export correctness under failover"
+        ],
+        "context_needed": [
+          "service architecture for export pipeline and shard lifecycle",
+          "code paths for compaction, pagination state, and failover recovery",
+          "tenant scoping keys and isolation invariants",
+          "reproduction evidence with timing/correlation across failover and compaction overlap",
+          "logs/traces/metrics around affected export sessions",
+          "storage and pagination cursor semantics during resume",
+          "current deployment and rollback mechanisms",
+          "existing regression tests covering tenant boundaries"
+        ],
+        "domains": [
+          "code",
+          "data",
+          "infra",
+          "security"
+        ],
+        "input_type": "multi_tenant_audit_export_isolation_bug_investigation",
+        "intents": [
+          "incident.root_cause_analysis",
+          "concurrency.defect_investigation",
+          "data_isolation.remediation_design",
+          "change.rollback_preparedness",
+          "regression.validation",
+          "risk.assessment_summary"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 23780.813,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 23780.813,
+            "latency_ms_p95": 23780.813,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "Investigate an intermittent multi-tenant audit export bug where cross-tenant records leak when async shard compaction overlaps resumable pagination after failover; determine root cause, propose a narrowly scoped safe fix with rollback readiness, validate tenant isolation via targeted regressions, and report remaining risks.",
+        "raw_input": "multi-tenant audit export service intermittently leaks cross-tenant records when async shard compaction overlaps resumable export pagination after failover; identify root cause, design a safe scoped fix, include rollback plan, verify tenant isolation with focused regression checks, and summarize residual risks",
+        "request_id": "req_005",
+        "risks": [
+          "cross_tenant_data_exposure",
+          "security_incident_potential",
+          "mutation_requested",
+          "needs_verification",
+          "concurrency_timing_sensitive",
+          "failover_edge_case",
+          "ambiguous_scope"
+        ],
+        "user_goal": "Eliminate intermittent cross-tenant data leakage in the audit export service with a safe, scoped remediation and evidence that tenant isolation is preserved after the fix."
+      },
+      "index": 5,
+      "level": "highest",
+      "plan": {
+        "budget": {
+          "max_model_calls": 7,
+          "max_retries": 1,
+          "max_tool_calls": 17,
+          "max_workers": 7
+        },
+        "execution_pattern": "discover_analyze_research_design_mutate_verify_finalize",
+        "global_invariants": [
+          "tenant_isolation_must_not_be_weakened",
+          "no_unverified_root_cause_claims",
+          "writes_must_be_scoped_to_designated_mutation_scope",
+          "rollback_plan_required_before_and_after_mutation",
+          "verification_must_include_explicit_cross_tenant_non_leakage_checks"
+        ],
+        "metadata": {
+          "archetype": "phase_aware_mutation",
+          "complexity": "high",
+          "domains": [
+            "code",
+            "data",
+            "infra",
+            "security"
+          ],
+          "llm_planner": {
+            "budget_auto_aligned": true,
+            "envelope_complexity_hint": "high",
+            "envelope_input_type": "multi_tenant_audit_export_isolation_bug_investigation",
+            "mode": "completed",
+            "model_calls": 1,
+            "repair_attempted": false,
+            "resolved_validation_errors": [],
+            "stages": [
+              "draft_plan",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Identify and remediate the intermittent cross-tenant audit export leakage with a narrowly scoped, reversible fix, then verify tenant isolation under compaction/pagination/failover conditions and summarize residual risk.",
+        "plan_id": "plan_req_005_isolation_incident_remediation",
+        "planner": "incident_response_planner_v1",
+        "request_id": "req_005",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Map the audit export pipeline, resumable pagination state handling, shard compaction integration points, and failover recovery code paths. Produce candidate implementation locations and tenant-scoping touchpoints without proposing changes yet.",
+            "max_model_calls": 1,
+            "max_tool_calls": 2,
+            "mode": "observe_only",
+            "output_artifacts": [
+              "repo_inventory",
+              "candidate_paths",
+              "tenant_scope_touchpoints"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "DISCOVER",
+            "step_id": "discover_export_isolation_surface",
+            "task_id": "audit_export_isolation_fix",
+            "worker_type": "repo_worker"
+          },
+          {
+            "input_artifacts": [
+              "repo_inventory",
+              "candidate_paths",
+              "tenant_scope_touchpoints"
+            ],
+            "instruction": "Analyze available logs/traces/metrics and code-level flow from discovered paths to correlate leakage timing with compaction overlap and failover resume windows. Produce root-cause evidence and bounded hypotheses tied to tenant key propagation/state transitions.",
+            "max_model_calls": 1,
+            "max_tool_calls": 3,
+            "mode": "observe_only",
+            "output_artifacts": [
+              "analysis_evidence",
+              "root_cause_hypotheses",
+              "timing_correlation_report"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": true,
+              "write_files": false
+            },
+            "phase": "ANALYZE",
+            "step_id": "analyze_timing_and_leak_evidence",
+            "task_id": "audit_export_isolation_fix",
+            "worker_type": "infra_worker"
+          },
+          {
+            "input_artifacts": [
+              "analysis_evidence",
+              "root_cause_hypotheses",
+              "timing_correlation_report"
+            ],
+            "instruction": "Validate dependency assumptions and isolation invariants for pagination cursor semantics, compaction visibility, and failover recovery ordering. If evidence is insufficient or contradictory, emit an evidence gap and indicate mutation must pause.",
+            "max_model_calls": 1,
+            "max_tool_calls": 2,
+            "mode": "observe_only",
+            "output_artifacts": [
+              "dependency_artifacts",
+              "validated_root_cause",
+              "isolation_invariants",
+              "evidence_gap"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "RESEARCH",
+            "step_id": "research_dependency_and_invariant_validation",
+            "task_id": "audit_export_isolation_fix",
+            "worker_type": "research_worker"
+          },
+          {
+            "input_artifacts": [
+              "candidate_paths",
+              "tenant_scope_touchpoints",
+              "analysis_evidence",
+              "validated_root_cause",
+              "dependency_artifacts",
+              "isolation_invariants"
+            ],
+            "instruction": "Design a minimally scoped fix tied to validated root cause and tenant isolation invariants. Define exact writable scope, rollback plan, and focused verification plan for failover+compaction+resume scenarios, including explicit non-leakage checks.",
+            "max_model_calls": 1,
+            "max_tool_calls": 1,
+            "mode": "plan_only",
+            "output_artifacts": [
+              "fix_design",
+              "mutation_scope",
+              "rollback_plan",
+              "verification_plan"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "DESIGN",
+            "step_id": "design_scoped_fix_and_rollback",
+            "task_id": "audit_export_isolation_fix",
+            "worker_type": "code_worker"
+          },
+          {
+            "input_artifacts": [
+              "analysis_evidence",
+              "validated_root_cause",
+              "dependency_artifacts",
+              "fix_design",
+              "mutation_scope",
+              "rollback_plan"
+            ],
+            "instruction": "Implement only the designed fix within the approved mutation scope, preserving resumable export correctness and tenant isolation. Prepare rollback artifacts aligned to the rollback plan.",
+            "max_model_calls": 1,
+            "max_tool_calls": 4,
+            "mode": "bounded_mutation",
+            "output_artifacts": [
+              "change_summary",
+              "rollback_patch",
+              "revert_instructions"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": true,
+              "write_files": true,
+              "write_paths_from_artifacts": [
+                "mutation_scope"
+              ]
+            },
+            "phase": "MUTATE",
+            "step_id": "mutate_isolation_fix",
+            "task_id": "audit_export_isolation_fix",
+            "worker_type": "code_worker"
+          },
+          {
+            "input_artifacts": [
+              "change_summary",
+              "mutation_scope",
+              "analysis_evidence",
+              "validated_root_cause",
+              "verification_plan",
+              "rollback_plan",
+              "rollback_patch"
+            ],
+            "instruction": "Run focused verification to confirm root-cause match, scope containment, rollback readiness, and absence of cross-tenant leakage across compaction overlap, failover, and resume pagination paths.",
+            "max_model_calls": 1,
+            "max_tool_calls": 5,
+            "mode": "verify_only",
+            "output_artifacts": [
+              "verification_results",
+              "focused_regression_results",
+              "rollback_readiness_check",
+              "residual_risk_assessment"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": true,
+              "write_files": false
+            },
+            "phase": "VERIFY",
+            "step_id": "verify_isolation_and_regressions",
+            "task_id": "audit_export_isolation_fix",
+            "worker_type": "verify_worker"
+          },
+          {
+            "input_artifacts": [
+              "change_summary",
+              "verification_results",
+              "focused_regression_results",
+              "rollback_readiness_check",
+              "residual_risk_assessment",
+              "rollback_plan"
+            ],
+            "instruction": "Produce a final incident report summarizing confirmed root cause, implemented scoped fix, verification evidence for tenant isolation, rollback readiness, and remaining risks/open questions.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "final_report"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "finalize_incident_summary",
+            "task_id": "audit_export_isolation_fix",
+            "worker_type": "research_worker"
+          }
+        ],
+        "strategy": "evidence_first_isolation_remediation_with_scoped_mutation",
+        "success_criteria": [
+          "Root cause is supported by concrete timing and code-path evidence.",
+          "A minimal, reversible fix is implemented only within the design-defined mutation scope.",
+          "Rollback artifacts and instructions are available and validated for readiness.",
+          "Focused regressions verify no cross-tenant leakage under compaction/failover/resume conditions.",
+          "Final report clearly states residual risks, assumptions, and any evidence gaps."
+        ]
+      },
+      "prompt": "multi-tenant audit export service intermittently leaks cross-tenant records when async shard compaction overlaps resumable export pagination after failover; identify root cause, design a safe scoped fix, include rollback plan, verify tenant isolation with focused regression checks, and summarize residual risks",
+      "qa_issues": [],
+      "status": "success"
+    }
+  ],
+  "success_count": 5
+}
