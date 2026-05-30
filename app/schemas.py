@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -37,7 +37,7 @@ class PlanStep(BaseModel):
     step_id: str
     worker_type: str
     phase: str | None = None
-    mode: str | None = None
+    mode: Literal["observe_only", "plan_only", "bounded_mutation", "verify_only", "summarize_only"] | None = None
     task_id: str | None = None
 
     instruction: str

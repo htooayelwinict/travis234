@@ -198,7 +198,7 @@ def _complex_multi_intent_plan(request_id: str = "req_123") -> dict[str, Any]:
                 "task_id": "task_main",
                 "instruction": "Patch async integration only within the approved mutation scope.",
                 "input_artifacts": ["mutation_scope", "patch_design", "rollback_plan", "performance_evidence", "sdk_dependency_notes"],
-                "output_artifacts": ["patch_result", "rollback_patch"],
+                "output_artifacts": ["patch_result", "change_summary", "rollback_patch"],
                 "max_tool_calls": 6,
                 "max_model_calls": 1,
                 "permissions": {
@@ -215,7 +215,14 @@ def _complex_multi_intent_plan(request_id: str = "req_123") -> dict[str, Any]:
                 "mode": "verify_only",
                 "task_id": "task_main",
                 "instruction": "Run focused verification checks for patched transaction integration.",
-                "input_artifacts": ["patch_result", "mutation_scope", "performance_evidence"],
+                "input_artifacts": [
+                    "patch_result",
+                    "change_summary",
+                    "rollback_patch",
+                    "mutation_scope",
+                    "performance_evidence",
+                    "rollback_plan",
+                ],
                 "output_artifacts": ["verification_result"],
                 "max_tool_calls": 3,
                 "max_model_calls": 0,
@@ -337,24 +344,21 @@ def test_validator_rejects_phase_aware_step_without_explicit_permissions() -> No
         PlannerPlanValidator().validate(envelope, Plan.model_validate(payload))
 
 
-def test_validator_rejects_overloaded_research_step_for_sdk_and_performance_evidence() -> None:
+def test_validator_rejects_phase_mode_mismatch() -> None:
     envelope = _envelope()
     payload = _complex_multi_intent_plan()
-    payload["steps"][1]["output_artifacts"].append("sdk_dependency_notes")
-    payload["steps"].pop(2)
-    payload["steps"][2]["input_artifacts"] = ["target_files", "performance_evidence", "sdk_dependency_notes"]
-    payload["budget"] = {"max_tool_calls": 21, "max_model_calls": 4, "max_workers": 6, "max_retries": 0}
+    payload["steps"][4]["mode"] = "observe_only"
 
-    with pytest.raises(ValueError, match="separate steps"):
+    with pytest.raises(ValueError, match="phase MUTATE must use mode"):
         PlannerPlanValidator().validate(envelope, Plan.model_validate(payload))
 
 
-def test_validator_rejects_mutation_without_performance_evidence_input() -> None:
+def test_validator_rejects_verify_without_evidence_context() -> None:
     envelope = _envelope()
     payload = _complex_multi_intent_plan()
-    payload["steps"][4]["input_artifacts"] = ["mutation_scope", "patch_design", "sdk_dependency_notes"]
+    payload["steps"][5]["input_artifacts"] = ["patch_result", "change_summary", "rollback_patch", "mutation_scope", "rollback_plan"]
 
-    with pytest.raises(ValueError, match="mutation must consume performance evidence"):
+    with pytest.raises(ValueError, match="consume evidence/root-cause artifacts"):
         PlannerPlanValidator().validate(envelope, Plan.model_validate(payload))
 
 
@@ -376,12 +380,13 @@ def test_validator_rejects_discovery_artifact_as_write_scope() -> None:
         PlannerPlanValidator().validate(envelope, Plan.model_validate(payload))
 
 
-def test_validator_rejects_mutation_without_rollback_artifact() -> None:
+def test_validator_rejects_mutation_without_change_summary() -> None:
     envelope = _envelope()
     payload = _complex_multi_intent_plan()
-    payload["steps"][4]["output_artifacts"] = ["patch_result"]
+    payload["steps"][4]["output_artifacts"] = ["patch_result", "rollback_patch"]
+    payload["steps"][5]["input_artifacts"] = ["patch_result", "rollback_patch", "mutation_scope", "performance_evidence"]
 
-    with pytest.raises(ValueError, match="rollback/revert"):
+    with pytest.raises(ValueError, match="output change_summary"):
         PlannerPlanValidator().validate(envelope, Plan.model_validate(payload))
 
 
@@ -395,7 +400,7 @@ def test_validator_rejects_mutation_without_pre_write_rollback_artifact() -> Non
         "performance_evidence",
         "sdk_dependency_notes",
     ]
-    payload["steps"][5]["input_artifacts"] = ["patch_result", "mutation_scope", "performance_evidence"]
+    payload["steps"][5]["input_artifacts"] = ["patch_result", "change_summary", "mutation_scope", "performance_evidence"]
 
     with pytest.raises(ValueError, match="rollback/revert artifact before write"):
         PlannerPlanValidator().validate(envelope, Plan.model_validate(payload))
@@ -419,12 +424,12 @@ def test_validator_rejects_finalize_without_output_artifact() -> None:
         PlannerPlanValidator().validate(envelope, Plan.model_validate(payload))
 
 
-def test_validator_rejects_mutation_without_stop_and_replan_metadata() -> None:
+def test_validator_rejects_mutation_without_design_rollback_plan() -> None:
     envelope = _envelope()
     payload = _complex_multi_intent_plan()
-    payload["metadata"] = {}
+    payload["steps"][3]["output_artifacts"] = ["mutation_scope", "patch_design"]
 
-    with pytest.raises(ValueError, match="metadata.stop_conditions"):
+    with pytest.raises(ValueError, match="DESIGN step output rollback_plan"):
         PlannerPlanValidator().validate(envelope, Plan.model_validate(payload))
 
 
@@ -534,6 +539,20 @@ def test_prompt_chain_repairs_missing_write_scope_from_design() -> None:
     assert plan.steps[4].permissions["write_paths_from_artifacts"] == ["mutation_scope"]
 
 
+def test_prompt_chain_repairs_invalid_semantic_mode_name() -> None:
+    envelope = _envelope()
+    invalid_mode = _complex_multi_intent_plan()
+    invalid_mode["steps"][1]["mode"] = "analysis"
+    repaired = _complex_multi_intent_plan()
+    client = FakePlannerClient({"draft_plan": invalid_mode, "repair_plan_1": repaired})
+
+    plan = LLMPlanCompiler(model_client=client).run(envelope)
+
+    assert [call["stage"] for call in client.calls] == ["draft_plan", "repair_plan_1"]
+    assert plan.steps[1].phase == "ANALYZE"
+    assert plan.steps[1].mode == "observe_only"
+
+
 def test_prompt_chain_repairs_invalid_plan_once() -> None:
     envelope = _envelope()
     invalid_draft = _complex_multi_intent_plan()
@@ -599,6 +618,8 @@ def test_prompt_contains_worker_catalog_and_envelope() -> None:
 
     draft_prompt = client.calls[0]["prompt"]
     assert "worker_catalog" in draft_prompt
+    assert "allowed_modes" in draft_prompt
+    assert "bounded_mutation" in draft_prompt
     assert "repo_worker" in draft_prompt
     assert "async_sdk_performance_refactor_request" in draft_prompt
 

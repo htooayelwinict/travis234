@@ -28,4 +28,8 @@ Keep one planner runtime and one worker-kernel runtime, but add a phase-aware pl
 
 ## Status
 
-Planning complete. Ready for phased implementation.
+Planner contract discipline pass complete. Current contract validation and prompt repairs are aligned with the LLM-heavy prompt-chain approach.
+
+Latest QA artifact:
+
+- `research/planner-contract-discipline-qa.md`

@@ -1,0 +1,578 @@
+{
+  "failure_count": 0,
+  "generated_at": "2026-05-30T16:17:10.018607+00:00",
+  "run_count": 2,
+  "runs": [
+    {
+      "attempts": 2,
+      "envelope": {
+        "ambiguity": [
+          "Exact code locations not provided.",
+          "Cache invalidation timing details missing."
+        ],
+        "artifacts": [
+          {
+            "name": "subscription renewal job",
+            "type": "job"
+          },
+          {
+            "name": "webhook retries",
+            "type": "mechanism"
+          },
+          {
+            "name": "account status cache",
+            "type": "cache"
+          }
+        ],
+        "assumptions": [
+          "Issue is in renewal job processing logic."
+        ],
+        "complexity_hint": "high",
+        "confidence": 0.7,
+        "constraints": [
+          "target_locations_must_be_identified_before_mutation",
+          "mutation_requires_verification"
+        ],
+        "context_needed": [
+          "cache_invalidation_details",
+          "webhook_retry_mechanism",
+          "billing_logic_code"
+        ],
+        "domains": [
+          "code",
+          "infra",
+          "billing"
+        ],
+        "input_type": "infra_job_debug_request",
+        "intents": [
+          "code.fix",
+          "infra.debug",
+          "billing.investigate"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 23602.91,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 23602.91,
+            "latency_ms_p95": 23602.91,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "Subscription renewal job charges canceled accounts when webhook retries arrive after account status cache invalidation; identify root cause, apply safe fix, include rollback plan, and verify with focused billing safety checks",
+        "raw_input": "subscription renewal job charges canceled accounts when webhook retries arrive after account status cache invalidation; identify root cause, apply safe fix, include rollback plan, and verify with focused billing safety checks",
+        "request_id": "req_002",
+        "risks": [
+          "mutation_requested",
+          "needs_verification",
+          "ambiguous_scope"
+        ],
+        "user_goal": "Identify root cause of incorrect charges on canceled accounts and apply safe fix with rollback and verification"
+      },
+      "index": 1,
+      "plan": {
+        "budget": {
+          "max_model_calls": 6,
+          "max_retries": 2,
+          "max_tool_calls": 19,
+          "max_workers": 6,
+          "step_count": 6
+        },
+        "execution_pattern": "discover_research_design_mutate_verify_finalize",
+        "global_invariants": [
+          "no charges to canceled accounts",
+          "cache invalidation must precede webhook processing",
+          "all mutations must have rollback"
+        ],
+        "metadata": {
+          "ambiguity_handled": true,
+          "complexity": "high",
+          "llm_planner": {
+            "budget_auto_aligned": false,
+            "envelope_complexity_hint": "high",
+            "envelope_input_type": "infra_job_debug_request",
+            "mode": "repaired",
+            "model_calls": 2,
+            "repair_attempted": true,
+            "resolved_validation_errors": [
+              {
+                "msg": "step step_4 with write_files must restrict writes by write_paths or write_paths_from_artifacts",
+                "type": "planner_validation"
+              },
+              {
+                "msg": "step step_4 phase MUTATE must scope writes with write_paths_from_artifacts",
+                "type": "planner_validation"
+              }
+            ],
+            "stages": [
+              "draft_plan",
+              "validate_plan",
+              "repair_plan_1",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Identify root cause of incorrect charges on canceled accounts and apply safe fix with rollback and verification",
+        "plan_id": "plan_req_002_001",
+        "planner": "safe_planner",
+        "request_id": "req_002",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Discover candidate file locations and paths for subscription renewal job, webhook retry mechanism, account status cache, and billing logic.",
+            "max_model_calls": 1,
+            "max_tool_calls": 5,
+            "mode": "observe_only",
+            "output_artifacts": [
+              "candidate_paths"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "DISCOVER",
+            "step_id": "step_1",
+            "task_id": "billing_fix_task",
+            "worker_type": "repo_worker"
+          },
+          {
+            "input_artifacts": [
+              "candidate_paths"
+            ],
+            "instruction": "Analyze renewal job processing logic, cache invalidation timing, and webhook retry behavior to collect root cause evidence.",
+            "max_model_calls": 1,
+            "max_tool_calls": 4,
+            "mode": "observe_only",
+            "output_artifacts": [
+              "root_cause_evidence"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "RESEARCH",
+            "step_id": "step_2",
+            "task_id": "billing_fix_task",
+            "worker_type": "research_worker"
+          },
+          {
+            "input_artifacts": [
+              "candidate_paths",
+              "root_cause_evidence"
+            ],
+            "instruction": "Design narrow mutation_scope from candidates, produce rollback_plan, and define verification_plan.",
+            "max_model_calls": 1,
+            "max_tool_calls": 2,
+            "mode": "plan_only",
+            "output_artifacts": [
+              "mutation_scope",
+              "rollback_plan",
+              "verification_plan"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "DESIGN",
+            "step_id": "step_3",
+            "task_id": "billing_fix_task",
+            "worker_type": "code_worker"
+          },
+          {
+            "input_artifacts": [
+              "mutation_scope",
+              "rollback_plan"
+            ],
+            "instruction": "Apply bounded mutation to fix root cause using mutation_scope and rollback_plan.",
+            "max_model_calls": 1,
+            "max_tool_calls": 3,
+            "mode": "bounded_mutation",
+            "output_artifacts": [
+              "change_summary",
+              "rollback_patch"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": true,
+              "write_paths_from_artifacts": [
+                "mutation_scope"
+              ]
+            },
+            "phase": "MUTATE",
+            "step_id": "step_4",
+            "task_id": "billing_fix_task",
+            "worker_type": "code_worker"
+          },
+          {
+            "input_artifacts": [
+              "change_summary",
+              "mutation_scope",
+              "root_cause_evidence",
+              "verification_plan"
+            ],
+            "instruction": "Verify fix against root cause, scope, billing safety checks, and rollback availability using change_summary and evidence.",
+            "max_model_calls": 1,
+            "max_tool_calls": 4,
+            "mode": "verify_only",
+            "output_artifacts": [
+              "verification_report"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": true,
+              "write_files": false
+            },
+            "phase": "VERIFY",
+            "step_id": "step_5",
+            "task_id": "billing_fix_task",
+            "worker_type": "verify_worker"
+          },
+          {
+            "input_artifacts": [
+              "verification_report",
+              "change_summary",
+              "rollback_patch"
+            ],
+            "instruction": "Produce final summary and report including rollback instructions.",
+            "max_model_calls": 1,
+            "max_tool_calls": 1,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "final_report"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "step_6",
+            "task_id": "billing_fix_task",
+            "worker_type": "research_worker"
+          }
+        ],
+        "strategy": "discovery_first_sequential_mutation_with_evidence_and_verification",
+        "success_criteria": [
+          "root cause identified and evidenced",
+          "fix scoped to mutation_scope",
+          "verification passes billing safety checks",
+          "rollback available"
+        ]
+      },
+      "prompt": "subscription renewal job charges canceled accounts when webhook retries arrive after account status cache invalidation; identify root cause, apply safe fix, include rollback plan, and verify with focused billing safety checks",
+      "status": "success"
+    },
+    {
+      "attempts": 1,
+      "envelope": {
+        "ambiguity": [
+          "specific codebase or system unnamed.",
+          "no logs or code provided.",
+          "exact overlap trigger conditions unknown."
+        ],
+        "artifacts": [
+          {
+            "name": "search indexing pipeline",
+            "type": "component"
+          },
+          {
+            "name": "private document ACL updates",
+            "type": "data"
+          },
+          {
+            "name": "incremental reindex",
+            "type": "process"
+          },
+          {
+            "name": "permission migration",
+            "type": "process"
+          }
+        ],
+        "assumptions": [
+          "issue occurs in production search infrastructure.",
+          "ACL updates are required for private document access."
+        ],
+        "complexity_hint": "high",
+        "confidence": 0.65,
+        "constraints": [
+          "root_cause_must_be_identified_before_fix",
+          "mutation_requires_verification",
+          "rollback_plan_mandatory"
+        ],
+        "context_needed": [
+          "pipeline_source",
+          "reindex_logs",
+          "migration_code",
+          "acl_update_path"
+        ],
+        "domains": [
+          "infra",
+          "code",
+          "data"
+        ],
+        "input_type": "infra_pipeline_debug_request",
+        "intents": [
+          "infra.debug",
+          "code.fix",
+          "verification.access_control"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 10358.999,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 10358.999,
+            "latency_ms_p95": 10358.999,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "Search indexing pipeline drops private document ACL updates when incremental reindex overlaps permission migration; identify root cause, implement safe fix, include rollback plan, and verify with focused access-control checks",
+        "raw_input": "search indexing pipeline drops private document ACL updates when incremental reindex overlaps permission migration; identify root cause, implement safe fix, include rollback plan, and verify with focused access-control checks",
+        "request_id": "req_003",
+        "risks": [
+          "mutation_requested",
+          "needs_verification",
+          "ambiguous_scope"
+        ],
+        "user_goal": "Identify root cause of dropped ACL updates during overlapping reindex and migration, implement safe fix with rollback, and verify via access-control checks"
+      },
+      "index": 2,
+      "plan": {
+        "budget": {
+          "max_model_calls": 6,
+          "max_retries": 2,
+          "max_tool_calls": 15,
+          "max_workers": 6
+        },
+        "execution_pattern": "discover_analyze_design_mutate_verify_finalize",
+        "global_invariants": [
+          "root_cause_must_be_identified_before_fix",
+          "mutation_requires_verification",
+          "rollback_plan_mandatory",
+          "no_write_without_design_scope"
+        ],
+        "metadata": {
+          "complexity": "high",
+          "confidence": 0.65,
+          "llm_planner": {
+            "budget_auto_aligned": false,
+            "envelope_complexity_hint": "high",
+            "envelope_input_type": "infra_pipeline_debug_request",
+            "mode": "repaired",
+            "model_calls": 2,
+            "repair_attempted": true,
+            "resolved_validation_errors": [
+              {
+                "msg": "step s4 with write_files must restrict writes by write_paths or write_paths_from_artifacts",
+                "type": "planner_validation"
+              },
+              {
+                "msg": "step s4 phase MUTATE must scope writes with write_paths_from_artifacts",
+                "type": "planner_validation"
+              }
+            ],
+            "stages": [
+              "draft_plan",
+              "validate_plan",
+              "repair_plan_1",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Search indexing pipeline drops private document ACL updates when incremental reindex overlaps permission migration; identify root cause, implement safe fix, include rollback plan, and verify with focused access-control checks",
+        "plan_id": "plan_req_003",
+        "planner": "infra_planner",
+        "request_id": "req_003",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Discover pipeline source, reindex logs, migration code, and ACL update paths for search indexing and permission migration overlap",
+            "max_model_calls": 1,
+            "max_tool_calls": 3,
+            "mode": "observe_only",
+            "output_artifacts": [
+              "candidate_paths",
+              "pipeline_source",
+              "reindex_logs"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "DISCOVER",
+            "step_id": "s1",
+            "task_id": "t1",
+            "worker_type": "repo_worker"
+          },
+          {
+            "input_artifacts": [
+              "candidate_paths",
+              "pipeline_source",
+              "reindex_logs"
+            ],
+            "instruction": "Analyze overlap conditions between incremental reindex and permission migration causing dropped ACL updates; produce root cause evidence",
+            "max_model_calls": 1,
+            "max_tool_calls": 3,
+            "mode": "observe_only",
+            "output_artifacts": [
+              "root_cause_evidence",
+              "dependency_artifacts"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "ANALYZE",
+            "step_id": "s2",
+            "task_id": "t1",
+            "worker_type": "infra_worker"
+          },
+          {
+            "input_artifacts": [
+              "root_cause_evidence",
+              "dependency_artifacts"
+            ],
+            "instruction": "Design narrow mutation_scope, rollback_plan, allowed_write_paths, and verification_plan from discovered candidates and evidence",
+            "max_model_calls": 1,
+            "max_tool_calls": 2,
+            "mode": "plan_only",
+            "output_artifacts": [
+              "mutation_scope",
+              "rollback_plan",
+              "allowed_write_paths",
+              "verification_plan"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "DESIGN",
+            "step_id": "s3",
+            "task_id": "t1",
+            "worker_type": "code_worker"
+          },
+          {
+            "input_artifacts": [
+              "mutation_scope",
+              "rollback_plan",
+              "allowed_write_paths"
+            ],
+            "instruction": "Apply bounded mutation to fix ACL drop using mutation_scope and rollback_plan; output change_summary and rollback_patch",
+            "max_model_calls": 1,
+            "max_tool_calls": 3,
+            "mode": "bounded_mutation",
+            "output_artifacts": [
+              "change_summary",
+              "rollback_patch"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": true,
+              "write_paths_from_artifacts": [
+                "allowed_write_paths"
+              ]
+            },
+            "phase": "MUTATE",
+            "step_id": "s4",
+            "task_id": "t1",
+            "worker_type": "code_worker"
+          },
+          {
+            "input_artifacts": [
+              "change_summary",
+              "mutation_scope",
+              "root_cause_evidence"
+            ],
+            "instruction": "Verify fix against root cause, scope, access-control checks using change_summary and evidence; output verification_report",
+            "max_model_calls": 1,
+            "max_tool_calls": 3,
+            "mode": "verify_only",
+            "output_artifacts": [
+              "verification_report"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": true,
+              "write_files": false
+            },
+            "phase": "VERIFY",
+            "step_id": "s5",
+            "task_id": "t1",
+            "worker_type": "verify_worker"
+          },
+          {
+            "input_artifacts": [
+              "verification_report",
+              "change_summary",
+              "rollback_patch"
+            ],
+            "instruction": "Produce final_report summarizing root cause, fix, verification results, and rollback availability",
+            "max_model_calls": 1,
+            "max_tool_calls": 1,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "final_report"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "s6",
+            "task_id": "t1",
+            "worker_type": "research_worker"
+          }
+        ],
+        "strategy": "observe-first discovery then targeted mutation with verification and rollback",
+        "success_criteria": [
+          "root cause identified",
+          "safe fix applied within mutation_scope",
+          "verification passes access-control checks",
+          "rollback available"
+        ]
+      },
+      "prompt": "search indexing pipeline drops private document ACL updates when incremental reindex overlaps permission migration; identify root cause, implement safe fix, include rollback plan, and verify with focused access-control checks",
+      "status": "success"
+    }
+  ],
+  "success_count": 2
+}

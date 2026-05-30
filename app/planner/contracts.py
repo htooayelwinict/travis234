@@ -14,6 +14,21 @@ ALLOWED_WORKER_TYPES: tuple[str, ...] = (
     "verify_worker",
 )
 
+ALLOWED_MODES: tuple[str, ...] = (
+    "observe_only",
+    "plan_only",
+    "bounded_mutation",
+    "verify_only",
+    "summarize_only",
+)
+
+WRITE_SCOPE_ARTIFACTS: tuple[str, ...] = (
+    "mutation_scope",
+    "allowed_write_paths",
+    "writable_targets",
+    "patch_scope",
+)
+
 WORKER_CATALOG: dict[str, dict[str, Any]] = {
     "direct_worker": {
         "description": "Direct question answering without file or command access.",
