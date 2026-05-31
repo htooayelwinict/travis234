@@ -6,6 +6,7 @@ from .infra_worker import InfraWorker
 from .repo_worker import RepoWorker
 from .research_worker import ResearchWorker
 from .verify_worker import VerifyWorker
+from .web_research_worker import WebResearchWorker
 
 __all__ = [
     "CodeWorker",
@@ -13,5 +14,6 @@ __all__ = [
     "InfraWorker",
     "RepoWorker",
     "ResearchWorker",
+    "WebResearchWorker",
     "VerifyWorker",
 ]

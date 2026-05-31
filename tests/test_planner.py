@@ -771,6 +771,7 @@ def test_prompt_contains_worker_catalog_and_envelope() -> None:
     assert "allowed_modes" in draft_prompt
     assert "bounded_mutation" in draft_prompt
     assert "repo_worker" in draft_prompt
+    assert "web_research_worker" in draft_prompt
     assert "async_sdk_performance_refactor_request" in draft_prompt
 
 

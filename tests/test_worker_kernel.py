@@ -83,6 +83,39 @@ def test_worker_kernel_code_flow_executes() -> None:
     assert "verification_result" in artifact_ids
 
 
+def test_worker_kernel_web_research_flow_executes() -> None:
+    plan = Plan(
+        plan_id="plan_req_web_research",
+        request_id="req_web_research",
+        planner="research",
+        objective="Compare external algorithm references",
+        strategy="web_research_then_summarize",
+        steps=[
+            PlanStep(
+                step_id="research_external_sources",
+                worker_type="web_research_worker",
+                phase="RESEARCH",
+                mode="observe_only",
+                task_id="external_research",
+                instruction="Collect comparable algorithm references and summarize differences.",
+                output_artifacts=["web_research_notes"],
+                max_tool_calls=4,
+                max_model_calls=1,
+                permissions={"read_files": False, "write_files": False, "run_commands": True},
+            )
+        ],
+        budget={"max_tool_calls": 4, "max_model_calls": 1, "max_workers": 1, "max_retries": 0},
+        execution_pattern="research_finalize",
+        global_invariants=["no_file_writes_for_web_research"],
+    )
+
+    result = WorkerKernelRuntime().run(plan)
+
+    assert result.status == "completed"
+    artifact_ids = {a.get("id") or a.get("artifact_id") for a in result.artifacts}
+    assert "web_research_notes" in artifact_ids
+
+
 def test_budget_rejection_before_dispatch() -> None:
     class CountingWorker:
         worker_type = "direct_worker"

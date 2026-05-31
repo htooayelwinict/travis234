@@ -288,7 +288,7 @@ class PlannerPlanValidator:
         return bool(context & DISCOVERY_CONTEXT_SIGNALS) or bool(constraints & DISCOVERY_CONSTRAINT_SIGNALS)
 
     def _is_discovery_step(self, worker_type: str, permissions: dict) -> bool:
-        return worker_type in {"repo_worker", "research_worker", "infra_worker"} and not bool(
+        return worker_type in {"repo_worker", "research_worker", "web_research_worker", "infra_worker"} and not bool(
             permissions.get("write_files", False)
         )
 

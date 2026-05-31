@@ -1,0 +1,2665 @@
+{
+  "failure_count": 0,
+  "generated_at": "2026-05-31T04:31:46.851936+00:00",
+  "run_count": 15,
+  "runs": [
+    {
+      "attempts": 1,
+      "envelope": {
+        "ambiguity": [
+          "No new actionable task is requested."
+        ],
+        "artifacts": [],
+        "assumptions": [
+          "The message is a conversational acknowledgment rather than a new task."
+        ],
+        "complexity_hint": "low",
+        "confidence": 0.99,
+        "constraints": [
+          "do_not_infer_new_work_without_explicit_request",
+          "preserve_non_actionable_acknowledgment_semantics"
+        ],
+        "context_needed": [],
+        "domains": [
+          "general",
+          "conversation"
+        ],
+        "input_type": "gratitude_acknowledgment_message",
+        "intents": [
+          "conversation.acknowledge_help",
+          "conversation.express_gratitude"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 5838.652,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 5838.652,
+            "latency_ms_p95": 5838.652,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "User expresses gratitude and indicates prior help was useful.",
+        "raw_input": "thanks, that helped",
+        "request_id": "req_001",
+        "risks": [
+          "no_actionable_work_item"
+        ],
+        "user_goal": "Acknowledge successful assistance and thank the assistant."
+      },
+      "index": 1,
+      "plan": {
+        "budget": {
+          "max_model_calls": 1,
+          "max_retries": 0,
+          "max_tool_calls": 0,
+          "max_workers": 1
+        },
+        "execution_pattern": "finalize",
+        "global_invariants": [
+          "no_tools",
+          "no_file_access",
+          "answer_from_user_input_only"
+        ],
+        "metadata": {
+          "archetype": "direct_support",
+          "llm_planner": {
+            "budget_auto_aligned": false,
+            "envelope_complexity_hint": "low",
+            "envelope_input_type": "gratitude_acknowledgment_message",
+            "mode": "completed",
+            "model_calls": 1,
+            "repair_attempted": false,
+            "resolved_validation_errors": [],
+            "stages": [
+              "draft_plan",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Provide direct conversational support by acknowledging the user\u2019s gratitude and offering optional next-step help without any runtime actions.",
+        "plan_id": "plan_req_001_direct_support",
+        "planner": "direct_support_planner",
+        "request_id": "req_001",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Known facts: User said \u201cthanks, that helped,\u201d indicating successful prior assistance and no explicit new task request. Unknowns: Whether the user wants any additional help right now. Do now: Respond with a brief friendly acknowledgment and invite a new question if needed. Do not do: Do not use tools, files, commands, or invent unsupported details. Output: direct_guidance with polite acknowledgment and safe optional next step.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "direct_guidance"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "direct_support_response",
+            "task_id": "direct_support",
+            "worker_type": "direct_worker"
+          }
+        ],
+        "strategy": "phase_aware_direct_support",
+        "success_criteria": [
+          "User receives a polite acknowledgment of gratitude with an optional invitation to ask for further help."
+        ]
+      },
+      "prompt": "thanks, that helped",
+      "status": "success"
+    },
+    {
+      "attempts": 1,
+      "envelope": {
+        "ambiguity": [
+          "\"I\" is pronoun-only and does not specify which identity aspect is requested.",
+          "No profile, account, or biographical context is provided."
+        ],
+        "artifacts": [],
+        "assumptions": [
+          "The user is asking a broad self-identity question rather than a technical identifier lookup."
+        ],
+        "complexity_hint": "low",
+        "confidence": 0.81,
+        "constraints": [
+          "do_not_claim_or_infer_personal_identity_without_verified_context",
+          "avoid fabricating personal facts",
+          "treat identity-related details as privacy-sensitive"
+        ],
+        "context_needed": [
+          "what identity dimension is intended (name, role, account, personal traits)",
+          "whether account/profile metadata is available",
+          "any prior conversation context the user wants used"
+        ],
+        "domains": [
+          "general"
+        ],
+        "input_type": "ambiguous_identity_query",
+        "intents": [
+          "identity.lookup",
+          "self_context.clarification"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 6632.629,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 6632.629,
+            "latency_ms_p95": 6632.629,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "The user asks, \"who am I.\"",
+        "raw_input": "who am i",
+        "request_id": "req_002",
+        "risks": [
+          "ambiguous_scope",
+          "insufficient_context",
+          "privacy_sensitive"
+        ],
+        "user_goal": "Determine the user's identity."
+      },
+      "index": 2,
+      "plan": {
+        "budget": {
+          "max_model_calls": 1,
+          "max_retries": 0,
+          "max_tool_calls": 0,
+          "max_workers": 1
+        },
+        "execution_pattern": "finalize",
+        "global_invariants": [
+          "no_tools",
+          "no_file_access",
+          "answer_from_user_input_only"
+        ],
+        "metadata": {
+          "archetype": "direct_support",
+          "llm_planner": {
+            "budget_auto_aligned": false,
+            "envelope_complexity_hint": "low",
+            "envelope_input_type": "ambiguous_identity_query",
+            "mode": "completed",
+            "model_calls": 1,
+            "repair_attempted": false,
+            "resolved_validation_errors": [],
+            "stages": [
+              "draft_plan",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Provide direct support to clarify the user\u2019s intended identity dimension and offer safe immediate guidance from the provided input only.",
+        "plan_id": "plan_req_002_direct_support",
+        "planner": "direct_support_planner",
+        "request_id": "req_002",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Known facts: User asked \"who am i\" with no profile/account/biographical context. Identity details are privacy-sensitive and must not be inferred. Unknowns: Which identity dimension is intended (name, role, account, personal traits), whether profile metadata exists, and any prior context to use. Do now: Ask concise clarifying questions (e.g., \"Do you mean your account username, your name/role, or a personal self-reflection question?\") and provide immediate safe guidance to share only non-sensitive context needed for help. Do not do: Do not use tools, files, or commands; do not invent personal facts or claim verified identity. Output: direct_guidance with clarification questions and safe next steps.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "direct_guidance"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "direct_support_response",
+            "task_id": "direct_support",
+            "worker_type": "direct_worker"
+          }
+        ],
+        "strategy": "phase_aware_direct_support",
+        "success_criteria": [
+          "User receives a direct response that asks focused clarification about intended identity type and provides safe immediate next steps without fabricated personal claims."
+        ]
+      },
+      "prompt": "who am i",
+      "status": "success"
+    },
+    {
+      "attempts": 1,
+      "envelope": {
+        "ambiguity": [
+          "No timezone or locale is specified, so the exact date may vary by region."
+        ],
+        "artifacts": [
+          {
+            "name": "today's date",
+            "type": "temporal_reference"
+          }
+        ],
+        "assumptions": [
+          "Assume the user wants the current calendar date at response time.",
+          "Assume Gregorian calendar unless specified otherwise."
+        ],
+        "complexity_hint": "low",
+        "confidence": 0.98,
+        "constraints": [
+          "date_response_must_use_runtime_current_date",
+          "timezone_assumption_must_be_explicit_if_not_provided"
+        ],
+        "context_needed": [
+          "current_date_source",
+          "applicable_timezone_or_locale"
+        ],
+        "domains": [
+          "general",
+          "time"
+        ],
+        "input_type": "current_date_lookup_query",
+        "intents": [
+          "time.lookup",
+          "date.retrieve"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 5844.178,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 5844.178,
+            "latency_ms_p95": 5844.178,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "User asks for the current date (\"today's date\").",
+        "raw_input": "what is today's date",
+        "request_id": "req_003",
+        "risks": [
+          "timezone_unspecified",
+          "needs_runtime_clock"
+        ],
+        "user_goal": "Find out today's date."
+      },
+      "index": 3,
+      "plan": {
+        "budget": {
+          "max_model_calls": 1,
+          "max_retries": 0,
+          "max_tool_calls": 0,
+          "max_workers": 1
+        },
+        "execution_pattern": "finalize",
+        "global_invariants": [
+          "no_tools",
+          "no_file_access",
+          "answer_from_user_input_only"
+        ],
+        "metadata": {
+          "archetype": "direct_support",
+          "llm_planner": {
+            "budget_auto_aligned": false,
+            "envelope_complexity_hint": "low",
+            "envelope_input_type": "current_date_lookup_query",
+            "mode": "completed",
+            "model_calls": 1,
+            "repair_attempted": false,
+            "resolved_validation_errors": [],
+            "stages": [
+              "draft_plan",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Provide the current date directly, while explicitly handling timezone ambiguity with a brief clarification or stated assumption.",
+        "plan_id": "plan_req_003_direct_support",
+        "planner": "direct_support_planner",
+        "request_id": "req_003",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Known facts: User asks for today's date; timezone/locale is not specified; Gregorian calendar is assumed unless user says otherwise. Unknowns: Applicable timezone or locale for determining \"today.\" Do now: Ask a concise timezone clarification if needed and provide immediate date guidance with an explicit timezone assumption when unavailable. Do not do: Do not use tools, files, or commands; do not invent unsupported provider-specific facts. Output: direct_guidance with the date response and safe next-step clarification.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "direct_guidance"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "direct_support_response",
+            "task_id": "direct_support",
+            "worker_type": "direct_worker"
+          }
+        ],
+        "strategy": "phase_aware_direct_support",
+        "success_criteria": [
+          "User receives today's date response with an explicit timezone assumption or a concise timezone clarification question."
+        ]
+      },
+      "prompt": "what is today's date",
+      "status": "success"
+    },
+    {
+      "attempts": 1,
+      "envelope": {
+        "ambiguity": [
+          "\u201cStandard water bottle\u201d is not universally defined and can refer to multiple common sizes.",
+          "No brand, region, or bottle category is specified."
+        ],
+        "artifacts": [
+          {
+            "name": "liters",
+            "type": "unit"
+          },
+          {
+            "name": "standard water bottle",
+            "type": "consumer_container"
+          }
+        ],
+        "assumptions": [
+          "User likely wants a common everyday reference size rather than a brand-specific exact capacity.",
+          "Metric output in liters is the preferred unit."
+        ],
+        "complexity_hint": "low",
+        "confidence": 0.96,
+        "constraints": [
+          "do_not_assume_single_global_standard_volume",
+          "state_assumptions_if_using_typical_size",
+          "distinguish_estimate_from_exact_specification"
+        ],
+        "context_needed": [
+          "target market/region",
+          "bottle type (single-use vs reusable)",
+          "whether an exact value or common range is desired"
+        ],
+        "domains": [
+          "general",
+          "consumer",
+          "measurement"
+        ],
+        "input_type": "ambiguous_consumer_container_volume_lookup",
+        "intents": [
+          "research.lookup",
+          "units.convert",
+          "consumer_reference.clarify"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 8343.871,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 8343.871,
+            "latency_ms_p95": 8343.871,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "Determine the liter volume of a typical \u201cstandard\u201d water bottle.",
+        "raw_input": "how many liters are in a standard water bottle",
+        "request_id": "req_004",
+        "risks": [
+          "ambiguous_scope",
+          "term_not_standardized",
+          "needs_verification"
+        ],
+        "user_goal": "Get a quick unit-level estimate for how many liters a standard water bottle holds."
+      },
+      "index": 4,
+      "plan": {
+        "budget": {
+          "max_model_calls": 1,
+          "max_retries": 0,
+          "max_tool_calls": 0,
+          "max_workers": 1
+        },
+        "execution_pattern": "finalize",
+        "global_invariants": [
+          "no_tools",
+          "no_file_access",
+          "answer_from_user_input_only"
+        ],
+        "metadata": {
+          "archetype": "direct_support",
+          "llm_planner": {
+            "budget_auto_aligned": false,
+            "envelope_complexity_hint": "low",
+            "envelope_input_type": "ambiguous_consumer_container_volume_lookup",
+            "mode": "completed",
+            "model_calls": 1,
+            "repair_attempted": false,
+            "resolved_validation_errors": [],
+            "stages": [
+              "draft_plan",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Provide a direct estimate for the liter volume of a typical \u201cstandard\u201d water bottle, while clarifying ambiguity and stating assumptions.",
+        "plan_id": "plan_req_004_direct_support",
+        "planner": "direct_support_planner",
+        "request_id": "req_004",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Known facts: User asks how many liters are in a \u201cstandard water bottle\u201d; term is ambiguous and not globally standardized; user likely wants a quick everyday estimate in liters. Unknowns: target region/market, bottle type (single-use vs reusable), and whether user wants one exact value or a common range. Do now: Give an immediate safe estimate with assumptions (e.g., common single-use bottle around 0.5 L, with common range about 0.33\u20131.0 L) and ask one concise clarifying question to refine if needed. Do not do: Do not use tools, files, or commands; do not invent brand- or region-specific exact standards. Output: direct_guidance with estimate, assumptions, and a brief clarification question.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "direct_guidance"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "direct_support_response",
+            "task_id": "direct_support",
+            "worker_type": "direct_worker"
+          }
+        ],
+        "strategy": "phase_aware_direct_support",
+        "success_criteria": [
+          "User receives a direct liters estimate with explicit assumptions and a concise clarification question to resolve ambiguity."
+        ]
+      },
+      "prompt": "how many liters are in a standard water bottle",
+      "status": "success"
+    },
+    {
+      "attempts": 1,
+      "envelope": {
+        "ambiguity": [
+          "MRT system location is unspecified.",
+          "Exact card problem (damaged card, insufficient balance, backend issue, blocked card) is unknown.",
+          "Commute route, timing, and transit alternatives are not provided."
+        ],
+        "artifacts": [
+          {
+            "name": "mrt card",
+            "type": "transit_card"
+          },
+          {
+            "name": "commute tomorrow",
+            "type": "time_constraint"
+          },
+          {
+            "name": "car",
+            "type": "vehicle"
+          }
+        ],
+        "assumptions": [
+          "The user relies on MRT for commuting.",
+          "The commute is necessary tomorrow.",
+          "The user currently does not have access to a car."
+        ],
+        "complexity_hint": "low",
+        "confidence": 0.91,
+        "constraints": [
+          "do_not_assume_root_cause_of_card_failure_without_evidence",
+          "recommendations_must_match_local_transit_rules_and_payment_options",
+          "time_sensitive_guidance_should_prioritize_next_day_commute_feasibility"
+        ],
+        "context_needed": [
+          "city_or_transit_network_for_mrt",
+          "card_type_and_issuer",
+          "observed_failure_mode_of_card",
+          "available_replacement_or_top_up_channels",
+          "accepted_alternative_fare_payment_methods",
+          "commute_route_and_time_window"
+        ],
+        "domains": [
+          "transportation",
+          "general"
+        ],
+        "input_type": "public_transit_card_failure_commute_urgency",
+        "intents": [
+          "mobility.issue_report",
+          "transit.access.restore",
+          "commute.contingency_identification"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 9305.86,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 9305.86,
+            "latency_ms_p95": 9305.86,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "The user says their MRT transit card is not working, and they must commute tomorrow without access to a car.",
+        "raw_input": "my mrt card is not working and i need to commute tomorrow with no car",
+        "request_id": "req_005",
+        "risks": [
+          "urgent_deadline",
+          "service_disruption_impact",
+          "needs_local_transit_policy_verification"
+        ],
+        "user_goal": "Find a way to complete tomorrow\u2019s commute despite a non-working MRT card and no car."
+      },
+      "index": 5,
+      "plan": {
+        "budget": {
+          "max_model_calls": 1,
+          "max_retries": 0,
+          "max_tool_calls": 0,
+          "max_workers": 1
+        },
+        "execution_pattern": "finalize",
+        "global_invariants": [
+          "no_tools",
+          "no_file_access",
+          "answer_from_user_input_only"
+        ],
+        "metadata": {
+          "archetype": "direct_support",
+          "llm_planner": {
+            "budget_auto_aligned": false,
+            "envelope_complexity_hint": "low",
+            "envelope_input_type": "public_transit_card_failure_commute_urgency",
+            "mode": "completed",
+            "model_calls": 1,
+            "repair_attempted": false,
+            "resolved_validation_errors": [],
+            "stages": [
+              "draft_plan",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Help the user secure a feasible, legal way to commute tomorrow despite a non-working MRT card and no car, using only provided input and clarifying questions.",
+        "plan_id": "plan_req_005_direct_support",
+        "planner": "direct_support_planner",
+        "request_id": "req_005",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Known facts: User says their MRT card is not working, they must commute tomorrow, and they do not have a car. Unknowns: City/transit network, card type/issuer, exact failure mode, replacement or top-up channels, accepted alternative payment methods, and commute route/time window. Do now: Ask concise clarifying questions (city/network, card type, exact error, route/time) and provide immediate safe guidance: check card balance/expiry/physical damage, try official ticket office/help point/app, prepare backup fare method accepted locally, and identify non-car backup transit options for tomorrow. Do not do: Do not use tools, files, or commands; do not invent provider-specific rules; do not suggest fare evasion or unsupported claims about root cause. Output: direct_guidance with brief questions plus actionable next steps for tomorrow commute readiness.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "direct_guidance"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "direct_support_response",
+            "task_id": "direct_support",
+            "worker_type": "direct_worker"
+          }
+        ],
+        "strategy": "phase_aware_direct_support",
+        "success_criteria": [
+          "User receives concise clarification questions and safe immediate guidance to maximize next-day commute feasibility without assuming unsupported local transit details."
+        ]
+      },
+      "prompt": "my mrt card is not working and i need to commute tomorrow with no car",
+      "status": "success"
+    },
+    {
+      "attempts": 1,
+      "envelope": {
+        "ambiguity": [
+          "cause of the girlfriend being upset is not provided.",
+          "severity of the conflict is unknown.",
+          "no details on prior attempts to resolve the issue.",
+          "relationship context and boundaries are unspecified."
+        ],
+        "artifacts": [
+          {
+            "name": "girlfriend",
+            "type": "person_role"
+          },
+          {
+            "name": "upset",
+            "type": "emotional_state"
+          },
+          {
+            "name": "make it up",
+            "type": "reconciliation_goal"
+          }
+        ],
+        "assumptions": [
+          "the user is seeking constructive, non-harmful reconciliation advice.",
+          "the relationship is ongoing.",
+          "no immediate safety threat is disclosed in the prompt."
+        ],
+        "complexity_hint": "medium",
+        "confidence": 0.93,
+        "constraints": [
+          "advice should avoid manipulation, pressure, or guilt tactics",
+          "respect consent and personal boundaries",
+          "encourage accountability and truthful communication",
+          "do not assume fault details without user-provided facts",
+          "recommend repair actions proportionate to the described issue"
+        ],
+        "context_needed": [
+          "what specifically happened",
+          "whether harm was emotional, trust-related, or practical",
+          "girlfriend\u2019s stated needs or boundaries",
+          "timeline and urgency of the conflict",
+          "what apologies or repair attempts were already made",
+          "any safety concerns or abusive dynamics"
+        ],
+        "domains": [
+          "relationships",
+          "communication",
+          "general"
+        ],
+        "input_type": "relationship_repair_advice",
+        "intents": [
+          "relationship.repair",
+          "communication.guidance",
+          "apology.support"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 10810.938,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 10810.938,
+            "latency_ms_p95": 10810.938,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "The user says their girlfriend is upset with them and asks for help making amends.",
+        "raw_input": "i have a girlfriend who is upset with me. help me make it up to her",
+        "request_id": "req_006",
+        "risks": [
+          "ambiguous_scope",
+          "one_sided_account",
+          "emotional_harm_if_mishandled",
+          "needs_context_for_safe_advice"
+        ],
+        "user_goal": "Get guidance to repair the relationship by apologizing and making it up to their girlfriend."
+      },
+      "index": 6,
+      "plan": {
+        "budget": {
+          "max_model_calls": 1,
+          "max_retries": 0,
+          "max_tool_calls": 0,
+          "max_workers": 1
+        },
+        "execution_pattern": "finalize",
+        "global_invariants": [
+          "no_tools",
+          "no_file_access",
+          "answer_from_user_input_only"
+        ],
+        "metadata": {
+          "archetype": "direct_support",
+          "llm_planner": {
+            "budget_auto_aligned": false,
+            "envelope_complexity_hint": "medium",
+            "envelope_input_type": "relationship_repair_advice",
+            "mode": "completed",
+            "model_calls": 1,
+            "repair_attempted": false,
+            "resolved_validation_errors": [],
+            "stages": [
+              "draft_plan",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Provide safe, consent-respecting relationship repair guidance from the user input only, without any runtime actions.",
+        "plan_id": "plan_req_006_direct_support",
+        "planner": "direct_support_planner",
+        "request_id": "req_006",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Known facts: User says their girlfriend is upset and wants help making amends; no safety threat is disclosed; advice must avoid manipulation, pressure, or guilt and respect boundaries. Unknowns: What happened, severity, her stated needs/boundaries, timeline/urgency, and what apology or repair attempts were already made. Do now: Ask 2-4 concise clarifying questions (what happened, what she said she needs, what was already tried, any safety concerns) and give immediate harmless guidance: acknowledge impact, give a sincere specific apology, ask what repair would help, and offer proportionate follow-through with no pressure. Do not do: Do not use tools/files/commands, do not assume fault details not provided, and do not invent unsupported facts. Output: direct_guidance with clarifying questions plus safe next-step wording the user can send or say.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "direct_guidance"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "direct_support_response",
+            "task_id": "direct_support",
+            "worker_type": "direct_worker"
+          }
+        ],
+        "strategy": "phase_aware_direct_support",
+        "success_criteria": [
+          "User receives a direct response with concise clarifying questions and immediate, safe, non-manipulative reconciliation guidance."
+        ]
+      },
+      "prompt": "i have a girlfriend who is upset with me. help me make it up to her",
+      "status": "success"
+    },
+    {
+      "attempts": 1,
+      "envelope": {
+        "ambiguity": [
+          "No protagonist or core character relationships specified.",
+          "No target audience or reading level specified.",
+          "No preferred setting region or time period specified.",
+          "No chapter granularity (brief beats vs detailed summaries) specified."
+        ],
+        "artifacts": [
+          {
+            "name": "12-chapter book outline",
+            "type": "deliverable"
+          },
+          {
+            "name": "small town library",
+            "type": "setting_component"
+          },
+          {
+            "name": "flood",
+            "type": "inciting_event"
+          },
+          {
+            "name": "cozy tone",
+            "type": "style_constraint"
+          }
+        ],
+        "assumptions": [
+          "The output should be an original fictional outline.",
+          "'Cozy' implies warm, community-focused, low-grit narrative tone.",
+          "The flood is a prior disruptive event that motivates the rebuilding arc."
+        ],
+        "complexity_hint": "low",
+        "confidence": 0.96,
+        "constraints": [
+          "must produce exactly 12 chapters",
+          "must center on rebuilding a small-town library",
+          "must include post-flood context as core premise",
+          "must maintain a cozy tone throughout",
+          "should avoid inventing external facts not provided by the user"
+        ],
+        "context_needed": [
+          "target audience age range",
+          "preferred subgenre boundaries for cozy tone",
+          "desired chapter detail depth",
+          "character roster or protagonist preference",
+          "time period and geographic setting preferences",
+          "ending preference (optimistic/bittersweet/open)"
+        ],
+        "domains": [
+          "creative_writing",
+          "literature",
+          "docs"
+        ],
+        "input_type": "creative_writing_book_outline_generation",
+        "intents": [
+          "content.generate",
+          "narrative.outline",
+          "tone.cozy",
+          "story.structuring"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 9553.873,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 9553.873,
+            "latency_ms_p95": 9553.873,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "Create a cozy 12-chapter book outline about rebuilding a small-town library after a flood.",
+        "raw_input": "write a cozy 12-chapter book outline about rebuilding a small town library after a flood",
+        "request_id": "req_007",
+        "risks": [
+          "underspecified_character_details",
+          "underspecified_setting_details",
+          "tone_interpretation_variance",
+          "scope_depth_unspecified"
+        ],
+        "user_goal": "Obtain a structured, chapter-by-chapter outline for a cozy-themed book centered on a community library rebuilding effort after flood damage."
+      },
+      "index": 7,
+      "plan": {
+        "budget": {
+          "max_model_calls": 1,
+          "max_retries": 0,
+          "max_tool_calls": 0,
+          "max_workers": 1
+        },
+        "execution_pattern": "finalize",
+        "global_invariants": [
+          "no_tools",
+          "no_file_access",
+          "answer_from_user_input_only"
+        ],
+        "metadata": {
+          "archetype": "direct_support",
+          "llm_planner": {
+            "budget_auto_aligned": false,
+            "envelope_complexity_hint": "low",
+            "envelope_input_type": "creative_writing_book_outline_generation",
+            "mode": "completed",
+            "model_calls": 1,
+            "repair_attempted": false,
+            "resolved_validation_errors": [],
+            "stages": [
+              "draft_plan",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Provide direct support for creating a cozy 12-chapter book outline using only the provided user input, with concise clarification prompts where details are missing.",
+        "plan_id": "plan_req_007_direct_support",
+        "planner": "direct_support_planner",
+        "request_id": "req_007",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Known facts: User wants an original cozy 12-chapter book outline about rebuilding a small-town library after a flood; must be exactly 12 chapters and keep a cozy tone. Unknowns: Target audience age range, setting/time period preference, protagonist/character roster, chapter detail depth, and ending preference. Do now: Ask a few concise clarifying questions if the user wants customization, then provide immediate safe guidance by drafting a complete 12-chapter cozy outline using clear assumptions if no answers are provided yet. Do not do: Do not use tools, files, or commands; do not invent unsupported external/provider-specific facts; do not violate the exact 12-chapter requirement or cozy tone constraint. Output: direct_guidance with either clarification questions plus a usable provisional outline, or a finalized outline if preferences are provided.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "direct_guidance"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "direct_support_response",
+            "task_id": "direct_support",
+            "worker_type": "direct_worker"
+          }
+        ],
+        "strategy": "phase_aware_direct_support",
+        "success_criteria": [
+          "User receives a direct response that includes concise clarifying questions for missing preferences and immediate, safe, usable guidance toward a cozy 12-chapter outline."
+        ]
+      },
+      "prompt": "write a cozy 12-chapter book outline about rebuilding a small town library after a flood",
+      "status": "success"
+    },
+    {
+      "attempts": 1,
+      "envelope": {
+        "ambiguity": [
+          "No deployment context is provided (vendor/platform unknown).",
+          "No workload details are provided (internal APIs, public APIs, or mixed).",
+          "Checklist depth is unspecified beyond 'simple'."
+        ],
+        "artifacts": [
+          {
+            "name": "API gateway",
+            "type": "component"
+          },
+          {
+            "name": "load balancer",
+            "type": "component"
+          },
+          {
+            "name": "decision checklist",
+            "type": "deliverable"
+          }
+        ],
+        "assumptions": [
+          "User wants a vendor-neutral conceptual comparison.",
+          "User expects a brief, practical checklist rather than deep implementation detail."
+        ],
+        "complexity_hint": "low",
+        "confidence": 0.96,
+        "constraints": [
+          "do_not_invent_environment_specific_facts",
+          "differentiate_layer7_api_management_from_traffic_distribution_functions",
+          "recommendations_should_be_conditioned_on_stated_requirements"
+        ],
+        "context_needed": [
+          "target environment (cloud/vendor or on-prem)",
+          "traffic types and protocols (HTTP, TCP, gRPC, etc.)",
+          "required features (auth, rate limiting, routing rules, observability)",
+          "scale and availability requirements"
+        ],
+        "domains": [
+          "infra",
+          "networking",
+          "docs"
+        ],
+        "input_type": "networking_component_comparison_guidance",
+        "intents": [
+          "concept.explain",
+          "architecture.compare",
+          "decision.support"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 8359.7,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 8359.7,
+            "latency_ms_p95": 8359.7,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "Explain the difference between an API gateway and a load balancer, and provide a simple checklist for deciding which to use.",
+        "raw_input": "explain api gateway vs load balancer and give a simple decision checklist",
+        "request_id": "req_008",
+        "risks": [
+          "ambiguous_scope",
+          "context_missing_for_recommendation",
+          "oversimplification_risk"
+        ],
+        "user_goal": "Understand API gateway vs load balancer roles and get a practical, simple decision aid for selection."
+      },
+      "index": 8,
+      "plan": {
+        "budget": {
+          "max_model_calls": 1,
+          "max_retries": 0,
+          "max_tool_calls": 0,
+          "max_workers": 1
+        },
+        "execution_pattern": "finalize",
+        "global_invariants": [
+          "no_tools",
+          "no_file_access",
+          "answer_from_user_input_only"
+        ],
+        "metadata": {
+          "archetype": "direct_support",
+          "llm_planner": {
+            "budget_auto_aligned": false,
+            "envelope_complexity_hint": "low",
+            "envelope_input_type": "networking_component_comparison_guidance",
+            "mode": "completed",
+            "model_calls": 1,
+            "repair_attempted": false,
+            "resolved_validation_errors": [],
+            "stages": [
+              "draft_plan",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Provide direct support for understanding API gateway vs load balancer and give a simple, vendor-neutral decision checklist using only the provided input.",
+        "plan_id": "plan_req_008_direct_support",
+        "planner": "direct_support_planner",
+        "request_id": "req_008",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Known facts: User asked for a conceptual difference between API gateway and load balancer plus a simple decision checklist; environment/vendor is not specified; guidance must stay vendor-neutral. Unknowns: Target environment (cloud/on-prem), traffic/protocol mix (HTTP/TCP/gRPC), required features (auth, rate limiting, advanced routing, observability), and scale/availability needs. Do now: Give a concise comparison, provide an immediate simple checklist, and ask brief clarifying questions to tailor a recommendation. Do not do: Do not use tools, files, or commands; do not invent provider-specific capabilities; do not present unconditional recommendations without stated requirements. Output: direct_guidance with safe next-step guidance and concise clarification questions.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "direct_guidance"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "direct_support_response",
+            "task_id": "direct_support",
+            "worker_type": "direct_worker"
+          }
+        ],
+        "strategy": "phase_aware_direct_support",
+        "success_criteria": [
+          "User receives a direct, vendor-neutral explanation plus a simple checklist and concise clarifying questions to tailor the final recommendation."
+        ]
+      },
+      "prompt": "explain api gateway vs load balancer and give a simple decision checklist",
+      "status": "success"
+    },
+    {
+      "attempts": 1,
+      "envelope": {
+        "ambiguity": [
+          "specific codebase, language, and files are not provided.",
+          "exact expected behavior after lock expiry is not explicitly defined.",
+          "nature of duplicate callbacks (identical payload vs repeated event IDs) is unclear.",
+          "current rollback infrastructure and deployment model are unspecified."
+        ],
+        "artifacts": [
+          {
+            "name": "payment dispute processor",
+            "type": "component"
+          },
+          {
+            "name": "fraud cases",
+            "type": "domain_entity"
+          },
+          {
+            "name": "duplicate bank callbacks",
+            "type": "external_event"
+          },
+          {
+            "name": "manual review lock",
+            "type": "state_lock"
+          },
+          {
+            "name": "dispute state checks",
+            "type": "verification_suite"
+          },
+          {
+            "name": "rollback plan",
+            "type": "operational_artifact"
+          }
+        ],
+        "assumptions": [
+          "an unintended closure of fraud cases is occurring in current behavior.",
+          "duplicate callback handling should be idempotent for dispute-state safety.",
+          "there is a defined pre-change version or configuration that can be rolled back to.",
+          "focused dispute-state checks can be executed in available test or staging environments."
+        ],
+        "complexity_hint": "high",
+        "confidence": 0.89,
+        "constraints": [
+          "root_cause_must_be_evidence_based_from_logs_or_code_paths",
+          "target_locations_must_be_identified_before_mutation",
+          "fix_must_preserve_valid_dispute_state_transitions",
+          "duplicate_callbacks_must_be_handled_idempotently",
+          "mutation_requires_verification",
+          "rollback_path_must_restore_prior_behavior_safely",
+          "verification_must_include_focused_dispute_state_checks"
+        ],
+        "context_needed": [
+          "repository_or_service_owning_dispute_processing",
+          "current_dispute_state_machine_definition",
+          "callback_deduplication_and_idempotency_logic",
+          "manual_review_lock_expiry_rules",
+          "reproducible_event_timeline_or_logs",
+          "existing_tests_covering_duplicate_callbacks",
+          "deployment_and_rollback_mechanism"
+        ],
+        "domains": [
+          "code",
+          "payments",
+          "fraud",
+          "reliability",
+          "qa"
+        ],
+        "input_type": "payment_dispute_duplicate_callback_state_transition_bugfix",
+        "intents": [
+          "code.debug",
+          "code.fix",
+          "state_machine.correctness",
+          "rollback.preparedness",
+          "qa.targeted_verification"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 9880.043,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 9880.043,
+            "latency_ms_p95": 9880.043,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "Investigate why the payment dispute processor incorrectly closes fraud cases when duplicate bank callbacks arrive after a manual-review lock expires, implement a safe fix, provide a rollback strategy, and validate with targeted dispute-state checks.",
+        "raw_input": "payment dispute processor closes fraud cases when duplicate bank callbacks arrive after manual review lock expires; identify root cause, apply safe fix, include rollback plan, and verify with focused dispute-state checks",
+        "request_id": "req_009",
+        "risks": [
+          "mutation_requested",
+          "file_mutation",
+          "needs_verification",
+          "ambiguous_scope",
+          "race_condition_possible",
+          "state_regression_risk"
+        ],
+        "user_goal": "Resolve an incorrect dispute-state transition bug caused by duplicate post-lock-expiry bank callbacks, with a safe remediation, rollback readiness, and focused verification."
+      },
+      "index": 9,
+      "plan": {
+        "budget": {
+          "max_model_calls": 7,
+          "max_retries": 1,
+          "max_tool_calls": 21,
+          "max_workers": 7
+        },
+        "execution_pattern": "discover_analyze_research_design_mutate_verify_finalize",
+        "global_invariants": [
+          "evidence_based_root_cause_before_mutation",
+          "no_writes_outside_design_scoped_mutation_scope",
+          "rollback_plan_and_patch_required_for_any_write",
+          "verification_must_cover_duplicate_callback_idempotency_and_dispute_state_safety",
+          "final_report_must_trace_diagnosis_design_change_and_verification_artifacts"
+        ],
+        "metadata": {
+          "archetype": "phase_aware_mutation",
+          "complexity": "high",
+          "domains": [
+            "code",
+            "payments",
+            "fraud",
+            "reliability",
+            "qa"
+          ],
+          "llm_planner": {
+            "budget_auto_aligned": true,
+            "envelope_complexity_hint": "high",
+            "envelope_input_type": "payment_dispute_duplicate_callback_state_transition_bugfix",
+            "mode": "completed",
+            "model_calls": 1,
+            "repair_attempted": false,
+            "resolved_validation_errors": [],
+            "stages": [
+              "draft_plan",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Identify and safely fix the dispute-state transition bug where duplicate post-lock-expiry bank callbacks close fraud cases incorrectly, with rollback readiness and focused verification.",
+        "plan_id": "plan_req_009_dispute_callback_state_fix",
+        "planner": "phase_aware_mutation_planner",
+        "request_id": "req_009",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Known facts: A payment dispute processor mis-closes fraud cases when duplicate bank callbacks arrive after manual-review lock expiry; codebase and exact files are unknown. Unknowns: Owning service/module, callback handler path, lock-expiry logic location, and current state-machine implementation. Do now: Discover and map candidate repository locations for dispute processing, callback deduplication/idempotency, manual-review lock expiry handling, and fraud-case state transitions. Do not do: Do not modify files, run destructive commands, or infer writable scope from candidate paths. Output: repo_inventory, candidate_code_locations, and event_timeline_requirements.",
+            "max_model_calls": 1,
+            "max_tool_calls": 4,
+            "mode": "observe_only",
+            "output_artifacts": [
+              "repo_inventory",
+              "candidate_code_locations",
+              "event_timeline_requirements"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "DISCOVER",
+            "step_id": "discover_dispute_processor_targets",
+            "task_id": "dispute_callback_fix",
+            "worker_type": "repo_worker"
+          },
+          {
+            "input_artifacts": [
+              "repo_inventory",
+              "candidate_code_locations",
+              "event_timeline_requirements"
+            ],
+            "instruction": "Known facts: repo_inventory, candidate_code_locations, and event_timeline_requirements are available; root cause must be evidence-based from logs or code paths. Unknowns: Whether duplicates are identified by event ID or payload and exact transition path that closes fraud cases. Do now: Build root-cause analysis from available code paths and any reproducible timeline/log context; explicitly determine if evidence is sufficient for safe mutation. Do not do: Do not invent evidence, do not propose code changes yet, and do not ignore ambiguity in duplicate-callback semantics. Output: root_cause_evidence, evidence_artifacts, and evidence_gap_decision.",
+            "max_model_calls": 1,
+            "max_tool_calls": 3,
+            "mode": "observe_only",
+            "output_artifacts": [
+              "root_cause_evidence",
+              "evidence_artifacts",
+              "evidence_gap_decision"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "ANALYZE",
+            "step_id": "analyze_root_cause_evidence",
+            "task_id": "dispute_callback_fix",
+            "worker_type": "research_worker"
+          },
+          {
+            "input_artifacts": [
+              "candidate_code_locations",
+              "repo_inventory"
+            ],
+            "instruction": "Known facts: Candidate locations are known and this fix requires idempotent duplicate-callback handling plus focused dispute-state verification. Unknowns: Existing tests covering duplicates, dependency points affecting state transitions, and current rollback/deployment hooks. Do now: Identify dependency surfaces and baseline verification targets (especially duplicate callbacks, lock expiry, and fraud/dispute transitions). Do not do: Do not edit files or assume dependency correctness without inspection. Output: dependency_artifacts and baseline_verification_targets.",
+            "max_model_calls": 1,
+            "max_tool_calls": 3,
+            "mode": "observe_only",
+            "output_artifacts": [
+              "dependency_artifacts",
+              "baseline_verification_targets"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "RESEARCH",
+            "step_id": "research_dependencies_and_tests",
+            "task_id": "dispute_callback_fix",
+            "worker_type": "repo_worker"
+          },
+          {
+            "input_artifacts": [
+              "root_cause_evidence",
+              "evidence_artifacts",
+              "evidence_gap_decision",
+              "dependency_artifacts",
+              "baseline_verification_targets",
+              "candidate_code_locations"
+            ],
+            "instruction": "Known facts: root_cause_evidence, evidence_artifacts, evidence_gap_decision, dependency_artifacts, and baseline_verification_targets are available; mutation must be path-scoped and rollback-ready. Unknowns: Final minimal patch shape until scope is narrowed from evidence. Do now: Produce a concrete fix design and narrow writable scope; define rollback and verification plans before any write. Do not do: Do not mutate files, do not widen scope beyond evidence-backed locations, and do not proceed if evidence_gap_decision indicates insufficient evidence. Output: fix_design, mutation_scope, allowed_write_paths, rollback_plan, and verification_plan.",
+            "max_model_calls": 1,
+            "max_tool_calls": 1,
+            "mode": "plan_only",
+            "output_artifacts": [
+              "fix_design",
+              "mutation_scope",
+              "allowed_write_paths",
+              "rollback_plan",
+              "verification_plan"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "DESIGN",
+            "step_id": "design_scoped_fix_and_rollback",
+            "task_id": "dispute_callback_fix",
+            "worker_type": "code_worker"
+          },
+          {
+            "input_artifacts": [
+              "fix_design",
+              "mutation_scope",
+              "allowed_write_paths",
+              "rollback_plan",
+              "root_cause_evidence",
+              "evidence_artifacts",
+              "dependency_artifacts",
+              "verification_plan"
+            ],
+            "instruction": "Known facts: fix_design defines the change, mutation_scope/allowed_write_paths constrain writes, rollback_plan is defined, and root_cause_evidence links diagnosis to implementation. Unknowns: None material if evidence_gap_decision is sufficient. Do now: Implement the minimal scoped code changes to enforce correct dispute-state transitions and idempotent duplicate-callback handling after lock expiry. Do not do: Do not write outside mutation_scope, do not change unrelated behavior, and do not claim success without verification outputs. Output: change_summary, rollback_patch, and implementation_notes.",
+            "max_model_calls": 1,
+            "max_tool_calls": 4,
+            "mode": "bounded_mutation",
+            "output_artifacts": [
+              "change_summary",
+              "rollback_patch",
+              "implementation_notes"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": true,
+              "write_paths_from_artifacts": [
+                "mutation_scope",
+                "allowed_write_paths"
+              ]
+            },
+            "phase": "MUTATE",
+            "step_id": "mutate_apply_scoped_fix",
+            "task_id": "dispute_callback_fix",
+            "worker_type": "code_worker"
+          },
+          {
+            "input_artifacts": [
+              "change_summary",
+              "mutation_scope",
+              "root_cause_evidence",
+              "verification_plan",
+              "rollback_plan",
+              "rollback_patch",
+              "dependency_artifacts",
+              "implementation_notes"
+            ],
+            "instruction": "Known facts: change_summary and rollback_patch exist; verification must confirm root-cause alignment, scope containment, focused dispute-state checks, and rollback availability. Unknowns: Residual edge-case regressions until checks run. Do now: Execute targeted verification for duplicate callbacks after manual-review lock expiry and confirm no invalid fraud-case closures; validate rollback readiness. Do not do: Do not modify code, do not skip failed checks, and do not report pass without explicit results. Output: verification_results, focused_dispute_state_check_report, and rollback_readiness_report.",
+            "max_model_calls": 1,
+            "max_tool_calls": 5,
+            "mode": "verify_only",
+            "output_artifacts": [
+              "verification_results",
+              "focused_dispute_state_check_report",
+              "rollback_readiness_report"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": true,
+              "write_files": false
+            },
+            "phase": "VERIFY",
+            "step_id": "verify_targeted_dispute_state_checks",
+            "task_id": "dispute_callback_fix",
+            "worker_type": "verify_worker"
+          },
+          {
+            "input_artifacts": [
+              "root_cause_evidence",
+              "fix_design",
+              "mutation_scope",
+              "change_summary",
+              "verification_results",
+              "focused_dispute_state_check_report",
+              "rollback_readiness_report",
+              "rollback_plan",
+              "rollback_patch"
+            ],
+            "instruction": "Known facts: implementation and verification artifacts are available, including rollback readiness. Unknowns: None material if verification artifacts are complete. Do now: Produce a concise final report summarizing root cause, scoped fix, verification outcomes, residual risks, and rollback execution steps. Do not do: Do not introduce new changes, tools, or unsupported claims beyond produced artifacts. Output: final_report.",
+            "max_model_calls": 1,
+            "max_tool_calls": 1,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "final_report"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "finalize_fix_report",
+            "task_id": "dispute_callback_fix",
+            "worker_type": "research_worker"
+          }
+        ],
+        "strategy": "evidence_first_discovery_analysis_then_scoped_design_mutation_and_verification",
+        "success_criteria": [
+          "Root cause is identified with explicit evidence tied to code paths or reproducible timeline.",
+          "A minimal scoped fix is implemented to preserve valid dispute-state transitions and idempotent duplicate callback handling.",
+          "Rollback plan and rollback patch are produced and validated as ready.",
+          "Focused dispute-state verification passes, including post-lock-expiry duplicate callback scenarios.",
+          "A final report clearly summarizes root cause, fix scope, verification results, and rollback steps."
+        ]
+      },
+      "prompt": "payment dispute processor closes fraud cases when duplicate bank callbacks arrive after manual review lock expires; identify root cause, apply safe fix, include rollback plan, and verify with focused dispute-state checks",
+      "status": "success"
+    },
+    {
+      "attempts": 1,
+      "envelope": {
+        "ambiguity": [
+          "Exact technology stack and codebase locations are not provided.",
+          "Frequency, blast radius, and tenant impact details are unspecified.",
+          "Current observability coverage for reproducing overlap conditions is unknown.",
+          "No concrete failure signature (error IDs, trace patterns, timestamps) is included."
+        ],
+        "artifacts": [
+          {
+            "name": "multi-tenant audit export service",
+            "type": "service"
+          },
+          {
+            "name": "cross-tenant records",
+            "type": "data_exposure"
+          },
+          {
+            "name": "async shard compaction",
+            "type": "background_process"
+          },
+          {
+            "name": "resumable export pagination",
+            "type": "feature"
+          },
+          {
+            "name": "failover",
+            "type": "runtime_event"
+          },
+          {
+            "name": "tenant isolation",
+            "type": "security_property"
+          },
+          {
+            "name": "rollback plan",
+            "type": "operational_safeguard"
+          },
+          {
+            "name": "focused regression checks",
+            "type": "test_artifact"
+          },
+          {
+            "name": "residual risks",
+            "type": "risk_report"
+          }
+        ],
+        "assumptions": [
+          "A real intermittent isolation breach has been observed, not only a hypothetical risk.",
+          "The leak is associated with concurrency/timing across compaction, pagination, and failover as described.",
+          "A controlled deployment process exists to apply and roll back a scoped fix."
+        ],
+        "complexity_hint": "high",
+        "confidence": 0.95,
+        "constraints": [
+          "tenant isolation must be preserved in all execution paths",
+          "root-cause claims must be evidence-backed",
+          "fix must be narrowly scoped to the identified failure mode",
+          "rollback path must be defined before rollout",
+          "regression checks must explicitly cover overlap of compaction, pagination, and failover",
+          "no assumptions of specific root cause without verification"
+        ],
+        "context_needed": [
+          "service architecture for export, compaction, and pagination paths",
+          "tenant-partitioning model and isolation invariants",
+          "failover mechanism details and state handoff behavior",
+          "export pagination token/state schema and persistence semantics",
+          "shard compaction scheduling, locking, and transactional boundaries",
+          "incident evidence: logs, traces, metrics, and sample affected exports",
+          "data store consistency model and read/write isolation guarantees",
+          "recent changes touching compaction, pagination, or failover code paths",
+          "existing regression/integration tests for tenant isolation"
+        ],
+        "domains": [
+          "infra",
+          "data",
+          "security",
+          "code"
+        ],
+        "input_type": "multi_tenant_data_isolation_incident_analysis_and_scoped_fix_design",
+        "intents": [
+          "incident.root_cause_analysis",
+          "security.isolation_validation",
+          "service.fix_design",
+          "rollback.strategy_definition",
+          "regression.test_design",
+          "risk.assessment"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 13224.838,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 13224.838,
+            "latency_ms_p95": 13224.838,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "Investigate an intermittent tenant-isolation leak in a multi-tenant audit export service occurring when async shard compaction overlaps resumable export pagination during failover, then provide root-cause analysis, a safely scoped fix with rollback, focused regression validation, and remaining risk summary.",
+        "raw_input": "multi-tenant audit export service intermittently leaks cross-tenant records when async shard compaction overlaps resumable export pagination after failover; identify root cause, design a safe scoped fix, include rollback plan, verify tenant isolation with focused regression checks, and summarize residual risks",
+        "request_id": "req_010",
+        "risks": [
+          "cross_tenant_data_exposure",
+          "needs_verification",
+          "concurrency_race_condition_possible",
+          "failover_state_inconsistency_possible",
+          "ambiguous_scope"
+        ],
+        "user_goal": "Resolve and safely mitigate a cross-tenant data leakage defect in audit exports while preserving rollback safety and validating tenant isolation."
+      },
+      "index": 10,
+      "plan": {
+        "budget": {
+          "max_model_calls": 6,
+          "max_retries": 1,
+          "max_tool_calls": 19,
+          "max_workers": 6
+        },
+        "execution_pattern": "discover_analyze_design_mutate_verify_finalize",
+        "global_invariants": [
+          "tenant_isolation_must_hold_in_all_paths",
+          "evidence_backed_claims_only",
+          "no_writes_outside_designated_mutation_scope",
+          "rollback_plan_required_before_and_after_mutation",
+          "verify_worker_must_run_after_any_write"
+        ],
+        "metadata": {
+          "archetype": "phase_aware_mutation_plan",
+          "complexity": "high",
+          "incident_type": "multi_tenant_data_isolation",
+          "llm_planner": {
+            "budget_auto_aligned": true,
+            "envelope_complexity_hint": "high",
+            "envelope_input_type": "multi_tenant_data_isolation_incident_analysis_and_scoped_fix_design",
+            "mode": "completed",
+            "model_calls": 1,
+            "repair_attempted": false,
+            "resolved_validation_errors": [],
+            "stages": [
+              "draft_plan",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Investigate the intermittent cross-tenant export leak, produce evidence-backed root cause analysis, implement a narrowly scoped mitigation with rollback safety, validate isolation via focused regression checks, and summarize residual risk.",
+        "plan_id": "plan_req_010_incident_fix",
+        "planner": "phase_aware_incident_planner",
+        "request_id": "req_010",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Known facts: Incident involves overlap of shard compaction, resumable pagination, and failover in a multi-tenant audit export service. Unknowns: Exact code locations, data-flow boundaries, and ownership of pagination/failover state. Do now: Locate relevant modules, interfaces, and state schemas; map candidate files and execution paths for export, compaction, failover, and tenant filters. Do not do: Do not infer root cause, modify files, or treat discovered candidates as writable scope. Output: repo_inventory, architecture_map, and candidate_paths for downstream evidence analysis.",
+            "max_model_calls": 1,
+            "max_tool_calls": 3,
+            "mode": "observe_only",
+            "output_artifacts": [
+              "repo_inventory",
+              "architecture_map",
+              "candidate_paths"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "DISCOVER",
+            "step_id": "discover_export_isolation_surface",
+            "task_id": "tenant_isolation_fix",
+            "worker_type": "repo_worker"
+          },
+          {
+            "input_artifacts": [
+              "repo_inventory",
+              "architecture_map",
+              "candidate_paths"
+            ],
+            "instruction": "Known facts: repo_inventory, architecture_map, and candidate_paths identify likely execution surfaces. Unknowns: Exact failure signature, race window, and failover state-handoff fault pattern. Do now: Correlate available logs/traces/metrics/test evidence with discovered paths to produce an evidence-backed root-cause narrative and dependency checks for compaction, pagination token semantics, and failover handoff. Do not do: Do not invent evidence, over-claim causality, or propose writes. Output: analysis_evidence, root_cause_evidence, incident_timeline, and dependency_artifacts.",
+            "max_model_calls": 1,
+            "max_tool_calls": 4,
+            "mode": "observe_only",
+            "output_artifacts": [
+              "analysis_evidence",
+              "root_cause_evidence",
+              "incident_timeline",
+              "dependency_artifacts"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": true,
+              "write_files": false
+            },
+            "phase": "ANALYZE",
+            "step_id": "analyze_incident_evidence",
+            "task_id": "tenant_isolation_fix",
+            "worker_type": "research_worker"
+          },
+          {
+            "input_artifacts": [
+              "analysis_evidence",
+              "root_cause_evidence",
+              "incident_timeline",
+              "dependency_artifacts",
+              "candidate_paths"
+            ],
+            "instruction": "Known facts: root_cause_evidence and dependency_artifacts describe the verified failure mode and constraints. Unknowns: Minimal safe mutation set until scope is explicitly narrowed. Do now: Design a narrowly scoped fix tied to evidence, define exact mutation_scope paths, produce rollback_plan, and create verification_plan focused on compaction+pagination+failover overlap and tenant isolation invariants. Do not do: Do not mutate files, do not broaden scope beyond evidence, and do not skip rollback definition. Output: fix_design, mutation_scope, rollback_plan, and verification_plan.",
+            "max_model_calls": 1,
+            "max_tool_calls": 2,
+            "mode": "plan_only",
+            "output_artifacts": [
+              "fix_design",
+              "mutation_scope",
+              "rollback_plan",
+              "verification_plan"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "DESIGN",
+            "step_id": "design_scoped_fix_and_rollback",
+            "task_id": "tenant_isolation_fix",
+            "worker_type": "code_worker"
+          },
+          {
+            "input_artifacts": [
+              "fix_design",
+              "mutation_scope",
+              "rollback_plan",
+              "root_cause_evidence",
+              "dependency_artifacts"
+            ],
+            "instruction": "Known facts: fix_design, mutation_scope, rollback_plan, and root_cause_evidence define what to change and why. Unknowns: None material after scoped design approval. Do now: Implement only the scoped mitigation within mutation_scope, preserving tenant isolation checks across failover/pagination/compaction boundaries, and prepare rollback patch instructions. Do not do: Do not write outside mutation_scope, do not alter unrelated behavior, and do not claim verification success in this step. Output: change_summary and rollback_patch.",
+            "max_model_calls": 1,
+            "max_tool_calls": 4,
+            "mode": "bounded_mutation",
+            "output_artifacts": [
+              "change_summary",
+              "rollback_patch"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": true,
+              "write_files": true,
+              "write_paths_from_artifacts": [
+                "mutation_scope"
+              ]
+            },
+            "phase": "MUTATE",
+            "step_id": "apply_scoped_mitigation",
+            "task_id": "tenant_isolation_fix",
+            "worker_type": "code_worker"
+          },
+          {
+            "input_artifacts": [
+              "change_summary",
+              "mutation_scope",
+              "root_cause_evidence",
+              "verification_plan",
+              "rollback_patch"
+            ],
+            "instruction": "Known facts: change_summary and rollback_patch exist, and verification_plan defines focused checks. Unknowns: Whether the change fully closes the evidence-matched leak without regressions. Do now: Execute focused verification for tenant isolation, root-cause match, scope containment, failover+compaction+pagination overlap behavior, and rollback readiness. Do not do: Do not modify files or dilute checks with unrelated broad test suites. Output: verification_results, focused_regression_results, and isolation_validation_report.",
+            "max_model_calls": 1,
+            "max_tool_calls": 5,
+            "mode": "verify_only",
+            "output_artifacts": [
+              "verification_results",
+              "focused_regression_results",
+              "isolation_validation_report"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": true,
+              "write_files": false
+            },
+            "phase": "VERIFY",
+            "step_id": "verify_isolation_and_regressions",
+            "task_id": "tenant_isolation_fix",
+            "worker_type": "verify_worker"
+          },
+          {
+            "input_artifacts": [
+              "root_cause_evidence",
+              "change_summary",
+              "verification_results",
+              "focused_regression_results",
+              "isolation_validation_report",
+              "rollback_patch"
+            ],
+            "instruction": "Known facts: verification and isolation validation outcomes are available with rollback readiness details. Unknowns: Residual operational/security risk after scoped mitigation. Do now: Produce a concise final report summarizing root cause, implemented scope, verification evidence, rollback posture, and remaining risks with recommended follow-ups. Do not do: Do not invent results beyond artifacts or claim zero residual risk without evidence. Output: final_report and residual_risks.",
+            "max_model_calls": 1,
+            "max_tool_calls": 1,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "final_report",
+              "residual_risks"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "finalize_incident_report",
+            "task_id": "tenant_isolation_fix",
+            "worker_type": "research_worker"
+          }
+        ],
+        "strategy": "evidence_first_isolation_incident_response",
+        "success_criteria": [
+          "Root cause is supported by explicit analysis_evidence and root_cause_evidence.",
+          "A narrowly scoped fix_design and mutation_scope are produced before mutation.",
+          "Mutation produces change_summary plus rollback_patch scoped to mutation_scope.",
+          "Verification confirms tenant isolation under compaction+pagination+failover overlap and reports focused_regression_results.",
+          "Final report summarizes outcomes and clearly states residual_risks."
+        ]
+      },
+      "prompt": "multi-tenant audit export service intermittently leaks cross-tenant records when async shard compaction overlaps resumable export pagination after failover; identify root cause, design a safe scoped fix, include rollback plan, verify tenant isolation with focused regression checks, and summarize residual risks",
+      "status": "success"
+    },
+    {
+      "attempts": 1,
+      "envelope": {
+        "ambiguity": [
+          "No numeric financial details are provided.",
+          "Debt composition (credit cards, loans, collections) is unspecified.",
+          "Geographic context and applicable relief programs are unknown.",
+          "Household size and fixed obligations are unknown."
+        ],
+        "artifacts": [
+          {
+            "name": "90-day personal finance recovery plan",
+            "type": "deliverable"
+          },
+          {
+            "name": "job loss",
+            "type": "life_event"
+          },
+          {
+            "name": "high-interest debt",
+            "type": "liability"
+          }
+        ],
+        "assumptions": [
+          "User seeks informational planning guidance, not immediate transactional execution.",
+          "The 90-day horizon is fixed and intentional.",
+          "High-interest debt is a priority concern relative to lower-interest obligations."
+        ],
+        "complexity_hint": "medium",
+        "confidence": 0.93,
+        "constraints": [
+          "must_not_assume_unprovided_income_or_assets",
+          "recommendations_should_prioritize_essential_expenses",
+          "debt_handling_guidance_should_account_for_interest_rates_and_minimums",
+          "advice_should_acknowledge_information_limits_when_data_is_missing"
+        ],
+        "context_needed": [
+          "current cash on hand",
+          "monthly essential expenses",
+          "debt balances and APRs",
+          "minimum payment obligations",
+          "unemployment benefits eligibility/status",
+          "severance details if any",
+          "household dependents and obligations",
+          "location-specific legal/financial constraints",
+          "near-term income prospects"
+        ],
+        "domains": [
+          "personal_finance",
+          "financial_planning"
+        ],
+        "input_type": "personal_finance_job_loss_debt_recovery_planning",
+        "intents": [
+          "finance.recovery_planning",
+          "debt.reduction_strategy",
+          "budget.stabilization",
+          "cashflow.prioritization"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 10547.873,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 10547.873,
+            "latency_ms_p95": 10547.873,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "Create a 90-day personal finance recovery plan for someone who recently lost their job and has high-interest debt.",
+        "raw_input": "design a 90-day personal finance recovery plan after job loss with high-interest debt",
+        "request_id": "req_011",
+        "risks": [
+          "needs_personal_financial_details",
+          "advice_may_be_incomplete_without_local_context",
+          "ambiguous_scope",
+          "needs_verification"
+        ],
+        "user_goal": "Obtain a structured short-term financial recovery approach that stabilizes cash flow and addresses high-interest debt after unemployment."
+      },
+      "index": 11,
+      "plan": {
+        "budget": {
+          "max_model_calls": 1,
+          "max_retries": 0,
+          "max_tool_calls": 0,
+          "max_workers": 1
+        },
+        "execution_pattern": "finalize",
+        "global_invariants": [
+          "no_tools",
+          "no_file_access",
+          "answer_from_user_input_only"
+        ],
+        "metadata": {
+          "archetype": "direct_support",
+          "llm_planner": {
+            "budget_auto_aligned": false,
+            "envelope_complexity_hint": "medium",
+            "envelope_input_type": "personal_finance_job_loss_debt_recovery_planning",
+            "mode": "completed",
+            "model_calls": 1,
+            "repair_attempted": false,
+            "resolved_validation_errors": [],
+            "stages": [
+              "draft_plan",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Provide a direct 90-day personal finance recovery framework after job loss, with safe debt and cash-flow prioritization guidance based only on provided input.",
+        "plan_id": "plan_req_011_direct_support",
+        "planner": "direct_support_planner",
+        "request_id": "req_011",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Known facts: User wants a 90-day personal finance recovery plan after job loss with high-interest debt; key priorities are essential expenses, cash-flow stabilization, and debt minimums/interest awareness. Unknowns: Current cash on hand, monthly essentials, debt balances/APRs/minimums, benefits or severance status, dependents, location constraints, and near-term income prospects. Do now: Provide an immediate safe 90-day action plan template (triage, stabilize, and rebuild phases) and ask concise clarifying questions to tailor amounts and sequencing. Do not do: Do not use tools, files, or commands; do not invent income/assets, legal eligibility, or provider-specific program facts not supplied by the user. Output: direct_guidance with practical next steps and a short clarification checklist.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "direct_guidance"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "direct_support_response",
+            "task_id": "direct_support",
+            "worker_type": "direct_worker"
+          }
+        ],
+        "strategy": "phase_aware_direct_support",
+        "success_criteria": [
+          "User receives a clear 90-day recovery structure plus safe immediate actions and concise clarification questions needed to personalize the plan."
+        ]
+      },
+      "prompt": "design a 90-day personal finance recovery plan after job loss with high-interest debt",
+      "status": "success"
+    },
+    {
+      "attempts": 1,
+      "envelope": {
+        "ambiguity": [
+          "No city or regional context is provided.",
+          "The three specific strategies are not specified.",
+          "No evaluation framework or weighting criteria are provided.",
+          "No data sources or evidence requirements are stated."
+        ],
+        "artifacts": [
+          {
+            "name": "urban traffic congestion",
+            "type": "problem_area"
+          },
+          {
+            "name": "three strategies",
+            "type": "analysis_scope"
+          },
+          {
+            "name": "highways",
+            "type": "infrastructure_constraint"
+          }
+        ],
+        "assumptions": [
+          "The response should be conceptual and comparative rather than city-specific modeling.",
+          "Highway expansion is excluded as a permitted solution category.",
+          "A balanced comparison across effectiveness and trade-offs is desired."
+        ],
+        "complexity_hint": "medium",
+        "confidence": 0.96,
+        "constraints": [
+          "must compare exactly three strategies",
+          "strategies must not rely on highway expansion",
+          "avoid asserting impacts without supporting evidence",
+          "state assumptions where local context is missing"
+        ],
+        "context_needed": [
+          "target city or region",
+          "time horizon for expected impact",
+          "comparison criteria (cost, effectiveness, equity, implementation speed, emissions)",
+          "baseline congestion indicators",
+          "policy and budget constraints"
+        ],
+        "domains": [
+          "transportation",
+          "urban_policy",
+          "research"
+        ],
+        "input_type": "urban_mobility_strategy_comparison",
+        "intents": [
+          "analysis.compare",
+          "policy.evaluate",
+          "transportation.congestion_mitigation"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 6447.222,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 6447.222,
+            "latency_ms_p95": 6447.222,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "Compare three policy strategies for reducing urban traffic congestion without adding highway capacity.",
+        "raw_input": "compare three strategies to reduce urban traffic congestion without expanding highways",
+        "request_id": "req_012",
+        "risks": [
+          "underspecified_scope",
+          "location_context_missing",
+          "evaluation_criteria_unspecified",
+          "needs_evidence"
+        ],
+        "user_goal": "Get a comparative analysis of three non-highway-expansion approaches to reduce urban traffic congestion."
+      },
+      "index": 12,
+      "plan": {
+        "budget": {
+          "max_model_calls": 1,
+          "max_retries": 0,
+          "max_tool_calls": 0,
+          "max_workers": 1
+        },
+        "execution_pattern": "finalize",
+        "global_invariants": [
+          "no_tools",
+          "no_file_access",
+          "answer_from_user_input_only"
+        ],
+        "metadata": {
+          "archetype": "direct_support",
+          "llm_planner": {
+            "budget_auto_aligned": false,
+            "envelope_complexity_hint": "medium",
+            "envelope_input_type": "urban_mobility_strategy_comparison",
+            "mode": "completed",
+            "model_calls": 1,
+            "repair_attempted": false,
+            "resolved_validation_errors": [],
+            "stages": [
+              "draft_plan",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Provide a direct comparative response on three non-highway strategies to reduce urban traffic congestion, while stating assumptions and requesting missing context concisely.",
+        "plan_id": "plan_req_012_direct_support",
+        "planner": "direct_support_planner",
+        "request_id": "req_012",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Known facts: User wants a comparison of exactly three strategies to reduce urban traffic congestion without expanding highways; local context is missing. Unknowns: Target city/region, time horizon, baseline congestion indicators, policy/budget constraints, and weighting criteria (cost, effectiveness, equity, implementation speed, emissions). Do now: Provide an immediate conceptual comparison of three valid non-highway strategies with explicit assumptions and trade-offs, then ask concise clarifying questions to refine the recommendation. Do not do: Do not use tools, files, or commands; do not invent location-specific evidence or unsupported quantitative impacts. Output: direct_guidance with the three-strategy comparison, assumptions, and focused clarification questions.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "direct_guidance"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "direct_support_response",
+            "task_id": "direct_support",
+            "worker_type": "direct_worker"
+          }
+        ],
+        "strategy": "phase_aware_direct_support",
+        "success_criteria": [
+          "User receives a direct comparison of exactly three non-highway congestion strategies with explicit assumptions, key trade-offs, and concise clarification questions to tailor the analysis."
+        ]
+      },
+      "prompt": "compare three strategies to reduce urban traffic congestion without expanding highways",
+      "status": "success"
+    },
+    {
+      "attempts": 1,
+      "envelope": {
+        "ambiguity": [
+          "No jurisdiction or regulatory regime is specified.",
+          "No details are provided on data types exposed.",
+          "No audience breakdown (customers, partners, employees, regulators, media) is provided.",
+          "No timeline or incident containment status is provided.",
+          "No preferred tone, template format, or communication channels are specified."
+        ],
+        "artifacts": [
+          {
+            "name": "crisis communication plan",
+            "type": "document"
+          },
+          {
+            "name": "startup",
+            "type": "organization"
+          },
+          {
+            "name": "data exposure incident",
+            "type": "security_incident"
+          }
+        ],
+        "assumptions": [
+          "The user wants a planning document, not immediate outbound messaging.",
+          "The startup has at least one internal decision-maker for approvals.",
+          "The incident details are still evolving and require careful qualification."
+        ],
+        "complexity_hint": "medium",
+        "confidence": 0.93,
+        "constraints": [
+          "communications_must_be_factually_accurate",
+          "unverified_claims_must_be_avoided",
+          "legal_review_should_precede_external_statements",
+          "regulatory_and_contractual_notification_obligations_must_be_respected",
+          "messages_should_be_consistent_across_audiences"
+        ],
+        "context_needed": [
+          "incident_scope",
+          "affected_data_categories",
+          "number_of_affected_individuals",
+          "jurisdictions_and_applicable_regulations",
+          "incident_timeline_and_current_status",
+          "stakeholder_audiences",
+          "approved_communication_channels",
+          "legal_and_pr_contacts",
+          "known_facts_vs_unknowns"
+        ],
+        "domains": [
+          "docs",
+          "security",
+          "business",
+          "legal"
+        ],
+        "input_type": "incident_response_communications_plan_drafting",
+        "intents": [
+          "docs.create",
+          "security.incident_communication",
+          "stakeholder.communication_strategy",
+          "reputation.risk_mitigation"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 12158.613,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 12158.613,
+            "latency_ms_p95": 12158.613,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "Create a crisis communication plan for a startup responding to a data exposure incident.",
+        "raw_input": "draft a crisis communication plan for a startup after a data exposure incident",
+        "request_id": "req_013",
+        "risks": [
+          "sensitive_incident_context",
+          "legal_compliance_requirements_unknown",
+          "regulatory_notification_requirements_unknown",
+          "reputational_harm_risk",
+          "needs_verification"
+        ],
+        "user_goal": "Produce a usable crisis communication plan tailored to a startup after a data exposure event."
+      },
+      "index": 13,
+      "plan": {
+        "budget": {
+          "max_model_calls": 1,
+          "max_retries": 0,
+          "max_tool_calls": 0,
+          "max_workers": 1
+        },
+        "execution_pattern": "finalize",
+        "global_invariants": [
+          "no_tools",
+          "no_file_access",
+          "answer_from_user_input_only"
+        ],
+        "metadata": {
+          "archetype": "direct_support",
+          "llm_planner": {
+            "budget_auto_aligned": false,
+            "envelope_complexity_hint": "medium",
+            "envelope_input_type": "incident_response_communications_plan_drafting",
+            "mode": "completed",
+            "model_calls": 1,
+            "repair_attempted": false,
+            "resolved_validation_errors": [],
+            "stages": [
+              "draft_plan",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Provide a direct, usable crisis communication planning response for a startup data exposure incident using only user-provided context, with clear assumptions and clarifying prompts.",
+        "plan_id": "plan_req_013_direct_support",
+        "planner": "direct_support_planner",
+        "request_id": "req_013",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Known facts: User wants a crisis communication plan for a startup after a data exposure incident; factual accuracy, consistency, and legal/regulatory care are required. Unknowns: Jurisdictions, affected data categories/count, incident timeline/status, audience segmentation, approved channels, and legal/PR approvers are not provided. Do now: Provide an immediately usable draft plan with clearly marked assumptions, include concise clarifying questions to finalize it, and give safe next steps the user can execute now. Do not do: Do not use tools/files/commands, do not invent incident facts, and do not provide legal conclusions or unverified claims. Output: direct_guidance containing a practical crisis communication plan draft plus focused clarification questions.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "direct_guidance"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "direct_support_response",
+            "task_id": "direct_support",
+            "worker_type": "direct_worker"
+          }
+        ],
+        "strategy": "phase_aware_direct_support",
+        "success_criteria": [
+          "User receives a practical crisis communication plan draft with explicit assumptions, concise clarification questions, and safe immediate next steps."
+        ]
+      },
+      "prompt": "draft a crisis communication plan for a startup after a data exposure incident",
+      "status": "success"
+    },
+    {
+      "attempts": 1,
+      "envelope": {
+        "ambiguity": [
+          "Current proficiency in statistics is not specified.",
+          "Specific objective (exam prep, job skill, academic foundation) is not provided.",
+          "Available study time per week is unknown.",
+          "Preferred learning modality and resources are unspecified."
+        ],
+        "artifacts": [
+          {
+            "name": "statistics",
+            "type": "subject"
+          },
+          {
+            "name": "8 weeks",
+            "type": "timeline"
+          },
+          {
+            "name": "full-time work",
+            "type": "schedule_constraint"
+          },
+          {
+            "name": "study strategy",
+            "type": "deliverable"
+          }
+        ],
+        "assumptions": [
+          "User wants a non-technical study plan rather than direct statistical problem solving.",
+          "User can allocate at least some consistent study time each week despite full-time work.",
+          "No specific curriculum, textbook, or platform is mandated."
+        ],
+        "complexity_hint": "medium",
+        "confidence": 0.94,
+        "constraints": [
+          "strategy_must_fit_full_time_work_schedule",
+          "timeline_is_fixed_to_eight_weeks",
+          "recommendations_should_match_starting_skill_level",
+          "workload_should_be_realistic_and_sustainable"
+        ],
+        "context_needed": [
+          "current_statistics_level",
+          "target_outcomes_or_use_case",
+          "weekly_available_study_hours",
+          "preferred_learning_resources_or_format",
+          "assessment_or_progress_tracking_preference"
+        ],
+        "domains": [
+          "education",
+          "productivity",
+          "statistics"
+        ],
+        "input_type": "timeboxed_statistics_learning_strategy_design",
+        "intents": [
+          "learning.plan",
+          "curriculum.structure",
+          "time_management.optimize"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 9387.605,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 9387.605,
+            "latency_ms_p95": 9387.605,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "Develop an 8-week study strategy to learn statistics while maintaining a full-time job.",
+        "raw_input": "create a study strategy for learning statistics in 8 weeks while working full-time",
+        "request_id": "req_014",
+        "risks": [
+          "ambiguous_scope",
+          "needs_verification",
+          "feasibility_constraints"
+        ],
+        "user_goal": "Obtain a practical, time-constrained learning strategy for statistics that fits around full-time work commitments."
+      },
+      "index": 14,
+      "plan": {
+        "budget": {
+          "max_model_calls": 1,
+          "max_retries": 0,
+          "max_tool_calls": 0,
+          "max_workers": 1
+        },
+        "execution_pattern": "finalize",
+        "global_invariants": [
+          "no_tools",
+          "no_file_access",
+          "answer_from_user_input_only"
+        ],
+        "metadata": {
+          "archetype": "direct_support",
+          "llm_planner": {
+            "budget_auto_aligned": false,
+            "envelope_complexity_hint": "medium",
+            "envelope_input_type": "timeboxed_statistics_learning_strategy_design",
+            "mode": "completed",
+            "model_calls": 1,
+            "repair_attempted": false,
+            "resolved_validation_errors": [],
+            "stages": [
+              "draft_plan",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Provide direct support to deliver a practical 8-week statistics study strategy compatible with full-time work, using only the provided input and concise clarifications.",
+        "plan_id": "plan_req_014_direct_support",
+        "planner": "direct_support_planner",
+        "request_id": "req_014",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Known facts: User wants an 8-week statistics study strategy while working full-time; goal is practical, sustainable learning. Unknowns: Current statistics level, target outcome/use case, weekly study hours, preferred resources/format, and progress-tracking preference. Do now: Ask 3-5 concise clarifying questions and provide an immediate safe baseline 8-week plan that works with limited weekly time. Do not do: Do not use tools, files, or commands; do not invent unsupported provider-specific facts; do not assume unrealistic workload. Output: direct_guidance with clarifying questions plus actionable weekly structure and next steps.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "direct_guidance"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "direct_support_response",
+            "task_id": "direct_support",
+            "worker_type": "direct_worker"
+          }
+        ],
+        "strategy": "phase_aware_direct_support",
+        "success_criteria": [
+          "User receives direct_guidance containing concise clarifying questions and an immediately usable, realistic 8-week study strategy for full-time work constraints."
+        ]
+      },
+      "prompt": "create a study strategy for learning statistics in 8 weeks while working full-time",
+      "status": "success"
+    },
+    {
+      "attempts": 1,
+      "envelope": {
+        "ambiguity": [
+          "No geography is specified.",
+          "'Rates' is undefined and may refer to different rate types.",
+          "Consumer demand scope is unspecified (aggregate economy vs sector-specific).",
+          "No required output format or level of quant detail is provided."
+        ],
+        "artifacts": [
+          {
+            "name": "inflation",
+            "type": "economic_indicator"
+          },
+          {
+            "name": "rates",
+            "type": "economic_indicator"
+          },
+          {
+            "name": "consumer demand",
+            "type": "economic_indicator"
+          },
+          {
+            "name": "next 12 months",
+            "type": "time_horizon"
+          }
+        ],
+        "assumptions": [
+          "The user wants a high-level scenario analysis, not a single-point forecast.",
+          "The analysis should connect inflation, rates, and demand within one macro narrative.",
+          "The 12-month horizon is rolling from the present date unless otherwise specified."
+        ],
+        "complexity_hint": "medium",
+        "confidence": 0.93,
+        "constraints": [
+          "do not assert specific forecasts without stated assumptions",
+          "separate scenarios must be internally consistent across indicators",
+          "time horizon must remain 12 months",
+          "uncertainty and confidence bounds should be explicit if quantitative claims are made"
+        ],
+        "context_needed": [
+          "target geography or market scope",
+          "which rate is in scope (policy rate, lending rates, or yields)",
+          "preferred inflation measure (CPI, core CPI, PCE, etc.)",
+          "target consumer segment or industry for demand",
+          "required number of scenarios and format",
+          "baseline assumptions and data source expectations"
+        ],
+        "domains": [
+          "economics",
+          "research",
+          "business_strategy"
+        ],
+        "input_type": "macroeconomic_scenario_analysis_brief",
+        "intents": [
+          "economics.scenario_analysis",
+          "forecast.synthesize",
+          "strategy.planning_support"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 9987.798,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 9987.798,
+            "latency_ms_p95": 9987.798,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "Create an economic scenario analysis for the next 12 months covering inflation, interest rates, and consumer demand.",
+        "raw_input": "propose an economic scenario analysis for inflation, rates, and consumer demand over the next 12 months",
+        "request_id": "req_015",
+        "risks": [
+          "needs_verification",
+          "ambiguous_scope",
+          "forecast_uncertainty"
+        ],
+        "user_goal": "Obtain a structured forward-looking macroeconomic scenario analysis over a 12-month horizon for inflation, rates, and consumer demand."
+      },
+      "index": 15,
+      "plan": {
+        "budget": {
+          "max_model_calls": 2,
+          "max_retries": 0,
+          "max_tool_calls": 0,
+          "max_workers": 2
+        },
+        "execution_pattern": "analyze_finalize",
+        "global_invariants": [
+          "no_tools",
+          "no_file_access",
+          "answer_from_user_input_only",
+          "explicit_assumptions_for_any_projection",
+          "maintain_12_month_horizon"
+        ],
+        "metadata": {
+          "archetype": "phase_aware_support",
+          "llm_planner": {
+            "budget_auto_aligned": true,
+            "envelope_complexity_hint": "medium",
+            "envelope_input_type": "macroeconomic_scenario_analysis_brief",
+            "mode": "completed",
+            "model_calls": 1,
+            "repair_attempted": false,
+            "resolved_validation_errors": [],
+            "stages": [
+              "draft_plan",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Provide a structured 12-month macroeconomic scenario analysis (inflation, interest rates, consumer demand) using only user-provided context, with explicit assumptions, uncertainty framing, and focused clarifying questions.",
+        "plan_id": "plan_req_015_macro_scenario_support",
+        "planner": "phase_aware_support_planner",
+        "request_id": "req_015",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Known facts: User wants a 12-month scenario analysis covering inflation, rates, and consumer demand; scope is ambiguous on geography, rate type, inflation measure, and demand segment. Unknowns: Target geography/market, definition of rates, inflation metric, demand segment, preferred scenario count/format, baseline/data expectations. Do now: Draft concise clarification questions and a provisional assumption set plus internally consistent base/upside/downside scenario framework that avoids point-forecast claims. Do not do: Do not use tools, files, commands, or invent external data/provider-specific facts. Output: clarification_questions, scenario_assumption_set, scenario_framework.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "observe_only",
+            "output_artifacts": [
+              "clarification_questions",
+              "scenario_assumption_set",
+              "scenario_framework"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "ANALYZE",
+            "step_id": "analyze_scope_and_scenarios",
+            "task_id": "macro_scenario_analysis",
+            "worker_type": "research_worker"
+          },
+          {
+            "input_artifacts": [
+              "clarification_questions",
+              "scenario_assumption_set",
+              "scenario_framework"
+            ],
+            "instruction": "Known facts: clarification_questions, scenario_assumption_set, and scenario_framework are available from prior analysis. Unknowns: User selections for scope details may still be pending. Do now: Deliver a user-ready response that includes (1) concise clarifying questions and (2) immediate safe guidance via a clearly structured 12-month scenario narrative with assumptions, scenario signals, and uncertainty/confidence language. Do not do: Do not use tools, files, or commands; do not present unsupported precise forecasts. Output: final_summary.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "final_summary"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "finalize_user_ready_response",
+            "task_id": "macro_scenario_analysis",
+            "worker_type": "direct_worker"
+          }
+        ],
+        "strategy": "ambiguity_first_analyze_then_finalize",
+        "success_criteria": [
+          "User receives a structured 12-month scenario analysis framework linking inflation, interest rates, and consumer demand.",
+          "Response includes concise clarifying questions for unresolved scope ambiguities.",
+          "Scenario outputs are internally consistent and avoid unsupported point-forecast assertions."
+        ]
+      },
+      "prompt": "propose an economic scenario analysis for inflation, rates, and consumer demand over the next 12 months",
+      "status": "success"
+    }
+  ],
+  "success_count": 15,
+  "suite": "finale_qa_test",
+  "summary": {
+    "avg_decompressor_elapsed_ms": 9088.2462,
+    "avg_planner_model_calls": 1.0,
+    "p95_decompressor_elapsed_ms": 12158.613
+  }
+}

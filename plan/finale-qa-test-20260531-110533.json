@@ -1,0 +1,151 @@
+{
+  "attempt_timeout_seconds": 55,
+  "failure_count": 15,
+  "generated_at": "2026-05-31T04:35:33.595396+00:00",
+  "max_attempts": 2,
+  "run_count": 15,
+  "runs": [
+    {
+      "attempts": 2,
+      "envelope": null,
+      "error": "NoResultError: subprocess exited without payload",
+      "index": 1,
+      "plan": null,
+      "prompt": "thanks, that helped",
+      "status": "failed"
+    },
+    {
+      "attempts": 2,
+      "envelope": null,
+      "error": "NoResultError: subprocess exited without payload",
+      "index": 2,
+      "plan": null,
+      "prompt": "who am i",
+      "status": "failed"
+    },
+    {
+      "attempts": 2,
+      "envelope": null,
+      "error": "NoResultError: subprocess exited without payload",
+      "index": 3,
+      "plan": null,
+      "prompt": "what is today's date",
+      "status": "failed"
+    },
+    {
+      "attempts": 2,
+      "envelope": null,
+      "error": "NoResultError: subprocess exited without payload",
+      "index": 4,
+      "plan": null,
+      "prompt": "how many liters are in a standard water bottle",
+      "status": "failed"
+    },
+    {
+      "attempts": 2,
+      "envelope": null,
+      "error": "NoResultError: subprocess exited without payload",
+      "index": 5,
+      "plan": null,
+      "prompt": "my mrt card is not working and i need to commute tomorrow with no car",
+      "status": "failed"
+    },
+    {
+      "attempts": 2,
+      "envelope": null,
+      "error": "NoResultError: subprocess exited without payload",
+      "index": 6,
+      "plan": null,
+      "prompt": "i have a girlfriend who is upset with me. help me make it up to her",
+      "status": "failed"
+    },
+    {
+      "attempts": 2,
+      "envelope": null,
+      "error": "NoResultError: subprocess exited without payload",
+      "index": 7,
+      "plan": null,
+      "prompt": "write a cozy 12-chapter book outline about rebuilding a small town library after a flood",
+      "status": "failed"
+    },
+    {
+      "attempts": 2,
+      "envelope": null,
+      "error": "NoResultError: subprocess exited without payload",
+      "index": 8,
+      "plan": null,
+      "prompt": "explain api gateway vs load balancer and give a simple decision checklist",
+      "status": "failed"
+    },
+    {
+      "attempts": 2,
+      "envelope": null,
+      "error": "NoResultError: subprocess exited without payload",
+      "index": 9,
+      "plan": null,
+      "prompt": "payment dispute processor closes fraud cases when duplicate bank callbacks arrive after manual review lock expires; identify root cause, apply safe fix, include rollback plan, and verify with focused dispute-state checks",
+      "status": "failed"
+    },
+    {
+      "attempts": 2,
+      "envelope": null,
+      "error": "NoResultError: subprocess exited without payload",
+      "index": 10,
+      "plan": null,
+      "prompt": "multi-tenant audit export service intermittently leaks cross-tenant records when async shard compaction overlaps resumable export pagination after failover; identify root cause, design a safe scoped fix, include rollback plan, verify tenant isolation with focused regression checks, and summarize residual risks",
+      "status": "failed"
+    },
+    {
+      "attempts": 2,
+      "envelope": null,
+      "error": "NoResultError: subprocess exited without payload",
+      "index": 11,
+      "plan": null,
+      "prompt": "design a 90-day personal finance recovery plan after job loss with high-interest debt",
+      "status": "failed"
+    },
+    {
+      "attempts": 2,
+      "envelope": null,
+      "error": "NoResultError: subprocess exited without payload",
+      "index": 12,
+      "plan": null,
+      "prompt": "compare three strategies to reduce urban traffic congestion without expanding highways",
+      "status": "failed"
+    },
+    {
+      "attempts": 2,
+      "envelope": null,
+      "error": "NoResultError: subprocess exited without payload",
+      "index": 13,
+      "plan": null,
+      "prompt": "draft a crisis communication plan for a startup after a data exposure incident",
+      "status": "failed"
+    },
+    {
+      "attempts": 2,
+      "envelope": null,
+      "error": "NoResultError: subprocess exited without payload",
+      "index": 14,
+      "plan": null,
+      "prompt": "create a study strategy for learning statistics in 8 weeks while working full-time",
+      "status": "failed"
+    },
+    {
+      "attempts": 2,
+      "envelope": null,
+      "error": "NoResultError: subprocess exited without payload",
+      "index": 15,
+      "plan": null,
+      "prompt": "propose an economic scenario analysis for inflation, rates, and consumer demand over the next 12 months",
+      "status": "failed"
+    }
+  ],
+  "success_count": 0,
+  "suite": "finale_qa_test",
+  "summary": {
+    "avg_decompressor_elapsed_ms": null,
+    "avg_planner_model_calls": null,
+    "p95_decompressor_elapsed_ms": null
+  }
+}

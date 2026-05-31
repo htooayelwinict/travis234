@@ -1,0 +1,382 @@
+{
+  "failure_count": 0,
+  "generated_at": "2026-05-31T16:21:06.104511+00:00",
+  "run_count": 1,
+  "runs": [
+    {
+      "attempts": 1,
+      "envelope": {
+        "ambiguity": [
+          "\"it's lagorithm\" appears to mean \"its algorithm\" but wording is unclear.",
+          "no codebase path or target implementation file is provided.",
+          "programming language for writing the fix is unspecified.",
+          "criteria for determining a flaw are not defined.",
+          "scope of \"similar algorithms\" is unspecified (domain/constraints/performance goals)."
+        ],
+        "artifacts": [
+          {
+            "name": "v8.md",
+            "type": "file"
+          },
+          {
+            "name": "algorithm",
+            "type": "concept"
+          },
+          {
+            "name": "similar algorithms",
+            "type": "comparison_set"
+          },
+          {
+            "name": "web search results",
+            "type": "external_sources"
+          },
+          {
+            "name": "fix code",
+            "type": "code_change"
+          }
+        ],
+        "assumptions": [
+          "v8.md exists and contains an algorithm description.",
+          "web access is expected for similarity research.",
+          "the user wants both analysis and potential code changes if justified."
+        ],
+        "complexity_hint": "high",
+        "confidence": 0.86,
+        "constraints": [
+          "must_understand_documented_algorithm_before_any_fix",
+          "must_not_assert_flaws_without_evidence",
+          "comparisons_should_use_relevant_and_credible_sources",
+          "target_code_locations_must_be_identified_before_mutation",
+          "mutation_requires_verification_with_tests_or_equivalent_checks",
+          "do_not_invent_repo_structure_dependencies_or_api_shapes"
+        ],
+        "context_needed": [
+          "contents_of_v8_md",
+          "definition_of_correctness_for_the_algorithm",
+          "programming_language_and_target_runtime_for_code",
+          "target_files_or_modules_for_implementation",
+          "evaluation_criteria_for_comparison",
+          "allowed_web_sources_and_citation_expectations",
+          "test_suite_or_validation_method"
+        ],
+        "domains": [
+          "code",
+          "research",
+          "docs"
+        ],
+        "input_type": "algorithm_review_web_research_comparison_and_code_fix_request",
+        "intents": [
+          "docs.analyze",
+          "research.lookup",
+          "algorithm.compare",
+          "code.fix",
+          "quality.improve"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 10297.481,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 10297.481,
+            "latency_ms_p95": 10297.481,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "Review the algorithm described in v8.md, research similar algorithms on the web, compare them, and if a flaw is found, propose a fix and implement code for the fix.",
+        "raw_input": "read the v8.md file and make sure you understand it's lagorithm. then do the websearch for similar algorithms and compare them. if you find a flaw in the v8.md algorithm, suggest a fix and write the code for it.",
+        "request_id": "req_001",
+        "risks": [
+          "mutation_requested",
+          "file_mutation",
+          "needs_verification",
+          "external_research_required",
+          "ambiguous_scope",
+          "root_cause_unconfirmed"
+        ],
+        "user_goal": "Validate and improve the algorithm in v8.md by benchmarking it against similar algorithms and producing corrected code if defects are identified."
+      },
+      "index": 1,
+      "plan": {
+        "budget": {
+          "max_model_calls": 8,
+          "max_retries": 0,
+          "max_tool_calls": 19,
+          "max_workers": 8
+        },
+        "execution_pattern": "discover_analyze_analyze_research_design_mutate_verify_finalize",
+        "global_invariants": [
+          "evidence_before_mutation",
+          "design_before_write_with_mutation_scope_and_rollback_plan",
+          "writes_scoped_via_mutation_scope_only",
+          "verify_after_write_with_root_cause_and_scope_checks",
+          "no_unfounded_flaw_claims_or_invented_repo_structure"
+        ],
+        "metadata": {
+          "archetype": "phase_aware_mutation",
+          "complexity": "high",
+          "llm_planner": {
+            "budget_auto_aligned": true,
+            "envelope_complexity_hint": "high",
+            "envelope_input_type": "algorithm_review_web_research_comparison_and_code_fix_request",
+            "mode": "repaired",
+            "model_calls": 2,
+            "repair_attempted": true,
+            "resolved_validation_errors": [
+              {
+                "msg": "plan phase order regresses at step index 3",
+                "type": "planner_validation"
+              }
+            ],
+            "stages": [
+              "draft_plan",
+              "validate_plan",
+              "repair_plan_1",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          },
+          "repair_reason": "fix_phase_order_regression"
+        },
+        "objective": "Review the algorithm documented in v8.md, compare it with credible similar algorithms, and implement a scoped, verified fix only if evidence confirms a flaw.",
+        "plan_id": "plan_req_001_phase_aware_mutation_repaired",
+        "planner": "phase_aware_planner_v2",
+        "request_id": "req_001",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Known facts: The user requested algorithm review, external comparison, and possible code fix; v8.md is expected to exist in the repository. Unknowns: Exact path to v8.md and exact implementation/test files tied to the documented algorithm. Do now: Locate v8.md and enumerate candidate implementation and test file paths related to that algorithm. Do not do: Do not edit files, run commands, assume undocumented structure, or claim flaws. Output: v8_doc_path, candidate_implementation_files, candidate_test_files.",
+            "max_model_calls": 1,
+            "max_tool_calls": 2,
+            "mode": "observe_only",
+            "output_artifacts": [
+              "v8_doc_path",
+              "candidate_implementation_files",
+              "candidate_test_files"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "DISCOVER",
+            "step_id": "discover_repo_targets",
+            "task_id": "algorithm_improvement",
+            "worker_type": "repo_worker"
+          },
+          {
+            "input_artifacts": [
+              "v8_doc_path",
+              "candidate_implementation_files"
+            ],
+            "instruction": "Known facts: v8_doc_path and candidate implementation files are available. Unknowns: Formal correctness definition details and whether any real flaw exists. Do now: Extract intended behavior, assumptions, constraints, edge cases, and potential failure points from v8.md and aligned implementation context. Do not do: Do not invent correctness criteria, propose patches, or assert defects without evidence. Output: algorithm_understanding, analysis_evidence, potential_flaws.",
+            "max_model_calls": 1,
+            "max_tool_calls": 2,
+            "mode": "observe_only",
+            "output_artifacts": [
+              "algorithm_understanding",
+              "analysis_evidence",
+              "potential_flaws"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "ANALYZE",
+            "step_id": "analyze_documented_algorithm",
+            "task_id": "algorithm_improvement",
+            "worker_type": "research_worker"
+          },
+          {
+            "input_artifacts": [
+              "candidate_implementation_files",
+              "candidate_test_files"
+            ],
+            "instruction": "Known facts: Candidate implementation and test files are identified; any mutation must be verified after writing. Unknowns: Exact validation method, test entry points, and dependency readiness for focused checks. Do now: Identify available test/validation mechanisms and dependency context needed to verify a future scoped fix. Do not do: Do not mutate files, run write operations, or claim verification readiness without evidence. Output: dependency_artifacts, validation_method, test_plan_context.",
+            "max_model_calls": 1,
+            "max_tool_calls": 2,
+            "mode": "observe_only",
+            "output_artifacts": [
+              "dependency_artifacts",
+              "validation_method",
+              "test_plan_context"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "ANALYZE",
+            "step_id": "analyze_validation_dependencies",
+            "task_id": "algorithm_improvement",
+            "worker_type": "repo_worker"
+          },
+          {
+            "input_artifacts": [
+              "algorithm_understanding"
+            ],
+            "instruction": "Known facts: algorithm_understanding is available and the user explicitly requested web comparison. Unknowns: Most relevant comparable algorithms and strongest credible references until research is complete. Do now: Gather credible external sources and produce an evidence-based comparison aligned to the documented algorithm goals and constraints. Do not do: Do not rely on low-credibility sources or claim flaws/superiority without cited evidence. Output: credible_sources, comparison_evidence, comparison_summary.",
+            "max_model_calls": 1,
+            "max_tool_calls": 4,
+            "mode": "observe_only",
+            "output_artifacts": [
+              "credible_sources",
+              "comparison_evidence",
+              "comparison_summary"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "RESEARCH",
+            "step_id": "research_similar_algorithms",
+            "task_id": "algorithm_improvement",
+            "worker_type": "research_worker"
+          },
+          {
+            "input_artifacts": [
+              "analysis_evidence",
+              "potential_flaws",
+              "comparison_evidence",
+              "comparison_summary",
+              "candidate_implementation_files",
+              "dependency_artifacts",
+              "validation_method",
+              "test_plan_context"
+            ],
+            "instruction": "Known facts: analysis_evidence, potential_flaws, comparison_evidence, and validation context are available before any write. Unknowns: Whether evidence is sufficient for a safe code change until design is finalized. Do now: Confirm root cause, define minimal fix design, set mutation_scope, and produce rollback_plan plus verification_plan tied to the root cause. Do not do: Do not write code, expand scope beyond necessity, or proceed without evidence-backed rationale. Output: root_cause_evidence, fix_design, mutation_scope, rollback_plan, verification_plan.",
+            "max_model_calls": 1,
+            "max_tool_calls": 1,
+            "mode": "plan_only",
+            "output_artifacts": [
+              "root_cause_evidence",
+              "fix_design",
+              "mutation_scope",
+              "rollback_plan",
+              "verification_plan"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "DESIGN",
+            "step_id": "design_scoped_fix",
+            "task_id": "algorithm_improvement",
+            "worker_type": "code_worker"
+          },
+          {
+            "input_artifacts": [
+              "mutation_scope",
+              "rollback_plan",
+              "root_cause_evidence",
+              "fix_design",
+              "dependency_artifacts"
+            ],
+            "instruction": "Known facts: mutation_scope, rollback_plan, root_cause_evidence, and fix_design define what to change and how to revert. Unknowns: Whether implementation will pass verification until checks run. Do now: Implement only the approved fix within mutation_scope, preserving behavior outside scope, and produce change and rollback artifacts. Do not do: Do not write outside mutation_scope, skip rollback readiness, or claim success before verification. Output: change_summary, rollback_patch.",
+            "max_model_calls": 1,
+            "max_tool_calls": 3,
+            "mode": "bounded_mutation",
+            "output_artifacts": [
+              "change_summary",
+              "rollback_patch"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "write_files": true,
+              "write_paths_from_artifacts": [
+                "mutation_scope"
+              ]
+            },
+            "phase": "MUTATE",
+            "step_id": "implement_scoped_fix",
+            "task_id": "algorithm_improvement",
+            "worker_type": "code_worker"
+          },
+          {
+            "input_artifacts": [
+              "change_summary",
+              "mutation_scope",
+              "root_cause_evidence",
+              "verification_plan",
+              "validation_method",
+              "rollback_patch"
+            ],
+            "instruction": "Known facts: A scoped change was applied and rollback_patch is available. Unknowns: Whether the patch matches root cause, stays in scope, and satisfies focused validation. Do now: Execute verification_plan via validation_method to check root-cause alignment, scope containment, focused check outcomes, and rollback availability. Do not do: Do not modify files or overstate confidence if results are partial/inconclusive. Output: verification_report, test_results.",
+            "max_model_calls": 1,
+            "max_tool_calls": 4,
+            "mode": "verify_only",
+            "output_artifacts": [
+              "verification_report",
+              "test_results"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": true,
+              "write_files": false
+            },
+            "phase": "VERIFY",
+            "step_id": "verify_fix",
+            "task_id": "algorithm_improvement",
+            "worker_type": "verify_worker"
+          },
+          {
+            "input_artifacts": [
+              "algorithm_understanding",
+              "credible_sources",
+              "comparison_summary",
+              "root_cause_evidence",
+              "fix_design",
+              "change_summary",
+              "verification_report",
+              "test_results"
+            ],
+            "instruction": "Known facts: Algorithm analysis, external comparison, design rationale, implemented change summary, and verification outputs are available. Unknowns: None material. Do now: Produce a final report summarizing findings, comparisons, flaw determination, fix scope, verification results, rollback status, and residual risks/next steps. Do not do: Do not invent claims beyond produced artifacts. Output: final_report.",
+            "max_model_calls": 1,
+            "max_tool_calls": 1,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "final_report"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "finalize_report",
+            "task_id": "algorithm_improvement",
+            "worker_type": "research_worker"
+          }
+        ],
+        "strategy": "discovery_analysis_research_design_then_scoped_mutation",
+        "success_criteria": [
+          "Documented algorithm is analyzed with explicit evidence.",
+          "Credible external comparisons are provided and tied to algorithm goals.",
+          "Any code mutation occurs only after DESIGN outputs mutation_scope, rollback_plan, and verification_plan.",
+          "Verification reports root-cause match, scope containment, focused check results, and rollback availability.",
+          "Final report clearly states findings, actions taken, and remaining risks."
+        ]
+      },
+      "prompt": "read the v8.md file and make sure you understand it's lagorithm. then do the websearch for similar algorithms and compare them. if you find a flaw in the v8.md algorithm, suggest a fix and write the code for it.",
+      "status": "success"
+    }
+  ],
+  "success_count": 1
+}

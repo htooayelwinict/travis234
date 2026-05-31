@@ -10,6 +10,7 @@ ALLOWED_WORKER_TYPES: tuple[str, ...] = (
     "repo_worker",
     "code_worker",
     "research_worker",
+    "web_research_worker",
     "infra_worker",
     "verify_worker",
 )
@@ -44,6 +45,10 @@ WORKER_CATALOG: dict[str, dict[str, Any]] = {
     },
     "research_worker": {
         "description": "Research and synthesis across available context.",
+        "can_write": False,
+    },
+    "web_research_worker": {
+        "description": "External web research and comparative synthesis with source-focused outputs.",
         "can_write": False,
     },
     "infra_worker": {

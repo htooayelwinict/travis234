@@ -9,6 +9,7 @@ from app.worker_kernel.workers import (
     RepoWorker,
     ResearchWorker,
     VerifyWorker,
+    WebResearchWorker,
 )
 from app.worker_kernel.workers.base import BaseWorker
 
@@ -33,6 +34,7 @@ def build_default_registry() -> WorkerRegistry:
     registry.register(RepoWorker())
     registry.register(CodeWorker())
     registry.register(ResearchWorker())
+    registry.register(WebResearchWorker())
     registry.register(InfraWorker())
     registry.register(VerifyWorker())
     return registry
