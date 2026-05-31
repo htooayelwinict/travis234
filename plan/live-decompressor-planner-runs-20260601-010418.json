@@ -1,0 +1,293 @@
+{
+  "failure_count": 0,
+  "generated_at": "2026-05-31T18:34:18.972266+00:00",
+  "run_count": 1,
+  "runs": [
+    {
+      "attempts": 1,
+      "envelope": {
+        "ambiguity": [
+          "The meaning of 'fix it' is unspecified.",
+          "It is unclear where to search for 1a.txt.",
+          "No expected output or validation criteria are provided."
+        ],
+        "artifacts": [
+          {
+            "name": "1a.txt",
+            "type": "file"
+          }
+        ],
+        "assumptions": [
+          "The user intends a modification to a file named 1a.txt.",
+          "The file may be in the current accessible project/workspace.",
+          "No specific fix strategy can be assumed without additional context."
+        ],
+        "complexity_hint": "low",
+        "confidence": 0.66,
+        "constraints": [
+          "target_locations_must_be_identified_before_mutation",
+          "mutation_requires_verification",
+          "do_not_assume_file_exists_without_check",
+          "do_not_infer_fix_details_without_requirements"
+        ],
+        "context_needed": [
+          "workspace_or_repo_tree",
+          "exact_location_of_1a.txt",
+          "definition_of_what_counts_as_fixed",
+          "expected_content_or_acceptance_criteria"
+        ],
+        "domains": [
+          "code",
+          "docs"
+        ],
+        "input_type": "ambiguous_text_file_fix_request",
+        "intents": [
+          "file.locate",
+          "code.fix",
+          "content.repair"
+        ],
+        "metadata": {
+          "decompressor_mode": "llm_prompt_chain",
+          "decompressor_runtime": {
+            "elapsed_ms": 17124.554,
+            "failure_rate": 0.0,
+            "latency_ms_p50": 17124.554,
+            "latency_ms_p95": 17124.554,
+            "repair_rate": 0.0
+          },
+          "llm_prompt_chain": {
+            "fallback": null,
+            "mode": "completed",
+            "model_calls": 1,
+            "redacted_prompt_input": false,
+            "stages": [
+              "decompress_request",
+              "validate_envelope"
+            ]
+          }
+        },
+        "normalized_input": "Locate the file 1a.txt and fix it.",
+        "raw_input": "if you can find the 1a.txt fix it.",
+        "request_id": "req_001",
+        "risks": [
+          "mutation_requested",
+          "file_mutation",
+          "ambiguous_scope",
+          "needs_verification",
+          "target_may_not_exist"
+        ],
+        "user_goal": "Have 1a.txt corrected, if it exists in the available workspace."
+      },
+      "index": 1,
+      "plan": {
+        "budget": {
+          "max_model_calls": 6,
+          "max_retries": 0,
+          "max_tool_calls": 0,
+          "max_workers": 6
+        },
+        "execution_pattern": "discover_analyze_design_mutate_verify_finalize",
+        "global_invariants": [
+          "discover_before_mutate",
+          "design_outputs_mutation_scope_and_rollback_plan_before_write",
+          "writes_scoped_via_write_paths_from_artifacts",
+          "verify_after_any_write",
+          "no_unsupported_assumptions_about_fix_requirements"
+        ],
+        "metadata": {
+          "ambiguity_handling": "evidence_gap_gated",
+          "archetype": "phase_aware_mutation",
+          "complexity": "low",
+          "llm_planner": {
+            "budget_auto_aligned": true,
+            "envelope_complexity_hint": "low",
+            "envelope_input_type": "ambiguous_text_file_fix_request",
+            "mode": "completed",
+            "model_calls": 1,
+            "repair_attempted": false,
+            "resolved_validation_errors": [],
+            "stages": [
+              "draft_plan",
+              "validate_plan"
+            ],
+            "validation_errors": []
+          },
+          "planner_runtime": {
+            "fallback_reason": null,
+            "mode": "llm_prompt_chain"
+          }
+        },
+        "objective": "Safely locate 1a.txt, define what can be fixed based on available evidence, apply a scoped fix if justified, verify results, and report outcomes or blockers.",
+        "plan_id": "plan_req_001_fix_1a_txt",
+        "planner": "phase_aware_mutation_planner",
+        "request_id": "req_001",
+        "steps": [
+          {
+            "input_artifacts": [],
+            "instruction": "Known facts: User requested to find and fix a file named 1a.txt; exact location is unknown; file may not exist. Unknowns: Workspace tree, concrete path, and whether multiple matches exist. Do now: Search accessible repository/workspace for 1a.txt and resolve candidate locations with existence status. Do not do: Do not modify files or assume any candidate is the writable target without explicit resolution. Output: target_file_candidates and target_resolution.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "observe_only",
+            "output_artifacts": [
+              "target_file_candidates",
+              "target_resolution"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "web_research": false,
+              "write_files": false
+            },
+            "phase": "DISCOVER",
+            "step_id": "discover_target_file",
+            "task_id": "fix_1a_txt",
+            "worker_type": "repo_worker"
+          },
+          {
+            "input_artifacts": [
+              "target_file_candidates",
+              "target_resolution"
+            ],
+            "instruction": "Known facts: target_file_candidates and target_resolution are available from discovery. Unknowns: What specifically counts as fixed and whether sufficient evidence exists for a safe correction. Do now: Inspect resolved target content, identify concrete defects, derive minimal fix requirements, and record an evidence gap if acceptance criteria are missing or ambiguous. Do not do: Do not edit files or invent requirements not supported by file content or user input. Output: root_cause_evidence, fix_requirements, and evidence_gap.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "observe_only",
+            "output_artifacts": [
+              "root_cause_evidence",
+              "fix_requirements",
+              "evidence_gap"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "web_research": false,
+              "write_files": false
+            },
+            "phase": "ANALYZE",
+            "step_id": "analyze_target_and_requirements",
+            "task_id": "fix_1a_txt",
+            "worker_type": "research_worker"
+          },
+          {
+            "input_artifacts": [
+              "target_resolution",
+              "root_cause_evidence",
+              "fix_requirements",
+              "evidence_gap"
+            ],
+            "instruction": "Known facts: target_resolution, root_cause_evidence, fix_requirements, and evidence_gap are available. Unknowns: Whether ambiguity permits safe mutation without additional user clarification. Do now: Produce a narrow mutation_scope, rollback_plan, verification_plan, and fix_design; if evidence_gap is material, design a no-write path and mark mutation as blocked by scope/criteria uncertainty. Do not do: Do not write files, do not expand scope beyond resolved target, and do not bypass rollback planning. Output: mutation_scope, rollback_plan, verification_plan, and fix_design.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "plan_only",
+            "output_artifacts": [
+              "mutation_scope",
+              "rollback_plan",
+              "verification_plan",
+              "fix_design"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "web_research": false,
+              "write_files": false
+            },
+            "phase": "DESIGN",
+            "step_id": "design_scoped_fix_and_rollback",
+            "task_id": "fix_1a_txt",
+            "worker_type": "code_worker"
+          },
+          {
+            "input_artifacts": [
+              "mutation_scope",
+              "rollback_plan",
+              "fix_design",
+              "root_cause_evidence",
+              "evidence_gap"
+            ],
+            "instruction": "Known facts: mutation_scope, rollback_plan, fix_design, root_cause_evidence, and evidence_gap are available. Unknowns: None if design indicates mutation is safe; otherwise mutation remains blocked. Do now: Apply only the designed fix within mutation_scope when evidence is sufficient, and generate rollback_patch for reversal. Do not do: Do not write outside mutation_scope, do not mutate when evidence_gap blocks safe action, and do not claim success without later verification. Output: change_summary and rollback_patch.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "bounded_mutation",
+            "output_artifacts": [
+              "change_summary",
+              "rollback_patch"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "web_research": false,
+              "write_files": true,
+              "write_paths_from_artifacts": [
+                "mutation_scope"
+              ]
+            },
+            "phase": "MUTATE",
+            "step_id": "apply_scoped_fix",
+            "task_id": "fix_1a_txt",
+            "worker_type": "code_worker"
+          },
+          {
+            "input_artifacts": [
+              "change_summary",
+              "mutation_scope",
+              "root_cause_evidence",
+              "verification_plan",
+              "rollback_patch"
+            ],
+            "instruction": "Known facts: change_summary, mutation_scope, root_cause_evidence, verification_plan, and rollback_patch are available. Unknowns: Whether the applied change fully satisfies inferred requirements without scope drift. Do now: Verify root-cause alignment, scope containment, and planned checks; confirm rollback availability and capture any residual issues. Do not do: Do not modify files or broaden scope during verification. Output: verification_results.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "verify_only",
+            "output_artifacts": [
+              "verification_results"
+            ],
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "web_research": false,
+              "write_files": false
+            },
+            "phase": "VERIFY",
+            "step_id": "verify_fix_outcome",
+            "task_id": "fix_1a_txt",
+            "worker_type": "verify_worker"
+          },
+          {
+            "input_artifacts": [
+              "verification_results",
+              "change_summary",
+              "evidence_gap"
+            ],
+            "instruction": "Known facts: verification_results, change_summary, and evidence_gap are available. Unknowns: Any user-specific acceptance criteria not provided in the request. Do now: Produce a concise final outcome with what was changed, verification status, rollback readiness, and explicit clarification requests if ambiguity limited certainty. Do not do: Do not perform additional edits or claim criteria satisfaction beyond available evidence. Output: final_report.",
+            "max_model_calls": 1,
+            "max_tool_calls": 0,
+            "mode": "summarize_only",
+            "output_artifacts": [
+              "final_report"
+            ],
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "web_research": false,
+              "write_files": false
+            },
+            "phase": "FINALIZE",
+            "step_id": "finalize_report",
+            "task_id": "fix_1a_txt",
+            "worker_type": "verify_worker"
+          }
+        ],
+        "strategy": "discovery_first_ambiguity_gated_mutation",
+        "success_criteria": [
+          "Target file location is resolved or explicitly reported missing.",
+          "Any mutation is constrained to design-produced mutation_scope with rollback_patch available.",
+          "Verification confirms scope containment and reports fix outcome or blocker clearly.",
+          "Final report states residual ambiguity and needed user clarification when evidence is insufficient."
+        ]
+      },
+      "prompt": "if you can find the 1a.txt fix it.",
+      "status": "success"
+    }
+  ],
+  "success_count": 1
+}

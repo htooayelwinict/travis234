@@ -130,14 +130,14 @@ class PlannerPlanValidator:
             if step.phase == "FINALIZE" and not step.output_artifacts:
                 errors.append(f"step {step.step_id} phase FINALIZE must output a final artifact")
             missing_permission_keys = [
-                key for key in ("read_files", "write_files", "run_commands") if key not in step.permissions
+                key for key in ("read_files", "write_files", "run_commands", "web_research") if key not in step.permissions
             ]
             if missing_permission_keys:
                 errors.append(
-                    f"step {step.step_id} permissions must explicitly include read_files/write_files/run_commands"
+                    f"step {step.step_id} permissions must explicitly include read_files/write_files/run_commands/web_research keys with boolean values; missing keys: {', '.join(missing_permission_keys)}"
                 )
             else:
-                for key in ("read_files", "write_files", "run_commands"):
+                for key in ("read_files", "write_files", "run_commands", "web_research"):
                     if not isinstance(step.permissions.get(key), bool):
                         errors.append(f"step {step.step_id} permission {key} must be a boolean")
 
