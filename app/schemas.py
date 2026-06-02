@@ -68,6 +68,20 @@ class Plan(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class ReplanRequest(BaseModel):
+    request_id: str
+    plan_id: str
+    run_id: str
+    failed_step_id: str
+    reason: str
+
+    worker_result: dict[str, Any] = Field(default_factory=dict)
+    completed_artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    completed_step_ids: list[str] = Field(default_factory=list)
+    remaining_budget: dict[str, Any] = Field(default_factory=dict)
+    recommended_action: str | None = None
+
+
 class Task(BaseModel):
     task_id: str
     run_id: str

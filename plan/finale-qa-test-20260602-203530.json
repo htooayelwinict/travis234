@@ -1,0 +1,3227 @@
+{
+  "decompressor": {
+    "envelope": {
+      "ambiguity": [
+        "authoritative industry guidance sources are not explicitly named.",
+        "exact repository boundaries and services in scope are unspecified.",
+        "acceptable risk thresholds for business-readiness are not defined.",
+        "target rollout environment and traffic profile are not provided.",
+        "regulatory jurisdictions and compliance obligations are unstated."
+      ],
+      "artifacts": [
+        {
+          "name": "cross-border payouts platform rollout",
+          "type": "program"
+        },
+        {
+          "name": "system-design.md",
+          "type": "file"
+        },
+        {
+          "name": "repository implementation",
+          "type": "codebase"
+        },
+        {
+          "name": "transaction orchestration",
+          "type": "component"
+        },
+        {
+          "name": "exchange-rate conversion",
+          "type": "component"
+        },
+        {
+          "name": "webhook retries",
+          "type": "mechanism"
+        },
+        {
+          "name": "deduplication",
+          "type": "control"
+        },
+        {
+          "name": "dead-letter recovery",
+          "type": "mechanism"
+        },
+        {
+          "name": "idempotency",
+          "type": "reliability_principle"
+        },
+        {
+          "name": "retry backoff",
+          "type": "reliability_principle"
+        },
+        {
+          "name": "auditability",
+          "type": "control_principle"
+        },
+        {
+          "name": "fraud-safe sequencing",
+          "type": "control_principle"
+        },
+        {
+          "name": "rollback path",
+          "type": "operational_artifact"
+        },
+        {
+          "name": "targeted verification",
+          "type": "validation_artifact"
+        },
+        {
+          "name": "post-change operational checks",
+          "type": "operational_artifact"
+        }
+      ],
+      "assumptions": [
+        "system-design.md exists and is intended as current architecture reference.",
+        "the repository contains the production-relevant implementation for the listed behaviors.",
+        "defect remediation is conditional on concrete, reproducible findings.",
+        "no external API contracts or dependencies should be assumed without provided evidence."
+      ],
+      "complexity_hint": "high",
+      "confidence": 0.93,
+      "constraints": [
+        "findings must be evidence-based and traceable to code/design artifacts",
+        "do not assert defects or root causes without concrete repository evidence",
+        "comparisons to guidance must cite authoritative sources explicitly",
+        "proposed changes must remain minimal in scope and tied to validated defects",
+        "rollback path must preserve transactional integrity and audit trail continuity",
+        "verification criteria must cover reliability, correctness, and fraud-safety invariants",
+        "financial transaction sequencing and idempotency guarantees must not be weakened"
+      ],
+      "context_needed": [
+        "repository tree and relevant services/modules",
+        "contents of system-design.md",
+        "runtime architecture and data flow for payout lifecycle",
+        "current retry/dedup/dead-letter implementation details",
+        "event/message schemas and idempotency keys",
+        "exchange-rate source, caching, and consistency rules",
+        "webhook delivery guarantees and failure modes",
+        "transaction ordering and anti-fraud control requirements",
+        "definition of authoritative industry guidance to use",
+        "regulatory/jurisdictional constraints for payouts",
+        "environments and deployment/rollback mechanics",
+        "existing monitoring, alerting, and audit logs",
+        "test coverage and reproducible defect evidence"
+      ],
+      "domains": [
+        "code",
+        "docs",
+        "reliability",
+        "fintech_payments",
+        "operations",
+        "risk_controls",
+        "research"
+      ],
+      "input_type": "cross_border_payouts_reliability_readiness_audit",
+      "intents": [
+        "architecture.review",
+        "repository.audit",
+        "reliability.assessment",
+        "industry_guidance.comparison",
+        "defect.validation",
+        "change_scope.definition",
+        "rollback.readiness",
+        "verification.criteria.definition",
+        "operations.checks.definition"
+      ],
+      "metadata": {
+        "decompressor_mode": "llm_prompt_chain",
+        "decompressor_runtime": {
+          "elapsed_ms": 26792.837,
+          "failure_rate": 0.0,
+          "latency_ms_p50": 26792.837,
+          "latency_ms_p95": 26792.837,
+          "repair_rate": 0.0
+        },
+        "llm_prompt_chain": {
+          "fallback": null,
+          "mode": "completed",
+          "model_calls": 1,
+          "redacted_prompt_input": false,
+          "stages": [
+            "decompress_request",
+            "validate_envelope"
+          ]
+        }
+      },
+      "normalized_input": "Assess reliability and business readiness for a cross-border payouts rollout by reviewing system-design.md and repository behavior for orchestration, FX conversion, webhook retry/dedup, and dead-letter recovery; compare observed behavior to authoritative guidance on idempotency, backoff, auditability, and fraud-safe sequencing; if concrete defects exist, define minimal changes, rollback approach, verification, and post-change operational checks.",
+      "raw_input": "Run a reliability and business-readiness audit for a cross-border payouts platform rollout: review system-design.md and the repository implementation for transaction orchestration, exchange-rate conversion, webhook retries with deduplication, and dead-letter recovery. Then compare repository behavior with authoritative industry guidance on idempotency, retry backoff, auditability, and fraud-safe sequencing. If defects are concrete, propose minimal scoped changes, a rollback path, and targeted verification plus post-change operational checks.",
+      "request_id": "req_001",
+      "risks": [
+        "needs_verification",
+        "ambiguous_scope",
+        "authoritative_source_mismatch_risk",
+        "mutation_requested",
+        "financial_integrity_risk",
+        "idempotency_gap_risk",
+        "retry_storm_risk",
+        "deduplication_failure_risk",
+        "dead_letter_reprocessing_risk",
+        "fraud_sequence_violation_risk"
+      ],
+      "user_goal": "Obtain an evidence-based audit of whether the payouts platform implementation is rollout-ready and aligned with industry reliability/safety guidance, with narrowly scoped remediation only for confirmed defects."
+    },
+    "request_id": "req_001"
+  },
+  "elapsed_ms": 129860.021,
+  "final_worker_kernel_result": {
+    "artifacts": [
+      {
+        "content": {
+          "derived_inputs": [],
+          "mode": "observe_only",
+          "output_id": "repo_inventory_v2",
+          "phase": "DISCOVER",
+          "step_id": "rebaseline_repo_and_design_evidence",
+          "worker_type": "repo_worker"
+        },
+        "id": "repo_inventory_v2",
+        "producer_step_id": "rebaseline_repo_and_design_evidence",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": {
+          "derived_inputs": [],
+          "mode": "observe_only",
+          "output_id": "design_doc_evidence_v2",
+          "phase": "DISCOVER",
+          "step_id": "rebaseline_repo_and_design_evidence",
+          "worker_type": "repo_worker"
+        },
+        "id": "design_doc_evidence_v2",
+        "producer_step_id": "rebaseline_repo_and_design_evidence",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": {
+          "derived_inputs": [],
+          "mode": "observe_only",
+          "output_id": "payout_flow_map_v2",
+          "phase": "DISCOVER",
+          "step_id": "rebaseline_repo_and_design_evidence",
+          "worker_type": "repo_worker"
+        },
+        "id": "payout_flow_map_v2",
+        "producer_step_id": "rebaseline_repo_and_design_evidence",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": {
+          "derived_inputs": [],
+          "mode": "observe_only",
+          "output_id": "control_evidence_baseline_v2",
+          "phase": "DISCOVER",
+          "step_id": "rebaseline_repo_and_design_evidence",
+          "worker_type": "repo_worker"
+        },
+        "id": "control_evidence_baseline_v2",
+        "producer_step_id": "rebaseline_repo_and_design_evidence",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": {
+          "derived_inputs": [
+            "control_evidence_baseline_v2"
+          ],
+          "mode": "observe_only",
+          "output_id": "authoritative_source_policy_v2",
+          "phase": "RESEARCH",
+          "step_id": "research_authoritative_guidance_with_scope_guardrails",
+          "worker_type": "web_research_worker"
+        },
+        "id": "authoritative_source_policy_v2",
+        "producer_step_id": "research_authoritative_guidance_with_scope_guardrails",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "content": {
+          "derived_inputs": [
+            "control_evidence_baseline_v2"
+          ],
+          "mode": "observe_only",
+          "output_id": "authoritative_sources_v2",
+          "phase": "RESEARCH",
+          "step_id": "research_authoritative_guidance_with_scope_guardrails",
+          "worker_type": "web_research_worker"
+        },
+        "id": "authoritative_sources_v2",
+        "producer_step_id": "research_authoritative_guidance_with_scope_guardrails",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "content": {
+          "derived_inputs": [
+            "control_evidence_baseline_v2"
+          ],
+          "mode": "observe_only",
+          "output_id": "guidance_control_matrix_v2",
+          "phase": "RESEARCH",
+          "step_id": "research_authoritative_guidance_with_scope_guardrails",
+          "worker_type": "web_research_worker"
+        },
+        "id": "guidance_control_matrix_v2",
+        "producer_step_id": "research_authoritative_guidance_with_scope_guardrails",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "content": {
+          "derived_inputs": [
+            "repo_inventory_v2",
+            "design_doc_evidence_v2",
+            "payout_flow_map_v2",
+            "control_evidence_baseline_v2",
+            "authoritative_source_policy_v2",
+            "authoritative_sources_v2",
+            "guidance_control_matrix_v2"
+          ],
+          "mode": "plan_only",
+          "output_id": "readiness_assessment",
+          "phase": "DESIGN",
+          "step_id": "design_readiness_assessment_and_minimal_actions",
+          "worker_type": "research_worker"
+        },
+        "id": "readiness_assessment",
+        "producer_step_id": "design_readiness_assessment_and_minimal_actions",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": {
+          "derived_inputs": [
+            "repo_inventory_v2",
+            "design_doc_evidence_v2",
+            "payout_flow_map_v2",
+            "control_evidence_baseline_v2",
+            "authoritative_source_policy_v2",
+            "authoritative_sources_v2",
+            "guidance_control_matrix_v2"
+          ],
+          "mode": "plan_only",
+          "output_id": "validated_defects",
+          "phase": "DESIGN",
+          "step_id": "design_readiness_assessment_and_minimal_actions",
+          "worker_type": "research_worker"
+        },
+        "id": "validated_defects",
+        "producer_step_id": "design_readiness_assessment_and_minimal_actions",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": {
+          "derived_inputs": [
+            "repo_inventory_v2",
+            "design_doc_evidence_v2",
+            "payout_flow_map_v2",
+            "control_evidence_baseline_v2",
+            "authoritative_source_policy_v2",
+            "authoritative_sources_v2",
+            "guidance_control_matrix_v2"
+          ],
+          "mode": "plan_only",
+          "output_id": "minimal_change_plan",
+          "phase": "DESIGN",
+          "step_id": "design_readiness_assessment_and_minimal_actions",
+          "worker_type": "research_worker"
+        },
+        "id": "minimal_change_plan",
+        "producer_step_id": "design_readiness_assessment_and_minimal_actions",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": {
+          "derived_inputs": [
+            "repo_inventory_v2",
+            "design_doc_evidence_v2",
+            "payout_flow_map_v2",
+            "control_evidence_baseline_v2",
+            "authoritative_source_policy_v2",
+            "authoritative_sources_v2",
+            "guidance_control_matrix_v2"
+          ],
+          "mode": "plan_only",
+          "output_id": "rollback_plan",
+          "phase": "DESIGN",
+          "step_id": "design_readiness_assessment_and_minimal_actions",
+          "worker_type": "research_worker"
+        },
+        "id": "rollback_plan",
+        "producer_step_id": "design_readiness_assessment_and_minimal_actions",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": {
+          "derived_inputs": [
+            "repo_inventory_v2",
+            "design_doc_evidence_v2",
+            "payout_flow_map_v2",
+            "control_evidence_baseline_v2",
+            "authoritative_source_policy_v2",
+            "authoritative_sources_v2",
+            "guidance_control_matrix_v2"
+          ],
+          "mode": "plan_only",
+          "output_id": "verification_plan",
+          "phase": "DESIGN",
+          "step_id": "design_readiness_assessment_and_minimal_actions",
+          "worker_type": "research_worker"
+        },
+        "id": "verification_plan",
+        "producer_step_id": "design_readiness_assessment_and_minimal_actions",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": {
+          "derived_inputs": [
+            "repo_inventory_v2",
+            "design_doc_evidence_v2",
+            "payout_flow_map_v2",
+            "control_evidence_baseline_v2",
+            "authoritative_source_policy_v2",
+            "authoritative_sources_v2",
+            "guidance_control_matrix_v2"
+          ],
+          "mode": "plan_only",
+          "output_id": "post_change_operational_checks",
+          "phase": "DESIGN",
+          "step_id": "design_readiness_assessment_and_minimal_actions",
+          "worker_type": "research_worker"
+        },
+        "id": "post_change_operational_checks",
+        "producer_step_id": "design_readiness_assessment_and_minimal_actions",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": {
+          "derived_inputs": [
+            "readiness_assessment",
+            "validated_defects",
+            "minimal_change_plan",
+            "rollback_plan",
+            "verification_plan",
+            "post_change_operational_checks",
+            "authoritative_sources_v2",
+            "guidance_control_matrix_v2"
+          ],
+          "mode": "summarize_only",
+          "output_id": "final_report",
+          "phase": "FINALIZE",
+          "step_id": "finalize_audit_report",
+          "worker_type": "verify_worker"
+        },
+        "id": "final_report",
+        "producer_step_id": "finalize_audit_report",
+        "worker_type": "verify_worker"
+      }
+    ],
+    "errors": [],
+    "metadata": {
+      "replan": {
+        "depth": 1,
+        "original_worker_results": [
+          {
+            "artifacts": [
+              {
+                "content": {
+                  "derived_inputs": [],
+                  "mode": "observe_only",
+                  "output_id": "repo_inventory",
+                  "phase": "DISCOVER",
+                  "step_id": "discover_repo_and_design_context",
+                  "worker_type": "repo_worker"
+                },
+                "id": "repo_inventory",
+                "producer_step_id": "discover_repo_and_design_context",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [],
+                  "mode": "observe_only",
+                  "output_id": "design_doc_evidence",
+                  "phase": "DISCOVER",
+                  "step_id": "discover_repo_and_design_context",
+                  "worker_type": "repo_worker"
+                },
+                "id": "design_doc_evidence",
+                "producer_step_id": "discover_repo_and_design_context",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [],
+                  "mode": "observe_only",
+                  "output_id": "payout_flow_map",
+                  "phase": "DISCOVER",
+                  "step_id": "discover_repo_and_design_context",
+                  "worker_type": "repo_worker"
+                },
+                "id": "payout_flow_map",
+                "producer_step_id": "discover_repo_and_design_context",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [],
+                  "mode": "observe_only",
+                  "output_id": "candidate_paths",
+                  "phase": "DISCOVER",
+                  "step_id": "discover_repo_and_design_context",
+                  "worker_type": "repo_worker"
+                },
+                "id": "candidate_paths",
+                "producer_step_id": "discover_repo_and_design_context",
+                "worker_type": "repo_worker"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "input_artifact_ids": [],
+              "mocked": true,
+              "mode": "observe_only",
+              "phase": "DISCOVER",
+              "task_id": "payout_readiness_audit"
+            },
+            "producer": "repo_worker",
+            "run_id": "run_plan_req_001_reliability_readiness_audit",
+            "status": "completed",
+            "summary": "Mock repo_worker completed plan outputs for discover_repo_and_design_context.",
+            "usage": {
+              "model_calls": 1,
+              "tool_calls": 2
+            },
+            "warnings": []
+          },
+          {
+            "artifacts": [
+              {
+                "content": {
+                  "derived_inputs": [
+                    "repo_inventory",
+                    "design_doc_evidence",
+                    "payout_flow_map",
+                    "candidate_paths"
+                  ],
+                  "mode": "observe_only",
+                  "output_id": "analysis_evidence",
+                  "phase": "ANALYZE",
+                  "step_id": "analyze_implementation_evidence",
+                  "worker_type": "research_worker"
+                },
+                "id": "analysis_evidence",
+                "producer_step_id": "analyze_implementation_evidence",
+                "worker_type": "research_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [
+                    "repo_inventory",
+                    "design_doc_evidence",
+                    "payout_flow_map",
+                    "candidate_paths"
+                  ],
+                  "mode": "observe_only",
+                  "output_id": "control_gap_assessment",
+                  "phase": "ANALYZE",
+                  "step_id": "analyze_implementation_evidence",
+                  "worker_type": "research_worker"
+                },
+                "id": "control_gap_assessment",
+                "producer_step_id": "analyze_implementation_evidence",
+                "worker_type": "research_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [
+                    "repo_inventory",
+                    "design_doc_evidence",
+                    "payout_flow_map",
+                    "candidate_paths"
+                  ],
+                  "mode": "observe_only",
+                  "output_id": "validated_defect_candidates",
+                  "phase": "ANALYZE",
+                  "step_id": "analyze_implementation_evidence",
+                  "worker_type": "research_worker"
+                },
+                "id": "validated_defect_candidates",
+                "producer_step_id": "analyze_implementation_evidence",
+                "worker_type": "research_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [
+                    "repo_inventory",
+                    "design_doc_evidence",
+                    "payout_flow_map",
+                    "candidate_paths"
+                  ],
+                  "mode": "observe_only",
+                  "output_id": "evidence_gap",
+                  "phase": "ANALYZE",
+                  "step_id": "analyze_implementation_evidence",
+                  "worker_type": "research_worker"
+                },
+                "id": "evidence_gap",
+                "producer_step_id": "analyze_implementation_evidence",
+                "worker_type": "research_worker"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "input_artifact_ids": [
+                "repo_inventory",
+                "design_doc_evidence",
+                "payout_flow_map",
+                "candidate_paths"
+              ],
+              "mocked": true,
+              "mode": "observe_only",
+              "phase": "ANALYZE",
+              "task_id": "payout_readiness_audit"
+            },
+            "producer": "research_worker",
+            "run_id": "run_plan_req_001_reliability_readiness_audit",
+            "status": "completed",
+            "summary": "Mock research_worker completed plan outputs for analyze_implementation_evidence.",
+            "usage": {
+              "model_calls": 1,
+              "tool_calls": 2
+            },
+            "warnings": []
+          },
+          {
+            "artifacts": [
+              {
+                "content": {
+                  "failed_step_id": "research_authoritative_guidance",
+                  "input_artifact_ids": [
+                    "analysis_evidence",
+                    "control_gap_assessment"
+                  ],
+                  "instruction_excerpt": "Known facts: analysis_evidence and control_gap_assessment define the implementation behaviors to compare; authoritative sources must be explicitly cited. Unknowns: Final authoritative standards set and jurisdiction-relevant guidance boundaries. Do now: Gather authoritative industry guidance for payment idempotency, retry backoff, auditability, fraud-safe sequencing, and dead-letter/reprocessing controls; return source-cited guidance statements mapped to assessed control areas. Do not do: Do not use non-authoritative references as primary evidence; do not invent source claims. Output: authoritative_sources, guidance_control_matrix.",
+                  "issue_class": "planner_level",
+                  "permissions": {
+                    "read_files": false,
+                    "run_commands": false,
+                    "web_research": true,
+                    "write_files": false
+                  },
+                  "signal_type": "planner_level",
+                  "signals": [
+                    "artifact_chain_gap",
+                    "external_source_conflict",
+                    "scope_ambiguity"
+                  ],
+                  "task_metadata": {
+                    "mode": "observe_only",
+                    "phase": "RESEARCH",
+                    "task_id": "payout_readiness_audit"
+                  }
+                },
+                "id": "planner_issue_snapshot",
+                "producer_step_id": "research_authoritative_guidance",
+                "worker_type": "web_research_worker"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "issue_class": "planner_level",
+              "mocked": true,
+              "recommended_action": "Return a full fixed plan and re-run from a safer evidence-first sequence.",
+              "replan_level": "planner"
+            },
+            "producer": "web_research_worker",
+            "run_id": "run_plan_req_001_reliability_readiness_audit",
+            "status": "needs_replan",
+            "summary": "Planner-level issue: evidence chain was insufficiently grounded and artifact dependencies are not yet safe for mutation. Re-planning is required before continuing.",
+            "usage": {
+              "model_calls": 0,
+              "tool_calls": 1
+            },
+            "warnings": []
+          }
+        ],
+        "replacement_plan": {
+          "budget": {
+            "max_model_calls": 3,
+            "max_retries": 0,
+            "max_tool_calls": 7,
+            "max_workers": 4
+          },
+          "execution_pattern": "discover_research_design_finalize",
+          "global_invariants": [
+            "evidence_based_findings_only",
+            "no_unverified_defect_or_root_cause_claims",
+            "explicit_authoritative_source_citations_required",
+            "no_file_mutation_or_runtime_side_effects",
+            "preserve_financial_integrity_idempotency_and_auditability_constraints"
+          ],
+          "metadata": {
+            "archetype": "phase_aware_audit",
+            "complexity": "high",
+            "llm_planner": {
+              "budget_auto_aligned": true,
+              "envelope_complexity_hint": "high",
+              "envelope_input_type": "cross_border_payouts_reliability_readiness_audit",
+              "failed_step_id": "research_authoritative_guidance",
+              "mode": "completed",
+              "model_calls": 1,
+              "parent_plan_id": "plan_req_001_reliability_readiness_audit",
+              "repair_attempted": false,
+              "replan": true,
+              "resolved_validation_errors": [],
+              "stages": [
+                "replan_plan",
+                "validate_plan"
+              ],
+              "validation_errors": []
+            },
+            "mutation_included": false,
+            "planner_runtime": {
+              "fallback_reason": null,
+              "mode": "llm_prompt_chain_replan"
+            },
+            "replan_reason": "planner_level_issue_artifact_chain_gap_external_source_conflict_scope_ambiguity",
+            "replanned_from_failed_step": "research_authoritative_guidance",
+            "self_contained_rebuild": true
+          },
+          "objective": "Produce an evidence-based rollout-readiness audit for cross-border payouts by assessing repository/design reliability controls, comparing against authoritative guidance, and defining minimal remediation/rollback/verification plans only for validated defects.",
+          "plan_id": "plan_req_001_reliability_readiness_audit_replan_01",
+          "planner": "phase_aware_planner_v1",
+          "request_id": "req_001",
+          "steps": [
+            {
+              "input_artifacts": [],
+              "instruction": "Known facts: Prior DISCOVER/ANALYZE execution existed, but this replan must be self-contained and cannot rely on prior artifact carryover. Unknowns: Whether current repository and system-design evidence chain is sufficiently complete for downstream guidance comparison. Do now: Re-read repository structure and system-design.md to rebuild a fresh, traceable payout lifecycle evidence baseline covering orchestration, FX conversion, webhook retry/dedup, dead-letter handling, idempotency controls, ordering, and auditability control points. Do not do: Do not modify files, run commands, or infer behavior without file-level evidence. Output: repo_inventory_v2, design_doc_evidence_v2, payout_flow_map_v2, control_evidence_baseline_v2.",
+              "max_model_calls": 1,
+              "max_tool_calls": 3,
+              "mode": "observe_only",
+              "output_artifacts": [
+                "repo_inventory_v2",
+                "design_doc_evidence_v2",
+                "payout_flow_map_v2",
+                "control_evidence_baseline_v2"
+              ],
+              "permissions": {
+                "read_files": true,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "DISCOVER",
+              "step_id": "rebaseline_repo_and_design_evidence",
+              "task_id": "payout_readiness_audit",
+              "worker_type": "repo_worker"
+            },
+            {
+              "input_artifacts": [
+                "control_evidence_baseline_v2"
+              ],
+              "instruction": "Known facts: Fresh implementation evidence baseline is available and prior replan signals flagged source conflict and scope ambiguity risks. Unknowns: Exact jurisdiction-specific boundaries and final authoritative source set to use for reliable comparison. Do now: Build a source-scoped guidance package by selecting authoritative standards/regulator/industry references, explicitly labeling applicability assumptions and jurisdiction caveats, and mapping cited guidance to idempotency, retry backoff, deduplication, dead-letter reprocessing, auditability, and fraud-safe sequencing controls. Do not do: Do not use non-authoritative material as primary evidence, do not invent citations, and do not produce guidance statements without direct source traceability. Output: authoritative_source_policy_v2, authoritative_sources_v2, guidance_control_matrix_v2.",
+              "max_model_calls": 1,
+              "max_tool_calls": 4,
+              "mode": "observe_only",
+              "output_artifacts": [
+                "authoritative_source_policy_v2",
+                "authoritative_sources_v2",
+                "guidance_control_matrix_v2"
+              ],
+              "permissions": {
+                "read_files": false,
+                "run_commands": false,
+                "web_research": true,
+                "write_files": false
+              },
+              "phase": "RESEARCH",
+              "step_id": "research_authoritative_guidance_with_scope_guardrails",
+              "task_id": "payout_readiness_audit",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "input_artifacts": [
+                "repo_inventory_v2",
+                "design_doc_evidence_v2",
+                "payout_flow_map_v2",
+                "control_evidence_baseline_v2",
+                "authoritative_source_policy_v2",
+                "authoritative_sources_v2",
+                "guidance_control_matrix_v2"
+              ],
+              "instruction": "Known facts: Fresh implementation evidence and source-scoped authoritative guidance artifacts are available for comparison. Unknowns: Whether any defect candidate remains validated after strict evidence-to-guidance alignment. Do now: Produce the rollout-readiness assessment by confirming validated defects only where repository/design evidence is concrete, documenting evidence gaps and confidence bounds, and defining minimal scoped remediation plus rollback and verification planning that preserves financial integrity, idempotency, ordering, fraud-safety, and audit continuity. Do not do: Do not prescribe mutations for unvalidated issues, do not weaken transaction safety constraints, and do not omit caveats for unresolved evidence gaps. Output: readiness_assessment, validated_defects, minimal_change_plan, rollback_plan, verification_plan, post_change_operational_checks.",
+              "max_model_calls": 1,
+              "max_tool_calls": 0,
+              "mode": "plan_only",
+              "output_artifacts": [
+                "readiness_assessment",
+                "validated_defects",
+                "minimal_change_plan",
+                "rollback_plan",
+                "verification_plan",
+                "post_change_operational_checks"
+              ],
+              "permissions": {
+                "read_files": false,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "DESIGN",
+              "step_id": "design_readiness_assessment_and_minimal_actions",
+              "task_id": "payout_readiness_audit",
+              "worker_type": "research_worker"
+            },
+            {
+              "input_artifacts": [
+                "readiness_assessment",
+                "validated_defects",
+                "minimal_change_plan",
+                "rollback_plan",
+                "verification_plan",
+                "post_change_operational_checks",
+                "authoritative_sources_v2",
+                "guidance_control_matrix_v2"
+              ],
+              "instruction": "Known facts: Readiness assessment, validated defects, and operational planning artifacts are complete and source-cited guidance is available. Unknowns: none. Do now: Compile the final audit report with evidence traceability, authoritative citations, rollout-readiness verdict, conditional remediation scope, rollback readiness, verification criteria, and post-change operational checks including explicit evidence-gap limitations. Do not do: Do not add unsupported claims, do not drop citation traceability, and do not overstate certainty beyond available evidence. Output: final_report.",
+              "max_model_calls": 0,
+              "max_tool_calls": 0,
+              "mode": "summarize_only",
+              "output_artifacts": [
+                "final_report"
+              ],
+              "permissions": {
+                "read_files": false,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "FINALIZE",
+              "step_id": "finalize_audit_report",
+              "task_id": "payout_readiness_audit",
+              "worker_type": "verify_worker"
+            }
+          ],
+          "strategy": "rebaseline_evidence_then_source_scoped_guidance_then_readiness_design",
+          "success_criteria": [
+            "All findings are traceable to freshly produced repository/design artifacts in this plan.",
+            "Guidance comparison uses explicitly cited authoritative sources with applicability/jurisdiction caveats.",
+            "Readiness verdict includes only validated defects plus minimal scoped remediation, rollback, verification, and operational checks.",
+            "Final report clearly states evidence gaps and confidence limits without unsupported claims."
+          ]
+        },
+        "request": {
+          "completed_artifacts": [
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "repo_inventory",
+                "phase": "DISCOVER",
+                "step_id": "discover_repo_and_design_context",
+                "worker_type": "repo_worker"
+              },
+              "id": "repo_inventory",
+              "producer_step_id": "discover_repo_and_design_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "design_doc_evidence",
+                "phase": "DISCOVER",
+                "step_id": "discover_repo_and_design_context",
+                "worker_type": "repo_worker"
+              },
+              "id": "design_doc_evidence",
+              "producer_step_id": "discover_repo_and_design_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "payout_flow_map",
+                "phase": "DISCOVER",
+                "step_id": "discover_repo_and_design_context",
+                "worker_type": "repo_worker"
+              },
+              "id": "payout_flow_map",
+              "producer_step_id": "discover_repo_and_design_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "candidate_paths",
+                "phase": "DISCOVER",
+                "step_id": "discover_repo_and_design_context",
+                "worker_type": "repo_worker"
+              },
+              "id": "candidate_paths",
+              "producer_step_id": "discover_repo_and_design_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory",
+                  "design_doc_evidence",
+                  "payout_flow_map",
+                  "candidate_paths"
+                ],
+                "mode": "observe_only",
+                "output_id": "analysis_evidence",
+                "phase": "ANALYZE",
+                "step_id": "analyze_implementation_evidence",
+                "worker_type": "research_worker"
+              },
+              "id": "analysis_evidence",
+              "producer_step_id": "analyze_implementation_evidence",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory",
+                  "design_doc_evidence",
+                  "payout_flow_map",
+                  "candidate_paths"
+                ],
+                "mode": "observe_only",
+                "output_id": "control_gap_assessment",
+                "phase": "ANALYZE",
+                "step_id": "analyze_implementation_evidence",
+                "worker_type": "research_worker"
+              },
+              "id": "control_gap_assessment",
+              "producer_step_id": "analyze_implementation_evidence",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory",
+                  "design_doc_evidence",
+                  "payout_flow_map",
+                  "candidate_paths"
+                ],
+                "mode": "observe_only",
+                "output_id": "validated_defect_candidates",
+                "phase": "ANALYZE",
+                "step_id": "analyze_implementation_evidence",
+                "worker_type": "research_worker"
+              },
+              "id": "validated_defect_candidates",
+              "producer_step_id": "analyze_implementation_evidence",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory",
+                  "design_doc_evidence",
+                  "payout_flow_map",
+                  "candidate_paths"
+                ],
+                "mode": "observe_only",
+                "output_id": "evidence_gap",
+                "phase": "ANALYZE",
+                "step_id": "analyze_implementation_evidence",
+                "worker_type": "research_worker"
+              },
+              "id": "evidence_gap",
+              "producer_step_id": "analyze_implementation_evidence",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "failed_step_id": "research_authoritative_guidance",
+                "input_artifact_ids": [
+                  "analysis_evidence",
+                  "control_gap_assessment"
+                ],
+                "instruction_excerpt": "Known facts: analysis_evidence and control_gap_assessment define the implementation behaviors to compare; authoritative sources must be explicitly cited. Unknowns: Final authoritative standards set and jurisdiction-relevant guidance boundaries. Do now: Gather authoritative industry guidance for payment idempotency, retry backoff, auditability, fraud-safe sequencing, and dead-letter/reprocessing controls; return source-cited guidance statements mapped to assessed control areas. Do not do: Do not use non-authoritative references as primary evidence; do not invent source claims. Output: authoritative_sources, guidance_control_matrix.",
+                "issue_class": "planner_level",
+                "permissions": {
+                  "read_files": false,
+                  "run_commands": false,
+                  "web_research": true,
+                  "write_files": false
+                },
+                "signal_type": "planner_level",
+                "signals": [
+                  "artifact_chain_gap",
+                  "external_source_conflict",
+                  "scope_ambiguity"
+                ],
+                "task_metadata": {
+                  "mode": "observe_only",
+                  "phase": "RESEARCH",
+                  "task_id": "payout_readiness_audit"
+                }
+              },
+              "id": "planner_issue_snapshot",
+              "producer_step_id": "research_authoritative_guidance",
+              "worker_type": "web_research_worker"
+            }
+          ],
+          "completed_step_ids": [
+            "discover_repo_and_design_context",
+            "analyze_implementation_evidence"
+          ],
+          "failed_step_id": "research_authoritative_guidance",
+          "plan_id": "plan_req_001_reliability_readiness_audit",
+          "reason": "Planner-level issue: evidence chain was insufficiently grounded and artifact dependencies are not yet safe for mutation. Re-planning is required before continuing.",
+          "recommended_action": "Return a full fixed plan and re-run from a safer evidence-first sequence.",
+          "remaining_budget": {
+            "max_model_calls": 3,
+            "max_retries": 0,
+            "max_tool_calls": 7,
+            "max_workers": 2
+          },
+          "request_id": "req_001",
+          "run_id": "run_plan_req_001_reliability_readiness_audit",
+          "worker_result": {
+            "artifacts": [
+              {
+                "content": {
+                  "failed_step_id": "research_authoritative_guidance",
+                  "input_artifact_ids": [
+                    "analysis_evidence",
+                    "control_gap_assessment"
+                  ],
+                  "instruction_excerpt": "Known facts: analysis_evidence and control_gap_assessment define the implementation behaviors to compare; authoritative sources must be explicitly cited. Unknowns: Final authoritative standards set and jurisdiction-relevant guidance boundaries. Do now: Gather authoritative industry guidance for payment idempotency, retry backoff, auditability, fraud-safe sequencing, and dead-letter/reprocessing controls; return source-cited guidance statements mapped to assessed control areas. Do not do: Do not use non-authoritative references as primary evidence; do not invent source claims. Output: authoritative_sources, guidance_control_matrix.",
+                  "issue_class": "planner_level",
+                  "permissions": {
+                    "read_files": false,
+                    "run_commands": false,
+                    "web_research": true,
+                    "write_files": false
+                  },
+                  "signal_type": "planner_level",
+                  "signals": [
+                    "artifact_chain_gap",
+                    "external_source_conflict",
+                    "scope_ambiguity"
+                  ],
+                  "task_metadata": {
+                    "mode": "observe_only",
+                    "phase": "RESEARCH",
+                    "task_id": "payout_readiness_audit"
+                  }
+                },
+                "id": "planner_issue_snapshot",
+                "producer_step_id": "research_authoritative_guidance",
+                "worker_type": "web_research_worker"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "issue_class": "planner_level",
+              "mocked": true,
+              "recommended_action": "Return a full fixed plan and re-run from a safer evidence-first sequence.",
+              "replan_level": "planner"
+            },
+            "producer": "web_research_worker",
+            "run_id": "run_plan_req_001_reliability_readiness_audit",
+            "status": "needs_replan",
+            "summary": "Planner-level issue: evidence chain was insufficiently grounded and artifact dependencies are not yet safe for mutation. Re-planning is required before continuing.",
+            "usage": {
+              "model_calls": 0,
+              "tool_calls": 1
+            },
+            "warnings": []
+          }
+        }
+      },
+      "worker_results": [
+        {
+          "artifacts": [
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "repo_inventory_v2",
+                "phase": "DISCOVER",
+                "step_id": "rebaseline_repo_and_design_evidence",
+                "worker_type": "repo_worker"
+              },
+              "id": "repo_inventory_v2",
+              "producer_step_id": "rebaseline_repo_and_design_evidence",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "design_doc_evidence_v2",
+                "phase": "DISCOVER",
+                "step_id": "rebaseline_repo_and_design_evidence",
+                "worker_type": "repo_worker"
+              },
+              "id": "design_doc_evidence_v2",
+              "producer_step_id": "rebaseline_repo_and_design_evidence",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "payout_flow_map_v2",
+                "phase": "DISCOVER",
+                "step_id": "rebaseline_repo_and_design_evidence",
+                "worker_type": "repo_worker"
+              },
+              "id": "payout_flow_map_v2",
+              "producer_step_id": "rebaseline_repo_and_design_evidence",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "control_evidence_baseline_v2",
+                "phase": "DISCOVER",
+                "step_id": "rebaseline_repo_and_design_evidence",
+                "worker_type": "repo_worker"
+              },
+              "id": "control_evidence_baseline_v2",
+              "producer_step_id": "rebaseline_repo_and_design_evidence",
+              "worker_type": "repo_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "input_artifact_ids": [],
+            "mocked": true,
+            "mode": "observe_only",
+            "phase": "DISCOVER",
+            "task_id": "payout_readiness_audit"
+          },
+          "producer": "repo_worker",
+          "run_id": "run_plan_req_001_reliability_readiness_audit_replan_01",
+          "status": "completed",
+          "summary": "Mock repo_worker completed plan outputs for rebaseline_repo_and_design_evidence.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 2
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": {
+                "derived_inputs": [
+                  "control_evidence_baseline_v2"
+                ],
+                "mode": "observe_only",
+                "output_id": "authoritative_source_policy_v2",
+                "phase": "RESEARCH",
+                "step_id": "research_authoritative_guidance_with_scope_guardrails",
+                "worker_type": "web_research_worker"
+              },
+              "id": "authoritative_source_policy_v2",
+              "producer_step_id": "research_authoritative_guidance_with_scope_guardrails",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "control_evidence_baseline_v2"
+                ],
+                "mode": "observe_only",
+                "output_id": "authoritative_sources_v2",
+                "phase": "RESEARCH",
+                "step_id": "research_authoritative_guidance_with_scope_guardrails",
+                "worker_type": "web_research_worker"
+              },
+              "id": "authoritative_sources_v2",
+              "producer_step_id": "research_authoritative_guidance_with_scope_guardrails",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "control_evidence_baseline_v2"
+                ],
+                "mode": "observe_only",
+                "output_id": "guidance_control_matrix_v2",
+                "phase": "RESEARCH",
+                "step_id": "research_authoritative_guidance_with_scope_guardrails",
+                "worker_type": "web_research_worker"
+              },
+              "id": "guidance_control_matrix_v2",
+              "producer_step_id": "research_authoritative_guidance_with_scope_guardrails",
+              "worker_type": "web_research_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "input_artifact_ids": [
+              "control_evidence_baseline_v2"
+            ],
+            "mocked": true,
+            "mode": "observe_only",
+            "phase": "RESEARCH",
+            "task_id": "payout_readiness_audit"
+          },
+          "producer": "web_research_worker",
+          "run_id": "run_plan_req_001_reliability_readiness_audit_replan_01",
+          "status": "completed",
+          "summary": "Mock web_research_worker completed plan outputs for research_authoritative_guidance_with_scope_guardrails.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 2
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory_v2",
+                  "design_doc_evidence_v2",
+                  "payout_flow_map_v2",
+                  "control_evidence_baseline_v2",
+                  "authoritative_source_policy_v2",
+                  "authoritative_sources_v2",
+                  "guidance_control_matrix_v2"
+                ],
+                "mode": "plan_only",
+                "output_id": "readiness_assessment",
+                "phase": "DESIGN",
+                "step_id": "design_readiness_assessment_and_minimal_actions",
+                "worker_type": "research_worker"
+              },
+              "id": "readiness_assessment",
+              "producer_step_id": "design_readiness_assessment_and_minimal_actions",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory_v2",
+                  "design_doc_evidence_v2",
+                  "payout_flow_map_v2",
+                  "control_evidence_baseline_v2",
+                  "authoritative_source_policy_v2",
+                  "authoritative_sources_v2",
+                  "guidance_control_matrix_v2"
+                ],
+                "mode": "plan_only",
+                "output_id": "validated_defects",
+                "phase": "DESIGN",
+                "step_id": "design_readiness_assessment_and_minimal_actions",
+                "worker_type": "research_worker"
+              },
+              "id": "validated_defects",
+              "producer_step_id": "design_readiness_assessment_and_minimal_actions",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory_v2",
+                  "design_doc_evidence_v2",
+                  "payout_flow_map_v2",
+                  "control_evidence_baseline_v2",
+                  "authoritative_source_policy_v2",
+                  "authoritative_sources_v2",
+                  "guidance_control_matrix_v2"
+                ],
+                "mode": "plan_only",
+                "output_id": "minimal_change_plan",
+                "phase": "DESIGN",
+                "step_id": "design_readiness_assessment_and_minimal_actions",
+                "worker_type": "research_worker"
+              },
+              "id": "minimal_change_plan",
+              "producer_step_id": "design_readiness_assessment_and_minimal_actions",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory_v2",
+                  "design_doc_evidence_v2",
+                  "payout_flow_map_v2",
+                  "control_evidence_baseline_v2",
+                  "authoritative_source_policy_v2",
+                  "authoritative_sources_v2",
+                  "guidance_control_matrix_v2"
+                ],
+                "mode": "plan_only",
+                "output_id": "rollback_plan",
+                "phase": "DESIGN",
+                "step_id": "design_readiness_assessment_and_minimal_actions",
+                "worker_type": "research_worker"
+              },
+              "id": "rollback_plan",
+              "producer_step_id": "design_readiness_assessment_and_minimal_actions",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory_v2",
+                  "design_doc_evidence_v2",
+                  "payout_flow_map_v2",
+                  "control_evidence_baseline_v2",
+                  "authoritative_source_policy_v2",
+                  "authoritative_sources_v2",
+                  "guidance_control_matrix_v2"
+                ],
+                "mode": "plan_only",
+                "output_id": "verification_plan",
+                "phase": "DESIGN",
+                "step_id": "design_readiness_assessment_and_minimal_actions",
+                "worker_type": "research_worker"
+              },
+              "id": "verification_plan",
+              "producer_step_id": "design_readiness_assessment_and_minimal_actions",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory_v2",
+                  "design_doc_evidence_v2",
+                  "payout_flow_map_v2",
+                  "control_evidence_baseline_v2",
+                  "authoritative_source_policy_v2",
+                  "authoritative_sources_v2",
+                  "guidance_control_matrix_v2"
+                ],
+                "mode": "plan_only",
+                "output_id": "post_change_operational_checks",
+                "phase": "DESIGN",
+                "step_id": "design_readiness_assessment_and_minimal_actions",
+                "worker_type": "research_worker"
+              },
+              "id": "post_change_operational_checks",
+              "producer_step_id": "design_readiness_assessment_and_minimal_actions",
+              "worker_type": "research_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "input_artifact_ids": [
+              "repo_inventory_v2",
+              "design_doc_evidence_v2",
+              "payout_flow_map_v2",
+              "control_evidence_baseline_v2",
+              "authoritative_source_policy_v2",
+              "authoritative_sources_v2",
+              "guidance_control_matrix_v2"
+            ],
+            "mocked": true,
+            "mode": "plan_only",
+            "phase": "DESIGN",
+            "task_id": "payout_readiness_audit"
+          },
+          "producer": "research_worker",
+          "run_id": "run_plan_req_001_reliability_readiness_audit_replan_01",
+          "status": "completed",
+          "summary": "Mock research_worker completed plan outputs for design_readiness_assessment_and_minimal_actions.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 0
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": {
+                "derived_inputs": [
+                  "readiness_assessment",
+                  "validated_defects",
+                  "minimal_change_plan",
+                  "rollback_plan",
+                  "verification_plan",
+                  "post_change_operational_checks",
+                  "authoritative_sources_v2",
+                  "guidance_control_matrix_v2"
+                ],
+                "mode": "summarize_only",
+                "output_id": "final_report",
+                "phase": "FINALIZE",
+                "step_id": "finalize_audit_report",
+                "worker_type": "verify_worker"
+              },
+              "id": "final_report",
+              "producer_step_id": "finalize_audit_report",
+              "worker_type": "verify_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "input_artifact_ids": [
+              "readiness_assessment",
+              "validated_defects",
+              "minimal_change_plan",
+              "rollback_plan",
+              "verification_plan",
+              "post_change_operational_checks",
+              "authoritative_sources_v2",
+              "guidance_control_matrix_v2"
+            ],
+            "mocked": true,
+            "mode": "summarize_only",
+            "phase": "FINALIZE",
+            "task_id": "payout_readiness_audit"
+          },
+          "producer": "verify_worker",
+          "run_id": "run_plan_req_001_reliability_readiness_audit_replan_01",
+          "status": "completed",
+          "summary": "Mock verify_worker completed plan outputs for finalize_audit_report.",
+          "usage": {
+            "model_calls": 0,
+            "tool_calls": 0
+          },
+          "warnings": []
+        }
+      ]
+    },
+    "producer": "worker_kernel",
+    "run_id": "run_plan_req_001_reliability_readiness_audit_replan_01",
+    "status": "completed",
+    "summary": "Plan executed successfully.",
+    "usage": {
+      "model_calls": 3,
+      "tool_calls": 4,
+      "workers": 4
+    },
+    "warnings": []
+  },
+  "generated_at": "2026-06-02T14:05:30.040300+00:00",
+  "plan_intent": "complex_scenario_file_research_audit",
+  "planner": {
+    "initial_plan": {
+      "budget": {
+        "max_model_calls": 5,
+        "max_retries": 0,
+        "max_tool_calls": 12,
+        "max_workers": 5
+      },
+      "execution_pattern": "discover_analyze_research_design_finalize",
+      "global_invariants": [
+        "evidence_based_findings_only",
+        "no_unverified_defect_or_root_cause_claims",
+        "explicit_authoritative_source_citations_required",
+        "no_file_mutation_or_runtime_side_effects",
+        "preserve_financial_integrity_idempotency_and_auditability_constraints"
+      ],
+      "metadata": {
+        "archetype": "phase_aware_audit",
+        "complexity": "high",
+        "llm_planner": {
+          "budget_auto_aligned": true,
+          "envelope_complexity_hint": "high",
+          "envelope_input_type": "cross_border_payouts_reliability_readiness_audit",
+          "mode": "completed",
+          "model_calls": 1,
+          "repair_attempted": false,
+          "resolved_validation_errors": [],
+          "stages": [
+            "draft_plan",
+            "validate_plan"
+          ],
+          "validation_errors": []
+        },
+        "mutation_included": false,
+        "planner_runtime": {
+          "fallback_reason": null,
+          "mode": "llm_prompt_chain"
+        }
+      },
+      "objective": "Produce an evidence-based rollout-readiness audit for cross-border payouts by assessing repository/design reliability controls, comparing against authoritative guidance, and defining minimal remediation/rollback/verification plans only for validated defects.",
+      "plan_id": "plan_req_001_reliability_readiness_audit",
+      "planner": "phase_aware_planner_v1",
+      "request_id": "req_001",
+      "steps": [
+        {
+          "input_artifacts": [],
+          "instruction": "Known facts: User requests an evidence-based reliability and business-readiness audit of payout orchestration, FX conversion, webhook retry/dedup, and dead-letter recovery using repository and system-design context. Unknowns: Exact module boundaries, service ownership, and concrete file locations for reliability controls. Do now: Inspect repository structure and system-design.md to map payout lifecycle components, data/event flow, and candidate implementation locations for idempotency, retry backoff, deduplication, dead-letter handling, auditability, and sequencing controls. Do not do: Do not modify files, run risky actions, or infer behavior without traceable file evidence. Output: repo_inventory, design_doc_evidence, payout_flow_map, candidate_paths.",
+          "max_model_calls": 1,
+          "max_tool_calls": 4,
+          "mode": "observe_only",
+          "output_artifacts": [
+            "repo_inventory",
+            "design_doc_evidence",
+            "payout_flow_map",
+            "candidate_paths"
+          ],
+          "permissions": {
+            "read_files": true,
+            "run_commands": false,
+            "web_research": false,
+            "write_files": false
+          },
+          "phase": "DISCOVER",
+          "step_id": "discover_repo_and_design_context",
+          "task_id": "payout_readiness_audit",
+          "worker_type": "repo_worker"
+        },
+        {
+          "input_artifacts": [
+            "repo_inventory",
+            "design_doc_evidence",
+            "payout_flow_map",
+            "candidate_paths"
+          ],
+          "instruction": "Known facts: repo_inventory, design_doc_evidence, payout_flow_map, and candidate_paths are available from discovery. Unknowns: Whether observed behavior fully satisfies idempotency, retry/backoff safety, dedup correctness, dead-letter recovery integrity, and fraud-safe ordering invariants. Do now: Analyze located implementation and design evidence to produce traceable findings on current behavior, identify concrete defect candidates only when reproducible evidence exists, and capture unresolved evidence gaps explicitly. Do not do: Do not assert root causes or defects without concrete repository/design evidence; do not propose changes yet. Output: analysis_evidence, control_gap_assessment, validated_defect_candidates, evidence_gap.",
+          "max_model_calls": 1,
+          "max_tool_calls": 4,
+          "mode": "observe_only",
+          "output_artifacts": [
+            "analysis_evidence",
+            "control_gap_assessment",
+            "validated_defect_candidates",
+            "evidence_gap"
+          ],
+          "permissions": {
+            "read_files": true,
+            "run_commands": false,
+            "web_research": false,
+            "write_files": false
+          },
+          "phase": "ANALYZE",
+          "step_id": "analyze_implementation_evidence",
+          "task_id": "payout_readiness_audit",
+          "worker_type": "research_worker"
+        },
+        {
+          "input_artifacts": [
+            "analysis_evidence",
+            "control_gap_assessment"
+          ],
+          "instruction": "Known facts: analysis_evidence and control_gap_assessment define the implementation behaviors to compare; authoritative sources must be explicitly cited. Unknowns: Final authoritative standards set and jurisdiction-relevant guidance boundaries. Do now: Gather authoritative industry guidance for payment idempotency, retry backoff, auditability, fraud-safe sequencing, and dead-letter/reprocessing controls; return source-cited guidance statements mapped to assessed control areas. Do not do: Do not use non-authoritative references as primary evidence; do not invent source claims. Output: authoritative_sources, guidance_control_matrix.",
+          "max_model_calls": 1,
+          "max_tool_calls": 4,
+          "mode": "observe_only",
+          "output_artifacts": [
+            "authoritative_sources",
+            "guidance_control_matrix"
+          ],
+          "permissions": {
+            "read_files": false,
+            "run_commands": false,
+            "web_research": true,
+            "write_files": false
+          },
+          "phase": "RESEARCH",
+          "step_id": "research_authoritative_guidance",
+          "task_id": "payout_readiness_audit",
+          "worker_type": "web_research_worker"
+        },
+        {
+          "input_artifacts": [
+            "analysis_evidence",
+            "validated_defect_candidates",
+            "evidence_gap",
+            "authoritative_sources",
+            "guidance_control_matrix"
+          ],
+          "instruction": "Known facts: analysis_evidence, validated_defect_candidates, evidence_gap, authoritative_sources, and guidance_control_matrix are available for comparison and planning. Unknowns: Whether any candidate defect remains actionable after evidence and guidance alignment checks. Do now: Produce a final comparison and readiness design package: confirm validated defects only where evidence is concrete, define minimal scoped remediation proposals for confirmed defects, and provide rollback_plan, verification_plan, and post_change_operational_checks with fraud-safety, ordering, idempotency, and audit continuity safeguards. Do not do: Do not prescribe mutations for unvalidated issues; do not weaken transaction integrity constraints; do not omit evidence-gap caveats. Output: readiness_assessment, validated_defects, minimal_change_plan, rollback_plan, verification_plan, post_change_operational_checks.",
+          "max_model_calls": 1,
+          "max_tool_calls": 0,
+          "mode": "plan_only",
+          "output_artifacts": [
+            "readiness_assessment",
+            "validated_defects",
+            "minimal_change_plan",
+            "rollback_plan",
+            "verification_plan",
+            "post_change_operational_checks"
+          ],
+          "permissions": {
+            "read_files": false,
+            "run_commands": false,
+            "web_research": false,
+            "write_files": false
+          },
+          "phase": "DESIGN",
+          "step_id": "design_remediation_and_readiness_plan",
+          "task_id": "payout_readiness_audit",
+          "worker_type": "research_worker"
+        },
+        {
+          "input_artifacts": [
+            "readiness_assessment",
+            "validated_defects",
+            "minimal_change_plan",
+            "rollback_plan",
+            "verification_plan",
+            "post_change_operational_checks"
+          ],
+          "instruction": "Known facts: readiness_assessment, validated_defects, minimal_change_plan, rollback_plan, verification_plan, and post_change_operational_checks are available. Unknowns: none. Do now: Compile a clear final audit report with evidence traceability, guidance citations, rollout-readiness verdict, conditional remediation scope, rollback readiness, and targeted verification/operations checks. Do not do: Do not add unsupported claims or omit evidence-gap limitations. Output: final_report.",
+          "max_model_calls": 1,
+          "max_tool_calls": 0,
+          "mode": "summarize_only",
+          "output_artifacts": [
+            "final_report"
+          ],
+          "permissions": {
+            "read_files": false,
+            "run_commands": false,
+            "web_research": false,
+            "write_files": false
+          },
+          "phase": "FINALIZE",
+          "step_id": "finalize_audit_report",
+          "task_id": "payout_readiness_audit",
+          "worker_type": "verify_worker"
+        }
+      ],
+      "strategy": "discovery_first_evidence_and_guidance_comparison",
+      "success_criteria": [
+        "Audit findings are traceable to repository/design evidence and clearly identify any evidence gaps.",
+        "Behavior-to-guidance comparison includes explicit authoritative citations.",
+        "Readiness verdict is provided with validated defects only, plus minimal scoped remediation, rollback plan, verification plan, and post-change operational checks."
+      ]
+    },
+    "planner_runtime_mode": "llm_prompt_chain"
+  },
+  "prompt": "Run a reliability and business-readiness audit for a cross-border payouts platform rollout: review system-design.md and the repository implementation for transaction orchestration, exchange-rate conversion, webhook retries with deduplication, and dead-letter recovery. Then compare repository behavior with authoritative industry guidance on idempotency, retry backoff, auditability, and fraud-safe sequencing. If defects are concrete, propose minimal scoped changes, a rollback path, and targeted verification plus post-change operational checks.",
+  "replan": {
+    "replan_depth": 1,
+    "replanned_plan": {
+      "budget": {
+        "max_model_calls": 3,
+        "max_retries": 0,
+        "max_tool_calls": 7,
+        "max_workers": 4
+      },
+      "execution_pattern": "discover_research_design_finalize",
+      "global_invariants": [
+        "evidence_based_findings_only",
+        "no_unverified_defect_or_root_cause_claims",
+        "explicit_authoritative_source_citations_required",
+        "no_file_mutation_or_runtime_side_effects",
+        "preserve_financial_integrity_idempotency_and_auditability_constraints"
+      ],
+      "metadata": {
+        "archetype": "phase_aware_audit",
+        "complexity": "high",
+        "llm_planner": {
+          "budget_auto_aligned": true,
+          "envelope_complexity_hint": "high",
+          "envelope_input_type": "cross_border_payouts_reliability_readiness_audit",
+          "failed_step_id": "research_authoritative_guidance",
+          "mode": "completed",
+          "model_calls": 1,
+          "parent_plan_id": "plan_req_001_reliability_readiness_audit",
+          "repair_attempted": false,
+          "replan": true,
+          "resolved_validation_errors": [],
+          "stages": [
+            "replan_plan",
+            "validate_plan"
+          ],
+          "validation_errors": []
+        },
+        "mutation_included": false,
+        "planner_runtime": {
+          "fallback_reason": null,
+          "mode": "llm_prompt_chain_replan"
+        },
+        "replan_reason": "planner_level_issue_artifact_chain_gap_external_source_conflict_scope_ambiguity",
+        "replanned_from_failed_step": "research_authoritative_guidance",
+        "self_contained_rebuild": true
+      },
+      "objective": "Produce an evidence-based rollout-readiness audit for cross-border payouts by assessing repository/design reliability controls, comparing against authoritative guidance, and defining minimal remediation/rollback/verification plans only for validated defects.",
+      "plan_id": "plan_req_001_reliability_readiness_audit_replan_01",
+      "planner": "phase_aware_planner_v1",
+      "request_id": "req_001",
+      "steps": [
+        {
+          "input_artifacts": [],
+          "instruction": "Known facts: Prior DISCOVER/ANALYZE execution existed, but this replan must be self-contained and cannot rely on prior artifact carryover. Unknowns: Whether current repository and system-design evidence chain is sufficiently complete for downstream guidance comparison. Do now: Re-read repository structure and system-design.md to rebuild a fresh, traceable payout lifecycle evidence baseline covering orchestration, FX conversion, webhook retry/dedup, dead-letter handling, idempotency controls, ordering, and auditability control points. Do not do: Do not modify files, run commands, or infer behavior without file-level evidence. Output: repo_inventory_v2, design_doc_evidence_v2, payout_flow_map_v2, control_evidence_baseline_v2.",
+          "max_model_calls": 1,
+          "max_tool_calls": 3,
+          "mode": "observe_only",
+          "output_artifacts": [
+            "repo_inventory_v2",
+            "design_doc_evidence_v2",
+            "payout_flow_map_v2",
+            "control_evidence_baseline_v2"
+          ],
+          "permissions": {
+            "read_files": true,
+            "run_commands": false,
+            "web_research": false,
+            "write_files": false
+          },
+          "phase": "DISCOVER",
+          "step_id": "rebaseline_repo_and_design_evidence",
+          "task_id": "payout_readiness_audit",
+          "worker_type": "repo_worker"
+        },
+        {
+          "input_artifacts": [
+            "control_evidence_baseline_v2"
+          ],
+          "instruction": "Known facts: Fresh implementation evidence baseline is available and prior replan signals flagged source conflict and scope ambiguity risks. Unknowns: Exact jurisdiction-specific boundaries and final authoritative source set to use for reliable comparison. Do now: Build a source-scoped guidance package by selecting authoritative standards/regulator/industry references, explicitly labeling applicability assumptions and jurisdiction caveats, and mapping cited guidance to idempotency, retry backoff, deduplication, dead-letter reprocessing, auditability, and fraud-safe sequencing controls. Do not do: Do not use non-authoritative material as primary evidence, do not invent citations, and do not produce guidance statements without direct source traceability. Output: authoritative_source_policy_v2, authoritative_sources_v2, guidance_control_matrix_v2.",
+          "max_model_calls": 1,
+          "max_tool_calls": 4,
+          "mode": "observe_only",
+          "output_artifacts": [
+            "authoritative_source_policy_v2",
+            "authoritative_sources_v2",
+            "guidance_control_matrix_v2"
+          ],
+          "permissions": {
+            "read_files": false,
+            "run_commands": false,
+            "web_research": true,
+            "write_files": false
+          },
+          "phase": "RESEARCH",
+          "step_id": "research_authoritative_guidance_with_scope_guardrails",
+          "task_id": "payout_readiness_audit",
+          "worker_type": "web_research_worker"
+        },
+        {
+          "input_artifacts": [
+            "repo_inventory_v2",
+            "design_doc_evidence_v2",
+            "payout_flow_map_v2",
+            "control_evidence_baseline_v2",
+            "authoritative_source_policy_v2",
+            "authoritative_sources_v2",
+            "guidance_control_matrix_v2"
+          ],
+          "instruction": "Known facts: Fresh implementation evidence and source-scoped authoritative guidance artifacts are available for comparison. Unknowns: Whether any defect candidate remains validated after strict evidence-to-guidance alignment. Do now: Produce the rollout-readiness assessment by confirming validated defects only where repository/design evidence is concrete, documenting evidence gaps and confidence bounds, and defining minimal scoped remediation plus rollback and verification planning that preserves financial integrity, idempotency, ordering, fraud-safety, and audit continuity. Do not do: Do not prescribe mutations for unvalidated issues, do not weaken transaction safety constraints, and do not omit caveats for unresolved evidence gaps. Output: readiness_assessment, validated_defects, minimal_change_plan, rollback_plan, verification_plan, post_change_operational_checks.",
+          "max_model_calls": 1,
+          "max_tool_calls": 0,
+          "mode": "plan_only",
+          "output_artifacts": [
+            "readiness_assessment",
+            "validated_defects",
+            "minimal_change_plan",
+            "rollback_plan",
+            "verification_plan",
+            "post_change_operational_checks"
+          ],
+          "permissions": {
+            "read_files": false,
+            "run_commands": false,
+            "web_research": false,
+            "write_files": false
+          },
+          "phase": "DESIGN",
+          "step_id": "design_readiness_assessment_and_minimal_actions",
+          "task_id": "payout_readiness_audit",
+          "worker_type": "research_worker"
+        },
+        {
+          "input_artifacts": [
+            "readiness_assessment",
+            "validated_defects",
+            "minimal_change_plan",
+            "rollback_plan",
+            "verification_plan",
+            "post_change_operational_checks",
+            "authoritative_sources_v2",
+            "guidance_control_matrix_v2"
+          ],
+          "instruction": "Known facts: Readiness assessment, validated defects, and operational planning artifacts are complete and source-cited guidance is available. Unknowns: none. Do now: Compile the final audit report with evidence traceability, authoritative citations, rollout-readiness verdict, conditional remediation scope, rollback readiness, verification criteria, and post-change operational checks including explicit evidence-gap limitations. Do not do: Do not add unsupported claims, do not drop citation traceability, and do not overstate certainty beyond available evidence. Output: final_report.",
+          "max_model_calls": 0,
+          "max_tool_calls": 0,
+          "mode": "summarize_only",
+          "output_artifacts": [
+            "final_report"
+          ],
+          "permissions": {
+            "read_files": false,
+            "run_commands": false,
+            "web_research": false,
+            "write_files": false
+          },
+          "phase": "FINALIZE",
+          "step_id": "finalize_audit_report",
+          "task_id": "payout_readiness_audit",
+          "worker_type": "verify_worker"
+        }
+      ],
+      "strategy": "rebaseline_evidence_then_source_scoped_guidance_then_readiness_design",
+      "success_criteria": [
+        "All findings are traceable to freshly produced repository/design artifacts in this plan.",
+        "Guidance comparison uses explicitly cited authoritative sources with applicability/jurisdiction caveats.",
+        "Readiness verdict includes only validated defects plus minimal scoped remediation, rollback, verification, and operational checks.",
+        "Final report clearly states evidence gaps and confidence limits without unsupported claims."
+      ]
+    },
+    "request": {
+      "completed_artifacts": [
+        {
+          "content": {
+            "derived_inputs": [],
+            "mode": "observe_only",
+            "output_id": "repo_inventory",
+            "phase": "DISCOVER",
+            "step_id": "discover_repo_and_design_context",
+            "worker_type": "repo_worker"
+          },
+          "id": "repo_inventory",
+          "producer_step_id": "discover_repo_and_design_context",
+          "worker_type": "repo_worker"
+        },
+        {
+          "content": {
+            "derived_inputs": [],
+            "mode": "observe_only",
+            "output_id": "design_doc_evidence",
+            "phase": "DISCOVER",
+            "step_id": "discover_repo_and_design_context",
+            "worker_type": "repo_worker"
+          },
+          "id": "design_doc_evidence",
+          "producer_step_id": "discover_repo_and_design_context",
+          "worker_type": "repo_worker"
+        },
+        {
+          "content": {
+            "derived_inputs": [],
+            "mode": "observe_only",
+            "output_id": "payout_flow_map",
+            "phase": "DISCOVER",
+            "step_id": "discover_repo_and_design_context",
+            "worker_type": "repo_worker"
+          },
+          "id": "payout_flow_map",
+          "producer_step_id": "discover_repo_and_design_context",
+          "worker_type": "repo_worker"
+        },
+        {
+          "content": {
+            "derived_inputs": [],
+            "mode": "observe_only",
+            "output_id": "candidate_paths",
+            "phase": "DISCOVER",
+            "step_id": "discover_repo_and_design_context",
+            "worker_type": "repo_worker"
+          },
+          "id": "candidate_paths",
+          "producer_step_id": "discover_repo_and_design_context",
+          "worker_type": "repo_worker"
+        },
+        {
+          "content": {
+            "derived_inputs": [
+              "repo_inventory",
+              "design_doc_evidence",
+              "payout_flow_map",
+              "candidate_paths"
+            ],
+            "mode": "observe_only",
+            "output_id": "analysis_evidence",
+            "phase": "ANALYZE",
+            "step_id": "analyze_implementation_evidence",
+            "worker_type": "research_worker"
+          },
+          "id": "analysis_evidence",
+          "producer_step_id": "analyze_implementation_evidence",
+          "worker_type": "research_worker"
+        },
+        {
+          "content": {
+            "derived_inputs": [
+              "repo_inventory",
+              "design_doc_evidence",
+              "payout_flow_map",
+              "candidate_paths"
+            ],
+            "mode": "observe_only",
+            "output_id": "control_gap_assessment",
+            "phase": "ANALYZE",
+            "step_id": "analyze_implementation_evidence",
+            "worker_type": "research_worker"
+          },
+          "id": "control_gap_assessment",
+          "producer_step_id": "analyze_implementation_evidence",
+          "worker_type": "research_worker"
+        },
+        {
+          "content": {
+            "derived_inputs": [
+              "repo_inventory",
+              "design_doc_evidence",
+              "payout_flow_map",
+              "candidate_paths"
+            ],
+            "mode": "observe_only",
+            "output_id": "validated_defect_candidates",
+            "phase": "ANALYZE",
+            "step_id": "analyze_implementation_evidence",
+            "worker_type": "research_worker"
+          },
+          "id": "validated_defect_candidates",
+          "producer_step_id": "analyze_implementation_evidence",
+          "worker_type": "research_worker"
+        },
+        {
+          "content": {
+            "derived_inputs": [
+              "repo_inventory",
+              "design_doc_evidence",
+              "payout_flow_map",
+              "candidate_paths"
+            ],
+            "mode": "observe_only",
+            "output_id": "evidence_gap",
+            "phase": "ANALYZE",
+            "step_id": "analyze_implementation_evidence",
+            "worker_type": "research_worker"
+          },
+          "id": "evidence_gap",
+          "producer_step_id": "analyze_implementation_evidence",
+          "worker_type": "research_worker"
+        },
+        {
+          "content": {
+            "failed_step_id": "research_authoritative_guidance",
+            "input_artifact_ids": [
+              "analysis_evidence",
+              "control_gap_assessment"
+            ],
+            "instruction_excerpt": "Known facts: analysis_evidence and control_gap_assessment define the implementation behaviors to compare; authoritative sources must be explicitly cited. Unknowns: Final authoritative standards set and jurisdiction-relevant guidance boundaries. Do now: Gather authoritative industry guidance for payment idempotency, retry backoff, auditability, fraud-safe sequencing, and dead-letter/reprocessing controls; return source-cited guidance statements mapped to assessed control areas. Do not do: Do not use non-authoritative references as primary evidence; do not invent source claims. Output: authoritative_sources, guidance_control_matrix.",
+            "issue_class": "planner_level",
+            "permissions": {
+              "read_files": false,
+              "run_commands": false,
+              "web_research": true,
+              "write_files": false
+            },
+            "signal_type": "planner_level",
+            "signals": [
+              "artifact_chain_gap",
+              "external_source_conflict",
+              "scope_ambiguity"
+            ],
+            "task_metadata": {
+              "mode": "observe_only",
+              "phase": "RESEARCH",
+              "task_id": "payout_readiness_audit"
+            }
+          },
+          "id": "planner_issue_snapshot",
+          "producer_step_id": "research_authoritative_guidance",
+          "worker_type": "web_research_worker"
+        }
+      ],
+      "completed_step_ids": [
+        "discover_repo_and_design_context",
+        "analyze_implementation_evidence"
+      ],
+      "failed_step_id": "research_authoritative_guidance",
+      "plan_id": "plan_req_001_reliability_readiness_audit",
+      "reason": "Planner-level issue: evidence chain was insufficiently grounded and artifact dependencies are not yet safe for mutation. Re-planning is required before continuing.",
+      "recommended_action": "Return a full fixed plan and re-run from a safer evidence-first sequence.",
+      "remaining_budget": {
+        "max_model_calls": 3,
+        "max_retries": 0,
+        "max_tool_calls": 7,
+        "max_workers": 2
+      },
+      "request_id": "req_001",
+      "run_id": "run_plan_req_001_reliability_readiness_audit",
+      "worker_result": {
+        "artifacts": [
+          {
+            "content": {
+              "failed_step_id": "research_authoritative_guidance",
+              "input_artifact_ids": [
+                "analysis_evidence",
+                "control_gap_assessment"
+              ],
+              "instruction_excerpt": "Known facts: analysis_evidence and control_gap_assessment define the implementation behaviors to compare; authoritative sources must be explicitly cited. Unknowns: Final authoritative standards set and jurisdiction-relevant guidance boundaries. Do now: Gather authoritative industry guidance for payment idempotency, retry backoff, auditability, fraud-safe sequencing, and dead-letter/reprocessing controls; return source-cited guidance statements mapped to assessed control areas. Do not do: Do not use non-authoritative references as primary evidence; do not invent source claims. Output: authoritative_sources, guidance_control_matrix.",
+              "issue_class": "planner_level",
+              "permissions": {
+                "read_files": false,
+                "run_commands": false,
+                "web_research": true,
+                "write_files": false
+              },
+              "signal_type": "planner_level",
+              "signals": [
+                "artifact_chain_gap",
+                "external_source_conflict",
+                "scope_ambiguity"
+              ],
+              "task_metadata": {
+                "mode": "observe_only",
+                "phase": "RESEARCH",
+                "task_id": "payout_readiness_audit"
+              }
+            },
+            "id": "planner_issue_snapshot",
+            "producer_step_id": "research_authoritative_guidance",
+            "worker_type": "web_research_worker"
+          }
+        ],
+        "errors": [],
+        "metadata": {
+          "issue_class": "planner_level",
+          "mocked": true,
+          "recommended_action": "Return a full fixed plan and re-run from a safer evidence-first sequence.",
+          "replan_level": "planner"
+        },
+        "producer": "web_research_worker",
+        "run_id": "run_plan_req_001_reliability_readiness_audit",
+        "status": "needs_replan",
+        "summary": "Planner-level issue: evidence chain was insufficiently grounded and artifact dependencies are not yet safe for mutation. Re-planning is required before continuing.",
+        "usage": {
+          "model_calls": 0,
+          "tool_calls": 1
+        },
+        "warnings": []
+      }
+    },
+    "requested": true
+  },
+  "selected_replan_step": "research_authoritative_guidance",
+  "worker_kernel": {
+    "errors": [],
+    "metadata": {
+      "replan": {
+        "depth": 1,
+        "original_worker_results": [
+          {
+            "artifacts": [
+              {
+                "content": {
+                  "derived_inputs": [],
+                  "mode": "observe_only",
+                  "output_id": "repo_inventory",
+                  "phase": "DISCOVER",
+                  "step_id": "discover_repo_and_design_context",
+                  "worker_type": "repo_worker"
+                },
+                "id": "repo_inventory",
+                "producer_step_id": "discover_repo_and_design_context",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [],
+                  "mode": "observe_only",
+                  "output_id": "design_doc_evidence",
+                  "phase": "DISCOVER",
+                  "step_id": "discover_repo_and_design_context",
+                  "worker_type": "repo_worker"
+                },
+                "id": "design_doc_evidence",
+                "producer_step_id": "discover_repo_and_design_context",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [],
+                  "mode": "observe_only",
+                  "output_id": "payout_flow_map",
+                  "phase": "DISCOVER",
+                  "step_id": "discover_repo_and_design_context",
+                  "worker_type": "repo_worker"
+                },
+                "id": "payout_flow_map",
+                "producer_step_id": "discover_repo_and_design_context",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [],
+                  "mode": "observe_only",
+                  "output_id": "candidate_paths",
+                  "phase": "DISCOVER",
+                  "step_id": "discover_repo_and_design_context",
+                  "worker_type": "repo_worker"
+                },
+                "id": "candidate_paths",
+                "producer_step_id": "discover_repo_and_design_context",
+                "worker_type": "repo_worker"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "input_artifact_ids": [],
+              "mocked": true,
+              "mode": "observe_only",
+              "phase": "DISCOVER",
+              "task_id": "payout_readiness_audit"
+            },
+            "producer": "repo_worker",
+            "run_id": "run_plan_req_001_reliability_readiness_audit",
+            "status": "completed",
+            "summary": "Mock repo_worker completed plan outputs for discover_repo_and_design_context.",
+            "usage": {
+              "model_calls": 1,
+              "tool_calls": 2
+            },
+            "warnings": []
+          },
+          {
+            "artifacts": [
+              {
+                "content": {
+                  "derived_inputs": [
+                    "repo_inventory",
+                    "design_doc_evidence",
+                    "payout_flow_map",
+                    "candidate_paths"
+                  ],
+                  "mode": "observe_only",
+                  "output_id": "analysis_evidence",
+                  "phase": "ANALYZE",
+                  "step_id": "analyze_implementation_evidence",
+                  "worker_type": "research_worker"
+                },
+                "id": "analysis_evidence",
+                "producer_step_id": "analyze_implementation_evidence",
+                "worker_type": "research_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [
+                    "repo_inventory",
+                    "design_doc_evidence",
+                    "payout_flow_map",
+                    "candidate_paths"
+                  ],
+                  "mode": "observe_only",
+                  "output_id": "control_gap_assessment",
+                  "phase": "ANALYZE",
+                  "step_id": "analyze_implementation_evidence",
+                  "worker_type": "research_worker"
+                },
+                "id": "control_gap_assessment",
+                "producer_step_id": "analyze_implementation_evidence",
+                "worker_type": "research_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [
+                    "repo_inventory",
+                    "design_doc_evidence",
+                    "payout_flow_map",
+                    "candidate_paths"
+                  ],
+                  "mode": "observe_only",
+                  "output_id": "validated_defect_candidates",
+                  "phase": "ANALYZE",
+                  "step_id": "analyze_implementation_evidence",
+                  "worker_type": "research_worker"
+                },
+                "id": "validated_defect_candidates",
+                "producer_step_id": "analyze_implementation_evidence",
+                "worker_type": "research_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [
+                    "repo_inventory",
+                    "design_doc_evidence",
+                    "payout_flow_map",
+                    "candidate_paths"
+                  ],
+                  "mode": "observe_only",
+                  "output_id": "evidence_gap",
+                  "phase": "ANALYZE",
+                  "step_id": "analyze_implementation_evidence",
+                  "worker_type": "research_worker"
+                },
+                "id": "evidence_gap",
+                "producer_step_id": "analyze_implementation_evidence",
+                "worker_type": "research_worker"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "input_artifact_ids": [
+                "repo_inventory",
+                "design_doc_evidence",
+                "payout_flow_map",
+                "candidate_paths"
+              ],
+              "mocked": true,
+              "mode": "observe_only",
+              "phase": "ANALYZE",
+              "task_id": "payout_readiness_audit"
+            },
+            "producer": "research_worker",
+            "run_id": "run_plan_req_001_reliability_readiness_audit",
+            "status": "completed",
+            "summary": "Mock research_worker completed plan outputs for analyze_implementation_evidence.",
+            "usage": {
+              "model_calls": 1,
+              "tool_calls": 2
+            },
+            "warnings": []
+          },
+          {
+            "artifacts": [
+              {
+                "content": {
+                  "failed_step_id": "research_authoritative_guidance",
+                  "input_artifact_ids": [
+                    "analysis_evidence",
+                    "control_gap_assessment"
+                  ],
+                  "instruction_excerpt": "Known facts: analysis_evidence and control_gap_assessment define the implementation behaviors to compare; authoritative sources must be explicitly cited. Unknowns: Final authoritative standards set and jurisdiction-relevant guidance boundaries. Do now: Gather authoritative industry guidance for payment idempotency, retry backoff, auditability, fraud-safe sequencing, and dead-letter/reprocessing controls; return source-cited guidance statements mapped to assessed control areas. Do not do: Do not use non-authoritative references as primary evidence; do not invent source claims. Output: authoritative_sources, guidance_control_matrix.",
+                  "issue_class": "planner_level",
+                  "permissions": {
+                    "read_files": false,
+                    "run_commands": false,
+                    "web_research": true,
+                    "write_files": false
+                  },
+                  "signal_type": "planner_level",
+                  "signals": [
+                    "artifact_chain_gap",
+                    "external_source_conflict",
+                    "scope_ambiguity"
+                  ],
+                  "task_metadata": {
+                    "mode": "observe_only",
+                    "phase": "RESEARCH",
+                    "task_id": "payout_readiness_audit"
+                  }
+                },
+                "id": "planner_issue_snapshot",
+                "producer_step_id": "research_authoritative_guidance",
+                "worker_type": "web_research_worker"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "issue_class": "planner_level",
+              "mocked": true,
+              "recommended_action": "Return a full fixed plan and re-run from a safer evidence-first sequence.",
+              "replan_level": "planner"
+            },
+            "producer": "web_research_worker",
+            "run_id": "run_plan_req_001_reliability_readiness_audit",
+            "status": "needs_replan",
+            "summary": "Planner-level issue: evidence chain was insufficiently grounded and artifact dependencies are not yet safe for mutation. Re-planning is required before continuing.",
+            "usage": {
+              "model_calls": 0,
+              "tool_calls": 1
+            },
+            "warnings": []
+          }
+        ],
+        "replacement_plan": {
+          "budget": {
+            "max_model_calls": 3,
+            "max_retries": 0,
+            "max_tool_calls": 7,
+            "max_workers": 4
+          },
+          "execution_pattern": "discover_research_design_finalize",
+          "global_invariants": [
+            "evidence_based_findings_only",
+            "no_unverified_defect_or_root_cause_claims",
+            "explicit_authoritative_source_citations_required",
+            "no_file_mutation_or_runtime_side_effects",
+            "preserve_financial_integrity_idempotency_and_auditability_constraints"
+          ],
+          "metadata": {
+            "archetype": "phase_aware_audit",
+            "complexity": "high",
+            "llm_planner": {
+              "budget_auto_aligned": true,
+              "envelope_complexity_hint": "high",
+              "envelope_input_type": "cross_border_payouts_reliability_readiness_audit",
+              "failed_step_id": "research_authoritative_guidance",
+              "mode": "completed",
+              "model_calls": 1,
+              "parent_plan_id": "plan_req_001_reliability_readiness_audit",
+              "repair_attempted": false,
+              "replan": true,
+              "resolved_validation_errors": [],
+              "stages": [
+                "replan_plan",
+                "validate_plan"
+              ],
+              "validation_errors": []
+            },
+            "mutation_included": false,
+            "planner_runtime": {
+              "fallback_reason": null,
+              "mode": "llm_prompt_chain_replan"
+            },
+            "replan_reason": "planner_level_issue_artifact_chain_gap_external_source_conflict_scope_ambiguity",
+            "replanned_from_failed_step": "research_authoritative_guidance",
+            "self_contained_rebuild": true
+          },
+          "objective": "Produce an evidence-based rollout-readiness audit for cross-border payouts by assessing repository/design reliability controls, comparing against authoritative guidance, and defining minimal remediation/rollback/verification plans only for validated defects.",
+          "plan_id": "plan_req_001_reliability_readiness_audit_replan_01",
+          "planner": "phase_aware_planner_v1",
+          "request_id": "req_001",
+          "steps": [
+            {
+              "input_artifacts": [],
+              "instruction": "Known facts: Prior DISCOVER/ANALYZE execution existed, but this replan must be self-contained and cannot rely on prior artifact carryover. Unknowns: Whether current repository and system-design evidence chain is sufficiently complete for downstream guidance comparison. Do now: Re-read repository structure and system-design.md to rebuild a fresh, traceable payout lifecycle evidence baseline covering orchestration, FX conversion, webhook retry/dedup, dead-letter handling, idempotency controls, ordering, and auditability control points. Do not do: Do not modify files, run commands, or infer behavior without file-level evidence. Output: repo_inventory_v2, design_doc_evidence_v2, payout_flow_map_v2, control_evidence_baseline_v2.",
+              "max_model_calls": 1,
+              "max_tool_calls": 3,
+              "mode": "observe_only",
+              "output_artifacts": [
+                "repo_inventory_v2",
+                "design_doc_evidence_v2",
+                "payout_flow_map_v2",
+                "control_evidence_baseline_v2"
+              ],
+              "permissions": {
+                "read_files": true,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "DISCOVER",
+              "step_id": "rebaseline_repo_and_design_evidence",
+              "task_id": "payout_readiness_audit",
+              "worker_type": "repo_worker"
+            },
+            {
+              "input_artifacts": [
+                "control_evidence_baseline_v2"
+              ],
+              "instruction": "Known facts: Fresh implementation evidence baseline is available and prior replan signals flagged source conflict and scope ambiguity risks. Unknowns: Exact jurisdiction-specific boundaries and final authoritative source set to use for reliable comparison. Do now: Build a source-scoped guidance package by selecting authoritative standards/regulator/industry references, explicitly labeling applicability assumptions and jurisdiction caveats, and mapping cited guidance to idempotency, retry backoff, deduplication, dead-letter reprocessing, auditability, and fraud-safe sequencing controls. Do not do: Do not use non-authoritative material as primary evidence, do not invent citations, and do not produce guidance statements without direct source traceability. Output: authoritative_source_policy_v2, authoritative_sources_v2, guidance_control_matrix_v2.",
+              "max_model_calls": 1,
+              "max_tool_calls": 4,
+              "mode": "observe_only",
+              "output_artifacts": [
+                "authoritative_source_policy_v2",
+                "authoritative_sources_v2",
+                "guidance_control_matrix_v2"
+              ],
+              "permissions": {
+                "read_files": false,
+                "run_commands": false,
+                "web_research": true,
+                "write_files": false
+              },
+              "phase": "RESEARCH",
+              "step_id": "research_authoritative_guidance_with_scope_guardrails",
+              "task_id": "payout_readiness_audit",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "input_artifacts": [
+                "repo_inventory_v2",
+                "design_doc_evidence_v2",
+                "payout_flow_map_v2",
+                "control_evidence_baseline_v2",
+                "authoritative_source_policy_v2",
+                "authoritative_sources_v2",
+                "guidance_control_matrix_v2"
+              ],
+              "instruction": "Known facts: Fresh implementation evidence and source-scoped authoritative guidance artifacts are available for comparison. Unknowns: Whether any defect candidate remains validated after strict evidence-to-guidance alignment. Do now: Produce the rollout-readiness assessment by confirming validated defects only where repository/design evidence is concrete, documenting evidence gaps and confidence bounds, and defining minimal scoped remediation plus rollback and verification planning that preserves financial integrity, idempotency, ordering, fraud-safety, and audit continuity. Do not do: Do not prescribe mutations for unvalidated issues, do not weaken transaction safety constraints, and do not omit caveats for unresolved evidence gaps. Output: readiness_assessment, validated_defects, minimal_change_plan, rollback_plan, verification_plan, post_change_operational_checks.",
+              "max_model_calls": 1,
+              "max_tool_calls": 0,
+              "mode": "plan_only",
+              "output_artifacts": [
+                "readiness_assessment",
+                "validated_defects",
+                "minimal_change_plan",
+                "rollback_plan",
+                "verification_plan",
+                "post_change_operational_checks"
+              ],
+              "permissions": {
+                "read_files": false,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "DESIGN",
+              "step_id": "design_readiness_assessment_and_minimal_actions",
+              "task_id": "payout_readiness_audit",
+              "worker_type": "research_worker"
+            },
+            {
+              "input_artifacts": [
+                "readiness_assessment",
+                "validated_defects",
+                "minimal_change_plan",
+                "rollback_plan",
+                "verification_plan",
+                "post_change_operational_checks",
+                "authoritative_sources_v2",
+                "guidance_control_matrix_v2"
+              ],
+              "instruction": "Known facts: Readiness assessment, validated defects, and operational planning artifacts are complete and source-cited guidance is available. Unknowns: none. Do now: Compile the final audit report with evidence traceability, authoritative citations, rollout-readiness verdict, conditional remediation scope, rollback readiness, verification criteria, and post-change operational checks including explicit evidence-gap limitations. Do not do: Do not add unsupported claims, do not drop citation traceability, and do not overstate certainty beyond available evidence. Output: final_report.",
+              "max_model_calls": 0,
+              "max_tool_calls": 0,
+              "mode": "summarize_only",
+              "output_artifacts": [
+                "final_report"
+              ],
+              "permissions": {
+                "read_files": false,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "FINALIZE",
+              "step_id": "finalize_audit_report",
+              "task_id": "payout_readiness_audit",
+              "worker_type": "verify_worker"
+            }
+          ],
+          "strategy": "rebaseline_evidence_then_source_scoped_guidance_then_readiness_design",
+          "success_criteria": [
+            "All findings are traceable to freshly produced repository/design artifacts in this plan.",
+            "Guidance comparison uses explicitly cited authoritative sources with applicability/jurisdiction caveats.",
+            "Readiness verdict includes only validated defects plus minimal scoped remediation, rollback, verification, and operational checks.",
+            "Final report clearly states evidence gaps and confidence limits without unsupported claims."
+          ]
+        },
+        "request": {
+          "completed_artifacts": [
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "repo_inventory",
+                "phase": "DISCOVER",
+                "step_id": "discover_repo_and_design_context",
+                "worker_type": "repo_worker"
+              },
+              "id": "repo_inventory",
+              "producer_step_id": "discover_repo_and_design_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "design_doc_evidence",
+                "phase": "DISCOVER",
+                "step_id": "discover_repo_and_design_context",
+                "worker_type": "repo_worker"
+              },
+              "id": "design_doc_evidence",
+              "producer_step_id": "discover_repo_and_design_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "payout_flow_map",
+                "phase": "DISCOVER",
+                "step_id": "discover_repo_and_design_context",
+                "worker_type": "repo_worker"
+              },
+              "id": "payout_flow_map",
+              "producer_step_id": "discover_repo_and_design_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "candidate_paths",
+                "phase": "DISCOVER",
+                "step_id": "discover_repo_and_design_context",
+                "worker_type": "repo_worker"
+              },
+              "id": "candidate_paths",
+              "producer_step_id": "discover_repo_and_design_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory",
+                  "design_doc_evidence",
+                  "payout_flow_map",
+                  "candidate_paths"
+                ],
+                "mode": "observe_only",
+                "output_id": "analysis_evidence",
+                "phase": "ANALYZE",
+                "step_id": "analyze_implementation_evidence",
+                "worker_type": "research_worker"
+              },
+              "id": "analysis_evidence",
+              "producer_step_id": "analyze_implementation_evidence",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory",
+                  "design_doc_evidence",
+                  "payout_flow_map",
+                  "candidate_paths"
+                ],
+                "mode": "observe_only",
+                "output_id": "control_gap_assessment",
+                "phase": "ANALYZE",
+                "step_id": "analyze_implementation_evidence",
+                "worker_type": "research_worker"
+              },
+              "id": "control_gap_assessment",
+              "producer_step_id": "analyze_implementation_evidence",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory",
+                  "design_doc_evidence",
+                  "payout_flow_map",
+                  "candidate_paths"
+                ],
+                "mode": "observe_only",
+                "output_id": "validated_defect_candidates",
+                "phase": "ANALYZE",
+                "step_id": "analyze_implementation_evidence",
+                "worker_type": "research_worker"
+              },
+              "id": "validated_defect_candidates",
+              "producer_step_id": "analyze_implementation_evidence",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory",
+                  "design_doc_evidence",
+                  "payout_flow_map",
+                  "candidate_paths"
+                ],
+                "mode": "observe_only",
+                "output_id": "evidence_gap",
+                "phase": "ANALYZE",
+                "step_id": "analyze_implementation_evidence",
+                "worker_type": "research_worker"
+              },
+              "id": "evidence_gap",
+              "producer_step_id": "analyze_implementation_evidence",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "failed_step_id": "research_authoritative_guidance",
+                "input_artifact_ids": [
+                  "analysis_evidence",
+                  "control_gap_assessment"
+                ],
+                "instruction_excerpt": "Known facts: analysis_evidence and control_gap_assessment define the implementation behaviors to compare; authoritative sources must be explicitly cited. Unknowns: Final authoritative standards set and jurisdiction-relevant guidance boundaries. Do now: Gather authoritative industry guidance for payment idempotency, retry backoff, auditability, fraud-safe sequencing, and dead-letter/reprocessing controls; return source-cited guidance statements mapped to assessed control areas. Do not do: Do not use non-authoritative references as primary evidence; do not invent source claims. Output: authoritative_sources, guidance_control_matrix.",
+                "issue_class": "planner_level",
+                "permissions": {
+                  "read_files": false,
+                  "run_commands": false,
+                  "web_research": true,
+                  "write_files": false
+                },
+                "signal_type": "planner_level",
+                "signals": [
+                  "artifact_chain_gap",
+                  "external_source_conflict",
+                  "scope_ambiguity"
+                ],
+                "task_metadata": {
+                  "mode": "observe_only",
+                  "phase": "RESEARCH",
+                  "task_id": "payout_readiness_audit"
+                }
+              },
+              "id": "planner_issue_snapshot",
+              "producer_step_id": "research_authoritative_guidance",
+              "worker_type": "web_research_worker"
+            }
+          ],
+          "completed_step_ids": [
+            "discover_repo_and_design_context",
+            "analyze_implementation_evidence"
+          ],
+          "failed_step_id": "research_authoritative_guidance",
+          "plan_id": "plan_req_001_reliability_readiness_audit",
+          "reason": "Planner-level issue: evidence chain was insufficiently grounded and artifact dependencies are not yet safe for mutation. Re-planning is required before continuing.",
+          "recommended_action": "Return a full fixed plan and re-run from a safer evidence-first sequence.",
+          "remaining_budget": {
+            "max_model_calls": 3,
+            "max_retries": 0,
+            "max_tool_calls": 7,
+            "max_workers": 2
+          },
+          "request_id": "req_001",
+          "run_id": "run_plan_req_001_reliability_readiness_audit",
+          "worker_result": {
+            "artifacts": [
+              {
+                "content": {
+                  "failed_step_id": "research_authoritative_guidance",
+                  "input_artifact_ids": [
+                    "analysis_evidence",
+                    "control_gap_assessment"
+                  ],
+                  "instruction_excerpt": "Known facts: analysis_evidence and control_gap_assessment define the implementation behaviors to compare; authoritative sources must be explicitly cited. Unknowns: Final authoritative standards set and jurisdiction-relevant guidance boundaries. Do now: Gather authoritative industry guidance for payment idempotency, retry backoff, auditability, fraud-safe sequencing, and dead-letter/reprocessing controls; return source-cited guidance statements mapped to assessed control areas. Do not do: Do not use non-authoritative references as primary evidence; do not invent source claims. Output: authoritative_sources, guidance_control_matrix.",
+                  "issue_class": "planner_level",
+                  "permissions": {
+                    "read_files": false,
+                    "run_commands": false,
+                    "web_research": true,
+                    "write_files": false
+                  },
+                  "signal_type": "planner_level",
+                  "signals": [
+                    "artifact_chain_gap",
+                    "external_source_conflict",
+                    "scope_ambiguity"
+                  ],
+                  "task_metadata": {
+                    "mode": "observe_only",
+                    "phase": "RESEARCH",
+                    "task_id": "payout_readiness_audit"
+                  }
+                },
+                "id": "planner_issue_snapshot",
+                "producer_step_id": "research_authoritative_guidance",
+                "worker_type": "web_research_worker"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "issue_class": "planner_level",
+              "mocked": true,
+              "recommended_action": "Return a full fixed plan and re-run from a safer evidence-first sequence.",
+              "replan_level": "planner"
+            },
+            "producer": "web_research_worker",
+            "run_id": "run_plan_req_001_reliability_readiness_audit",
+            "status": "needs_replan",
+            "summary": "Planner-level issue: evidence chain was insufficiently grounded and artifact dependencies are not yet safe for mutation. Re-planning is required before continuing.",
+            "usage": {
+              "model_calls": 0,
+              "tool_calls": 1
+            },
+            "warnings": []
+          }
+        }
+      },
+      "worker_results": [
+        {
+          "artifacts": [
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "repo_inventory_v2",
+                "phase": "DISCOVER",
+                "step_id": "rebaseline_repo_and_design_evidence",
+                "worker_type": "repo_worker"
+              },
+              "id": "repo_inventory_v2",
+              "producer_step_id": "rebaseline_repo_and_design_evidence",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "design_doc_evidence_v2",
+                "phase": "DISCOVER",
+                "step_id": "rebaseline_repo_and_design_evidence",
+                "worker_type": "repo_worker"
+              },
+              "id": "design_doc_evidence_v2",
+              "producer_step_id": "rebaseline_repo_and_design_evidence",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "payout_flow_map_v2",
+                "phase": "DISCOVER",
+                "step_id": "rebaseline_repo_and_design_evidence",
+                "worker_type": "repo_worker"
+              },
+              "id": "payout_flow_map_v2",
+              "producer_step_id": "rebaseline_repo_and_design_evidence",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "control_evidence_baseline_v2",
+                "phase": "DISCOVER",
+                "step_id": "rebaseline_repo_and_design_evidence",
+                "worker_type": "repo_worker"
+              },
+              "id": "control_evidence_baseline_v2",
+              "producer_step_id": "rebaseline_repo_and_design_evidence",
+              "worker_type": "repo_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "input_artifact_ids": [],
+            "mocked": true,
+            "mode": "observe_only",
+            "phase": "DISCOVER",
+            "task_id": "payout_readiness_audit"
+          },
+          "producer": "repo_worker",
+          "run_id": "run_plan_req_001_reliability_readiness_audit_replan_01",
+          "status": "completed",
+          "summary": "Mock repo_worker completed plan outputs for rebaseline_repo_and_design_evidence.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 2
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": {
+                "derived_inputs": [
+                  "control_evidence_baseline_v2"
+                ],
+                "mode": "observe_only",
+                "output_id": "authoritative_source_policy_v2",
+                "phase": "RESEARCH",
+                "step_id": "research_authoritative_guidance_with_scope_guardrails",
+                "worker_type": "web_research_worker"
+              },
+              "id": "authoritative_source_policy_v2",
+              "producer_step_id": "research_authoritative_guidance_with_scope_guardrails",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "control_evidence_baseline_v2"
+                ],
+                "mode": "observe_only",
+                "output_id": "authoritative_sources_v2",
+                "phase": "RESEARCH",
+                "step_id": "research_authoritative_guidance_with_scope_guardrails",
+                "worker_type": "web_research_worker"
+              },
+              "id": "authoritative_sources_v2",
+              "producer_step_id": "research_authoritative_guidance_with_scope_guardrails",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "control_evidence_baseline_v2"
+                ],
+                "mode": "observe_only",
+                "output_id": "guidance_control_matrix_v2",
+                "phase": "RESEARCH",
+                "step_id": "research_authoritative_guidance_with_scope_guardrails",
+                "worker_type": "web_research_worker"
+              },
+              "id": "guidance_control_matrix_v2",
+              "producer_step_id": "research_authoritative_guidance_with_scope_guardrails",
+              "worker_type": "web_research_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "input_artifact_ids": [
+              "control_evidence_baseline_v2"
+            ],
+            "mocked": true,
+            "mode": "observe_only",
+            "phase": "RESEARCH",
+            "task_id": "payout_readiness_audit"
+          },
+          "producer": "web_research_worker",
+          "run_id": "run_plan_req_001_reliability_readiness_audit_replan_01",
+          "status": "completed",
+          "summary": "Mock web_research_worker completed plan outputs for research_authoritative_guidance_with_scope_guardrails.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 2
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory_v2",
+                  "design_doc_evidence_v2",
+                  "payout_flow_map_v2",
+                  "control_evidence_baseline_v2",
+                  "authoritative_source_policy_v2",
+                  "authoritative_sources_v2",
+                  "guidance_control_matrix_v2"
+                ],
+                "mode": "plan_only",
+                "output_id": "readiness_assessment",
+                "phase": "DESIGN",
+                "step_id": "design_readiness_assessment_and_minimal_actions",
+                "worker_type": "research_worker"
+              },
+              "id": "readiness_assessment",
+              "producer_step_id": "design_readiness_assessment_and_minimal_actions",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory_v2",
+                  "design_doc_evidence_v2",
+                  "payout_flow_map_v2",
+                  "control_evidence_baseline_v2",
+                  "authoritative_source_policy_v2",
+                  "authoritative_sources_v2",
+                  "guidance_control_matrix_v2"
+                ],
+                "mode": "plan_only",
+                "output_id": "validated_defects",
+                "phase": "DESIGN",
+                "step_id": "design_readiness_assessment_and_minimal_actions",
+                "worker_type": "research_worker"
+              },
+              "id": "validated_defects",
+              "producer_step_id": "design_readiness_assessment_and_minimal_actions",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory_v2",
+                  "design_doc_evidence_v2",
+                  "payout_flow_map_v2",
+                  "control_evidence_baseline_v2",
+                  "authoritative_source_policy_v2",
+                  "authoritative_sources_v2",
+                  "guidance_control_matrix_v2"
+                ],
+                "mode": "plan_only",
+                "output_id": "minimal_change_plan",
+                "phase": "DESIGN",
+                "step_id": "design_readiness_assessment_and_minimal_actions",
+                "worker_type": "research_worker"
+              },
+              "id": "minimal_change_plan",
+              "producer_step_id": "design_readiness_assessment_and_minimal_actions",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory_v2",
+                  "design_doc_evidence_v2",
+                  "payout_flow_map_v2",
+                  "control_evidence_baseline_v2",
+                  "authoritative_source_policy_v2",
+                  "authoritative_sources_v2",
+                  "guidance_control_matrix_v2"
+                ],
+                "mode": "plan_only",
+                "output_id": "rollback_plan",
+                "phase": "DESIGN",
+                "step_id": "design_readiness_assessment_and_minimal_actions",
+                "worker_type": "research_worker"
+              },
+              "id": "rollback_plan",
+              "producer_step_id": "design_readiness_assessment_and_minimal_actions",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory_v2",
+                  "design_doc_evidence_v2",
+                  "payout_flow_map_v2",
+                  "control_evidence_baseline_v2",
+                  "authoritative_source_policy_v2",
+                  "authoritative_sources_v2",
+                  "guidance_control_matrix_v2"
+                ],
+                "mode": "plan_only",
+                "output_id": "verification_plan",
+                "phase": "DESIGN",
+                "step_id": "design_readiness_assessment_and_minimal_actions",
+                "worker_type": "research_worker"
+              },
+              "id": "verification_plan",
+              "producer_step_id": "design_readiness_assessment_and_minimal_actions",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory_v2",
+                  "design_doc_evidence_v2",
+                  "payout_flow_map_v2",
+                  "control_evidence_baseline_v2",
+                  "authoritative_source_policy_v2",
+                  "authoritative_sources_v2",
+                  "guidance_control_matrix_v2"
+                ],
+                "mode": "plan_only",
+                "output_id": "post_change_operational_checks",
+                "phase": "DESIGN",
+                "step_id": "design_readiness_assessment_and_minimal_actions",
+                "worker_type": "research_worker"
+              },
+              "id": "post_change_operational_checks",
+              "producer_step_id": "design_readiness_assessment_and_minimal_actions",
+              "worker_type": "research_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "input_artifact_ids": [
+              "repo_inventory_v2",
+              "design_doc_evidence_v2",
+              "payout_flow_map_v2",
+              "control_evidence_baseline_v2",
+              "authoritative_source_policy_v2",
+              "authoritative_sources_v2",
+              "guidance_control_matrix_v2"
+            ],
+            "mocked": true,
+            "mode": "plan_only",
+            "phase": "DESIGN",
+            "task_id": "payout_readiness_audit"
+          },
+          "producer": "research_worker",
+          "run_id": "run_plan_req_001_reliability_readiness_audit_replan_01",
+          "status": "completed",
+          "summary": "Mock research_worker completed plan outputs for design_readiness_assessment_and_minimal_actions.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 0
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": {
+                "derived_inputs": [
+                  "readiness_assessment",
+                  "validated_defects",
+                  "minimal_change_plan",
+                  "rollback_plan",
+                  "verification_plan",
+                  "post_change_operational_checks",
+                  "authoritative_sources_v2",
+                  "guidance_control_matrix_v2"
+                ],
+                "mode": "summarize_only",
+                "output_id": "final_report",
+                "phase": "FINALIZE",
+                "step_id": "finalize_audit_report",
+                "worker_type": "verify_worker"
+              },
+              "id": "final_report",
+              "producer_step_id": "finalize_audit_report",
+              "worker_type": "verify_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "input_artifact_ids": [
+              "readiness_assessment",
+              "validated_defects",
+              "minimal_change_plan",
+              "rollback_plan",
+              "verification_plan",
+              "post_change_operational_checks",
+              "authoritative_sources_v2",
+              "guidance_control_matrix_v2"
+            ],
+            "mocked": true,
+            "mode": "summarize_only",
+            "phase": "FINALIZE",
+            "task_id": "payout_readiness_audit"
+          },
+          "producer": "verify_worker",
+          "run_id": "run_plan_req_001_reliability_readiness_audit_replan_01",
+          "status": "completed",
+          "summary": "Mock verify_worker completed plan outputs for finalize_audit_report.",
+          "usage": {
+            "model_calls": 0,
+            "tool_calls": 0
+          },
+          "warnings": []
+        }
+      ]
+    },
+    "run_status": "completed",
+    "run_summary": "Plan executed successfully.",
+    "usage": {
+      "model_calls": 3,
+      "tool_calls": 4,
+      "workers": 4
+    },
+    "warnings": []
+  },
+  "worker_mock_runs": [
+    {
+      "expected_outputs": [
+        "repo_inventory",
+        "design_doc_evidence",
+        "payout_flow_map",
+        "candidate_paths"
+      ],
+      "input_artifacts": [],
+      "metadata": {
+        "input_artifact_ids": [],
+        "mocked": true,
+        "mode": "observe_only",
+        "phase": "DISCOVER",
+        "task_id": "payout_readiness_audit"
+      },
+      "mode": "observe_only",
+      "phase": "DISCOVER",
+      "produced_artifacts": [
+        "repo_inventory",
+        "design_doc_evidence",
+        "payout_flow_map",
+        "candidate_paths"
+      ],
+      "recommended_action": null,
+      "status": "completed",
+      "step_id": "discover_repo_and_design_context",
+      "summary": "Mock repo_worker completed plan outputs for discover_repo_and_design_context.",
+      "task_id": "payout_readiness_audit",
+      "worker_type": "repo_worker"
+    },
+    {
+      "expected_outputs": [
+        "analysis_evidence",
+        "control_gap_assessment",
+        "validated_defect_candidates",
+        "evidence_gap"
+      ],
+      "input_artifacts": [
+        "repo_inventory",
+        "design_doc_evidence",
+        "payout_flow_map",
+        "candidate_paths"
+      ],
+      "metadata": {
+        "input_artifact_ids": [
+          "repo_inventory",
+          "design_doc_evidence",
+          "payout_flow_map",
+          "candidate_paths"
+        ],
+        "mocked": true,
+        "mode": "observe_only",
+        "phase": "ANALYZE",
+        "task_id": "payout_readiness_audit"
+      },
+      "mode": "observe_only",
+      "phase": "ANALYZE",
+      "produced_artifacts": [
+        "analysis_evidence",
+        "control_gap_assessment",
+        "validated_defect_candidates",
+        "evidence_gap"
+      ],
+      "recommended_action": null,
+      "status": "completed",
+      "step_id": "analyze_implementation_evidence",
+      "summary": "Mock research_worker completed plan outputs for analyze_implementation_evidence.",
+      "task_id": "payout_readiness_audit",
+      "worker_type": "research_worker"
+    },
+    {
+      "expected_outputs": [
+        "authoritative_sources",
+        "guidance_control_matrix"
+      ],
+      "input_artifacts": [
+        "analysis_evidence",
+        "control_gap_assessment"
+      ],
+      "metadata": {
+        "issue_class": "planner_level",
+        "mocked": true,
+        "recommended_action": "Return a full fixed plan and re-run from a safer evidence-first sequence.",
+        "replan_level": "planner"
+      },
+      "mode": "observe_only",
+      "phase": "RESEARCH",
+      "produced_artifacts": [
+        "planner_issue_snapshot"
+      ],
+      "recommended_action": "Return a full fixed plan and re-run from a safer evidence-first sequence.",
+      "status": "needs_replan",
+      "step_id": "research_authoritative_guidance",
+      "summary": "Planner-level issue: evidence chain was insufficiently grounded and artifact dependencies are not yet safe for mutation. Re-planning is required before continuing.",
+      "task_id": "payout_readiness_audit",
+      "worker_type": "web_research_worker"
+    },
+    {
+      "expected_outputs": [
+        "repo_inventory_v2",
+        "design_doc_evidence_v2",
+        "payout_flow_map_v2",
+        "control_evidence_baseline_v2"
+      ],
+      "input_artifacts": [],
+      "metadata": {
+        "input_artifact_ids": [],
+        "mocked": true,
+        "mode": "observe_only",
+        "phase": "DISCOVER",
+        "task_id": "payout_readiness_audit"
+      },
+      "mode": "observe_only",
+      "phase": "DISCOVER",
+      "produced_artifacts": [
+        "repo_inventory_v2",
+        "design_doc_evidence_v2",
+        "payout_flow_map_v2",
+        "control_evidence_baseline_v2"
+      ],
+      "recommended_action": null,
+      "status": "completed",
+      "step_id": "rebaseline_repo_and_design_evidence",
+      "summary": "Mock repo_worker completed plan outputs for rebaseline_repo_and_design_evidence.",
+      "task_id": "payout_readiness_audit",
+      "worker_type": "repo_worker"
+    },
+    {
+      "expected_outputs": [
+        "authoritative_source_policy_v2",
+        "authoritative_sources_v2",
+        "guidance_control_matrix_v2"
+      ],
+      "input_artifacts": [
+        "control_evidence_baseline_v2"
+      ],
+      "metadata": {
+        "input_artifact_ids": [
+          "control_evidence_baseline_v2"
+        ],
+        "mocked": true,
+        "mode": "observe_only",
+        "phase": "RESEARCH",
+        "task_id": "payout_readiness_audit"
+      },
+      "mode": "observe_only",
+      "phase": "RESEARCH",
+      "produced_artifacts": [
+        "authoritative_source_policy_v2",
+        "authoritative_sources_v2",
+        "guidance_control_matrix_v2"
+      ],
+      "recommended_action": null,
+      "status": "completed",
+      "step_id": "research_authoritative_guidance_with_scope_guardrails",
+      "summary": "Mock web_research_worker completed plan outputs for research_authoritative_guidance_with_scope_guardrails.",
+      "task_id": "payout_readiness_audit",
+      "worker_type": "web_research_worker"
+    },
+    {
+      "expected_outputs": [
+        "readiness_assessment",
+        "validated_defects",
+        "minimal_change_plan",
+        "rollback_plan",
+        "verification_plan",
+        "post_change_operational_checks"
+      ],
+      "input_artifacts": [
+        "repo_inventory_v2",
+        "design_doc_evidence_v2",
+        "payout_flow_map_v2",
+        "control_evidence_baseline_v2",
+        "authoritative_source_policy_v2",
+        "authoritative_sources_v2",
+        "guidance_control_matrix_v2"
+      ],
+      "metadata": {
+        "input_artifact_ids": [
+          "repo_inventory_v2",
+          "design_doc_evidence_v2",
+          "payout_flow_map_v2",
+          "control_evidence_baseline_v2",
+          "authoritative_source_policy_v2",
+          "authoritative_sources_v2",
+          "guidance_control_matrix_v2"
+        ],
+        "mocked": true,
+        "mode": "plan_only",
+        "phase": "DESIGN",
+        "task_id": "payout_readiness_audit"
+      },
+      "mode": "plan_only",
+      "phase": "DESIGN",
+      "produced_artifacts": [
+        "readiness_assessment",
+        "validated_defects",
+        "minimal_change_plan",
+        "rollback_plan",
+        "verification_plan",
+        "post_change_operational_checks"
+      ],
+      "recommended_action": null,
+      "status": "completed",
+      "step_id": "design_readiness_assessment_and_minimal_actions",
+      "summary": "Mock research_worker completed plan outputs for design_readiness_assessment_and_minimal_actions.",
+      "task_id": "payout_readiness_audit",
+      "worker_type": "research_worker"
+    },
+    {
+      "expected_outputs": [
+        "final_report"
+      ],
+      "input_artifacts": [
+        "readiness_assessment",
+        "validated_defects",
+        "minimal_change_plan",
+        "rollback_plan",
+        "verification_plan",
+        "post_change_operational_checks",
+        "authoritative_sources_v2",
+        "guidance_control_matrix_v2"
+      ],
+      "metadata": {
+        "input_artifact_ids": [
+          "readiness_assessment",
+          "validated_defects",
+          "minimal_change_plan",
+          "rollback_plan",
+          "verification_plan",
+          "post_change_operational_checks",
+          "authoritative_sources_v2",
+          "guidance_control_matrix_v2"
+        ],
+        "mocked": true,
+        "mode": "summarize_only",
+        "phase": "FINALIZE",
+        "task_id": "payout_readiness_audit"
+      },
+      "mode": "summarize_only",
+      "phase": "FINALIZE",
+      "produced_artifacts": [
+        "final_report"
+      ],
+      "recommended_action": null,
+      "status": "completed",
+      "step_id": "finalize_audit_report",
+      "summary": "Mock verify_worker completed plan outputs for finalize_audit_report.",
+      "task_id": "payout_readiness_audit",
+      "worker_type": "verify_worker"
+    }
+  ],
+  "worker_status_counts": {
+    "completed": 6,
+    "needs_replan": 1
+  },
+  "workflow": "decompressor -> planner -> worker mock -> worker replan request -> planner replan -> rerun"
+}

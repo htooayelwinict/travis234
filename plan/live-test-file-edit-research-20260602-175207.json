@@ -1,0 +1,371 @@
+{
+  "prompt": "Please review the algorithm in v8.md, research comparable algorithms from reliable sources online, summarize the differences, and implement a scoped code fix if you find concrete issues. Include a brief backup plan and verification steps.",
+  "generated_at": "2026-06-02T17:52:07.344865",
+  "envelope": {
+    "request_id": "req_001",
+    "raw_input": "Please review the algorithm in v8.md, research comparable algorithms from reliable sources online, summarize the differences, and implement a scoped code fix if you find concrete issues. Include a brief backup plan and verification steps.",
+    "normalized_input": "Review the algorithm described in v8.md, compare it against reliable online algorithm references, summarize differences, and if concrete defects are identified, apply a narrowly scoped code fix with a brief fallback and validation outline.",
+    "user_goal": "Obtain an evidence-based algorithm review and comparison, plus a limited code correction only when specific, verifiable issues are found.",
+    "input_type": "algorithm_review_research_comparison_and_scoped_code_fix",
+    "intents": [
+      "docs.review",
+      "research.lookup",
+      "algorithm.compare",
+      "code.fix",
+      "validation.define",
+      "risk_mitigation.note"
+    ],
+    "domains": [
+      "code",
+      "research",
+      "docs"
+    ],
+    "risks": [
+      "mutation_requested",
+      "file_mutation",
+      "needs_verification",
+      "ambiguous_scope",
+      "external_source_quality_risk",
+      "insufficient_context"
+    ],
+    "artifacts": [
+      {
+        "name": "v8.md",
+        "type": "file"
+      },
+      {
+        "name": "algorithm",
+        "type": "component"
+      },
+      {
+        "name": "comparable algorithms",
+        "type": "reference_set"
+      },
+      {
+        "name": "reliable sources online",
+        "type": "external_sources"
+      },
+      {
+        "name": "scoped code fix",
+        "type": "code_change"
+      },
+      {
+        "name": "backup plan",
+        "type": "contingency_note"
+      },
+      {
+        "name": "verification steps",
+        "type": "validation_criteria"
+      }
+    ],
+    "context_needed": [
+      "contents_of_v8_md",
+      "repository_tree",
+      "target_code_locations_linked_to_algorithm",
+      "programming_language_and_runtime",
+      "test_suite_or_validation_mechanism",
+      "definition_of_reliable_sources",
+      "scope_limits_for_code_changes",
+      "acceptance_criteria_for_concrete_issues"
+    ],
+    "constraints": [
+      "do_not_claim_defects_without_concrete_evidence",
+      "only_apply_mutation_if_issue_is_specific_and_verifiable",
+      "keep_changes_narrowly_scoped_to_identified_issue",
+      "preserve_traceability_between_v8_md_analysis_and_code_change",
+      "verification_requirements_must_be_defined_for_any_mutation",
+      "do_not_invent_repository_facts_or_api_shapes"
+    ],
+    "complexity_hint": "high",
+    "confidence": 0.89,
+    "ambiguity": [
+      "The specific algorithm in v8.md is not provided.",
+      "The codebase files to modify are not identified.",
+      "Criteria for what counts as a 'reliable' source are unspecified.",
+      "Threshold for 'concrete issues' requiring a fix is not explicitly defined.",
+      "Expected depth/format of the backup plan and verification details is unclear."
+    ],
+    "assumptions": [
+      "v8.md exists and contains an algorithm description relevant to implementation.",
+      "Internet research is permitted for sourcing comparable algorithms.",
+      "A corresponding implementation exists in the codebase for potential scoped fixes.",
+      "Any fix should be minimal and tied directly to evidenced issues."
+    ],
+    "metadata": {
+      "decompressor_mode": "llm_prompt_chain",
+      "llm_prompt_chain": {
+        "mode": "completed",
+        "stages": [
+          "decompress_request",
+          "validate_envelope"
+        ],
+        "fallback": null,
+        "redacted_prompt_input": false,
+        "model_calls": 1
+      },
+      "decompressor_runtime": {
+        "elapsed_ms": 21029.36,
+        "failure_rate": 0.0,
+        "repair_rate": 0.0,
+        "latency_ms_p50": 21029.36,
+        "latency_ms_p95": 21029.36
+      }
+    }
+  },
+  "plan": {
+    "plan_id": "plan_req_001_algorithm_review_fix",
+    "request_id": "req_001",
+    "planner": "phase_aware_planner_v1",
+    "objective": "Review the algorithm in v8.md against reliable external references, summarize evidence-based differences, and apply a narrowly scoped code fix only if concrete, verifiable defects are found, with rollback and verification traceability.",
+    "strategy": "discovery_first_evidence_driven_research_then_guarded_mutation",
+    "execution_pattern": "discover_analyze_research_design_mutate_verify_finalize",
+    "steps": [
+      {
+        "step_id": "discover_repo_context",
+        "worker_type": "repo_worker",
+        "phase": "DISCOVER",
+        "mode": "observe_only",
+        "task_id": "algorithm_review_fix",
+        "instruction": "Known facts: Request requires reviewing v8.md, mapping to implementation, and potentially applying a scoped fix with verification. Unknowns: Exact v8.md location/content, relevant code paths, runtime/language, tests, and dependency context. Do now: Discover and read repository context to locate v8.md, enumerate candidate implementation files, identify validation mechanisms, and collect dependency/manifests relevant to the algorithm path. Do not do: Do not modify files, run commands, or infer writable scope from candidates. Output: repo_inventory, v8_contents, candidate_code_locations, test_validation_inventory, dependency_candidates.",
+        "input_artifacts": [],
+        "output_artifacts": [
+          "repo_inventory",
+          "v8_contents",
+          "candidate_code_locations",
+          "test_validation_inventory",
+          "dependency_candidates"
+        ],
+        "max_tool_calls": 0,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": true,
+          "write_files": false,
+          "run_commands": false,
+          "web_research": false
+        }
+      },
+      {
+        "step_id": "analyze_algorithm_and_code",
+        "worker_type": "research_worker",
+        "phase": "ANALYZE",
+        "mode": "observe_only",
+        "task_id": "algorithm_review_fix",
+        "instruction": "Known facts: repo_inventory, v8_contents, candidate_code_locations, test_validation_inventory, and dependency_candidates are available. Unknowns: Whether implementation diverges materially from v8.md and whether any divergence is a concrete defect. Do now: Analyze v8.md and candidate code to produce algorithm_spec, traceability_map from spec elements to code locations, concrete issue hypotheses with evidence, and dependency verification context. Do not do: Do not mutate files, do not claim defects without concrete supporting evidence, and do not invent API/repo facts. Output: algorithm_spec, traceability_map, analysis_evidence, concrete_issue_hypotheses, dependency_artifacts.",
+        "input_artifacts": [
+          "repo_inventory",
+          "v8_contents",
+          "candidate_code_locations",
+          "test_validation_inventory",
+          "dependency_candidates"
+        ],
+        "output_artifacts": [
+          "algorithm_spec",
+          "traceability_map",
+          "analysis_evidence",
+          "concrete_issue_hypotheses",
+          "dependency_artifacts"
+        ],
+        "max_tool_calls": 0,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": true,
+          "write_files": false,
+          "run_commands": false,
+          "web_research": false
+        }
+      },
+      {
+        "step_id": "research_comparable_algorithms",
+        "worker_type": "web_research_worker",
+        "phase": "RESEARCH",
+        "mode": "observe_only",
+        "task_id": "algorithm_review_fix",
+        "instruction": "Known facts: algorithm_spec defines the target behavior and external comparison against reliable sources is required. Unknowns: Source reliability threshold and best comparable references. Do now: Research reputable external algorithm references, document explicit reliability criteria used, and extract comparison evidence aligned to algorithm_spec terms. Do not do: Do not mutate files, do not use non-credible sources without labeling limitations, and do not fabricate citations. Output: source_reliability_criteria, external_algorithm_references, comparison_evidence.",
+        "input_artifacts": [
+          "algorithm_spec"
+        ],
+        "output_artifacts": [
+          "source_reliability_criteria",
+          "external_algorithm_references",
+          "comparison_evidence"
+        ],
+        "max_tool_calls": 0,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": false,
+          "write_files": false,
+          "run_commands": false,
+          "web_research": true
+        }
+      },
+      {
+        "step_id": "design_scoped_change_or_no_change",
+        "worker_type": "code_worker",
+        "phase": "DESIGN",
+        "mode": "plan_only",
+        "task_id": "algorithm_review_fix",
+        "instruction": "Known facts: traceability_map, analysis_evidence, concrete_issue_hypotheses, dependency_artifacts, comparison_evidence, and source_reliability_criteria are available. Unknowns: Whether evidence is sufficient to justify mutation and exact minimal writable scope. Do now: Synthesize differences and decide mutation readiness; if concrete verifiable defects exist, produce narrowly scoped mutation_scope plus fix_design, rollback_plan, and verification_plan; otherwise produce evidence_gap and a no-change mutation_decision. Do not do: Do not write files, do not broaden scope beyond evidenced locations, and do not proceed without dependency/evidence sufficiency. Output: differences_summary, concrete_issue_list, mutation_decision, mutation_scope, fix_design, rollback_plan, verification_plan, evidence_gap.",
+        "input_artifacts": [
+          "traceability_map",
+          "analysis_evidence",
+          "concrete_issue_hypotheses",
+          "dependency_artifacts",
+          "comparison_evidence",
+          "source_reliability_criteria",
+          "candidate_code_locations"
+        ],
+        "output_artifacts": [
+          "differences_summary",
+          "concrete_issue_list",
+          "mutation_decision",
+          "mutation_scope",
+          "fix_design",
+          "rollback_plan",
+          "verification_plan",
+          "evidence_gap"
+        ],
+        "max_tool_calls": 0,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": true,
+          "write_files": false,
+          "run_commands": false,
+          "web_research": false
+        }
+      },
+      {
+        "step_id": "apply_guarded_patch",
+        "worker_type": "code_worker",
+        "phase": "MUTATE",
+        "mode": "bounded_mutation",
+        "task_id": "algorithm_review_fix",
+        "instruction": "Known facts: mutation_decision, mutation_scope, fix_design, rollback_plan, concrete_issue_list, and analysis_evidence define if and how to patch. Unknowns: None beyond mutation_decision outcome at runtime. Do now: If mutation_decision is approved and evidence is sufficient, implement only the scoped fix within mutation_scope following fix_design; if not approved, perform no file edits and emit explicit no-change reasoning in change_summary. Do not do: Do not write outside mutation_scope, do not ignore rollback_plan, and do not claim a fix without traceable linkage to evidence. Output: change_summary, rollback_patch.",
+        "input_artifacts": [
+          "mutation_decision",
+          "mutation_scope",
+          "fix_design",
+          "rollback_plan",
+          "concrete_issue_list",
+          "analysis_evidence",
+          "evidence_gap"
+        ],
+        "output_artifacts": [
+          "change_summary",
+          "rollback_patch"
+        ],
+        "max_tool_calls": 0,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": true,
+          "write_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_paths_from_artifacts": [
+            "mutation_scope"
+          ]
+        }
+      },
+      {
+        "step_id": "verify_change_and_scope",
+        "worker_type": "verify_worker",
+        "phase": "VERIFY",
+        "mode": "verify_only",
+        "task_id": "algorithm_review_fix",
+        "instruction": "Known facts: change_summary, mutation_scope, analysis_evidence, verification_plan, and rollback_plan are available after mutation step. Unknowns: Whether checks fully confirm root-cause match and scope containment. Do now: Execute verification_plan to validate defect-target alignment, scope containment to mutation_scope, focused checks/tests, and rollback readiness. Do not do: Do not modify files, do not skip failed or inconclusive checks, and do not overstate confidence. Output: verification_results, scope_containment_report, rollback_readiness.",
+        "input_artifacts": [
+          "change_summary",
+          "mutation_scope",
+          "analysis_evidence",
+          "verification_plan",
+          "rollback_plan"
+        ],
+        "output_artifacts": [
+          "verification_results",
+          "scope_containment_report",
+          "rollback_readiness"
+        ],
+        "max_tool_calls": 0,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": true,
+          "write_files": false,
+          "run_commands": true,
+          "web_research": false
+        }
+      },
+      {
+        "step_id": "finalize_user_report",
+        "worker_type": "research_worker",
+        "phase": "FINALIZE",
+        "mode": "summarize_only",
+        "task_id": "algorithm_review_fix",
+        "instruction": "Known facts: differences_summary, external_algorithm_references, source_reliability_criteria, concrete_issue_list, mutation_decision, change_summary, verification_results, rollback_plan, and rollback_readiness are available. Unknowns: None material. Do now: Produce a concise final report summarizing algorithm differences, evidence quality, whether a concrete issue warranted code changes, what was changed (or why not), plus brief backup plan and verification steps/results. Do not do: Do not invent findings beyond artifacts and do not omit uncertainty or evidence gaps. Output: final_report.",
+        "input_artifacts": [
+          "differences_summary",
+          "external_algorithm_references",
+          "source_reliability_criteria",
+          "concrete_issue_list",
+          "mutation_decision",
+          "change_summary",
+          "verification_results",
+          "rollback_plan",
+          "rollback_readiness",
+          "evidence_gap"
+        ],
+        "output_artifacts": [
+          "final_report"
+        ],
+        "max_tool_calls": 0,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": false,
+          "write_files": false,
+          "run_commands": false,
+          "web_research": false
+        }
+      }
+    ],
+    "budget": {
+      "max_tool_calls": 0,
+      "max_model_calls": 7,
+      "max_workers": 7,
+      "max_retries": 1
+    },
+    "global_invariants": [
+      "do_not_claim_defects_without_concrete_evidence",
+      "only_mutate_when_mutation_decision_is_approved_and_verifiable",
+      "writes_must_be_scoped_via_design_produced_mutation_scope",
+      "preserve_traceability_between_v8_analysis_external_comparison_and_any_change",
+      "verify_after_any_write_and_report_rollback_readiness",
+      "do_not_invent_repository_facts_or_api_shapes"
+    ],
+    "success_criteria": [
+      "Produces evidence-based comparison of v8.md algorithm versus reliable external references.",
+      "Identifies concrete issues only when supported by traceable analysis evidence.",
+      "Applies code changes only when mutation_decision is approved and scope is narrowly defined.",
+      "Includes rollback/backup plan and verification outcomes in the final report."
+    ],
+    "metadata": {
+      "complexity": "high",
+      "archetype": "phase_aware_mutation_plan",
+      "llm_planner": {
+        "mode": "completed",
+        "stages": [
+          "draft_plan",
+          "validate_plan"
+        ],
+        "model_calls": 1,
+        "repair_attempted": false,
+        "validation_errors": [],
+        "resolved_validation_errors": [],
+        "budget_auto_aligned": true,
+        "envelope_input_type": "algorithm_review_research_comparison_and_scoped_code_fix",
+        "envelope_complexity_hint": "high"
+      },
+      "planner_runtime": {
+        "mode": "llm_prompt_chain",
+        "fallback_reason": null
+      }
+    }
+  }
+}

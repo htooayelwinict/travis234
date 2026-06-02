@@ -1,0 +1,1858 @@
+{
+  "elapsed_ms": 130413.36,
+  "envelope": {
+    "ambiguity": [
+      "Repository structure and exact webhook components are not provided.",
+      "Criteria for what qualifies as an authoritative external reference are unspecified.",
+      "Expected rollback artifact format is unspecified.",
+      "Operational environment (staging/production topology) is not specified.",
+      "Threshold for labeling an issue a concrete defect is not explicitly defined."
+    ],
+    "artifacts": [
+      {
+        "name": "system-design.md",
+        "type": "file"
+      },
+      {
+        "name": "webhook delivery retry implementation",
+        "type": "component"
+      },
+      {
+        "name": "deduplication implementation",
+        "type": "component"
+      },
+      {
+        "name": "dead-letter recovery implementation",
+        "type": "component"
+      },
+      {
+        "name": "idempotent webhook processing references",
+        "type": "external_reference_topic"
+      },
+      {
+        "name": "backoff with jitter references",
+        "type": "external_reference_topic"
+      },
+      {
+        "name": "inbox/outbox deduplication references",
+        "type": "external_reference_topic"
+      },
+      {
+        "name": "dead-letter handling references",
+        "type": "external_reference_topic"
+      },
+      {
+        "name": "delivery observability references",
+        "type": "external_reference_topic"
+      },
+      {
+        "name": "documented flow",
+        "type": "documentation_section"
+      },
+      {
+        "name": "repository code",
+        "type": "codebase"
+      },
+      {
+        "name": "project files",
+        "type": "file_set"
+      },
+      {
+        "name": "rollback artifact",
+        "type": "change_artifact"
+      },
+      {
+        "name": "focused verification steps",
+        "type": "validation_artifact"
+      },
+      {
+        "name": "operational post-change checks",
+        "type": "operations_artifact"
+      }
+    ],
+    "assumptions": [
+      "The repository contains a file named system-design.md.",
+      "Webhook retry, deduplication, and dead-letter behavior are implemented in the codebase.",
+      "Direct project file edits are permitted when concrete defects are identified.",
+      "Verification and operational checks are expected as deliverables alongside any fix."
+    ],
+    "complexity_hint": "high",
+    "confidence": 0.92,
+    "constraints": [
+      "boundary_is_problem_description_only_no_execution_planning",
+      "target_locations_must_be_identified_before_mutation",
+      "mutations_only_if_concrete_defects_are_confirmed",
+      "fix_scope_must_be_minimal_and_localized",
+      "mutation_requires_verification",
+      "comparisons_should_use_authoritative_sources",
+      "do_not_invent_repo_facts_api_shapes_or_root_causes",
+      "post_change_checks_must_align_with_operational_safety"
+    ],
+    "context_needed": [
+      "repository tree and relevant module paths",
+      "contents of system-design.md",
+      "languages/frameworks used by webhook pipeline",
+      "current retry/backoff and deduplication logic locations",
+      "dead-letter queue/recovery mechanism details",
+      "existing observability metrics/logging/tracing setup",
+      "test framework and available automated tests",
+      "definition of acceptable authoritative sources",
+      "change control constraints for rollback artifact format"
+    ],
+    "domains": [
+      "code",
+      "docs",
+      "research",
+      "infra",
+      "observability",
+      "operations"
+    ],
+    "input_type": "webhook_reliability_code_audit_with_conditional_patch",
+    "intents": [
+      "docs.review",
+      "codebase.locate_implementation",
+      "research.lookup",
+      "architecture.compare_against_standards",
+      "code.fix_conditional",
+      "change.rollback_preparation",
+      "verification.definition",
+      "operations.checklist_definition"
+    ],
+    "metadata": {
+      "decompressor_mode": "llm_prompt_chain",
+      "decompressor_runtime": {
+        "elapsed_ms": 18690.362,
+        "failure_rate": 0.0,
+        "latency_ms_p50": 18690.362,
+        "latency_ms_p95": 18690.362,
+        "repair_rate": 0.0
+      },
+      "llm_prompt_chain": {
+        "fallback": null,
+        "mode": "completed",
+        "model_calls": 1,
+        "redacted_prompt_input": false,
+        "stages": [
+          "decompress_request",
+          "validate_envelope"
+        ]
+      }
+    },
+    "normalized_input": "Inspect system-design.md and the repository implementation of webhook retry, deduplication, and dead-letter recovery; research authoritative best practices; compare docs and code to those references; and if concrete defects are found, apply minimal code fixes, provide rollback material, and specify focused verification plus operational post-change checks.",
+    "raw_input": "Read system-design.md and find the repository's webhook delivery retry, deduplication, and dead-letter recovery implementation. Research authoritative external references on idempotent webhook processing, backoff with jitter, inbox/outbox deduplication, dead-letter handling, and delivery observability. Compare the documented flow and the code against those references, and if you find concrete defects, apply a minimally scoped code fix directly in project files, produce a rollback artifact, and define focused verification steps and operational post-change checks.",
+    "request_id": "req_001",
+    "risks": [
+      "mutation_requested",
+      "file_mutation",
+      "needs_verification",
+      "external_sources_quality_risk",
+      "ambiguous_scope",
+      "rollback_artifact_required",
+      "production_reliability_impact"
+    ],
+    "user_goal": "Validate and harden the repository\u2019s webhook delivery reliability mechanisms against authoritative practices, with minimal corrective changes and safe rollback/verification guidance when defects are confirmed."
+  },
+  "error": null,
+  "final_worker_kernel_result": {
+    "artifacts": [
+      {
+        "content": "Mock artifact repo_inventory_v2 from discover_rebuild_boundaries_and_targets.",
+        "id": "repo_inventory_v2",
+        "producer_step_id": "discover_rebuild_boundaries_and_targets",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact design_doc_extract_v2 from discover_rebuild_boundaries_and_targets.",
+        "id": "design_doc_extract_v2",
+        "producer_step_id": "discover_rebuild_boundaries_and_targets",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact webhook_boundary_map from discover_rebuild_boundaries_and_targets.",
+        "id": "webhook_boundary_map",
+        "producer_step_id": "discover_rebuild_boundaries_and_targets",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact candidate_webhook_locations_v2 from discover_rebuild_boundaries_and_targets.",
+        "id": "candidate_webhook_locations_v2",
+        "producer_step_id": "discover_rebuild_boundaries_and_targets",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact test_inventory_v2 from discover_rebuild_boundaries_and_targets.",
+        "id": "test_inventory_v2",
+        "producer_step_id": "discover_rebuild_boundaries_and_targets",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact observability_locations_v2 from discover_rebuild_boundaries_and_targets.",
+        "id": "observability_locations_v2",
+        "producer_step_id": "discover_rebuild_boundaries_and_targets",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact analysis_evidence from analyze_evidence_against_boundaries.",
+        "id": "analysis_evidence",
+        "producer_step_id": "analyze_evidence_against_boundaries",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": "Mock artifact root_cause_evidence from analyze_evidence_against_boundaries.",
+        "id": "root_cause_evidence",
+        "producer_step_id": "analyze_evidence_against_boundaries",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": "Mock artifact doc_code_delta from analyze_evidence_against_boundaries.",
+        "id": "doc_code_delta",
+        "producer_step_id": "analyze_evidence_against_boundaries",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": "Mock artifact dependency_artifacts from analyze_evidence_against_boundaries.",
+        "id": "dependency_artifacts",
+        "producer_step_id": "analyze_evidence_against_boundaries",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": "Mock artifact evidence_gap from analyze_evidence_against_boundaries.",
+        "id": "evidence_gap",
+        "producer_step_id": "analyze_evidence_against_boundaries",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": "Mock artifact source_quality_rubric from research_authoritative_sources_with_conflict_resolution.",
+        "id": "source_quality_rubric",
+        "producer_step_id": "research_authoritative_sources_with_conflict_resolution",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "content": "Mock artifact external_sources from research_authoritative_sources_with_conflict_resolution.",
+        "id": "external_sources",
+        "producer_step_id": "research_authoritative_sources_with_conflict_resolution",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "content": "Mock artifact best_practice_matrix from research_authoritative_sources_with_conflict_resolution.",
+        "id": "best_practice_matrix",
+        "producer_step_id": "research_authoritative_sources_with_conflict_resolution",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "content": "Mock artifact research_evidence from research_authoritative_sources_with_conflict_resolution.",
+        "id": "research_evidence",
+        "producer_step_id": "research_authoritative_sources_with_conflict_resolution",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "content": "Mock artifact conflict_resolution_notes from research_authoritative_sources_with_conflict_resolution.",
+        "id": "conflict_resolution_notes",
+        "producer_step_id": "research_authoritative_sources_with_conflict_resolution",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "content": "Mock artifact mutation_scope from design_go_no_go_scoped_mutation.",
+        "id": "mutation_scope",
+        "producer_step_id": "design_go_no_go_scoped_mutation",
+        "worker_type": "code_worker"
+      },
+      {
+        "content": "Mock artifact allowed_write_paths from design_go_no_go_scoped_mutation.",
+        "id": "allowed_write_paths",
+        "producer_step_id": "design_go_no_go_scoped_mutation",
+        "worker_type": "code_worker"
+      },
+      {
+        "content": "Mock artifact fix_design from design_go_no_go_scoped_mutation.",
+        "id": "fix_design",
+        "producer_step_id": "design_go_no_go_scoped_mutation",
+        "worker_type": "code_worker"
+      },
+      {
+        "content": "Mock artifact rollback_plan from design_go_no_go_scoped_mutation.",
+        "id": "rollback_plan",
+        "producer_step_id": "design_go_no_go_scoped_mutation",
+        "worker_type": "code_worker"
+      },
+      {
+        "content": "Mock artifact verification_plan from design_go_no_go_scoped_mutation.",
+        "id": "verification_plan",
+        "producer_step_id": "design_go_no_go_scoped_mutation",
+        "worker_type": "code_worker"
+      },
+      {
+        "content": "Mock artifact mutation_readiness from design_go_no_go_scoped_mutation.",
+        "id": "mutation_readiness",
+        "producer_step_id": "design_go_no_go_scoped_mutation",
+        "worker_type": "code_worker"
+      },
+      {
+        "content": "Mock artifact change_summary from apply_minimal_scoped_patch_or_no_change.",
+        "id": "change_summary",
+        "producer_step_id": "apply_minimal_scoped_patch_or_no_change",
+        "worker_type": "code_worker"
+      },
+      {
+        "content": "Mock artifact rollback_artifact from apply_minimal_scoped_patch_or_no_change.",
+        "id": "rollback_artifact",
+        "producer_step_id": "apply_minimal_scoped_patch_or_no_change",
+        "worker_type": "code_worker"
+      },
+      {
+        "content": "Mock artifact updated_files_manifest from apply_minimal_scoped_patch_or_no_change.",
+        "id": "updated_files_manifest",
+        "producer_step_id": "apply_minimal_scoped_patch_or_no_change",
+        "worker_type": "code_worker"
+      },
+      {
+        "content": "Mock artifact verification_results from verify_scope_safety_and_root_cause_alignment.",
+        "id": "verification_results",
+        "producer_step_id": "verify_scope_safety_and_root_cause_alignment",
+        "worker_type": "verify_worker"
+      },
+      {
+        "content": "Mock artifact focused_check_results from verify_scope_safety_and_root_cause_alignment.",
+        "id": "focused_check_results",
+        "producer_step_id": "verify_scope_safety_and_root_cause_alignment",
+        "worker_type": "verify_worker"
+      },
+      {
+        "content": "Mock artifact scope_containment_report from verify_scope_safety_and_root_cause_alignment.",
+        "id": "scope_containment_report",
+        "producer_step_id": "verify_scope_safety_and_root_cause_alignment",
+        "worker_type": "verify_worker"
+      },
+      {
+        "content": "Mock artifact rollback_validation from verify_scope_safety_and_root_cause_alignment.",
+        "id": "rollback_validation",
+        "producer_step_id": "verify_scope_safety_and_root_cause_alignment",
+        "worker_type": "verify_worker"
+      },
+      {
+        "content": "Mock artifact residual_risk from verify_scope_safety_and_root_cause_alignment.",
+        "id": "residual_risk",
+        "producer_step_id": "verify_scope_safety_and_root_cause_alignment",
+        "worker_type": "verify_worker"
+      },
+      {
+        "content": "Mock artifact final_report from finalize_audit_and_operational_guidance.",
+        "id": "final_report",
+        "producer_step_id": "finalize_audit_and_operational_guidance",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": "Mock artifact operational_post_change_checks from finalize_audit_and_operational_guidance.",
+        "id": "operational_post_change_checks",
+        "producer_step_id": "finalize_audit_and_operational_guidance",
+        "worker_type": "research_worker"
+      }
+    ],
+    "errors": [],
+    "metadata": {
+      "replan": {
+        "depth": 1,
+        "original_worker_results": [
+          {
+            "artifacts": [
+              {
+                "content": "Mock artifact repo_inventory from discover_repo_and_flow.",
+                "id": "repo_inventory",
+                "producer_step_id": "discover_repo_and_flow",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": "Mock artifact candidate_webhook_locations from discover_repo_and_flow.",
+                "id": "candidate_webhook_locations",
+                "producer_step_id": "discover_repo_and_flow",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": "Mock artifact design_doc_extract from discover_repo_and_flow.",
+                "id": "design_doc_extract",
+                "producer_step_id": "discover_repo_and_flow",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": "Mock artifact test_inventory from discover_repo_and_flow.",
+                "id": "test_inventory",
+                "producer_step_id": "discover_repo_and_flow",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": "Mock artifact observability_locations from discover_repo_and_flow.",
+                "id": "observability_locations",
+                "producer_step_id": "discover_repo_and_flow",
+                "worker_type": "repo_worker"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "mocked": true
+            },
+            "producer": "repo_worker",
+            "run_id": "run_plan_req_001_webhook_reliability_audit_patch",
+            "status": "completed",
+            "summary": "Mock repo_worker accepted and completed discover_repo_and_flow.",
+            "usage": {
+              "model_calls": 1,
+              "tool_calls": 1
+            },
+            "warnings": []
+          },
+          {
+            "artifacts": [
+              {
+                "content": {
+                  "failed_step_id": "analyze_doc_code_and_evidence",
+                  "input_artifact_ids": [
+                    "candidate_webhook_locations",
+                    "design_doc_extract",
+                    "test_inventory",
+                    "observability_locations"
+                  ],
+                  "issue_type": "planner_level",
+                  "signals": [
+                    "conflicting_external_sources",
+                    "delivery_boundary_mismatch",
+                    "mutation_scope_unreachable"
+                  ],
+                  "task_metadata": {
+                    "mode": "observe_only",
+                    "phase": "ANALYZE",
+                    "task_id": "webhook_reliability_audit_and_patch"
+                  }
+                },
+                "id": "planner_issue_snapshot"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "issue_class": "planner_level",
+              "mocked": true,
+              "recommended_action": "Return a full fixed new Plan using the existing schema and rebuild the context needed for webhook delivery mutation.",
+              "trigger": "planner_level_issue"
+            },
+            "producer": "research_worker",
+            "run_id": "run_plan_req_001_webhook_reliability_audit_patch",
+            "status": "needs_replan",
+            "summary": "Planner-level issue: external webhook guidance is conflicting, discovered repository delivery boundaries do not align with the assumed retry/deduplication path, and the artifact chain to safe mutation cannot be satisfied without a new full plan.",
+            "usage": {
+              "model_calls": 0,
+              "tool_calls": 1
+            },
+            "warnings": []
+          }
+        ],
+        "replacement_plan": {
+          "budget": {
+            "max_model_calls": 6,
+            "max_retries": 1,
+            "max_tool_calls": 22,
+            "max_workers": 7
+          },
+          "execution_pattern": "discover_analyze_research_design_mutate_verify_finalize",
+          "global_invariants": [
+            "no_mutation_before_discovery_analysis_research_and_design_outputs_exist",
+            "writes_must_be_scoped_via_mutation_scope_only",
+            "no_unverified_defect_or_fix_claims_without_evidence_artifacts",
+            "verification_required_after_any_file_write",
+            "final_output_must_include_rollback_and_operational_safety_guidance"
+          ],
+          "metadata": {
+            "archetype": "phase_aware_mutation_replan",
+            "complexity": "high",
+            "llm_planner": {
+              "budget_auto_aligned": true,
+              "envelope_complexity_hint": "high",
+              "envelope_input_type": "webhook_reliability_code_audit_with_conditional_patch",
+              "failed_step_id": "analyze_doc_code_and_evidence",
+              "mode": "completed",
+              "model_calls": 1,
+              "parent_plan_id": "plan_req_001_webhook_reliability_audit_patch",
+              "repair_attempted": false,
+              "replan": true,
+              "resolved_validation_errors": [],
+              "stages": [
+                "replan_plan",
+                "validate_plan"
+              ],
+              "validation_errors": []
+            },
+            "planner_runtime": {
+              "fallback_reason": null,
+              "mode": "llm_prompt_chain_replan"
+            },
+            "replan_context": {
+              "completed_step_ids": [
+                "discover_repo_and_flow"
+              ],
+              "failed_step_id": "analyze_doc_code_and_evidence",
+              "reason": "conflicting_external_sources_delivery_boundary_mismatch_mutation_scope_unreachable"
+            },
+            "source_request": "webhook_reliability_code_audit_with_conditional_patch"
+          },
+          "objective": "Audit webhook retry, deduplication, and dead-letter reliability against authoritative practices, and apply only minimal scoped fixes when concrete defects are evidenced, with rollback and verification guidance.",
+          "plan_id": "plan_req_001_webhook_reliability_audit_patch_r2",
+          "planner": "phase_aware_reliability_planner",
+          "request_id": "req_001",
+          "steps": [
+            {
+              "input_artifacts": [],
+              "instruction": "Known facts: Prior execution failed at analysis due to delivery boundary mismatch and insufficient artifact chain for safe mutation. Unknowns: Actual webhook delivery boundaries, true retry/dedup/dead-letter code paths, and exact test/observability coverage locations. Do now: Re-scan repository and system-design.md to produce a fresh boundary-accurate map of webhook flow, implementation paths, test locations, and observability points, including candidate writable targets only if evidenced. Do not do: Do not modify files, do not infer behavior without file evidence, and do not reuse prior assumptions as facts. Output: repo_inventory_v2, design_doc_extract_v2, webhook_boundary_map, candidate_webhook_locations_v2, test_inventory_v2, observability_locations_v2.",
+              "max_model_calls": 1,
+              "max_tool_calls": 4,
+              "mode": "observe_only",
+              "output_artifacts": [
+                "repo_inventory_v2",
+                "design_doc_extract_v2",
+                "webhook_boundary_map",
+                "candidate_webhook_locations_v2",
+                "test_inventory_v2",
+                "observability_locations_v2"
+              ],
+              "permissions": {
+                "read_files": true,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "DISCOVER",
+              "step_id": "discover_rebuild_boundaries_and_targets",
+              "task_id": "webhook_reliability_audit_and_patch",
+              "worker_type": "repo_worker"
+            },
+            {
+              "input_artifacts": [
+                "design_doc_extract_v2",
+                "webhook_boundary_map",
+                "candidate_webhook_locations_v2",
+                "test_inventory_v2",
+                "observability_locations_v2"
+              ],
+              "instruction": "Known facts: Fresh repository inventory, boundary map, documented flow extract, and candidate code/test/observability locations are available. Unknowns: Which mismatches are concrete defects versus intentional boundary choices, and whether evidence is sufficient for safe mutation. Do now: Compare documented flow to code within confirmed boundaries, produce evidence-backed defect candidates with root-cause hypotheses, and explicitly capture dependency blockers and evidence gaps. Do not do: Do not mutate files, do not use external sources in this step, and do not label defects without traceable evidence. Output: analysis_evidence, root_cause_evidence, doc_code_delta, dependency_artifacts, evidence_gap.",
+              "max_model_calls": 1,
+              "max_tool_calls": 4,
+              "mode": "observe_only",
+              "output_artifacts": [
+                "analysis_evidence",
+                "root_cause_evidence",
+                "doc_code_delta",
+                "dependency_artifacts",
+                "evidence_gap"
+              ],
+              "permissions": {
+                "read_files": true,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "ANALYZE",
+              "step_id": "analyze_evidence_against_boundaries",
+              "task_id": "webhook_reliability_audit_and_patch",
+              "worker_type": "research_worker"
+            },
+            {
+              "input_artifacts": [
+                "doc_code_delta",
+                "webhook_boundary_map"
+              ],
+              "instruction": "Known facts: Internal deltas and boundary-aware concerns are identified, and prior run reported conflicting external guidance. Unknowns: Which sources should be considered authoritative enough to drive acceptance decisions. Do now: Build an explicit source-quality rubric, gather high-authority references for idempotency, jittered backoff, deduplication, dead-letter handling, and observability, then resolve conflicts into a single comparison matrix tied to identified concerns. Do not do: Do not write project files, do not use low-credibility sources, and do not make repo-specific claims beyond provided artifacts. Output: source_quality_rubric, external_sources, best_practice_matrix, research_evidence, conflict_resolution_notes.",
+              "max_model_calls": 1,
+              "max_tool_calls": 4,
+              "mode": "observe_only",
+              "output_artifacts": [
+                "source_quality_rubric",
+                "external_sources",
+                "best_practice_matrix",
+                "research_evidence",
+                "conflict_resolution_notes"
+              ],
+              "permissions": {
+                "read_files": false,
+                "run_commands": false,
+                "web_research": true,
+                "write_files": false
+              },
+              "phase": "RESEARCH",
+              "step_id": "research_authoritative_sources_with_conflict_resolution",
+              "task_id": "webhook_reliability_audit_and_patch",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "input_artifacts": [
+                "analysis_evidence",
+                "root_cause_evidence",
+                "dependency_artifacts",
+                "evidence_gap",
+                "best_practice_matrix",
+                "research_evidence",
+                "conflict_resolution_notes",
+                "candidate_webhook_locations_v2"
+              ],
+              "instruction": "Known facts: Internal evidence, root-cause hypotheses, dependency status, evidence gaps, and conflict-resolved best-practice guidance are available. Unknowns: Whether evidence suffices for safe mutation in each candidate target. Do now: Produce a strict go/no-go mutation design with minimal scope, explicit writable paths, rollback plan, and focused verification plan; if evidence is insufficient, emit no-go with rationale and verification-only guidance. Do not do: Do not edit files, do not broaden scope beyond evidenced defects, and do not omit rollback or verification planning. Output: mutation_scope, allowed_write_paths, fix_design, rollback_plan, verification_plan, mutation_readiness.",
+              "max_model_calls": 1,
+              "max_tool_calls": 3,
+              "mode": "plan_only",
+              "output_artifacts": [
+                "mutation_scope",
+                "allowed_write_paths",
+                "fix_design",
+                "rollback_plan",
+                "verification_plan",
+                "mutation_readiness"
+              ],
+              "permissions": {
+                "read_files": true,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "DESIGN",
+              "step_id": "design_go_no_go_scoped_mutation",
+              "task_id": "webhook_reliability_audit_and_patch",
+              "worker_type": "code_worker"
+            },
+            {
+              "input_artifacts": [
+                "mutation_scope",
+                "allowed_write_paths",
+                "fix_design",
+                "rollback_plan",
+                "mutation_readiness",
+                "root_cause_evidence",
+                "dependency_artifacts"
+              ],
+              "instruction": "Known facts: mutation_scope, allowed_write_paths, fix_design, rollback_plan, and mutation_readiness define whether and where changes are permitted. Unknowns: None beyond localized implementation details in approved files. Do now: If mutation_readiness is go, implement the minimal localized fix strictly within allowed_write_paths/mutation_scope and generate rollback artifact; if no-go, perform no writes and output a no-change rationale. Do not do: Do not write outside scoped paths, do not change unrelated behavior, and do not claim verification success. Output: change_summary, rollback_artifact, updated_files_manifest.",
+              "max_model_calls": 1,
+              "max_tool_calls": 4,
+              "mode": "bounded_mutation",
+              "output_artifacts": [
+                "change_summary",
+                "rollback_artifact",
+                "updated_files_manifest"
+              ],
+              "permissions": {
+                "read_files": true,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": true,
+                "write_paths_from_artifacts": [
+                  "allowed_write_paths",
+                  "mutation_scope"
+                ]
+              },
+              "phase": "MUTATE",
+              "step_id": "apply_minimal_scoped_patch_or_no_change",
+              "task_id": "webhook_reliability_audit_and_patch",
+              "worker_type": "code_worker"
+            },
+            {
+              "input_artifacts": [
+                "change_summary",
+                "updated_files_manifest",
+                "mutation_scope",
+                "allowed_write_paths",
+                "verification_plan",
+                "root_cause_evidence",
+                "rollback_plan",
+                "rollback_artifact"
+              ],
+              "instruction": "Known facts: Change outputs, declared mutation scope, verification plan, and rollback materials are available after mutate step. Unknowns: Whether focused checks fully validate defect resolution and operational safety. Do now: Run focused verification per verification_plan, confirm all changed files are within allowed_write_paths/mutation_scope, validate rollback usability, and record residual risk with evidence links. Do not do: Do not modify files and do not report pass/fail without evidence-backed results. Output: verification_results, focused_check_results, scope_containment_report, rollback_validation, residual_risk.",
+              "max_model_calls": 1,
+              "max_tool_calls": 3,
+              "mode": "verify_only",
+              "output_artifacts": [
+                "verification_results",
+                "focused_check_results",
+                "scope_containment_report",
+                "rollback_validation",
+                "residual_risk"
+              ],
+              "permissions": {
+                "read_files": true,
+                "run_commands": true,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "VERIFY",
+              "step_id": "verify_scope_safety_and_root_cause_alignment",
+              "task_id": "webhook_reliability_audit_and_patch",
+              "worker_type": "verify_worker"
+            },
+            {
+              "input_artifacts": [
+                "verification_results",
+                "focused_check_results",
+                "scope_containment_report",
+                "rollback_validation",
+                "residual_risk",
+                "change_summary",
+                "rollback_artifact",
+                "best_practice_matrix",
+                "external_sources"
+              ],
+              "instruction": "Known facts: Verification, scope containment, rollback validation, change summary, and external comparison artifacts are complete. Unknowns: None material for reporting. Do now: Produce final report covering findings, code/doc deltas, changes or no-change rationale, rollback usage instructions, verification outcomes, residual risks, and operational post-change checks. Do not do: Do not introduce unsupported claims and do not add unstated repository facts. Output: final_report, operational_post_change_checks.",
+              "max_model_calls": 0,
+              "max_tool_calls": 0,
+              "mode": "summarize_only",
+              "output_artifacts": [
+                "final_report",
+                "operational_post_change_checks"
+              ],
+              "permissions": {
+                "read_files": false,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "FINALIZE",
+              "step_id": "finalize_audit_and_operational_guidance",
+              "task_id": "webhook_reliability_audit_and_patch",
+              "worker_type": "research_worker"
+            }
+          ],
+          "strategy": "boundary_reestablishment_then_evidence_gated_mutation_with_conflict_resolved_research",
+          "success_criteria": [
+            "Boundary-accurate webhook flow and implementation locations are re-established with file evidence.",
+            "Internal analysis distinguishes concrete defects from boundary mismatches and captures evidence gaps.",
+            "External guidance conflicts are resolved via an explicit source-quality rubric and authoritative comparison matrix.",
+            "Any mutation is minimal, path-scoped, evidence-justified, and paired with rollback artifact.",
+            "Verification confirms root-cause alignment, scope containment, rollback validity, and residual risk.",
+            "Final report includes actionable rollback and operational post-change safety checks."
+          ]
+        },
+        "request": {
+          "completed_artifacts": [
+            {
+              "content": "Mock artifact repo_inventory from discover_repo_and_flow.",
+              "id": "repo_inventory",
+              "producer_step_id": "discover_repo_and_flow",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact candidate_webhook_locations from discover_repo_and_flow.",
+              "id": "candidate_webhook_locations",
+              "producer_step_id": "discover_repo_and_flow",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact design_doc_extract from discover_repo_and_flow.",
+              "id": "design_doc_extract",
+              "producer_step_id": "discover_repo_and_flow",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact test_inventory from discover_repo_and_flow.",
+              "id": "test_inventory",
+              "producer_step_id": "discover_repo_and_flow",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact observability_locations from discover_repo_and_flow.",
+              "id": "observability_locations",
+              "producer_step_id": "discover_repo_and_flow",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "failed_step_id": "analyze_doc_code_and_evidence",
+                "input_artifact_ids": [
+                  "candidate_webhook_locations",
+                  "design_doc_extract",
+                  "test_inventory",
+                  "observability_locations"
+                ],
+                "issue_type": "planner_level",
+                "signals": [
+                  "conflicting_external_sources",
+                  "delivery_boundary_mismatch",
+                  "mutation_scope_unreachable"
+                ],
+                "task_metadata": {
+                  "mode": "observe_only",
+                  "phase": "ANALYZE",
+                  "task_id": "webhook_reliability_audit_and_patch"
+                }
+              },
+              "id": "planner_issue_snapshot"
+            }
+          ],
+          "completed_step_ids": [
+            "discover_repo_and_flow"
+          ],
+          "failed_step_id": "analyze_doc_code_and_evidence",
+          "plan_id": "plan_req_001_webhook_reliability_audit_patch",
+          "reason": "Planner-level issue: external webhook guidance is conflicting, discovered repository delivery boundaries do not align with the assumed retry/deduplication path, and the artifact chain to safe mutation cannot be satisfied without a new full plan.",
+          "recommended_action": "Return a full fixed new Plan using the existing schema and rebuild the context needed for webhook delivery mutation.",
+          "remaining_budget": {
+            "max_model_calls": 6,
+            "max_retries": 1,
+            "max_tool_calls": 22,
+            "max_workers": 5
+          },
+          "request_id": "req_001",
+          "run_id": "run_plan_req_001_webhook_reliability_audit_patch",
+          "worker_result": {
+            "artifacts": [
+              {
+                "content": {
+                  "failed_step_id": "analyze_doc_code_and_evidence",
+                  "input_artifact_ids": [
+                    "candidate_webhook_locations",
+                    "design_doc_extract",
+                    "test_inventory",
+                    "observability_locations"
+                  ],
+                  "issue_type": "planner_level",
+                  "signals": [
+                    "conflicting_external_sources",
+                    "delivery_boundary_mismatch",
+                    "mutation_scope_unreachable"
+                  ],
+                  "task_metadata": {
+                    "mode": "observe_only",
+                    "phase": "ANALYZE",
+                    "task_id": "webhook_reliability_audit_and_patch"
+                  }
+                },
+                "id": "planner_issue_snapshot"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "issue_class": "planner_level",
+              "mocked": true,
+              "recommended_action": "Return a full fixed new Plan using the existing schema and rebuild the context needed for webhook delivery mutation.",
+              "trigger": "planner_level_issue"
+            },
+            "producer": "research_worker",
+            "run_id": "run_plan_req_001_webhook_reliability_audit_patch",
+            "status": "needs_replan",
+            "summary": "Planner-level issue: external webhook guidance is conflicting, discovered repository delivery boundaries do not align with the assumed retry/deduplication path, and the artifact chain to safe mutation cannot be satisfied without a new full plan.",
+            "usage": {
+              "model_calls": 0,
+              "tool_calls": 1
+            },
+            "warnings": []
+          }
+        }
+      },
+      "worker_results": [
+        {
+          "artifacts": [
+            {
+              "content": "Mock artifact repo_inventory_v2 from discover_rebuild_boundaries_and_targets.",
+              "id": "repo_inventory_v2",
+              "producer_step_id": "discover_rebuild_boundaries_and_targets",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact design_doc_extract_v2 from discover_rebuild_boundaries_and_targets.",
+              "id": "design_doc_extract_v2",
+              "producer_step_id": "discover_rebuild_boundaries_and_targets",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact webhook_boundary_map from discover_rebuild_boundaries_and_targets.",
+              "id": "webhook_boundary_map",
+              "producer_step_id": "discover_rebuild_boundaries_and_targets",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact candidate_webhook_locations_v2 from discover_rebuild_boundaries_and_targets.",
+              "id": "candidate_webhook_locations_v2",
+              "producer_step_id": "discover_rebuild_boundaries_and_targets",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact test_inventory_v2 from discover_rebuild_boundaries_and_targets.",
+              "id": "test_inventory_v2",
+              "producer_step_id": "discover_rebuild_boundaries_and_targets",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact observability_locations_v2 from discover_rebuild_boundaries_and_targets.",
+              "id": "observability_locations_v2",
+              "producer_step_id": "discover_rebuild_boundaries_and_targets",
+              "worker_type": "repo_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "mocked": true
+          },
+          "producer": "repo_worker",
+          "run_id": "run_plan_req_001_webhook_reliability_audit_patch_r2",
+          "status": "completed",
+          "summary": "Mock repo_worker accepted and completed discover_rebuild_boundaries_and_targets.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 1
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": "Mock artifact analysis_evidence from analyze_evidence_against_boundaries.",
+              "id": "analysis_evidence",
+              "producer_step_id": "analyze_evidence_against_boundaries",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": "Mock artifact root_cause_evidence from analyze_evidence_against_boundaries.",
+              "id": "root_cause_evidence",
+              "producer_step_id": "analyze_evidence_against_boundaries",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": "Mock artifact doc_code_delta from analyze_evidence_against_boundaries.",
+              "id": "doc_code_delta",
+              "producer_step_id": "analyze_evidence_against_boundaries",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": "Mock artifact dependency_artifacts from analyze_evidence_against_boundaries.",
+              "id": "dependency_artifacts",
+              "producer_step_id": "analyze_evidence_against_boundaries",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": "Mock artifact evidence_gap from analyze_evidence_against_boundaries.",
+              "id": "evidence_gap",
+              "producer_step_id": "analyze_evidence_against_boundaries",
+              "worker_type": "research_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "mocked": true
+          },
+          "producer": "research_worker",
+          "run_id": "run_plan_req_001_webhook_reliability_audit_patch_r2",
+          "status": "completed",
+          "summary": "Mock research_worker accepted and completed analyze_evidence_against_boundaries.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 1
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": "Mock artifact source_quality_rubric from research_authoritative_sources_with_conflict_resolution.",
+              "id": "source_quality_rubric",
+              "producer_step_id": "research_authoritative_sources_with_conflict_resolution",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "content": "Mock artifact external_sources from research_authoritative_sources_with_conflict_resolution.",
+              "id": "external_sources",
+              "producer_step_id": "research_authoritative_sources_with_conflict_resolution",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "content": "Mock artifact best_practice_matrix from research_authoritative_sources_with_conflict_resolution.",
+              "id": "best_practice_matrix",
+              "producer_step_id": "research_authoritative_sources_with_conflict_resolution",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "content": "Mock artifact research_evidence from research_authoritative_sources_with_conflict_resolution.",
+              "id": "research_evidence",
+              "producer_step_id": "research_authoritative_sources_with_conflict_resolution",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "content": "Mock artifact conflict_resolution_notes from research_authoritative_sources_with_conflict_resolution.",
+              "id": "conflict_resolution_notes",
+              "producer_step_id": "research_authoritative_sources_with_conflict_resolution",
+              "worker_type": "web_research_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "mocked": true
+          },
+          "producer": "web_research_worker",
+          "run_id": "run_plan_req_001_webhook_reliability_audit_patch_r2",
+          "status": "completed",
+          "summary": "Mock web_research_worker accepted and completed research_authoritative_sources_with_conflict_resolution.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 1
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": "Mock artifact mutation_scope from design_go_no_go_scoped_mutation.",
+              "id": "mutation_scope",
+              "producer_step_id": "design_go_no_go_scoped_mutation",
+              "worker_type": "code_worker"
+            },
+            {
+              "content": "Mock artifact allowed_write_paths from design_go_no_go_scoped_mutation.",
+              "id": "allowed_write_paths",
+              "producer_step_id": "design_go_no_go_scoped_mutation",
+              "worker_type": "code_worker"
+            },
+            {
+              "content": "Mock artifact fix_design from design_go_no_go_scoped_mutation.",
+              "id": "fix_design",
+              "producer_step_id": "design_go_no_go_scoped_mutation",
+              "worker_type": "code_worker"
+            },
+            {
+              "content": "Mock artifact rollback_plan from design_go_no_go_scoped_mutation.",
+              "id": "rollback_plan",
+              "producer_step_id": "design_go_no_go_scoped_mutation",
+              "worker_type": "code_worker"
+            },
+            {
+              "content": "Mock artifact verification_plan from design_go_no_go_scoped_mutation.",
+              "id": "verification_plan",
+              "producer_step_id": "design_go_no_go_scoped_mutation",
+              "worker_type": "code_worker"
+            },
+            {
+              "content": "Mock artifact mutation_readiness from design_go_no_go_scoped_mutation.",
+              "id": "mutation_readiness",
+              "producer_step_id": "design_go_no_go_scoped_mutation",
+              "worker_type": "code_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "mocked": true
+          },
+          "producer": "code_worker",
+          "run_id": "run_plan_req_001_webhook_reliability_audit_patch_r2",
+          "status": "completed",
+          "summary": "Mock code_worker accepted and completed design_go_no_go_scoped_mutation.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 1
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": "Mock artifact change_summary from apply_minimal_scoped_patch_or_no_change.",
+              "id": "change_summary",
+              "producer_step_id": "apply_minimal_scoped_patch_or_no_change",
+              "worker_type": "code_worker"
+            },
+            {
+              "content": "Mock artifact rollback_artifact from apply_minimal_scoped_patch_or_no_change.",
+              "id": "rollback_artifact",
+              "producer_step_id": "apply_minimal_scoped_patch_or_no_change",
+              "worker_type": "code_worker"
+            },
+            {
+              "content": "Mock artifact updated_files_manifest from apply_minimal_scoped_patch_or_no_change.",
+              "id": "updated_files_manifest",
+              "producer_step_id": "apply_minimal_scoped_patch_or_no_change",
+              "worker_type": "code_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "mocked": true
+          },
+          "producer": "code_worker",
+          "run_id": "run_plan_req_001_webhook_reliability_audit_patch_r2",
+          "status": "completed",
+          "summary": "Mock code_worker accepted and completed apply_minimal_scoped_patch_or_no_change.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 1
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": "Mock artifact verification_results from verify_scope_safety_and_root_cause_alignment.",
+              "id": "verification_results",
+              "producer_step_id": "verify_scope_safety_and_root_cause_alignment",
+              "worker_type": "verify_worker"
+            },
+            {
+              "content": "Mock artifact focused_check_results from verify_scope_safety_and_root_cause_alignment.",
+              "id": "focused_check_results",
+              "producer_step_id": "verify_scope_safety_and_root_cause_alignment",
+              "worker_type": "verify_worker"
+            },
+            {
+              "content": "Mock artifact scope_containment_report from verify_scope_safety_and_root_cause_alignment.",
+              "id": "scope_containment_report",
+              "producer_step_id": "verify_scope_safety_and_root_cause_alignment",
+              "worker_type": "verify_worker"
+            },
+            {
+              "content": "Mock artifact rollback_validation from verify_scope_safety_and_root_cause_alignment.",
+              "id": "rollback_validation",
+              "producer_step_id": "verify_scope_safety_and_root_cause_alignment",
+              "worker_type": "verify_worker"
+            },
+            {
+              "content": "Mock artifact residual_risk from verify_scope_safety_and_root_cause_alignment.",
+              "id": "residual_risk",
+              "producer_step_id": "verify_scope_safety_and_root_cause_alignment",
+              "worker_type": "verify_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "mocked": true
+          },
+          "producer": "verify_worker",
+          "run_id": "run_plan_req_001_webhook_reliability_audit_patch_r2",
+          "status": "completed",
+          "summary": "Mock verify_worker accepted and completed verify_scope_safety_and_root_cause_alignment.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 1
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": "Mock artifact final_report from finalize_audit_and_operational_guidance.",
+              "id": "final_report",
+              "producer_step_id": "finalize_audit_and_operational_guidance",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": "Mock artifact operational_post_change_checks from finalize_audit_and_operational_guidance.",
+              "id": "operational_post_change_checks",
+              "producer_step_id": "finalize_audit_and_operational_guidance",
+              "worker_type": "research_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "mocked": true
+          },
+          "producer": "research_worker",
+          "run_id": "run_plan_req_001_webhook_reliability_audit_patch_r2",
+          "status": "completed",
+          "summary": "Mock research_worker accepted and completed finalize_audit_and_operational_guidance.",
+          "usage": {
+            "model_calls": 0,
+            "tool_calls": 0
+          },
+          "warnings": []
+        }
+      ]
+    },
+    "producer": "worker_kernel",
+    "run_id": "run_plan_req_001_webhook_reliability_audit_patch_r2",
+    "status": "completed",
+    "summary": "Plan executed successfully.",
+    "usage": {
+      "model_calls": 6,
+      "tool_calls": 6,
+      "workers": 7
+    },
+    "warnings": []
+  },
+  "fixed_new_replan_plan": {
+    "budget": {
+      "max_model_calls": 6,
+      "max_retries": 1,
+      "max_tool_calls": 22,
+      "max_workers": 7
+    },
+    "execution_pattern": "discover_analyze_research_design_mutate_verify_finalize",
+    "global_invariants": [
+      "no_mutation_before_discovery_analysis_research_and_design_outputs_exist",
+      "writes_must_be_scoped_via_mutation_scope_only",
+      "no_unverified_defect_or_fix_claims_without_evidence_artifacts",
+      "verification_required_after_any_file_write",
+      "final_output_must_include_rollback_and_operational_safety_guidance"
+    ],
+    "metadata": {
+      "archetype": "phase_aware_mutation_replan",
+      "complexity": "high",
+      "llm_planner": {
+        "budget_auto_aligned": true,
+        "envelope_complexity_hint": "high",
+        "envelope_input_type": "webhook_reliability_code_audit_with_conditional_patch",
+        "failed_step_id": "analyze_doc_code_and_evidence",
+        "mode": "completed",
+        "model_calls": 1,
+        "parent_plan_id": "plan_req_001_webhook_reliability_audit_patch",
+        "repair_attempted": false,
+        "replan": true,
+        "resolved_validation_errors": [],
+        "stages": [
+          "replan_plan",
+          "validate_plan"
+        ],
+        "validation_errors": []
+      },
+      "planner_runtime": {
+        "fallback_reason": null,
+        "mode": "llm_prompt_chain_replan"
+      },
+      "replan_context": {
+        "completed_step_ids": [
+          "discover_repo_and_flow"
+        ],
+        "failed_step_id": "analyze_doc_code_and_evidence",
+        "reason": "conflicting_external_sources_delivery_boundary_mismatch_mutation_scope_unreachable"
+      },
+      "source_request": "webhook_reliability_code_audit_with_conditional_patch"
+    },
+    "objective": "Audit webhook retry, deduplication, and dead-letter reliability against authoritative practices, and apply only minimal scoped fixes when concrete defects are evidenced, with rollback and verification guidance.",
+    "plan_id": "plan_req_001_webhook_reliability_audit_patch_r2",
+    "planner": "phase_aware_reliability_planner",
+    "request_id": "req_001",
+    "steps": [
+      {
+        "input_artifacts": [],
+        "instruction": "Known facts: Prior execution failed at analysis due to delivery boundary mismatch and insufficient artifact chain for safe mutation. Unknowns: Actual webhook delivery boundaries, true retry/dedup/dead-letter code paths, and exact test/observability coverage locations. Do now: Re-scan repository and system-design.md to produce a fresh boundary-accurate map of webhook flow, implementation paths, test locations, and observability points, including candidate writable targets only if evidenced. Do not do: Do not modify files, do not infer behavior without file evidence, and do not reuse prior assumptions as facts. Output: repo_inventory_v2, design_doc_extract_v2, webhook_boundary_map, candidate_webhook_locations_v2, test_inventory_v2, observability_locations_v2.",
+        "max_model_calls": 1,
+        "max_tool_calls": 4,
+        "mode": "observe_only",
+        "output_artifacts": [
+          "repo_inventory_v2",
+          "design_doc_extract_v2",
+          "webhook_boundary_map",
+          "candidate_webhook_locations_v2",
+          "test_inventory_v2",
+          "observability_locations_v2"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "DISCOVER",
+        "step_id": "discover_rebuild_boundaries_and_targets",
+        "task_id": "webhook_reliability_audit_and_patch",
+        "worker_type": "repo_worker"
+      },
+      {
+        "input_artifacts": [
+          "design_doc_extract_v2",
+          "webhook_boundary_map",
+          "candidate_webhook_locations_v2",
+          "test_inventory_v2",
+          "observability_locations_v2"
+        ],
+        "instruction": "Known facts: Fresh repository inventory, boundary map, documented flow extract, and candidate code/test/observability locations are available. Unknowns: Which mismatches are concrete defects versus intentional boundary choices, and whether evidence is sufficient for safe mutation. Do now: Compare documented flow to code within confirmed boundaries, produce evidence-backed defect candidates with root-cause hypotheses, and explicitly capture dependency blockers and evidence gaps. Do not do: Do not mutate files, do not use external sources in this step, and do not label defects without traceable evidence. Output: analysis_evidence, root_cause_evidence, doc_code_delta, dependency_artifacts, evidence_gap.",
+        "max_model_calls": 1,
+        "max_tool_calls": 4,
+        "mode": "observe_only",
+        "output_artifacts": [
+          "analysis_evidence",
+          "root_cause_evidence",
+          "doc_code_delta",
+          "dependency_artifacts",
+          "evidence_gap"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "ANALYZE",
+        "step_id": "analyze_evidence_against_boundaries",
+        "task_id": "webhook_reliability_audit_and_patch",
+        "worker_type": "research_worker"
+      },
+      {
+        "input_artifacts": [
+          "doc_code_delta",
+          "webhook_boundary_map"
+        ],
+        "instruction": "Known facts: Internal deltas and boundary-aware concerns are identified, and prior run reported conflicting external guidance. Unknowns: Which sources should be considered authoritative enough to drive acceptance decisions. Do now: Build an explicit source-quality rubric, gather high-authority references for idempotency, jittered backoff, deduplication, dead-letter handling, and observability, then resolve conflicts into a single comparison matrix tied to identified concerns. Do not do: Do not write project files, do not use low-credibility sources, and do not make repo-specific claims beyond provided artifacts. Output: source_quality_rubric, external_sources, best_practice_matrix, research_evidence, conflict_resolution_notes.",
+        "max_model_calls": 1,
+        "max_tool_calls": 4,
+        "mode": "observe_only",
+        "output_artifacts": [
+          "source_quality_rubric",
+          "external_sources",
+          "best_practice_matrix",
+          "research_evidence",
+          "conflict_resolution_notes"
+        ],
+        "permissions": {
+          "read_files": false,
+          "run_commands": false,
+          "web_research": true,
+          "write_files": false
+        },
+        "phase": "RESEARCH",
+        "step_id": "research_authoritative_sources_with_conflict_resolution",
+        "task_id": "webhook_reliability_audit_and_patch",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "input_artifacts": [
+          "analysis_evidence",
+          "root_cause_evidence",
+          "dependency_artifacts",
+          "evidence_gap",
+          "best_practice_matrix",
+          "research_evidence",
+          "conflict_resolution_notes",
+          "candidate_webhook_locations_v2"
+        ],
+        "instruction": "Known facts: Internal evidence, root-cause hypotheses, dependency status, evidence gaps, and conflict-resolved best-practice guidance are available. Unknowns: Whether evidence suffices for safe mutation in each candidate target. Do now: Produce a strict go/no-go mutation design with minimal scope, explicit writable paths, rollback plan, and focused verification plan; if evidence is insufficient, emit no-go with rationale and verification-only guidance. Do not do: Do not edit files, do not broaden scope beyond evidenced defects, and do not omit rollback or verification planning. Output: mutation_scope, allowed_write_paths, fix_design, rollback_plan, verification_plan, mutation_readiness.",
+        "max_model_calls": 1,
+        "max_tool_calls": 3,
+        "mode": "plan_only",
+        "output_artifacts": [
+          "mutation_scope",
+          "allowed_write_paths",
+          "fix_design",
+          "rollback_plan",
+          "verification_plan",
+          "mutation_readiness"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "DESIGN",
+        "step_id": "design_go_no_go_scoped_mutation",
+        "task_id": "webhook_reliability_audit_and_patch",
+        "worker_type": "code_worker"
+      },
+      {
+        "input_artifacts": [
+          "mutation_scope",
+          "allowed_write_paths",
+          "fix_design",
+          "rollback_plan",
+          "mutation_readiness",
+          "root_cause_evidence",
+          "dependency_artifacts"
+        ],
+        "instruction": "Known facts: mutation_scope, allowed_write_paths, fix_design, rollback_plan, and mutation_readiness define whether and where changes are permitted. Unknowns: None beyond localized implementation details in approved files. Do now: If mutation_readiness is go, implement the minimal localized fix strictly within allowed_write_paths/mutation_scope and generate rollback artifact; if no-go, perform no writes and output a no-change rationale. Do not do: Do not write outside scoped paths, do not change unrelated behavior, and do not claim verification success. Output: change_summary, rollback_artifact, updated_files_manifest.",
+        "max_model_calls": 1,
+        "max_tool_calls": 4,
+        "mode": "bounded_mutation",
+        "output_artifacts": [
+          "change_summary",
+          "rollback_artifact",
+          "updated_files_manifest"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": true,
+          "write_paths_from_artifacts": [
+            "allowed_write_paths",
+            "mutation_scope"
+          ]
+        },
+        "phase": "MUTATE",
+        "step_id": "apply_minimal_scoped_patch_or_no_change",
+        "task_id": "webhook_reliability_audit_and_patch",
+        "worker_type": "code_worker"
+      },
+      {
+        "input_artifacts": [
+          "change_summary",
+          "updated_files_manifest",
+          "mutation_scope",
+          "allowed_write_paths",
+          "verification_plan",
+          "root_cause_evidence",
+          "rollback_plan",
+          "rollback_artifact"
+        ],
+        "instruction": "Known facts: Change outputs, declared mutation scope, verification plan, and rollback materials are available after mutate step. Unknowns: Whether focused checks fully validate defect resolution and operational safety. Do now: Run focused verification per verification_plan, confirm all changed files are within allowed_write_paths/mutation_scope, validate rollback usability, and record residual risk with evidence links. Do not do: Do not modify files and do not report pass/fail without evidence-backed results. Output: verification_results, focused_check_results, scope_containment_report, rollback_validation, residual_risk.",
+        "max_model_calls": 1,
+        "max_tool_calls": 3,
+        "mode": "verify_only",
+        "output_artifacts": [
+          "verification_results",
+          "focused_check_results",
+          "scope_containment_report",
+          "rollback_validation",
+          "residual_risk"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": true,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "VERIFY",
+        "step_id": "verify_scope_safety_and_root_cause_alignment",
+        "task_id": "webhook_reliability_audit_and_patch",
+        "worker_type": "verify_worker"
+      },
+      {
+        "input_artifacts": [
+          "verification_results",
+          "focused_check_results",
+          "scope_containment_report",
+          "rollback_validation",
+          "residual_risk",
+          "change_summary",
+          "rollback_artifact",
+          "best_practice_matrix",
+          "external_sources"
+        ],
+        "instruction": "Known facts: Verification, scope containment, rollback validation, change summary, and external comparison artifacts are complete. Unknowns: None material for reporting. Do now: Produce final report covering findings, code/doc deltas, changes or no-change rationale, rollback usage instructions, verification outcomes, residual risks, and operational post-change checks. Do not do: Do not introduce unsupported claims and do not add unstated repository facts. Output: final_report, operational_post_change_checks.",
+        "max_model_calls": 0,
+        "max_tool_calls": 0,
+        "mode": "summarize_only",
+        "output_artifacts": [
+          "final_report",
+          "operational_post_change_checks"
+        ],
+        "permissions": {
+          "read_files": false,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "FINALIZE",
+        "step_id": "finalize_audit_and_operational_guidance",
+        "task_id": "webhook_reliability_audit_and_patch",
+        "worker_type": "research_worker"
+      }
+    ],
+    "strategy": "boundary_reestablishment_then_evidence_gated_mutation_with_conflict_resolved_research",
+    "success_criteria": [
+      "Boundary-accurate webhook flow and implementation locations are re-established with file evidence.",
+      "Internal analysis distinguishes concrete defects from boundary mismatches and captures evidence gaps.",
+      "External guidance conflicts are resolved via an explicit source-quality rubric and authoritative comparison matrix.",
+      "Any mutation is minimal, path-scoped, evidence-justified, and paired with rollback artifact.",
+      "Verification confirms root-cause alignment, scope containment, rollback validity, and residual risk.",
+      "Final report includes actionable rollback and operational post-change safety checks."
+    ]
+  },
+  "generated_at": "2026-06-02T13:28:42.528586+00:00",
+  "initial_plan": {
+    "budget": {
+      "max_model_calls": 7,
+      "max_retries": 1,
+      "max_tool_calls": 24,
+      "max_workers": 7
+    },
+    "execution_pattern": "discover_analyze_research_design_mutate_verify_finalize",
+    "global_invariants": [
+      "no_mutation_before_discovery_analysis_research_and_design_outputs_exist",
+      "writes_must_be_scoped_via_mutation_scope_only",
+      "no_unverified_defect_or_fix_claims_without_evidence_artifacts",
+      "verification_required_after_any_file_write",
+      "final_output_must_include_rollback_and_operational_safety_guidance"
+    ],
+    "metadata": {
+      "archetype": "phase_aware_mutation",
+      "complexity": "high",
+      "llm_planner": {
+        "budget_auto_aligned": true,
+        "envelope_complexity_hint": "high",
+        "envelope_input_type": "webhook_reliability_code_audit_with_conditional_patch",
+        "mode": "completed",
+        "model_calls": 1,
+        "repair_attempted": false,
+        "resolved_validation_errors": [],
+        "stages": [
+          "draft_plan",
+          "validate_plan"
+        ],
+        "validation_errors": []
+      },
+      "planner_runtime": {
+        "fallback_reason": null,
+        "mode": "llm_prompt_chain"
+      },
+      "source_request": "webhook_reliability_code_audit_with_conditional_patch"
+    },
+    "objective": "Audit webhook retry, deduplication, and dead-letter reliability against authoritative practices, and apply only minimal scoped fixes when concrete defects are evidenced, with rollback and verification guidance.",
+    "plan_id": "plan_req_001_webhook_reliability_audit_patch",
+    "planner": "phase_aware_reliability_planner",
+    "request_id": "req_001",
+    "steps": [
+      {
+        "input_artifacts": [],
+        "instruction": "Known facts: The task requires reviewing repository docs/code for webhook retry, deduplication, dead-letter handling, tests, and observability before any mutation. Unknowns: Exact repository tree, module paths, framework choices, and where system-design.md details map to code. Do now: Enumerate relevant paths, extract webhook flow details from system-design.md, and locate implementation/test/observability candidates. Do not do: Do not modify files, run mutating commands, or assume behavior without file evidence. Output: repo_inventory, candidate_webhook_locations, design_doc_extract, test_inventory, observability_locations.",
+        "max_model_calls": 1,
+        "max_tool_calls": 4,
+        "mode": "observe_only",
+        "output_artifacts": [
+          "repo_inventory",
+          "candidate_webhook_locations",
+          "design_doc_extract",
+          "test_inventory",
+          "observability_locations"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "DISCOVER",
+        "step_id": "discover_repo_and_flow",
+        "task_id": "webhook_reliability_audit_and_patch",
+        "worker_type": "repo_worker"
+      },
+      {
+        "input_artifacts": [
+          "candidate_webhook_locations",
+          "design_doc_extract",
+          "test_inventory",
+          "observability_locations"
+        ],
+        "instruction": "Known facts: Candidate locations and documented webhook flow are available from discovery. Unknowns: Whether mismatches are true defects, dependency constraints, and any evidence gaps preventing safe fixes. Do now: Compare documented flow to located code, identify concrete defect evidence and root-cause hypotheses, and capture dependency readiness or evidence gaps. Do not do: Do not mutate files, do not use external web sources in this step, and do not label issues as defects without traceable evidence. Output: analysis_evidence, root_cause_evidence, dependency_artifacts, doc_code_delta, evidence_gap.",
+        "max_model_calls": 1,
+        "max_tool_calls": 4,
+        "mode": "observe_only",
+        "output_artifacts": [
+          "analysis_evidence",
+          "root_cause_evidence",
+          "dependency_artifacts",
+          "doc_code_delta",
+          "evidence_gap"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "ANALYZE",
+        "step_id": "analyze_doc_code_and_evidence",
+        "task_id": "webhook_reliability_audit_and_patch",
+        "worker_type": "research_worker"
+      },
+      {
+        "input_artifacts": [
+          "doc_code_delta"
+        ],
+        "instruction": "Known facts: The request requires external comparison for idempotency, backoff with jitter, deduplication patterns, dead-letter handling, and delivery observability. Unknowns: Exact acceptance threshold for source authority. Do now: Collect high-authority references and synthesize a concise best-practice matrix aligned to the identified webhook concerns. Do not do: Do not write project files, do not rely on low-credibility sources, and do not claim repo-specific findings not grounded in prior artifacts. Output: external_sources, best_practice_matrix, research_evidence.",
+        "max_model_calls": 1,
+        "max_tool_calls": 4,
+        "mode": "observe_only",
+        "output_artifacts": [
+          "external_sources",
+          "best_practice_matrix",
+          "research_evidence"
+        ],
+        "permissions": {
+          "read_files": false,
+          "run_commands": false,
+          "web_research": true,
+          "write_files": false
+        },
+        "phase": "RESEARCH",
+        "step_id": "research_authoritative_practices",
+        "task_id": "webhook_reliability_audit_and_patch",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "input_artifacts": [
+          "analysis_evidence",
+          "root_cause_evidence",
+          "dependency_artifacts",
+          "doc_code_delta",
+          "evidence_gap",
+          "best_practice_matrix",
+          "research_evidence",
+          "candidate_webhook_locations"
+        ],
+        "instruction": "Known facts: Internal evidence and external best-practice matrix are available to define a minimal corrective plan. Unknowns: Whether evidence is sufficient for safe mutation in all targeted areas. Do now: Produce a go/no-go mutation design with narrow write scope, explicit rollback plan, and focused verification plan; if evidence_gap is material, mark no-go. Do not do: Do not edit files, do not broaden scope beyond evidenced defects, and do not skip rollback/verification design. Output: mutation_scope, fix_design, rollback_plan, verification_plan, mutation_readiness.",
+        "max_model_calls": 1,
+        "max_tool_calls": 3,
+        "mode": "plan_only",
+        "output_artifacts": [
+          "mutation_scope",
+          "fix_design",
+          "rollback_plan",
+          "verification_plan",
+          "mutation_readiness"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "DESIGN",
+        "step_id": "design_scoped_fix_and_rollback",
+        "task_id": "webhook_reliability_audit_and_patch",
+        "worker_type": "code_worker"
+      },
+      {
+        "input_artifacts": [
+          "mutation_scope",
+          "fix_design",
+          "rollback_plan",
+          "mutation_readiness",
+          "root_cause_evidence",
+          "dependency_artifacts"
+        ],
+        "instruction": "Known facts: mutation_scope, fix_design, rollback_plan, and mutation_readiness define if and where changes are allowed. Unknowns: None beyond implementation details inside scoped files. Do now: If mutation_readiness is go, apply the minimal localized fix strictly within mutation_scope and produce rollback material; if no-go, produce a no-change summary with reason. Do not do: Do not write outside mutation_scope, do not alter unrelated behavior, and do not claim verification success in this step. Output: change_summary, rollback_artifact, updated_files_manifest.",
+        "max_model_calls": 1,
+        "max_tool_calls": 5,
+        "mode": "bounded_mutation",
+        "output_artifacts": [
+          "change_summary",
+          "rollback_artifact",
+          "updated_files_manifest"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": true,
+          "write_paths_from_artifacts": [
+            "mutation_scope"
+          ]
+        },
+        "phase": "MUTATE",
+        "step_id": "apply_minimal_patch",
+        "task_id": "webhook_reliability_audit_and_patch",
+        "worker_type": "code_worker"
+      },
+      {
+        "input_artifacts": [
+          "change_summary",
+          "updated_files_manifest",
+          "mutation_scope",
+          "verification_plan",
+          "root_cause_evidence",
+          "rollback_plan",
+          "rollback_artifact"
+        ],
+        "instruction": "Known facts: A change summary, write scope, rollback artifact, and verification plan are available after mutation. Unknowns: Whether focused checks fully validate root-cause resolution and operational safety. Do now: Execute focused verification aligned to verification_plan, confirm scope containment to mutation_scope, validate rollback availability, and record residual risk. Do not do: Do not modify files and do not report pass without evidence-linked results. Output: verification_results, focused_check_results, rollback_validation.",
+        "max_model_calls": 1,
+        "max_tool_calls": 4,
+        "mode": "verify_only",
+        "output_artifacts": [
+          "verification_results",
+          "focused_check_results",
+          "rollback_validation"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": true,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "VERIFY",
+        "step_id": "verify_changes_and_safety",
+        "task_id": "webhook_reliability_audit_and_patch",
+        "worker_type": "verify_worker"
+      },
+      {
+        "input_artifacts": [
+          "verification_results",
+          "focused_check_results",
+          "rollback_validation",
+          "change_summary",
+          "rollback_artifact",
+          "best_practice_matrix",
+          "external_sources"
+        ],
+        "instruction": "Known facts: Verification outputs, change summary, rollback artifact, and research comparison are available. Unknowns: None material for final reporting. Do now: Produce a final report summarizing findings, changes (or no-change rationale), rollback usage, focused verification outcomes, and operational post-change checks. Do not do: Do not introduce new claims not supported by produced artifacts and do not include unstated repository facts. Output: final_report, operational_post_change_checks.",
+        "max_model_calls": 1,
+        "max_tool_calls": 0,
+        "mode": "summarize_only",
+        "output_artifacts": [
+          "final_report",
+          "operational_post_change_checks"
+        ],
+        "permissions": {
+          "read_files": false,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "FINALIZE",
+        "step_id": "finalize_audit_report",
+        "task_id": "webhook_reliability_audit_and_patch",
+        "worker_type": "research_worker"
+      }
+    ],
+    "strategy": "discovery_first_evidence_gated_mutation_with_external_comparison",
+    "success_criteria": [
+      "Repository webhook reliability behaviors are mapped to concrete code/doc locations with evidence.",
+      "Authoritative external references are synthesized into a comparison matrix tied to identified reliability concerns.",
+      "Any mutation is minimal, localized, evidence-justified, and constrained to mutation_scope with rollback material.",
+      "Post-mutation verification reports root-cause alignment, scope containment, and focused check outcomes.",
+      "Final report provides actionable verification and operational post-change checks with clear residual risks."
+    ]
+  },
+  "mocked_worker_replan_result": {
+    "artifacts": [
+      {
+        "content": {
+          "failed_step_id": "analyze_doc_code_and_evidence",
+          "input_artifact_ids": [
+            "candidate_webhook_locations",
+            "design_doc_extract",
+            "test_inventory",
+            "observability_locations"
+          ],
+          "issue_type": "planner_level",
+          "signals": [
+            "conflicting_external_sources",
+            "delivery_boundary_mismatch",
+            "mutation_scope_unreachable"
+          ],
+          "task_metadata": {
+            "mode": "observe_only",
+            "phase": "ANALYZE",
+            "task_id": "webhook_reliability_audit_and_patch"
+          }
+        },
+        "id": "planner_issue_snapshot"
+      }
+    ],
+    "errors": [],
+    "metadata": {
+      "issue_class": "planner_level",
+      "mocked": true,
+      "recommended_action": "Return a full fixed new Plan using the existing schema and rebuild the context needed for webhook delivery mutation.",
+      "trigger": "planner_level_issue"
+    },
+    "producer": "research_worker",
+    "run_id": "run_plan_req_001_webhook_reliability_audit_patch",
+    "status": "needs_replan",
+    "summary": "Planner-level issue: external webhook guidance is conflicting, discovered repository delivery boundaries do not align with the assumed retry/deduplication path, and the artifact chain to safe mutation cannot be satisfied without a new full plan.",
+    "usage": {
+      "model_calls": 0,
+      "tool_calls": 1
+    },
+    "warnings": []
+  },
+  "prompt": "Read system-design.md and find the repository's webhook delivery retry, deduplication, and dead-letter recovery implementation. Research authoritative external references on idempotent webhook processing, backoff with jitter, inbox/outbox deduplication, dead-letter handling, and delivery observability. Compare the documented flow and the code against those references, and if you find concrete defects, apply a minimally scoped code fix directly in project files, produce a rollback artifact, and define focused verification steps and operational post-change checks.",
+  "replan_request": {
+    "completed_artifacts": [
+      {
+        "content": "Mock artifact repo_inventory from discover_repo_and_flow.",
+        "id": "repo_inventory",
+        "producer_step_id": "discover_repo_and_flow",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact candidate_webhook_locations from discover_repo_and_flow.",
+        "id": "candidate_webhook_locations",
+        "producer_step_id": "discover_repo_and_flow",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact design_doc_extract from discover_repo_and_flow.",
+        "id": "design_doc_extract",
+        "producer_step_id": "discover_repo_and_flow",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact test_inventory from discover_repo_and_flow.",
+        "id": "test_inventory",
+        "producer_step_id": "discover_repo_and_flow",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact observability_locations from discover_repo_and_flow.",
+        "id": "observability_locations",
+        "producer_step_id": "discover_repo_and_flow",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": {
+          "failed_step_id": "analyze_doc_code_and_evidence",
+          "input_artifact_ids": [
+            "candidate_webhook_locations",
+            "design_doc_extract",
+            "test_inventory",
+            "observability_locations"
+          ],
+          "issue_type": "planner_level",
+          "signals": [
+            "conflicting_external_sources",
+            "delivery_boundary_mismatch",
+            "mutation_scope_unreachable"
+          ],
+          "task_metadata": {
+            "mode": "observe_only",
+            "phase": "ANALYZE",
+            "task_id": "webhook_reliability_audit_and_patch"
+          }
+        },
+        "id": "planner_issue_snapshot"
+      }
+    ],
+    "completed_step_ids": [
+      "discover_repo_and_flow"
+    ],
+    "failed_step_id": "analyze_doc_code_and_evidence",
+    "plan_id": "plan_req_001_webhook_reliability_audit_patch",
+    "reason": "Planner-level issue: external webhook guidance is conflicting, discovered repository delivery boundaries do not align with the assumed retry/deduplication path, and the artifact chain to safe mutation cannot be satisfied without a new full plan.",
+    "recommended_action": "Return a full fixed new Plan using the existing schema and rebuild the context needed for webhook delivery mutation.",
+    "remaining_budget": {
+      "max_model_calls": 6,
+      "max_retries": 1,
+      "max_tool_calls": 22,
+      "max_workers": 5
+    },
+    "request_id": "req_001",
+    "run_id": "run_plan_req_001_webhook_reliability_audit_patch",
+    "worker_result": {
+      "artifacts": [
+        {
+          "content": {
+            "failed_step_id": "analyze_doc_code_and_evidence",
+            "input_artifact_ids": [
+              "candidate_webhook_locations",
+              "design_doc_extract",
+              "test_inventory",
+              "observability_locations"
+            ],
+            "issue_type": "planner_level",
+            "signals": [
+              "conflicting_external_sources",
+              "delivery_boundary_mismatch",
+              "mutation_scope_unreachable"
+            ],
+            "task_metadata": {
+              "mode": "observe_only",
+              "phase": "ANALYZE",
+              "task_id": "webhook_reliability_audit_and_patch"
+            }
+          },
+          "id": "planner_issue_snapshot"
+        }
+      ],
+      "errors": [],
+      "metadata": {
+        "issue_class": "planner_level",
+        "mocked": true,
+        "recommended_action": "Return a full fixed new Plan using the existing schema and rebuild the context needed for webhook delivery mutation.",
+        "trigger": "planner_level_issue"
+      },
+      "producer": "research_worker",
+      "run_id": "run_plan_req_001_webhook_reliability_audit_patch",
+      "status": "needs_replan",
+      "summary": "Planner-level issue: external webhook guidance is conflicting, discovered repository delivery boundaries do not align with the assumed retry/deduplication path, and the artifact chain to safe mutation cannot be satisfied without a new full plan.",
+      "usage": {
+        "model_calls": 0,
+        "tool_calls": 1
+      },
+      "warnings": []
+    }
+  }
+}

@@ -1,0 +1,1752 @@
+{
+  "elapsed_ms": 194928.123,
+  "envelope": {
+    "ambiguity": [
+      "The specific algorithm in v8.md is not provided.",
+      "The codebase and exact implementation files are not identified.",
+      "Criteria for what counts as a reliable source are unspecified.",
+      "The acceptable scope and limits of the code fix are not explicitly defined.",
+      "The required depth and format of the differences summary are not specified.",
+      "The exact rollback mechanism expected by 'backup plan' is unclear."
+    ],
+    "artifacts": [
+      {
+        "name": "v8.md",
+        "type": "file"
+      },
+      {
+        "name": "algorithm",
+        "type": "component"
+      },
+      {
+        "name": "comparable algorithms",
+        "type": "reference_set"
+      },
+      {
+        "name": "reliable sources online",
+        "type": "external_sources"
+      },
+      {
+        "name": "scoped code fix",
+        "type": "code_change"
+      },
+      {
+        "name": "backup plan",
+        "type": "rollback_strategy"
+      },
+      {
+        "name": "verification steps",
+        "type": "validation_criteria"
+      }
+    ],
+    "assumptions": [
+      "v8.md exists and contains the algorithm specification to review.",
+      "Online access is intended for comparative research.",
+      "A code fix is conditional and should only occur when evidence of concrete issues is found.",
+      "Verification is expected to use available project tests or equivalent checks if present."
+    ],
+    "complexity_hint": "high",
+    "confidence": 0.9,
+    "constraints": [
+      "problem_description_only_no_execution_planning",
+      "code_changes_only_if_concrete_issues_are_evidenced",
+      "mutations_must_be_scoped_and_targeted",
+      "claims_from_online_sources_must_be_cited_and_reliable",
+      "differences_summary_must_distinguish_behavioral_and_complexity_impacts",
+      "verification_requirements_must_be_defined_before_accepting_fixes",
+      "rollback_consideration_must_be_brief_and_non-invasive"
+    ],
+    "context_needed": [
+      "contents_of_v8_md",
+      "repository_tree",
+      "code_locations_implementing_the_documented_algorithm",
+      "programming_language_and_runtime",
+      "test_suite_or_validation_harness",
+      "definition_of_reliable_sources_oracceptable_reference_types",
+      "scope_boundaries_for_allowed_code_changes",
+      "acceptance_criteria_for_concrete_issues",
+      "network_access_for_online_research"
+    ],
+    "domains": [
+      "code",
+      "research",
+      "docs"
+    ],
+    "input_type": "algorithm_comparative_research_with_scoped_code_fix",
+    "intents": [
+      "docs.review",
+      "research.lookup",
+      "analysis.compare",
+      "code.fix",
+      "quality.verify",
+      "risk.mitigation"
+    ],
+    "metadata": {
+      "decompressor_mode": "llm_prompt_chain",
+      "decompressor_runtime": {
+        "elapsed_ms": 18591.378,
+        "failure_rate": 0.0,
+        "latency_ms_p50": 18591.378,
+        "latency_ms_p95": 18591.378,
+        "repair_rate": 0.0
+      },
+      "llm_prompt_chain": {
+        "fallback": null,
+        "mode": "completed",
+        "model_calls": 1,
+        "redacted_prompt_input": false,
+        "stages": [
+          "decompress_request",
+          "validate_envelope"
+        ]
+      }
+    },
+    "normalized_input": "Assess the algorithm documented in v8.md, compare it against trustworthy online algorithm references, summarize key differences, and apply a limited code correction only if verifiable issues are found, with rollback and verification considerations included.",
+    "raw_input": "Please review the algorithm in v8.md, research comparable algorithms from reliable sources online, summarize the differences, and implement a scoped code fix if you find concrete issues. Include a brief backup plan and verification steps.",
+    "request_id": "req_001",
+    "risks": [
+      "mutation_requested",
+      "file_mutation",
+      "needs_verification",
+      "ambiguous_scope",
+      "external_source_quality_risk",
+      "insufficient_context"
+    ],
+    "user_goal": "Obtain an evidence-based algorithm review and comparison, plus a narrowly scoped, justified code correction if concrete defects are identified."
+  },
+  "error": null,
+  "final_worker_kernel_result": {
+    "artifacts": [
+      {
+        "content": "Mock artifact repo_inventory from discover_repo_context.",
+        "id": "repo_inventory",
+        "producer_step_id": "discover_repo_context",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact algorithm_spec_excerpt from discover_repo_context.",
+        "id": "algorithm_spec_excerpt",
+        "producer_step_id": "discover_repo_context",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact implementation_candidates from discover_repo_context.",
+        "id": "implementation_candidates",
+        "producer_step_id": "discover_repo_context",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact dependency_inventory from discover_repo_context.",
+        "id": "dependency_inventory",
+        "producer_step_id": "discover_repo_context",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact test_harness_inventory from discover_repo_context.",
+        "id": "test_harness_inventory",
+        "producer_step_id": "discover_repo_context",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact analysis_evidence from analyze_internal_evidence.",
+        "id": "analysis_evidence",
+        "producer_step_id": "analyze_internal_evidence",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": "Mock artifact root_cause_evidence from analyze_internal_evidence.",
+        "id": "root_cause_evidence",
+        "producer_step_id": "analyze_internal_evidence",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": "Mock artifact concrete_issue_assessment from analyze_internal_evidence.",
+        "id": "concrete_issue_assessment",
+        "producer_step_id": "analyze_internal_evidence",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": "Mock artifact internal_differences_notes from analyze_internal_evidence.",
+        "id": "internal_differences_notes",
+        "producer_step_id": "analyze_internal_evidence",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": "Mock artifact evidence_gap from analyze_internal_evidence.",
+        "id": "evidence_gap",
+        "producer_step_id": "analyze_internal_evidence",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": "Mock artifact source_selection_protocol from research_external_references.",
+        "id": "source_selection_protocol",
+        "producer_step_id": "research_external_references",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "content": "Mock artifact web_reference_set from research_external_references.",
+        "id": "web_reference_set",
+        "producer_step_id": "research_external_references",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "content": "Mock artifact source_reliability_notes from research_external_references.",
+        "id": "source_reliability_notes",
+        "producer_step_id": "research_external_references",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "content": "Mock artifact cited_comparison_notes from research_external_references.",
+        "id": "cited_comparison_notes",
+        "producer_step_id": "research_external_references",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "content": "Mock artifact differences_summary from research_external_references.",
+        "id": "differences_summary",
+        "producer_step_id": "research_external_references",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "content": "Mock artifact fix_design from design_scoped_fix_and_safety.",
+        "id": "fix_design",
+        "producer_step_id": "design_scoped_fix_and_safety",
+        "worker_type": "code_worker"
+      },
+      {
+        "content": "Mock artifact mutation_scope from design_scoped_fix_and_safety.",
+        "id": "mutation_scope",
+        "producer_step_id": "design_scoped_fix_and_safety",
+        "worker_type": "code_worker"
+      },
+      {
+        "content": "Mock artifact rollback_plan from design_scoped_fix_and_safety.",
+        "id": "rollback_plan",
+        "producer_step_id": "design_scoped_fix_and_safety",
+        "worker_type": "code_worker"
+      },
+      {
+        "content": "Mock artifact verification_plan from design_scoped_fix_and_safety.",
+        "id": "verification_plan",
+        "producer_step_id": "design_scoped_fix_and_safety",
+        "worker_type": "code_worker"
+      },
+      {
+        "content": "Mock artifact stop_or_replan_decision from design_scoped_fix_and_safety.",
+        "id": "stop_or_replan_decision",
+        "producer_step_id": "design_scoped_fix_and_safety",
+        "worker_type": "code_worker"
+      },
+      {
+        "content": "Mock artifact change_summary from apply_scoped_mutation.",
+        "id": "change_summary",
+        "producer_step_id": "apply_scoped_mutation",
+        "worker_type": "code_worker"
+      },
+      {
+        "content": "Mock artifact rollback_patch from apply_scoped_mutation.",
+        "id": "rollback_patch",
+        "producer_step_id": "apply_scoped_mutation",
+        "worker_type": "code_worker"
+      },
+      {
+        "content": "Mock artifact verification_results from verify_changes.",
+        "id": "verification_results",
+        "producer_step_id": "verify_changes",
+        "worker_type": "verify_worker"
+      },
+      {
+        "content": "Mock artifact scope_verification_report from verify_changes.",
+        "id": "scope_verification_report",
+        "producer_step_id": "verify_changes",
+        "worker_type": "verify_worker"
+      },
+      {
+        "content": "Mock artifact rollback_readiness_report from verify_changes.",
+        "id": "rollback_readiness_report",
+        "producer_step_id": "verify_changes",
+        "worker_type": "verify_worker"
+      },
+      {
+        "content": "Mock artifact final_report from finalize_report.",
+        "id": "final_report",
+        "producer_step_id": "finalize_report",
+        "worker_type": "research_worker"
+      }
+    ],
+    "errors": [],
+    "metadata": {
+      "replan": {
+        "depth": 1,
+        "original_worker_results": [
+          {
+            "artifacts": [
+              {
+                "content": "Mock artifact repo_inventory from discover_repo_context.",
+                "id": "repo_inventory",
+                "producer_step_id": "discover_repo_context",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": "Mock artifact algorithm_spec_excerpt from discover_repo_context.",
+                "id": "algorithm_spec_excerpt",
+                "producer_step_id": "discover_repo_context",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": "Mock artifact implementation_candidates from discover_repo_context.",
+                "id": "implementation_candidates",
+                "producer_step_id": "discover_repo_context",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": "Mock artifact dependency_inventory from discover_repo_context.",
+                "id": "dependency_inventory",
+                "producer_step_id": "discover_repo_context",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": "Mock artifact test_harness_inventory from discover_repo_context.",
+                "id": "test_harness_inventory",
+                "producer_step_id": "discover_repo_context",
+                "worker_type": "repo_worker"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "mocked": true
+            },
+            "producer": "repo_worker",
+            "run_id": "run_plan_req_001_algorithm_review_fix_repaired",
+            "status": "completed",
+            "summary": "Mock repo_worker completed discover_repo_context.",
+            "usage": {
+              "model_calls": 1,
+              "tool_calls": 1
+            },
+            "warnings": []
+          },
+          {
+            "artifacts": [
+              {
+                "content": "Mock artifact analysis_evidence from analyze_internal_evidence.",
+                "id": "analysis_evidence",
+                "producer_step_id": "analyze_internal_evidence",
+                "worker_type": "research_worker"
+              },
+              {
+                "content": "Mock artifact root_cause_evidence from analyze_internal_evidence.",
+                "id": "root_cause_evidence",
+                "producer_step_id": "analyze_internal_evidence",
+                "worker_type": "research_worker"
+              },
+              {
+                "content": "Mock artifact concrete_issue_assessment from analyze_internal_evidence.",
+                "id": "concrete_issue_assessment",
+                "producer_step_id": "analyze_internal_evidence",
+                "worker_type": "research_worker"
+              },
+              {
+                "content": "Mock artifact internal_differences_notes from analyze_internal_evidence.",
+                "id": "internal_differences_notes",
+                "producer_step_id": "analyze_internal_evidence",
+                "worker_type": "research_worker"
+              },
+              {
+                "content": "Mock artifact evidence_gap from analyze_internal_evidence.",
+                "id": "evidence_gap",
+                "producer_step_id": "analyze_internal_evidence",
+                "worker_type": "research_worker"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "mocked": true
+            },
+            "producer": "research_worker",
+            "run_id": "run_plan_req_001_algorithm_review_fix_repaired",
+            "status": "completed",
+            "summary": "Mock research_worker completed analyze_internal_evidence.",
+            "usage": {
+              "model_calls": 1,
+              "tool_calls": 1
+            },
+            "warnings": []
+          },
+          {
+            "artifacts": [
+              {
+                "content": "Mock worker reached the research/design boundary and requested a full fixed new plan.",
+                "failed_step_id": "research_external_references",
+                "id": "mock_partial_replan_evidence"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "mocked": true,
+              "recommended_action": "Return a full replacement Plan using the existing Plan schema; re-establish required artifacts inside the new plan before mutation."
+            },
+            "producer": "web_research_worker",
+            "run_id": "run_plan_req_001_algorithm_review_fix_repaired",
+            "status": "needs_replan",
+            "summary": "Mocked worker cannot complete because external comparison evidence is underspecified for safe mutation.",
+            "usage": {
+              "model_calls": 0,
+              "tool_calls": 1
+            },
+            "warnings": []
+          }
+        ],
+        "replacement_plan": {
+          "budget": {
+            "max_model_calls": 5,
+            "max_retries": 0,
+            "max_tool_calls": 15,
+            "max_workers": 7
+          },
+          "execution_pattern": "sequential_phase_gated",
+          "global_invariants": [
+            "phase_order_non_decreasing",
+            "evidence_before_mutation",
+            "design_defines_mutation_scope_before_write",
+            "writes_limited_to_design_scope",
+            "verify_after_mutation",
+            "finalize_after_verify"
+          ],
+          "metadata": {
+            "archetype": "phase_aware_worker_plan",
+            "complexity": "high",
+            "llm_planner": {
+              "budget_auto_aligned": true,
+              "envelope_complexity_hint": "high",
+              "envelope_input_type": "algorithm_comparative_research_with_scoped_code_fix",
+              "failed_step_id": "research_external_references",
+              "mode": "repaired",
+              "model_calls": 2,
+              "parent_plan_id": "plan_req_001_algorithm_review_fix_repaired",
+              "repair_attempted": true,
+              "replan": true,
+              "resolved_validation_errors": [
+                {
+                  "msg": "mutation requires a later verify_worker step",
+                  "type": "planner_validation"
+                },
+                {
+                  "msg": "verification after mutation must consume mutation output artifacts",
+                  "type": "planner_validation"
+                },
+                {
+                  "msg": "verification after mutation must consume write-scope artifacts used by mutation",
+                  "type": "planner_validation"
+                },
+                {
+                  "msg": "verification after mutation must output verification/test artifacts",
+                  "type": "planner_validation"
+                }
+              ],
+              "stages": [
+                "replan_plan",
+                "validate_plan",
+                "repair_replan_plan_1",
+                "validate_plan"
+              ],
+              "validation_errors": []
+            },
+            "planner_runtime": {
+              "fallback_reason": null,
+              "mode": "llm_prompt_chain_replan"
+            },
+            "repair_reason": "validation_fix_verify_worker_and_dependency_contracts",
+            "repaired_from": "plan_req_001_algorithm_review_fix_replan2"
+          },
+          "objective": "Assess the algorithm documented in v8.md, compare it with reliable online references, and apply a narrowly scoped code correction only when concrete, evidenced issues are confirmed, with rollback and verification coverage.",
+          "plan_id": "plan_req_001_algorithm_review_fix_replan3",
+          "planner": "phase_aware_planner_v2",
+          "request_id": "req_001",
+          "steps": [
+            {
+              "input_artifacts": [],
+              "instruction": "Known facts: A full replacement plan is required and no prior artifacts can be assumed. Unknowns: Exact path/content of v8.md, implementation files, runtime, and tests are unknown. Do now: Inspect repository structure, locate v8.md, extract algorithm requirements, identify implementation candidates, and inventory dependencies and test harnesses. Do not do: Do not modify files, do not run external web research, and do not define writable scope yet. Output: repo_inventory, algorithm_spec_excerpt, implementation_candidates, dependency_inventory, test_harness_inventory.",
+              "max_model_calls": 1,
+              "max_tool_calls": 3,
+              "mode": "observe_only",
+              "output_artifacts": [
+                "repo_inventory",
+                "algorithm_spec_excerpt",
+                "implementation_candidates",
+                "dependency_inventory",
+                "test_harness_inventory"
+              ],
+              "permissions": {
+                "read_files": true,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "DISCOVER",
+              "step_id": "discover_repo_context",
+              "task_id": "algorithm_review_fix",
+              "worker_type": "repo_worker"
+            },
+            {
+              "input_artifacts": [
+                "algorithm_spec_excerpt",
+                "implementation_candidates",
+                "dependency_inventory",
+                "test_harness_inventory"
+              ],
+              "instruction": "Known facts: Repository context and algorithm/implementation candidate artifacts are available. Unknowns: Whether concrete implementation defects exist and whether evidence is sufficient for mutation decisions. Do now: Compare documented algorithm vs implementation behavior and complexity, produce root-cause evidence for confirmed defects, and explicitly record blocking evidence gaps. Do not do: Do not mutate code, do not infer unsupported defects, and do not claim fix verification. Output: analysis_evidence, root_cause_evidence, concrete_issue_assessment, internal_differences_notes, evidence_gap.",
+              "max_model_calls": 1,
+              "max_tool_calls": 2,
+              "mode": "observe_only",
+              "output_artifacts": [
+                "analysis_evidence",
+                "root_cause_evidence",
+                "concrete_issue_assessment",
+                "internal_differences_notes",
+                "evidence_gap"
+              ],
+              "permissions": {
+                "read_files": true,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "ANALYZE",
+              "step_id": "analyze_internal_evidence",
+              "task_id": "algorithm_review_fix",
+              "worker_type": "research_worker"
+            },
+            {
+              "input_artifacts": [
+                "algorithm_spec_excerpt",
+                "analysis_evidence",
+                "internal_differences_notes"
+              ],
+              "instruction": "Known facts: Internal analysis exists and external comparison is required before any mutation. Unknowns: Which sources are reliable enough and whether external evidence confirms internal findings. Do now: Apply a reliability screen (official docs, peer-reviewed material, authoritative textbooks, or widely trusted technical references), gather citations, and produce behavior/complexity comparison mapped to internal findings. Do not do: Do not use uncited or low-credibility sources, do not mutate files, and do not assert conclusions without citation linkage. Output: source_selection_protocol, web_reference_set, source_reliability_notes, cited_comparison_notes, differences_summary.",
+              "max_model_calls": 1,
+              "max_tool_calls": 4,
+              "mode": "observe_only",
+              "output_artifacts": [
+                "source_selection_protocol",
+                "web_reference_set",
+                "source_reliability_notes",
+                "cited_comparison_notes",
+                "differences_summary"
+              ],
+              "permissions": {
+                "read_files": false,
+                "run_commands": false,
+                "web_research": true,
+                "write_files": false
+              },
+              "phase": "RESEARCH",
+              "step_id": "research_external_references",
+              "task_id": "algorithm_review_fix",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "input_artifacts": [
+                "analysis_evidence",
+                "root_cause_evidence",
+                "concrete_issue_assessment",
+                "evidence_gap",
+                "differences_summary",
+                "cited_comparison_notes",
+                "implementation_candidates",
+                "test_harness_inventory",
+                "source_selection_protocol"
+              ],
+              "instruction": "Known facts: Internal/external evidence, issue assessment, and reliability notes are available. Unknowns: Minimal writable scope and exact patch shape until design is finalized. Do now: If concrete_issue_assessment is affirmative and evidence_gap is non-blocking, produce minimal fix_design with mutation_scope, rollback_plan, and verification_plan; otherwise produce stop_or_replan_decision that blocks mutation. Do not do: Do not edit files, do not expand scope beyond root cause, and do not bypass evidence gates. Output: fix_design, mutation_scope, rollback_plan, verification_plan, stop_or_replan_decision.",
+              "max_model_calls": 1,
+              "max_tool_calls": 1,
+              "mode": "plan_only",
+              "output_artifacts": [
+                "fix_design",
+                "mutation_scope",
+                "rollback_plan",
+                "verification_plan",
+                "stop_or_replan_decision"
+              ],
+              "permissions": {
+                "read_files": true,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "DESIGN",
+              "step_id": "design_scoped_fix_and_safety",
+              "task_id": "algorithm_review_fix",
+              "worker_type": "code_worker"
+            },
+            {
+              "input_artifacts": [
+                "fix_design",
+                "mutation_scope",
+                "rollback_plan",
+                "verification_plan",
+                "root_cause_evidence",
+                "analysis_evidence",
+                "stop_or_replan_decision"
+              ],
+              "instruction": "Known facts: fix_design, mutation_scope, rollback_plan, verification_plan, and stop_or_replan_decision are defined. Unknowns: None if mutation is allowed; otherwise change must be a no-op. Do now: Apply only the minimal change inside mutation_scope consistent with fix_design and evidence, and produce exact rollback artifact. Do not do: Do not write outside mutation_scope, do not modify unrelated code, and do not report verification success. Output: change_summary, rollback_patch.",
+              "max_model_calls": 0,
+              "max_tool_calls": 3,
+              "mode": "bounded_mutation",
+              "output_artifacts": [
+                "change_summary",
+                "rollback_patch"
+              ],
+              "permissions": {
+                "read_files": true,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": true,
+                "write_paths_from_artifacts": [
+                  "mutation_scope"
+                ]
+              },
+              "phase": "MUTATE",
+              "step_id": "apply_scoped_mutation",
+              "task_id": "algorithm_review_fix",
+              "worker_type": "code_worker"
+            },
+            {
+              "input_artifacts": [
+                "change_summary",
+                "rollback_patch",
+                "mutation_scope",
+                "verification_plan",
+                "root_cause_evidence",
+                "analysis_evidence"
+              ],
+              "instruction": "Known facts: Mutation outputs, write scope, rollback artifact, and verification plan are available. Unknowns: Whether the change resolves root cause, stays within scope, and passes targeted checks. Do now: Execute verification_plan checks, validate root-cause alignment, verify modified paths are contained in mutation_scope, and confirm rollback_patch readiness. Do not do: Do not modify files, do not skip failing/inconclusive checks, and do not overstate outcomes. Output: verification_results, scope_verification_report, rollback_readiness_report.",
+              "max_model_calls": 0,
+              "max_tool_calls": 2,
+              "mode": "verify_only",
+              "output_artifacts": [
+                "verification_results",
+                "scope_verification_report",
+                "rollback_readiness_report"
+              ],
+              "permissions": {
+                "read_files": true,
+                "run_commands": true,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "VERIFY",
+              "step_id": "verify_changes",
+              "task_id": "algorithm_review_fix",
+              "worker_type": "verify_worker"
+            },
+            {
+              "input_artifacts": [
+                "differences_summary",
+                "web_reference_set",
+                "source_reliability_notes",
+                "cited_comparison_notes",
+                "change_summary",
+                "verification_results",
+                "scope_verification_report",
+                "rollback_readiness_report"
+              ],
+              "instruction": "Known facts: Internal analysis, cited external comparison, mutation outputs, and verification reports are available. Unknowns: No execution unknowns remain for reporting. Do now: Produce a final evidence-based report covering behavioral vs complexity differences, source reliability/citations, mutation justification and scope, verification outcomes, and brief rollback guidance. Do not do: Do not add uncited claims, do not mutate code, and do not omit verification status. Output: final_report.",
+              "max_model_calls": 0,
+              "max_tool_calls": 0,
+              "mode": "summarize_only",
+              "output_artifacts": [
+                "final_report"
+              ],
+              "permissions": {
+                "read_files": false,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "FINALIZE",
+              "step_id": "finalize_report",
+              "task_id": "algorithm_review_fix",
+              "worker_type": "research_worker"
+            }
+          ],
+          "strategy": "phase_gated_evidence_first_research_then_scoped_mutation",
+          "success_criteria": [
+            "Algorithm review includes cited reliable external references.",
+            "Differences summary clearly separates behavioral and complexity impacts.",
+            "Code mutation occurs only when concrete issues are evidenced and remains within mutation_scope.",
+            "Verification confirms root-cause alignment, scope containment, and rollback readiness.",
+            "Final report includes comparison findings, fix rationale, verification status, and rollback guidance."
+          ]
+        },
+        "request": {
+          "completed_artifacts": [
+            {
+              "content": "Mock artifact repo_inventory from discover_repo_context.",
+              "id": "repo_inventory",
+              "producer_step_id": "discover_repo_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact algorithm_spec_excerpt from discover_repo_context.",
+              "id": "algorithm_spec_excerpt",
+              "producer_step_id": "discover_repo_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact implementation_candidates from discover_repo_context.",
+              "id": "implementation_candidates",
+              "producer_step_id": "discover_repo_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact dependency_inventory from discover_repo_context.",
+              "id": "dependency_inventory",
+              "producer_step_id": "discover_repo_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact test_harness_inventory from discover_repo_context.",
+              "id": "test_harness_inventory",
+              "producer_step_id": "discover_repo_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact analysis_evidence from analyze_internal_evidence.",
+              "id": "analysis_evidence",
+              "producer_step_id": "analyze_internal_evidence",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": "Mock artifact root_cause_evidence from analyze_internal_evidence.",
+              "id": "root_cause_evidence",
+              "producer_step_id": "analyze_internal_evidence",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": "Mock artifact concrete_issue_assessment from analyze_internal_evidence.",
+              "id": "concrete_issue_assessment",
+              "producer_step_id": "analyze_internal_evidence",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": "Mock artifact internal_differences_notes from analyze_internal_evidence.",
+              "id": "internal_differences_notes",
+              "producer_step_id": "analyze_internal_evidence",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": "Mock artifact evidence_gap from analyze_internal_evidence.",
+              "id": "evidence_gap",
+              "producer_step_id": "analyze_internal_evidence",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": "Mock worker reached the research/design boundary and requested a full fixed new plan.",
+              "failed_step_id": "research_external_references",
+              "id": "mock_partial_replan_evidence"
+            }
+          ],
+          "failed_step_id": "research_external_references",
+          "plan_id": "plan_req_001_algorithm_review_fix_repaired",
+          "reason": "Mocked worker cannot complete because external comparison evidence is underspecified for safe mutation.",
+          "recommended_action": "Return a full replacement Plan using the existing Plan schema; re-establish required artifacts inside the new plan before mutation.",
+          "remaining_budget": {
+            "max_model_calls": 5,
+            "max_retries": 0,
+            "max_tool_calls": 15,
+            "max_workers": 4
+          },
+          "request_id": "req_001",
+          "run_id": "run_plan_req_001_algorithm_review_fix_repaired",
+          "worker_result": {
+            "artifacts": [
+              {
+                "content": "Mock worker reached the research/design boundary and requested a full fixed new plan.",
+                "failed_step_id": "research_external_references",
+                "id": "mock_partial_replan_evidence"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "mocked": true,
+              "recommended_action": "Return a full replacement Plan using the existing Plan schema; re-establish required artifacts inside the new plan before mutation."
+            },
+            "producer": "web_research_worker",
+            "run_id": "run_plan_req_001_algorithm_review_fix_repaired",
+            "status": "needs_replan",
+            "summary": "Mocked worker cannot complete because external comparison evidence is underspecified for safe mutation.",
+            "usage": {
+              "model_calls": 0,
+              "tool_calls": 1
+            },
+            "warnings": []
+          }
+        }
+      },
+      "worker_results": [
+        {
+          "artifacts": [
+            {
+              "content": "Mock artifact repo_inventory from discover_repo_context.",
+              "id": "repo_inventory",
+              "producer_step_id": "discover_repo_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact algorithm_spec_excerpt from discover_repo_context.",
+              "id": "algorithm_spec_excerpt",
+              "producer_step_id": "discover_repo_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact implementation_candidates from discover_repo_context.",
+              "id": "implementation_candidates",
+              "producer_step_id": "discover_repo_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact dependency_inventory from discover_repo_context.",
+              "id": "dependency_inventory",
+              "producer_step_id": "discover_repo_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact test_harness_inventory from discover_repo_context.",
+              "id": "test_harness_inventory",
+              "producer_step_id": "discover_repo_context",
+              "worker_type": "repo_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "mocked": true
+          },
+          "producer": "repo_worker",
+          "run_id": "run_plan_req_001_algorithm_review_fix_replan3",
+          "status": "completed",
+          "summary": "Mock repo_worker completed discover_repo_context.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 1
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": "Mock artifact analysis_evidence from analyze_internal_evidence.",
+              "id": "analysis_evidence",
+              "producer_step_id": "analyze_internal_evidence",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": "Mock artifact root_cause_evidence from analyze_internal_evidence.",
+              "id": "root_cause_evidence",
+              "producer_step_id": "analyze_internal_evidence",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": "Mock artifact concrete_issue_assessment from analyze_internal_evidence.",
+              "id": "concrete_issue_assessment",
+              "producer_step_id": "analyze_internal_evidence",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": "Mock artifact internal_differences_notes from analyze_internal_evidence.",
+              "id": "internal_differences_notes",
+              "producer_step_id": "analyze_internal_evidence",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": "Mock artifact evidence_gap from analyze_internal_evidence.",
+              "id": "evidence_gap",
+              "producer_step_id": "analyze_internal_evidence",
+              "worker_type": "research_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "mocked": true
+          },
+          "producer": "research_worker",
+          "run_id": "run_plan_req_001_algorithm_review_fix_replan3",
+          "status": "completed",
+          "summary": "Mock research_worker completed analyze_internal_evidence.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 1
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": "Mock artifact source_selection_protocol from research_external_references.",
+              "id": "source_selection_protocol",
+              "producer_step_id": "research_external_references",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "content": "Mock artifact web_reference_set from research_external_references.",
+              "id": "web_reference_set",
+              "producer_step_id": "research_external_references",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "content": "Mock artifact source_reliability_notes from research_external_references.",
+              "id": "source_reliability_notes",
+              "producer_step_id": "research_external_references",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "content": "Mock artifact cited_comparison_notes from research_external_references.",
+              "id": "cited_comparison_notes",
+              "producer_step_id": "research_external_references",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "content": "Mock artifact differences_summary from research_external_references.",
+              "id": "differences_summary",
+              "producer_step_id": "research_external_references",
+              "worker_type": "web_research_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "mocked": true
+          },
+          "producer": "web_research_worker",
+          "run_id": "run_plan_req_001_algorithm_review_fix_replan3",
+          "status": "completed",
+          "summary": "Mock web_research_worker completed research_external_references.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 1
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": "Mock artifact fix_design from design_scoped_fix_and_safety.",
+              "id": "fix_design",
+              "producer_step_id": "design_scoped_fix_and_safety",
+              "worker_type": "code_worker"
+            },
+            {
+              "content": "Mock artifact mutation_scope from design_scoped_fix_and_safety.",
+              "id": "mutation_scope",
+              "producer_step_id": "design_scoped_fix_and_safety",
+              "worker_type": "code_worker"
+            },
+            {
+              "content": "Mock artifact rollback_plan from design_scoped_fix_and_safety.",
+              "id": "rollback_plan",
+              "producer_step_id": "design_scoped_fix_and_safety",
+              "worker_type": "code_worker"
+            },
+            {
+              "content": "Mock artifact verification_plan from design_scoped_fix_and_safety.",
+              "id": "verification_plan",
+              "producer_step_id": "design_scoped_fix_and_safety",
+              "worker_type": "code_worker"
+            },
+            {
+              "content": "Mock artifact stop_or_replan_decision from design_scoped_fix_and_safety.",
+              "id": "stop_or_replan_decision",
+              "producer_step_id": "design_scoped_fix_and_safety",
+              "worker_type": "code_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "mocked": true
+          },
+          "producer": "code_worker",
+          "run_id": "run_plan_req_001_algorithm_review_fix_replan3",
+          "status": "completed",
+          "summary": "Mock code_worker completed design_scoped_fix_and_safety.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 1
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": "Mock artifact change_summary from apply_scoped_mutation.",
+              "id": "change_summary",
+              "producer_step_id": "apply_scoped_mutation",
+              "worker_type": "code_worker"
+            },
+            {
+              "content": "Mock artifact rollback_patch from apply_scoped_mutation.",
+              "id": "rollback_patch",
+              "producer_step_id": "apply_scoped_mutation",
+              "worker_type": "code_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "mocked": true
+          },
+          "producer": "code_worker",
+          "run_id": "run_plan_req_001_algorithm_review_fix_replan3",
+          "status": "completed",
+          "summary": "Mock code_worker completed apply_scoped_mutation.",
+          "usage": {
+            "model_calls": 0,
+            "tool_calls": 1
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": "Mock artifact verification_results from verify_changes.",
+              "id": "verification_results",
+              "producer_step_id": "verify_changes",
+              "worker_type": "verify_worker"
+            },
+            {
+              "content": "Mock artifact scope_verification_report from verify_changes.",
+              "id": "scope_verification_report",
+              "producer_step_id": "verify_changes",
+              "worker_type": "verify_worker"
+            },
+            {
+              "content": "Mock artifact rollback_readiness_report from verify_changes.",
+              "id": "rollback_readiness_report",
+              "producer_step_id": "verify_changes",
+              "worker_type": "verify_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "mocked": true
+          },
+          "producer": "verify_worker",
+          "run_id": "run_plan_req_001_algorithm_review_fix_replan3",
+          "status": "completed",
+          "summary": "Mock verify_worker completed verify_changes.",
+          "usage": {
+            "model_calls": 0,
+            "tool_calls": 1
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": "Mock artifact final_report from finalize_report.",
+              "id": "final_report",
+              "producer_step_id": "finalize_report",
+              "worker_type": "research_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "mocked": true
+          },
+          "producer": "research_worker",
+          "run_id": "run_plan_req_001_algorithm_review_fix_replan3",
+          "status": "completed",
+          "summary": "Mock research_worker completed finalize_report.",
+          "usage": {
+            "model_calls": 0,
+            "tool_calls": 0
+          },
+          "warnings": []
+        }
+      ]
+    },
+    "producer": "worker_kernel",
+    "run_id": "run_plan_req_001_algorithm_review_fix_replan3",
+    "status": "completed",
+    "summary": "Plan executed successfully.",
+    "usage": {
+      "model_calls": 4,
+      "tool_calls": 6,
+      "workers": 7
+    },
+    "warnings": []
+  },
+  "fixed_new_replan_plan": {
+    "budget": {
+      "max_model_calls": 5,
+      "max_retries": 0,
+      "max_tool_calls": 15,
+      "max_workers": 7
+    },
+    "execution_pattern": "sequential_phase_gated",
+    "global_invariants": [
+      "phase_order_non_decreasing",
+      "evidence_before_mutation",
+      "design_defines_mutation_scope_before_write",
+      "writes_limited_to_design_scope",
+      "verify_after_mutation",
+      "finalize_after_verify"
+    ],
+    "metadata": {
+      "archetype": "phase_aware_worker_plan",
+      "complexity": "high",
+      "llm_planner": {
+        "budget_auto_aligned": true,
+        "envelope_complexity_hint": "high",
+        "envelope_input_type": "algorithm_comparative_research_with_scoped_code_fix",
+        "failed_step_id": "research_external_references",
+        "mode": "repaired",
+        "model_calls": 2,
+        "parent_plan_id": "plan_req_001_algorithm_review_fix_repaired",
+        "repair_attempted": true,
+        "replan": true,
+        "resolved_validation_errors": [
+          {
+            "msg": "mutation requires a later verify_worker step",
+            "type": "planner_validation"
+          },
+          {
+            "msg": "verification after mutation must consume mutation output artifacts",
+            "type": "planner_validation"
+          },
+          {
+            "msg": "verification after mutation must consume write-scope artifacts used by mutation",
+            "type": "planner_validation"
+          },
+          {
+            "msg": "verification after mutation must output verification/test artifacts",
+            "type": "planner_validation"
+          }
+        ],
+        "stages": [
+          "replan_plan",
+          "validate_plan",
+          "repair_replan_plan_1",
+          "validate_plan"
+        ],
+        "validation_errors": []
+      },
+      "planner_runtime": {
+        "fallback_reason": null,
+        "mode": "llm_prompt_chain_replan"
+      },
+      "repair_reason": "validation_fix_verify_worker_and_dependency_contracts",
+      "repaired_from": "plan_req_001_algorithm_review_fix_replan2"
+    },
+    "objective": "Assess the algorithm documented in v8.md, compare it with reliable online references, and apply a narrowly scoped code correction only when concrete, evidenced issues are confirmed, with rollback and verification coverage.",
+    "plan_id": "plan_req_001_algorithm_review_fix_replan3",
+    "planner": "phase_aware_planner_v2",
+    "request_id": "req_001",
+    "steps": [
+      {
+        "input_artifacts": [],
+        "instruction": "Known facts: A full replacement plan is required and no prior artifacts can be assumed. Unknowns: Exact path/content of v8.md, implementation files, runtime, and tests are unknown. Do now: Inspect repository structure, locate v8.md, extract algorithm requirements, identify implementation candidates, and inventory dependencies and test harnesses. Do not do: Do not modify files, do not run external web research, and do not define writable scope yet. Output: repo_inventory, algorithm_spec_excerpt, implementation_candidates, dependency_inventory, test_harness_inventory.",
+        "max_model_calls": 1,
+        "max_tool_calls": 3,
+        "mode": "observe_only",
+        "output_artifacts": [
+          "repo_inventory",
+          "algorithm_spec_excerpt",
+          "implementation_candidates",
+          "dependency_inventory",
+          "test_harness_inventory"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "DISCOVER",
+        "step_id": "discover_repo_context",
+        "task_id": "algorithm_review_fix",
+        "worker_type": "repo_worker"
+      },
+      {
+        "input_artifacts": [
+          "algorithm_spec_excerpt",
+          "implementation_candidates",
+          "dependency_inventory",
+          "test_harness_inventory"
+        ],
+        "instruction": "Known facts: Repository context and algorithm/implementation candidate artifacts are available. Unknowns: Whether concrete implementation defects exist and whether evidence is sufficient for mutation decisions. Do now: Compare documented algorithm vs implementation behavior and complexity, produce root-cause evidence for confirmed defects, and explicitly record blocking evidence gaps. Do not do: Do not mutate code, do not infer unsupported defects, and do not claim fix verification. Output: analysis_evidence, root_cause_evidence, concrete_issue_assessment, internal_differences_notes, evidence_gap.",
+        "max_model_calls": 1,
+        "max_tool_calls": 2,
+        "mode": "observe_only",
+        "output_artifacts": [
+          "analysis_evidence",
+          "root_cause_evidence",
+          "concrete_issue_assessment",
+          "internal_differences_notes",
+          "evidence_gap"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "ANALYZE",
+        "step_id": "analyze_internal_evidence",
+        "task_id": "algorithm_review_fix",
+        "worker_type": "research_worker"
+      },
+      {
+        "input_artifacts": [
+          "algorithm_spec_excerpt",
+          "analysis_evidence",
+          "internal_differences_notes"
+        ],
+        "instruction": "Known facts: Internal analysis exists and external comparison is required before any mutation. Unknowns: Which sources are reliable enough and whether external evidence confirms internal findings. Do now: Apply a reliability screen (official docs, peer-reviewed material, authoritative textbooks, or widely trusted technical references), gather citations, and produce behavior/complexity comparison mapped to internal findings. Do not do: Do not use uncited or low-credibility sources, do not mutate files, and do not assert conclusions without citation linkage. Output: source_selection_protocol, web_reference_set, source_reliability_notes, cited_comparison_notes, differences_summary.",
+        "max_model_calls": 1,
+        "max_tool_calls": 4,
+        "mode": "observe_only",
+        "output_artifacts": [
+          "source_selection_protocol",
+          "web_reference_set",
+          "source_reliability_notes",
+          "cited_comparison_notes",
+          "differences_summary"
+        ],
+        "permissions": {
+          "read_files": false,
+          "run_commands": false,
+          "web_research": true,
+          "write_files": false
+        },
+        "phase": "RESEARCH",
+        "step_id": "research_external_references",
+        "task_id": "algorithm_review_fix",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "input_artifacts": [
+          "analysis_evidence",
+          "root_cause_evidence",
+          "concrete_issue_assessment",
+          "evidence_gap",
+          "differences_summary",
+          "cited_comparison_notes",
+          "implementation_candidates",
+          "test_harness_inventory",
+          "source_selection_protocol"
+        ],
+        "instruction": "Known facts: Internal/external evidence, issue assessment, and reliability notes are available. Unknowns: Minimal writable scope and exact patch shape until design is finalized. Do now: If concrete_issue_assessment is affirmative and evidence_gap is non-blocking, produce minimal fix_design with mutation_scope, rollback_plan, and verification_plan; otherwise produce stop_or_replan_decision that blocks mutation. Do not do: Do not edit files, do not expand scope beyond root cause, and do not bypass evidence gates. Output: fix_design, mutation_scope, rollback_plan, verification_plan, stop_or_replan_decision.",
+        "max_model_calls": 1,
+        "max_tool_calls": 1,
+        "mode": "plan_only",
+        "output_artifacts": [
+          "fix_design",
+          "mutation_scope",
+          "rollback_plan",
+          "verification_plan",
+          "stop_or_replan_decision"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "DESIGN",
+        "step_id": "design_scoped_fix_and_safety",
+        "task_id": "algorithm_review_fix",
+        "worker_type": "code_worker"
+      },
+      {
+        "input_artifacts": [
+          "fix_design",
+          "mutation_scope",
+          "rollback_plan",
+          "verification_plan",
+          "root_cause_evidence",
+          "analysis_evidence",
+          "stop_or_replan_decision"
+        ],
+        "instruction": "Known facts: fix_design, mutation_scope, rollback_plan, verification_plan, and stop_or_replan_decision are defined. Unknowns: None if mutation is allowed; otherwise change must be a no-op. Do now: Apply only the minimal change inside mutation_scope consistent with fix_design and evidence, and produce exact rollback artifact. Do not do: Do not write outside mutation_scope, do not modify unrelated code, and do not report verification success. Output: change_summary, rollback_patch.",
+        "max_model_calls": 0,
+        "max_tool_calls": 3,
+        "mode": "bounded_mutation",
+        "output_artifacts": [
+          "change_summary",
+          "rollback_patch"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": true,
+          "write_paths_from_artifacts": [
+            "mutation_scope"
+          ]
+        },
+        "phase": "MUTATE",
+        "step_id": "apply_scoped_mutation",
+        "task_id": "algorithm_review_fix",
+        "worker_type": "code_worker"
+      },
+      {
+        "input_artifacts": [
+          "change_summary",
+          "rollback_patch",
+          "mutation_scope",
+          "verification_plan",
+          "root_cause_evidence",
+          "analysis_evidence"
+        ],
+        "instruction": "Known facts: Mutation outputs, write scope, rollback artifact, and verification plan are available. Unknowns: Whether the change resolves root cause, stays within scope, and passes targeted checks. Do now: Execute verification_plan checks, validate root-cause alignment, verify modified paths are contained in mutation_scope, and confirm rollback_patch readiness. Do not do: Do not modify files, do not skip failing/inconclusive checks, and do not overstate outcomes. Output: verification_results, scope_verification_report, rollback_readiness_report.",
+        "max_model_calls": 0,
+        "max_tool_calls": 2,
+        "mode": "verify_only",
+        "output_artifacts": [
+          "verification_results",
+          "scope_verification_report",
+          "rollback_readiness_report"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": true,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "VERIFY",
+        "step_id": "verify_changes",
+        "task_id": "algorithm_review_fix",
+        "worker_type": "verify_worker"
+      },
+      {
+        "input_artifacts": [
+          "differences_summary",
+          "web_reference_set",
+          "source_reliability_notes",
+          "cited_comparison_notes",
+          "change_summary",
+          "verification_results",
+          "scope_verification_report",
+          "rollback_readiness_report"
+        ],
+        "instruction": "Known facts: Internal analysis, cited external comparison, mutation outputs, and verification reports are available. Unknowns: No execution unknowns remain for reporting. Do now: Produce a final evidence-based report covering behavioral vs complexity differences, source reliability/citations, mutation justification and scope, verification outcomes, and brief rollback guidance. Do not do: Do not add uncited claims, do not mutate code, and do not omit verification status. Output: final_report.",
+        "max_model_calls": 0,
+        "max_tool_calls": 0,
+        "mode": "summarize_only",
+        "output_artifacts": [
+          "final_report"
+        ],
+        "permissions": {
+          "read_files": false,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "FINALIZE",
+        "step_id": "finalize_report",
+        "task_id": "algorithm_review_fix",
+        "worker_type": "research_worker"
+      }
+    ],
+    "strategy": "phase_gated_evidence_first_research_then_scoped_mutation",
+    "success_criteria": [
+      "Algorithm review includes cited reliable external references.",
+      "Differences summary clearly separates behavioral and complexity impacts.",
+      "Code mutation occurs only when concrete issues are evidenced and remains within mutation_scope.",
+      "Verification confirms root-cause alignment, scope containment, and rollback readiness.",
+      "Final report includes comparison findings, fix rationale, verification status, and rollback guidance."
+    ]
+  },
+  "generated_at": "2026-06-02T18:31:46.866454",
+  "initial_plan": {
+    "budget": {
+      "max_model_calls": 7,
+      "max_retries": 0,
+      "max_tool_calls": 18,
+      "max_workers": 7
+    },
+    "execution_pattern": "sequential_phase_gated",
+    "global_invariants": [
+      "phase_order_non_decreasing",
+      "evidence_before_mutation",
+      "design_defines_mutation_scope_before_write",
+      "writes_limited_to_design_scope",
+      "verify_after_mutation",
+      "finalize_after_verify"
+    ],
+    "metadata": {
+      "archetype": "phase_aware_worker_plan",
+      "complexity": "high",
+      "llm_planner": {
+        "budget_auto_aligned": true,
+        "envelope_complexity_hint": "high",
+        "envelope_input_type": "algorithm_comparative_research_with_scoped_code_fix",
+        "mode": "repaired",
+        "model_calls": 2,
+        "repair_attempted": true,
+        "resolved_validation_errors": [
+          {
+            "msg": "plan phase order regresses at step index 2",
+            "type": "planner_validation"
+          }
+        ],
+        "stages": [
+          "draft_plan",
+          "validate_plan",
+          "repair_plan_1",
+          "validate_plan"
+        ],
+        "validation_errors": []
+      },
+      "planner_runtime": {
+        "fallback_reason": null,
+        "mode": "llm_prompt_chain"
+      },
+      "repaired_from": "plan_req_001_algorithm_review_fix"
+    },
+    "objective": "Assess the algorithm documented in v8.md, compare it with reliable online references, and apply a narrowly scoped code correction only when concrete, evidenced issues are confirmed, with rollback and verification coverage.",
+    "plan_id": "plan_req_001_algorithm_review_fix_repaired",
+    "planner": "phase_aware_planner_v2",
+    "request_id": "req_001",
+    "steps": [
+      {
+        "input_artifacts": [],
+        "instruction": "Known facts: The request requires reviewing v8.md, locating implementation candidates, and identifying available validation paths before any fix. Unknowns: Exact repository paths, language/runtime details, and test harness locations are not yet known. Do now: Inspect repository structure and extract v8.md location, implementation candidate paths, dependency/test context, and relevant algorithm specification excerpts. Do not do: Do not modify files, do not run write operations, and do not define write scope. Output: repo_inventory, algorithm_spec_excerpt, implementation_candidates, dependency_inventory, test_harness_inventory.",
+        "max_model_calls": 1,
+        "max_tool_calls": 4,
+        "mode": "observe_only",
+        "output_artifacts": [
+          "repo_inventory",
+          "algorithm_spec_excerpt",
+          "implementation_candidates",
+          "dependency_inventory",
+          "test_harness_inventory"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "DISCOVER",
+        "step_id": "discover_repo_context",
+        "task_id": "algorithm_review_fix",
+        "worker_type": "repo_worker"
+      },
+      {
+        "input_artifacts": [
+          "algorithm_spec_excerpt",
+          "implementation_candidates",
+          "dependency_inventory",
+          "test_harness_inventory"
+        ],
+        "instruction": "Known facts: Repository context, algorithm spec excerpts, candidate implementation paths, and dependency/test inventories are available. Unknowns: Whether concrete implementation defects are present and whether current evidence is sufficient for mutation decisions. Do now: Analyze documented algorithm versus implementation behavior and complexity characteristics, produce root-cause evidence for any concrete issues, and record evidence gaps that would block mutation. Do not do: Do not mutate code, do not invent unsupported defects, and do not claim verification completion. Output: analysis_evidence, root_cause_evidence, concrete_issue_assessment, internal_differences_notes, evidence_gap.",
+        "max_model_calls": 1,
+        "max_tool_calls": 2,
+        "mode": "observe_only",
+        "output_artifacts": [
+          "analysis_evidence",
+          "root_cause_evidence",
+          "concrete_issue_assessment",
+          "internal_differences_notes",
+          "evidence_gap"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "ANALYZE",
+        "step_id": "analyze_internal_evidence",
+        "task_id": "algorithm_review_fix",
+        "worker_type": "research_worker"
+      },
+      {
+        "input_artifacts": [
+          "algorithm_spec_excerpt",
+          "analysis_evidence",
+          "internal_differences_notes"
+        ],
+        "instruction": "Known facts: External comparison against reliable online references is required, and internal evidence context is available for targeting comparisons. Unknowns: Which sources most reliably match the documented algorithm and whether external evidence confirms or challenges internal findings. Do now: Collect trustworthy cited algorithm references, assess source reliability, and produce a comparison summary that distinguishes behavioral and complexity impacts against internal findings. Do not do: Do not use uncited or low-credibility sources, do not mutate files, and do not assert conclusions without traceable citations. Output: web_reference_set, source_reliability_notes, cited_comparison_notes, differences_summary.",
+        "max_model_calls": 1,
+        "max_tool_calls": 4,
+        "mode": "observe_only",
+        "output_artifacts": [
+          "web_reference_set",
+          "source_reliability_notes",
+          "cited_comparison_notes",
+          "differences_summary"
+        ],
+        "permissions": {
+          "read_files": false,
+          "run_commands": false,
+          "web_research": true,
+          "write_files": false
+        },
+        "phase": "RESEARCH",
+        "step_id": "research_external_references",
+        "task_id": "algorithm_review_fix",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "input_artifacts": [
+          "analysis_evidence",
+          "root_cause_evidence",
+          "concrete_issue_assessment",
+          "evidence_gap",
+          "differences_summary",
+          "cited_comparison_notes",
+          "implementation_candidates",
+          "test_harness_inventory"
+        ],
+        "instruction": "Known facts: Internal/external evidence, cited differences, and concrete issue assessment are available. Unknowns: The minimal safe patch shape and exact writable scope until design is finalized. Do now: Create a minimal fix design only if concrete_issue_assessment is affirmative and evidence_gap is non-blocking; define mutation_scope, rollback_plan, and verification_plan tied to root-cause evidence and scope containment. Do not do: Do not edit files, do not broaden scope beyond necessity, and do not proceed when evidence is insufficient. Output: fix_design, mutation_scope, rollback_plan, verification_plan, stop_or_replan_decision.",
+        "max_model_calls": 1,
+        "max_tool_calls": 1,
+        "mode": "plan_only",
+        "output_artifacts": [
+          "fix_design",
+          "mutation_scope",
+          "rollback_plan",
+          "verification_plan",
+          "stop_or_replan_decision"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "DESIGN",
+        "step_id": "design_scoped_fix_and_safety",
+        "task_id": "algorithm_review_fix",
+        "worker_type": "code_worker"
+      },
+      {
+        "input_artifacts": [
+          "fix_design",
+          "mutation_scope",
+          "rollback_plan",
+          "verification_plan",
+          "root_cause_evidence",
+          "analysis_evidence",
+          "stop_or_replan_decision"
+        ],
+        "instruction": "Known facts: A fix design, approved mutation scope, rollback plan, and root-cause evidence exist, with a gate decision controlling whether mutation proceeds. Unknowns: None when stop_or_replan_decision allows mutation; otherwise this step must produce no-op change artifacts. Do now: Apply only the minimal change inside mutation_scope consistent with fix_design and evidence, and produce change plus rollback artifacts. Do not do: Do not write outside mutation_scope, do not modify unrelated code, and do not claim verification success. Output: change_summary, rollback_patch.",
+        "max_model_calls": 1,
+        "max_tool_calls": 4,
+        "mode": "bounded_mutation",
+        "output_artifacts": [
+          "change_summary",
+          "rollback_patch"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": true,
+          "write_paths_from_artifacts": [
+            "mutation_scope"
+          ]
+        },
+        "phase": "MUTATE",
+        "step_id": "apply_scoped_mutation",
+        "task_id": "algorithm_review_fix",
+        "worker_type": "code_worker"
+      },
+      {
+        "input_artifacts": [
+          "change_summary",
+          "mutation_scope",
+          "verification_plan",
+          "root_cause_evidence",
+          "analysis_evidence",
+          "rollback_patch"
+        ],
+        "instruction": "Known facts: Change and rollback artifacts, mutation scope, verification plan, and root-cause evidence are available. Unknowns: Whether the applied change fully addresses the root cause, remains within scope, and passes focused checks. Do now: Run verification_plan checks, confirm root-cause match, confirm scope containment against mutation_scope, and confirm rollback availability/readiness. Do not do: Do not modify files, do not skip failed/inconclusive checks, and do not overstate results. Output: verification_results, scope_verification_report, rollback_readiness_report.",
+        "max_model_calls": 1,
+        "max_tool_calls": 3,
+        "mode": "verify_only",
+        "output_artifacts": [
+          "verification_results",
+          "scope_verification_report",
+          "rollback_readiness_report"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": true,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "VERIFY",
+        "step_id": "verify_changes",
+        "task_id": "algorithm_review_fix",
+        "worker_type": "verify_worker"
+      },
+      {
+        "input_artifacts": [
+          "differences_summary",
+          "web_reference_set",
+          "source_reliability_notes",
+          "cited_comparison_notes",
+          "change_summary",
+          "verification_results",
+          "scope_verification_report",
+          "rollback_readiness_report"
+        ],
+        "instruction": "Known facts: Internal analysis, cited external comparison, mutation outputs, and verification outcomes are available. Unknowns: No unresolved execution unknowns remain for reporting. Do now: Produce a final evidence-based report summarizing behavioral vs complexity differences, source reliability/citations, whether mutation was justified and scoped, verification outcomes, and brief rollback guidance. Do not do: Do not introduce new uncited claims, do not perform additional mutation, and do not omit verification status. Output: final_report.",
+        "max_model_calls": 1,
+        "max_tool_calls": 0,
+        "mode": "summarize_only",
+        "output_artifacts": [
+          "final_report"
+        ],
+        "permissions": {
+          "read_files": false,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "FINALIZE",
+        "step_id": "finalize_report",
+        "task_id": "algorithm_review_fix",
+        "worker_type": "research_worker"
+      }
+    ],
+    "strategy": "phase_gated_evidence_first_research_then_scoped_mutation",
+    "success_criteria": [
+      "Algorithm review includes cited reliable external references.",
+      "Differences summary clearly distinguishes behavioral and complexity impacts.",
+      "Code changes occur only when concrete issues are evidenced and stay within mutation_scope.",
+      "Verification confirms root-cause alignment, scope containment, and rollback readiness.",
+      "Final report includes comparison findings, fix rationale, verification outcome, and backup guidance."
+    ]
+  },
+  "mocked_worker_replan_result": {
+    "artifacts": [
+      {
+        "content": "Mock worker reached the research/design boundary and requested a full fixed new plan.",
+        "failed_step_id": "research_external_references",
+        "id": "mock_partial_replan_evidence"
+      }
+    ],
+    "errors": [],
+    "metadata": {
+      "mocked": true,
+      "recommended_action": "Return a full replacement Plan using the existing Plan schema; re-establish required artifacts inside the new plan before mutation."
+    },
+    "producer": "web_research_worker",
+    "run_id": "run_plan_req_001_algorithm_review_fix_repaired",
+    "status": "needs_replan",
+    "summary": "Mocked worker cannot complete because external comparison evidence is underspecified for safe mutation.",
+    "usage": {
+      "model_calls": 0,
+      "tool_calls": 1
+    },
+    "warnings": []
+  },
+  "prompt": "Please review the algorithm in v8.md, research comparable algorithms from reliable sources online, summarize the differences, and implement a scoped code fix if you find concrete issues. Include a brief backup plan and verification steps.",
+  "replan_request": {
+    "completed_artifacts": [
+      {
+        "content": "Mock artifact repo_inventory from discover_repo_context.",
+        "id": "repo_inventory",
+        "producer_step_id": "discover_repo_context",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact algorithm_spec_excerpt from discover_repo_context.",
+        "id": "algorithm_spec_excerpt",
+        "producer_step_id": "discover_repo_context",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact implementation_candidates from discover_repo_context.",
+        "id": "implementation_candidates",
+        "producer_step_id": "discover_repo_context",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact dependency_inventory from discover_repo_context.",
+        "id": "dependency_inventory",
+        "producer_step_id": "discover_repo_context",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact test_harness_inventory from discover_repo_context.",
+        "id": "test_harness_inventory",
+        "producer_step_id": "discover_repo_context",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact analysis_evidence from analyze_internal_evidence.",
+        "id": "analysis_evidence",
+        "producer_step_id": "analyze_internal_evidence",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": "Mock artifact root_cause_evidence from analyze_internal_evidence.",
+        "id": "root_cause_evidence",
+        "producer_step_id": "analyze_internal_evidence",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": "Mock artifact concrete_issue_assessment from analyze_internal_evidence.",
+        "id": "concrete_issue_assessment",
+        "producer_step_id": "analyze_internal_evidence",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": "Mock artifact internal_differences_notes from analyze_internal_evidence.",
+        "id": "internal_differences_notes",
+        "producer_step_id": "analyze_internal_evidence",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": "Mock artifact evidence_gap from analyze_internal_evidence.",
+        "id": "evidence_gap",
+        "producer_step_id": "analyze_internal_evidence",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": "Mock worker reached the research/design boundary and requested a full fixed new plan.",
+        "failed_step_id": "research_external_references",
+        "id": "mock_partial_replan_evidence"
+      }
+    ],
+    "failed_step_id": "research_external_references",
+    "plan_id": "plan_req_001_algorithm_review_fix_repaired",
+    "reason": "Mocked worker cannot complete because external comparison evidence is underspecified for safe mutation.",
+    "recommended_action": "Return a full replacement Plan using the existing Plan schema; re-establish required artifacts inside the new plan before mutation.",
+    "remaining_budget": {
+      "max_model_calls": 5,
+      "max_retries": 0,
+      "max_tool_calls": 15,
+      "max_workers": 4
+    },
+    "request_id": "req_001",
+    "run_id": "run_plan_req_001_algorithm_review_fix_repaired",
+    "worker_result": {
+      "artifacts": [
+        {
+          "content": "Mock worker reached the research/design boundary and requested a full fixed new plan.",
+          "failed_step_id": "research_external_references",
+          "id": "mock_partial_replan_evidence"
+        }
+      ],
+      "errors": [],
+      "metadata": {
+        "mocked": true,
+        "recommended_action": "Return a full replacement Plan using the existing Plan schema; re-establish required artifacts inside the new plan before mutation."
+      },
+      "producer": "web_research_worker",
+      "run_id": "run_plan_req_001_algorithm_review_fix_repaired",
+      "status": "needs_replan",
+      "summary": "Mocked worker cannot complete because external comparison evidence is underspecified for safe mutation.",
+      "usage": {
+        "model_calls": 0,
+        "tool_calls": 1
+      },
+      "warnings": []
+    }
+  },
+  "status": "success"
+}

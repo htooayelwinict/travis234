@@ -1,0 +1,3886 @@
+{
+  "decompressor": {
+    "envelope": {
+      "ambiguity": [
+        "Authoritative industry guidance sources are not explicitly named.",
+        "Repository structure and implementation language are unspecified.",
+        "Severity threshold for what qualifies as a concrete defect is not provided.",
+        "Operational environment details (queueing, payment provider behavior, tax engine integration) are not provided.",
+        "Current release timeline and risk tolerance are unspecified."
+      ],
+      "artifacts": [
+        {
+          "name": "subscription billing platform rollout",
+          "type": "component"
+        },
+        {
+          "name": "system-design.md",
+          "type": "file"
+        },
+        {
+          "name": "repository implementation",
+          "type": "codebase"
+        },
+        {
+          "name": "invoice generation",
+          "type": "component"
+        },
+        {
+          "name": "tax calculation",
+          "type": "component"
+        },
+        {
+          "name": "payment retries",
+          "type": "component"
+        },
+        {
+          "name": "deduplication",
+          "type": "mechanism"
+        },
+        {
+          "name": "dead-letter recovery",
+          "type": "mechanism"
+        },
+        {
+          "name": "idempotency",
+          "type": "reliability_property"
+        },
+        {
+          "name": "retry backoff",
+          "type": "reliability_property"
+        },
+        {
+          "name": "auditability",
+          "type": "reliability_property"
+        },
+        {
+          "name": "ordering guarantees",
+          "type": "reliability_property"
+        },
+        {
+          "name": "rollback path",
+          "type": "operational_artifact"
+        },
+        {
+          "name": "targeted verification",
+          "type": "validation_artifact"
+        },
+        {
+          "name": "post-change operational checks",
+          "type": "operational_artifact"
+        }
+      ],
+      "assumptions": [
+        "system-design.md exists and is intended as the primary architecture reference.",
+        "The repository contains executable implementation for the listed billing concerns.",
+        "The user wants evidence-based analysis rather than speculative recommendations.",
+        "Any proposed changes should be limited to areas with demonstrable defects."
+      ],
+      "complexity_hint": "high",
+      "confidence": 0.9,
+      "constraints": [
+        "findings must distinguish confirmed defects from hypotheses",
+        "no root-cause claims without code/design evidence",
+        "behavior comparisons must reference explicitly identified authoritative guidance",
+        "proposed changes must remain minimally scoped to confirmed defects",
+        "rollback path must preserve data integrity and financial correctness",
+        "verification must cover idempotency, retries, deduplication, ordering, and recovery paths",
+        "operational checks must be actionable and tied to changed behavior"
+      ],
+      "context_needed": [
+        "repository access scope and branch/commit under review",
+        "location and ownership of billing pipeline modules",
+        "definition of authoritative industry guidance sources to use",
+        "current production/staging architecture and message flow boundaries",
+        "existing retry, deduplication, and dead-letter policies/configuration",
+        "current observability/audit log capabilities and required compliance constraints",
+        "release criteria and acceptable risk threshold for rollout",
+        "test suites, fixtures, and known incident history relevant to billing flows"
+      ],
+      "domains": [
+        "code",
+        "architecture",
+        "reliability",
+        "payments",
+        "operations",
+        "docs",
+        "research"
+      ],
+      "input_type": "subscription_billing_rollout_reliability_audit",
+      "intents": [
+        "architecture.review",
+        "code.review",
+        "reliability.audit",
+        "standards.comparison",
+        "payments.risk_assessment",
+        "change_scope.definition",
+        "verification.design",
+        "operations.readiness"
+      ],
+      "metadata": {
+        "decompressor_mode": "llm_prompt_chain",
+        "decompressor_runtime": {
+          "elapsed_ms": 22948.977,
+          "failure_rate": 0.0,
+          "latency_ms_p50": 22948.977,
+          "latency_ms_p95": 22948.977,
+          "repair_rate": 0.0
+        },
+        "llm_prompt_chain": {
+          "fallback": null,
+          "mode": "completed",
+          "model_calls": 1,
+          "redacted_prompt_input": false,
+          "stages": [
+            "decompress_request",
+            "validate_envelope"
+          ]
+        }
+      },
+      "normalized_input": "Assess release readiness and reliability for a subscription billing platform rollout by reviewing system-design.md and repository code for invoice generation, tax calculation, payment retry deduplication, and dead-letter recovery; compare behavior against authoritative guidance on idempotency, retry backoff, auditability, and ordering guarantees; if concrete defects exist, define minimal changes, rollback approach, and focused verification plus post-change operational checks.",
+      "raw_input": "Run a release-readiness and reliability audit for a subscription billing platform rollout: review system-design.md and the repository implementation for invoice generation, tax calculation, payment retries with deduplication, and dead-letter recovery. Then compare repository behavior with authoritative industry guidance on idempotency, retry backoff, auditability, and ordering guarantees. If defects are concrete, propose minimal scoped changes, a rollback path, and targeted verification plus post-change operational checks.",
+      "request_id": "req_001",
+      "risks": [
+        "mutation_requested",
+        "needs_verification",
+        "ambiguous_scope",
+        "external_guidance_interpretation_risk",
+        "ordering_semantics_mismatch_risk",
+        "idempotency_gap_risk",
+        "retry_policy_regression_risk"
+      ],
+      "user_goal": "Obtain a grounded release-readiness/reliability audit of the billing rollout, with standards-based gap analysis and narrowly scoped remediation/verification recommendations for confirmed defects."
+    },
+    "request_id": "req_001"
+  },
+  "elapsed_ms": 115989.781,
+  "final_worker_kernel_result": {
+    "artifacts": [
+      {
+        "content": {
+          "derived_inputs": [],
+          "mode": "observe_only",
+          "output_id": "refreshed_evidence_bundle",
+          "phase": "DISCOVER",
+          "step_id": "rebaseline_verification_inputs",
+          "worker_type": "verify_worker"
+        },
+        "id": "refreshed_evidence_bundle",
+        "producer_step_id": "rebaseline_verification_inputs",
+        "worker_type": "verify_worker"
+      },
+      {
+        "content": {
+          "derived_inputs": [],
+          "mode": "observe_only",
+          "output_id": "refreshed_guidance_bundle",
+          "phase": "DISCOVER",
+          "step_id": "rebaseline_verification_inputs",
+          "worker_type": "verify_worker"
+        },
+        "id": "refreshed_guidance_bundle",
+        "producer_step_id": "rebaseline_verification_inputs",
+        "worker_type": "verify_worker"
+      },
+      {
+        "content": {
+          "derived_inputs": [],
+          "mode": "observe_only",
+          "output_id": "refreshed_design_bundle",
+          "phase": "DISCOVER",
+          "step_id": "rebaseline_verification_inputs",
+          "worker_type": "verify_worker"
+        },
+        "id": "refreshed_design_bundle",
+        "producer_step_id": "rebaseline_verification_inputs",
+        "worker_type": "verify_worker"
+      },
+      {
+        "content": {
+          "derived_inputs": [],
+          "mode": "observe_only",
+          "output_id": "verification_contract",
+          "phase": "DISCOVER",
+          "step_id": "rebaseline_verification_inputs",
+          "worker_type": "verify_worker"
+        },
+        "id": "verification_contract",
+        "producer_step_id": "rebaseline_verification_inputs",
+        "worker_type": "verify_worker"
+      },
+      {
+        "content": {
+          "derived_inputs": [
+            "refreshed_evidence_bundle",
+            "refreshed_guidance_bundle",
+            "refreshed_design_bundle",
+            "verification_contract"
+          ],
+          "mode": "verify_only",
+          "output_id": "verification_results",
+          "phase": "VERIFY",
+          "step_id": "verify_traceability_and_readiness",
+          "worker_type": "verify_worker"
+        },
+        "id": "verification_results",
+        "producer_step_id": "verify_traceability_and_readiness",
+        "worker_type": "verify_worker"
+      },
+      {
+        "content": {
+          "derived_inputs": [
+            "refreshed_evidence_bundle",
+            "refreshed_guidance_bundle",
+            "refreshed_design_bundle",
+            "verification_contract"
+          ],
+          "mode": "verify_only",
+          "output_id": "readiness_assessment",
+          "phase": "VERIFY",
+          "step_id": "verify_traceability_and_readiness",
+          "worker_type": "verify_worker"
+        },
+        "id": "readiness_assessment",
+        "producer_step_id": "verify_traceability_and_readiness",
+        "worker_type": "verify_worker"
+      },
+      {
+        "content": {
+          "derived_inputs": [
+            "refreshed_evidence_bundle",
+            "refreshed_guidance_bundle",
+            "refreshed_design_bundle",
+            "verification_contract"
+          ],
+          "mode": "verify_only",
+          "output_id": "traceability_report",
+          "phase": "VERIFY",
+          "step_id": "verify_traceability_and_readiness",
+          "worker_type": "verify_worker"
+        },
+        "id": "traceability_report",
+        "producer_step_id": "verify_traceability_and_readiness",
+        "worker_type": "verify_worker"
+      },
+      {
+        "content": {
+          "derived_inputs": [
+            "verification_results",
+            "readiness_assessment",
+            "traceability_report",
+            "refreshed_design_bundle"
+          ],
+          "mode": "summarize_only",
+          "output_id": "final_report",
+          "phase": "FINALIZE",
+          "step_id": "finalize_audit_report",
+          "worker_type": "verify_worker"
+        },
+        "id": "final_report",
+        "producer_step_id": "finalize_audit_report",
+        "worker_type": "verify_worker"
+      }
+    ],
+    "errors": [],
+    "metadata": {
+      "replan": {
+        "depth": 1,
+        "original_worker_results": [
+          {
+            "artifacts": [
+              {
+                "content": {
+                  "derived_inputs": [],
+                  "mode": "observe_only",
+                  "output_id": "repo_inventory",
+                  "phase": "DISCOVER",
+                  "step_id": "discover_billing_context",
+                  "worker_type": "repo_worker"
+                },
+                "id": "repo_inventory",
+                "producer_step_id": "discover_billing_context",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [],
+                  "mode": "observe_only",
+                  "output_id": "module_map",
+                  "phase": "DISCOVER",
+                  "step_id": "discover_billing_context",
+                  "worker_type": "repo_worker"
+                },
+                "id": "module_map",
+                "producer_step_id": "discover_billing_context",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [],
+                  "mode": "observe_only",
+                  "output_id": "architecture_notes",
+                  "phase": "DISCOVER",
+                  "step_id": "discover_billing_context",
+                  "worker_type": "repo_worker"
+                },
+                "id": "architecture_notes",
+                "producer_step_id": "discover_billing_context",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [],
+                  "mode": "observe_only",
+                  "output_id": "context_gaps",
+                  "phase": "DISCOVER",
+                  "step_id": "discover_billing_context",
+                  "worker_type": "repo_worker"
+                },
+                "id": "context_gaps",
+                "producer_step_id": "discover_billing_context",
+                "worker_type": "repo_worker"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "input_artifact_ids": [],
+              "mocked": true,
+              "mode": "observe_only",
+              "phase": "DISCOVER",
+              "task_id": "billing_rollout_audit"
+            },
+            "producer": "repo_worker",
+            "run_id": "run_plan_req_001_reliability_audit",
+            "status": "completed",
+            "summary": "Mock repo_worker completed plan outputs for discover_billing_context.",
+            "usage": {
+              "model_calls": 1,
+              "tool_calls": 2
+            },
+            "warnings": []
+          },
+          {
+            "artifacts": [
+              {
+                "content": {
+                  "derived_inputs": [
+                    "repo_inventory",
+                    "module_map",
+                    "architecture_notes"
+                  ],
+                  "mode": "observe_only",
+                  "output_id": "analysis_evidence",
+                  "phase": "ANALYZE",
+                  "step_id": "analyze_billing_behavior",
+                  "worker_type": "repo_worker"
+                },
+                "id": "analysis_evidence",
+                "producer_step_id": "analyze_billing_behavior",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [
+                    "repo_inventory",
+                    "module_map",
+                    "architecture_notes"
+                  ],
+                  "mode": "observe_only",
+                  "output_id": "behavior_matrix",
+                  "phase": "ANALYZE",
+                  "step_id": "analyze_billing_behavior",
+                  "worker_type": "repo_worker"
+                },
+                "id": "behavior_matrix",
+                "producer_step_id": "analyze_billing_behavior",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [
+                    "repo_inventory",
+                    "module_map",
+                    "architecture_notes"
+                  ],
+                  "mode": "observe_only",
+                  "output_id": "confirmed_defects_prelim",
+                  "phase": "ANALYZE",
+                  "step_id": "analyze_billing_behavior",
+                  "worker_type": "repo_worker"
+                },
+                "id": "confirmed_defects_prelim",
+                "producer_step_id": "analyze_billing_behavior",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [
+                    "repo_inventory",
+                    "module_map",
+                    "architecture_notes"
+                  ],
+                  "mode": "observe_only",
+                  "output_id": "hypothesis_log",
+                  "phase": "ANALYZE",
+                  "step_id": "analyze_billing_behavior",
+                  "worker_type": "repo_worker"
+                },
+                "id": "hypothesis_log",
+                "producer_step_id": "analyze_billing_behavior",
+                "worker_type": "repo_worker"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "input_artifact_ids": [
+                "repo_inventory",
+                "module_map",
+                "architecture_notes"
+              ],
+              "mocked": true,
+              "mode": "observe_only",
+              "phase": "ANALYZE",
+              "task_id": "billing_rollout_audit"
+            },
+            "producer": "repo_worker",
+            "run_id": "run_plan_req_001_reliability_audit",
+            "status": "completed",
+            "summary": "Mock repo_worker completed plan outputs for analyze_billing_behavior.",
+            "usage": {
+              "model_calls": 1,
+              "tool_calls": 2
+            },
+            "warnings": []
+          },
+          {
+            "artifacts": [
+              {
+                "content": {
+                  "derived_inputs": [],
+                  "mode": "observe_only",
+                  "output_id": "authoritative_guidance_sources",
+                  "phase": "RESEARCH",
+                  "step_id": "research_authoritative_guidance",
+                  "worker_type": "web_research_worker"
+                },
+                "id": "authoritative_guidance_sources",
+                "producer_step_id": "research_authoritative_guidance",
+                "worker_type": "web_research_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [],
+                  "mode": "observe_only",
+                  "output_id": "guidance_control_matrix",
+                  "phase": "RESEARCH",
+                  "step_id": "research_authoritative_guidance",
+                  "worker_type": "web_research_worker"
+                },
+                "id": "guidance_control_matrix",
+                "producer_step_id": "research_authoritative_guidance",
+                "worker_type": "web_research_worker"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "input_artifact_ids": [],
+              "mocked": true,
+              "mode": "observe_only",
+              "phase": "RESEARCH",
+              "task_id": "billing_rollout_audit"
+            },
+            "producer": "web_research_worker",
+            "run_id": "run_plan_req_001_reliability_audit",
+            "status": "completed",
+            "summary": "Mock web_research_worker completed plan outputs for research_authoritative_guidance.",
+            "usage": {
+              "model_calls": 1,
+              "tool_calls": 2
+            },
+            "warnings": []
+          },
+          {
+            "artifacts": [
+              {
+                "content": {
+                  "derived_inputs": [
+                    "analysis_evidence",
+                    "behavior_matrix",
+                    "confirmed_defects_prelim",
+                    "hypothesis_log",
+                    "authoritative_guidance_sources",
+                    "guidance_control_matrix",
+                    "context_gaps"
+                  ],
+                  "mode": "plan_only",
+                  "output_id": "confirmed_defects",
+                  "phase": "DESIGN",
+                  "step_id": "design_gap_and_remediation_plan",
+                  "worker_type": "research_worker"
+                },
+                "id": "confirmed_defects",
+                "producer_step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [
+                    "analysis_evidence",
+                    "behavior_matrix",
+                    "confirmed_defects_prelim",
+                    "hypothesis_log",
+                    "authoritative_guidance_sources",
+                    "guidance_control_matrix",
+                    "context_gaps"
+                  ],
+                  "mode": "plan_only",
+                  "output_id": "standards_gap_analysis",
+                  "phase": "DESIGN",
+                  "step_id": "design_gap_and_remediation_plan",
+                  "worker_type": "research_worker"
+                },
+                "id": "standards_gap_analysis",
+                "producer_step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [
+                    "analysis_evidence",
+                    "behavior_matrix",
+                    "confirmed_defects_prelim",
+                    "hypothesis_log",
+                    "authoritative_guidance_sources",
+                    "guidance_control_matrix",
+                    "context_gaps"
+                  ],
+                  "mode": "plan_only",
+                  "output_id": "mutation_scope",
+                  "phase": "DESIGN",
+                  "step_id": "design_gap_and_remediation_plan",
+                  "worker_type": "research_worker"
+                },
+                "id": "mutation_scope",
+                "producer_step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [
+                    "analysis_evidence",
+                    "behavior_matrix",
+                    "confirmed_defects_prelim",
+                    "hypothesis_log",
+                    "authoritative_guidance_sources",
+                    "guidance_control_matrix",
+                    "context_gaps"
+                  ],
+                  "mode": "plan_only",
+                  "output_id": "change_design",
+                  "phase": "DESIGN",
+                  "step_id": "design_gap_and_remediation_plan",
+                  "worker_type": "research_worker"
+                },
+                "id": "change_design",
+                "producer_step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [
+                    "analysis_evidence",
+                    "behavior_matrix",
+                    "confirmed_defects_prelim",
+                    "hypothesis_log",
+                    "authoritative_guidance_sources",
+                    "guidance_control_matrix",
+                    "context_gaps"
+                  ],
+                  "mode": "plan_only",
+                  "output_id": "rollback_plan",
+                  "phase": "DESIGN",
+                  "step_id": "design_gap_and_remediation_plan",
+                  "worker_type": "research_worker"
+                },
+                "id": "rollback_plan",
+                "producer_step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [
+                    "analysis_evidence",
+                    "behavior_matrix",
+                    "confirmed_defects_prelim",
+                    "hypothesis_log",
+                    "authoritative_guidance_sources",
+                    "guidance_control_matrix",
+                    "context_gaps"
+                  ],
+                  "mode": "plan_only",
+                  "output_id": "verification_plan",
+                  "phase": "DESIGN",
+                  "step_id": "design_gap_and_remediation_plan",
+                  "worker_type": "research_worker"
+                },
+                "id": "verification_plan",
+                "producer_step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [
+                    "analysis_evidence",
+                    "behavior_matrix",
+                    "confirmed_defects_prelim",
+                    "hypothesis_log",
+                    "authoritative_guidance_sources",
+                    "guidance_control_matrix",
+                    "context_gaps"
+                  ],
+                  "mode": "plan_only",
+                  "output_id": "operational_checks_plan",
+                  "phase": "DESIGN",
+                  "step_id": "design_gap_and_remediation_plan",
+                  "worker_type": "research_worker"
+                },
+                "id": "operational_checks_plan",
+                "producer_step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [
+                    "analysis_evidence",
+                    "behavior_matrix",
+                    "confirmed_defects_prelim",
+                    "hypothesis_log",
+                    "authoritative_guidance_sources",
+                    "guidance_control_matrix",
+                    "context_gaps"
+                  ],
+                  "mode": "plan_only",
+                  "output_id": "evidence_gap",
+                  "phase": "DESIGN",
+                  "step_id": "design_gap_and_remediation_plan",
+                  "worker_type": "research_worker"
+                },
+                "id": "evidence_gap",
+                "producer_step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "input_artifact_ids": [
+                "analysis_evidence",
+                "behavior_matrix",
+                "confirmed_defects_prelim",
+                "hypothesis_log",
+                "authoritative_guidance_sources",
+                "guidance_control_matrix",
+                "context_gaps"
+              ],
+              "mocked": true,
+              "mode": "plan_only",
+              "phase": "DESIGN",
+              "task_id": "billing_rollout_audit"
+            },
+            "producer": "research_worker",
+            "run_id": "run_plan_req_001_reliability_audit",
+            "status": "completed",
+            "summary": "Mock research_worker completed plan outputs for design_gap_and_remediation_plan.",
+            "usage": {
+              "model_calls": 1,
+              "tool_calls": 2
+            },
+            "warnings": []
+          },
+          {
+            "artifacts": [
+              {
+                "content": {
+                  "failed_step_id": "verify_plan_integrity",
+                  "input_artifact_ids": [
+                    "confirmed_defects",
+                    "standards_gap_analysis",
+                    "mutation_scope",
+                    "change_design",
+                    "rollback_plan",
+                    "verification_plan",
+                    "operational_checks_plan",
+                    "analysis_evidence",
+                    "authoritative_guidance_sources",
+                    "evidence_gap"
+                  ],
+                  "instruction_excerpt": "Known facts: Proposed findings and plans are available with explicit evidence and scope artifacts. Unknowns: Whether recommendations fully satisfy constraints on evidence quality, minimal scope, rollback safety, and verification coverage. Do now: Validate traceability from each confirmed defect to evidence and guidance, check scope containment in mutation_scope, and verify rollback/verification/operational plans cover idempotency, retries, deduplication, ordering, and recovery. Do not do: Do not add new speculative defects or alter repository files. Output: verification_results and readiness_assessment.",
+                  "issue_class": "planner_level",
+                  "permissions": {
+                    "read_files": true,
+                    "run_commands": false,
+                    "web_research": false,
+                    "write_files": false
+                  },
+                  "signal_type": "planner_level",
+                  "signals": [
+                    "verification_contract_mismatch",
+                    "evidence_gap",
+                    "scope_ambiguity"
+                  ],
+                  "task_metadata": {
+                    "mode": "verify_only",
+                    "phase": "VERIFY",
+                    "task_id": "billing_rollout_audit"
+                  }
+                },
+                "id": "planner_issue_snapshot",
+                "producer_step_id": "verify_plan_integrity",
+                "worker_type": "verify_worker"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "issue_class": "planner_level",
+              "mocked": true,
+              "recommended_action": "Return a full fixed plan and re-run from a verification-safe sequence.",
+              "replan_level": "planner"
+            },
+            "producer": "verify_worker",
+            "run_id": "run_plan_req_001_reliability_audit",
+            "status": "needs_replan",
+            "summary": "Planner-level issue: verification criteria and mutation outputs are misaligned; re-planning is required before final verification.",
+            "usage": {
+              "model_calls": 0,
+              "tool_calls": 1
+            },
+            "warnings": []
+          }
+        ],
+        "replacement_plan": {
+          "budget": {
+            "max_model_calls": 2,
+            "max_retries": 1,
+            "max_tool_calls": 9,
+            "max_workers": 3
+          },
+          "execution_pattern": "discover_verify_finalize",
+          "global_invariants": [
+            "evidence_before_conclusion",
+            "no_file_mutation",
+            "separate_confirmed_defects_from_hypotheses",
+            "authoritative_sources_required_for_standards_comparison",
+            "minimal_scope_recommendations_only",
+            "rollback_and_verification_plans_required_for_confirmed_defects"
+          ],
+          "metadata": {
+            "archetype": "phase_aware_reliability_audit",
+            "complexity": "high",
+            "llm_planner": {
+              "budget_auto_aligned": true,
+              "envelope_complexity_hint": "high",
+              "envelope_input_type": "subscription_billing_rollout_reliability_audit",
+              "failed_step_id": "verify_plan_integrity",
+              "mode": "completed",
+              "model_calls": 1,
+              "parent_plan_id": "plan_req_001_reliability_audit",
+              "repair_attempted": false,
+              "replan": true,
+              "resolved_validation_errors": [],
+              "stages": [
+                "replan_plan",
+                "validate_plan"
+              ],
+              "validation_errors": []
+            },
+            "mutation_intent": "propose_only_no_writes",
+            "planner_runtime": {
+              "fallback_reason": null,
+              "mode": "llm_prompt_chain_replan"
+            },
+            "replan_reason": "Planner-level verification contract mismatch resolved via verification-safe rebaseline",
+            "source_failed_step_id": "verify_plan_integrity"
+          },
+          "objective": "Assess subscription billing rollout readiness by collecting repository/design evidence, comparing behavior to authoritative guidance, and delivering minimally scoped remediation, rollback, and verification recommendations for confirmed defects.",
+          "plan_id": "plan_req_001_reliability_audit_replan_v2",
+          "planner": "reliability_audit_planner",
+          "request_id": "req_001",
+          "steps": [
+            {
+              "input_artifacts": [],
+              "instruction": "Known facts: Prior DISCOVER/ANALYZE/RESEARCH/DESIGN work completed, and replan is required because verification criteria and mutation-oriented outputs were misaligned for a no-write audit. Unknowns: Exact traceability completeness from each confirmed defect to evidence and guidance, and whether prior design outputs are sufficiently bounded for verification without mutation assumptions. Do now: Re-establish a fresh, read-only verification baseline by consolidating repository/design evidence, authoritative guidance controls, and design-phase defect/remediation artifacts into a single verification contract that is explicitly no-mutation and scope-bounded. Do not do: Do not modify files, do not introduce new defects, do not broaden remediation scope, and do not use uncited or non-authoritative standards claims. Output: refreshed_evidence_bundle, refreshed_guidance_bundle, refreshed_design_bundle, and verification_contract.",
+              "max_model_calls": 0,
+              "max_tool_calls": 4,
+              "mode": "observe_only",
+              "output_artifacts": [
+                "refreshed_evidence_bundle",
+                "refreshed_guidance_bundle",
+                "refreshed_design_bundle",
+                "verification_contract"
+              ],
+              "permissions": {
+                "read_files": true,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "DISCOVER",
+              "step_id": "rebaseline_verification_inputs",
+              "task_id": "billing_rollout_audit",
+              "worker_type": "verify_worker"
+            },
+            {
+              "input_artifacts": [
+                "refreshed_evidence_bundle",
+                "refreshed_guidance_bundle",
+                "refreshed_design_bundle",
+                "verification_contract"
+              ],
+              "instruction": "Known facts: refreshed_evidence_bundle, refreshed_guidance_bundle, refreshed_design_bundle, and verification_contract provide a no-write, comparison-ready baseline. Unknowns: Whether every confirmed defect is fully traceable to file evidence and authoritative guidance, and whether rollback/verification/operational checks are complete for idempotency, retries, deduplication, ordering, and dead-letter recovery. Do now: Execute strict verification against verification_contract, producing explicit pass/fail traceability per defect and a release-readiness determination with clearly separated confirmed defects, hypotheses, and residual evidence gaps. Do not do: Do not add speculative findings, do not alter repository artifacts, and do not accept conclusions lacking direct evidence-to-guidance linkage. Output: verification_results, readiness_assessment, and traceability_report.",
+              "max_model_calls": 1,
+              "max_tool_calls": 3,
+              "mode": "verify_only",
+              "output_artifacts": [
+                "verification_results",
+                "readiness_assessment",
+                "traceability_report"
+              ],
+              "permissions": {
+                "read_files": true,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "VERIFY",
+              "step_id": "verify_traceability_and_readiness",
+              "task_id": "billing_rollout_audit",
+              "worker_type": "verify_worker"
+            },
+            {
+              "input_artifacts": [
+                "verification_results",
+                "readiness_assessment",
+                "traceability_report",
+                "refreshed_design_bundle"
+              ],
+              "instruction": "Known facts: verification_results, readiness_assessment, and traceability_report contain the verified no-write audit outcome. Unknowns: None material beyond documented evidence gaps. Do now: Deliver the final report with readiness verdict, confirmed defects versus hypotheses, standards comparison outcomes, minimal remediation scope, rollback path, targeted verification, and operational checks, all grounded in verified traceability. Do not do: Do not introduce uncited claims, do not expand scope, and do not imply code mutations were performed. Output: final_report.",
+              "max_model_calls": 1,
+              "max_tool_calls": 0,
+              "mode": "summarize_only",
+              "output_artifacts": [
+                "final_report"
+              ],
+              "permissions": {
+                "read_files": false,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "FINALIZE",
+              "step_id": "finalize_audit_report",
+              "task_id": "billing_rollout_audit",
+              "worker_type": "verify_worker"
+            }
+          ],
+          "strategy": "verification_safe_rebaseline_then_traceability_verification",
+          "success_criteria": [
+            "Verification inputs are rebaselined into a no-mutation contract with explicit evidence, guidance, and scope linkage.",
+            "Each confirmed defect has explicit traceability to repository/design evidence and authoritative guidance controls.",
+            "Readiness assessment clearly separates confirmed defects, hypotheses, and unresolved evidence gaps.",
+            "Recommendations remain minimally scoped and include rollback, targeted verification, and operational checks.",
+            "A final evidence-traceable readiness report is produced without repository mutation."
+          ]
+        },
+        "request": {
+          "completed_artifacts": [
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "repo_inventory",
+                "phase": "DISCOVER",
+                "step_id": "discover_billing_context",
+                "worker_type": "repo_worker"
+              },
+              "id": "repo_inventory",
+              "producer_step_id": "discover_billing_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "module_map",
+                "phase": "DISCOVER",
+                "step_id": "discover_billing_context",
+                "worker_type": "repo_worker"
+              },
+              "id": "module_map",
+              "producer_step_id": "discover_billing_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "architecture_notes",
+                "phase": "DISCOVER",
+                "step_id": "discover_billing_context",
+                "worker_type": "repo_worker"
+              },
+              "id": "architecture_notes",
+              "producer_step_id": "discover_billing_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "context_gaps",
+                "phase": "DISCOVER",
+                "step_id": "discover_billing_context",
+                "worker_type": "repo_worker"
+              },
+              "id": "context_gaps",
+              "producer_step_id": "discover_billing_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory",
+                  "module_map",
+                  "architecture_notes"
+                ],
+                "mode": "observe_only",
+                "output_id": "analysis_evidence",
+                "phase": "ANALYZE",
+                "step_id": "analyze_billing_behavior",
+                "worker_type": "repo_worker"
+              },
+              "id": "analysis_evidence",
+              "producer_step_id": "analyze_billing_behavior",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory",
+                  "module_map",
+                  "architecture_notes"
+                ],
+                "mode": "observe_only",
+                "output_id": "behavior_matrix",
+                "phase": "ANALYZE",
+                "step_id": "analyze_billing_behavior",
+                "worker_type": "repo_worker"
+              },
+              "id": "behavior_matrix",
+              "producer_step_id": "analyze_billing_behavior",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory",
+                  "module_map",
+                  "architecture_notes"
+                ],
+                "mode": "observe_only",
+                "output_id": "confirmed_defects_prelim",
+                "phase": "ANALYZE",
+                "step_id": "analyze_billing_behavior",
+                "worker_type": "repo_worker"
+              },
+              "id": "confirmed_defects_prelim",
+              "producer_step_id": "analyze_billing_behavior",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory",
+                  "module_map",
+                  "architecture_notes"
+                ],
+                "mode": "observe_only",
+                "output_id": "hypothesis_log",
+                "phase": "ANALYZE",
+                "step_id": "analyze_billing_behavior",
+                "worker_type": "repo_worker"
+              },
+              "id": "hypothesis_log",
+              "producer_step_id": "analyze_billing_behavior",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "authoritative_guidance_sources",
+                "phase": "RESEARCH",
+                "step_id": "research_authoritative_guidance",
+                "worker_type": "web_research_worker"
+              },
+              "id": "authoritative_guidance_sources",
+              "producer_step_id": "research_authoritative_guidance",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "guidance_control_matrix",
+                "phase": "RESEARCH",
+                "step_id": "research_authoritative_guidance",
+                "worker_type": "web_research_worker"
+              },
+              "id": "guidance_control_matrix",
+              "producer_step_id": "research_authoritative_guidance",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "analysis_evidence",
+                  "behavior_matrix",
+                  "confirmed_defects_prelim",
+                  "hypothesis_log",
+                  "authoritative_guidance_sources",
+                  "guidance_control_matrix",
+                  "context_gaps"
+                ],
+                "mode": "plan_only",
+                "output_id": "confirmed_defects",
+                "phase": "DESIGN",
+                "step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              "id": "confirmed_defects",
+              "producer_step_id": "design_gap_and_remediation_plan",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "analysis_evidence",
+                  "behavior_matrix",
+                  "confirmed_defects_prelim",
+                  "hypothesis_log",
+                  "authoritative_guidance_sources",
+                  "guidance_control_matrix",
+                  "context_gaps"
+                ],
+                "mode": "plan_only",
+                "output_id": "standards_gap_analysis",
+                "phase": "DESIGN",
+                "step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              "id": "standards_gap_analysis",
+              "producer_step_id": "design_gap_and_remediation_plan",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "analysis_evidence",
+                  "behavior_matrix",
+                  "confirmed_defects_prelim",
+                  "hypothesis_log",
+                  "authoritative_guidance_sources",
+                  "guidance_control_matrix",
+                  "context_gaps"
+                ],
+                "mode": "plan_only",
+                "output_id": "mutation_scope",
+                "phase": "DESIGN",
+                "step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              "id": "mutation_scope",
+              "producer_step_id": "design_gap_and_remediation_plan",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "analysis_evidence",
+                  "behavior_matrix",
+                  "confirmed_defects_prelim",
+                  "hypothesis_log",
+                  "authoritative_guidance_sources",
+                  "guidance_control_matrix",
+                  "context_gaps"
+                ],
+                "mode": "plan_only",
+                "output_id": "change_design",
+                "phase": "DESIGN",
+                "step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              "id": "change_design",
+              "producer_step_id": "design_gap_and_remediation_plan",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "analysis_evidence",
+                  "behavior_matrix",
+                  "confirmed_defects_prelim",
+                  "hypothesis_log",
+                  "authoritative_guidance_sources",
+                  "guidance_control_matrix",
+                  "context_gaps"
+                ],
+                "mode": "plan_only",
+                "output_id": "rollback_plan",
+                "phase": "DESIGN",
+                "step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              "id": "rollback_plan",
+              "producer_step_id": "design_gap_and_remediation_plan",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "analysis_evidence",
+                  "behavior_matrix",
+                  "confirmed_defects_prelim",
+                  "hypothesis_log",
+                  "authoritative_guidance_sources",
+                  "guidance_control_matrix",
+                  "context_gaps"
+                ],
+                "mode": "plan_only",
+                "output_id": "verification_plan",
+                "phase": "DESIGN",
+                "step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              "id": "verification_plan",
+              "producer_step_id": "design_gap_and_remediation_plan",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "analysis_evidence",
+                  "behavior_matrix",
+                  "confirmed_defects_prelim",
+                  "hypothesis_log",
+                  "authoritative_guidance_sources",
+                  "guidance_control_matrix",
+                  "context_gaps"
+                ],
+                "mode": "plan_only",
+                "output_id": "operational_checks_plan",
+                "phase": "DESIGN",
+                "step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              "id": "operational_checks_plan",
+              "producer_step_id": "design_gap_and_remediation_plan",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "analysis_evidence",
+                  "behavior_matrix",
+                  "confirmed_defects_prelim",
+                  "hypothesis_log",
+                  "authoritative_guidance_sources",
+                  "guidance_control_matrix",
+                  "context_gaps"
+                ],
+                "mode": "plan_only",
+                "output_id": "evidence_gap",
+                "phase": "DESIGN",
+                "step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              "id": "evidence_gap",
+              "producer_step_id": "design_gap_and_remediation_plan",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "failed_step_id": "verify_plan_integrity",
+                "input_artifact_ids": [
+                  "confirmed_defects",
+                  "standards_gap_analysis",
+                  "mutation_scope",
+                  "change_design",
+                  "rollback_plan",
+                  "verification_plan",
+                  "operational_checks_plan",
+                  "analysis_evidence",
+                  "authoritative_guidance_sources",
+                  "evidence_gap"
+                ],
+                "instruction_excerpt": "Known facts: Proposed findings and plans are available with explicit evidence and scope artifacts. Unknowns: Whether recommendations fully satisfy constraints on evidence quality, minimal scope, rollback safety, and verification coverage. Do now: Validate traceability from each confirmed defect to evidence and guidance, check scope containment in mutation_scope, and verify rollback/verification/operational plans cover idempotency, retries, deduplication, ordering, and recovery. Do not do: Do not add new speculative defects or alter repository files. Output: verification_results and readiness_assessment.",
+                "issue_class": "planner_level",
+                "permissions": {
+                  "read_files": true,
+                  "run_commands": false,
+                  "web_research": false,
+                  "write_files": false
+                },
+                "signal_type": "planner_level",
+                "signals": [
+                  "verification_contract_mismatch",
+                  "evidence_gap",
+                  "scope_ambiguity"
+                ],
+                "task_metadata": {
+                  "mode": "verify_only",
+                  "phase": "VERIFY",
+                  "task_id": "billing_rollout_audit"
+                }
+              },
+              "id": "planner_issue_snapshot",
+              "producer_step_id": "verify_plan_integrity",
+              "worker_type": "verify_worker"
+            }
+          ],
+          "completed_step_ids": [
+            "discover_billing_context",
+            "analyze_billing_behavior",
+            "research_authoritative_guidance",
+            "design_gap_and_remediation_plan"
+          ],
+          "failed_step_id": "verify_plan_integrity",
+          "plan_id": "plan_req_001_reliability_audit",
+          "reason": "Planner-level issue: verification criteria and mutation outputs are misaligned; re-planning is required before final verification.",
+          "recommended_action": "Return a full fixed plan and re-run from a verification-safe sequence.",
+          "remaining_budget": {
+            "max_model_calls": 2,
+            "max_retries": 1,
+            "max_tool_calls": 9,
+            "max_workers": 1
+          },
+          "request_id": "req_001",
+          "run_id": "run_plan_req_001_reliability_audit",
+          "worker_result": {
+            "artifacts": [
+              {
+                "content": {
+                  "failed_step_id": "verify_plan_integrity",
+                  "input_artifact_ids": [
+                    "confirmed_defects",
+                    "standards_gap_analysis",
+                    "mutation_scope",
+                    "change_design",
+                    "rollback_plan",
+                    "verification_plan",
+                    "operational_checks_plan",
+                    "analysis_evidence",
+                    "authoritative_guidance_sources",
+                    "evidence_gap"
+                  ],
+                  "instruction_excerpt": "Known facts: Proposed findings and plans are available with explicit evidence and scope artifacts. Unknowns: Whether recommendations fully satisfy constraints on evidence quality, minimal scope, rollback safety, and verification coverage. Do now: Validate traceability from each confirmed defect to evidence and guidance, check scope containment in mutation_scope, and verify rollback/verification/operational plans cover idempotency, retries, deduplication, ordering, and recovery. Do not do: Do not add new speculative defects or alter repository files. Output: verification_results and readiness_assessment.",
+                  "issue_class": "planner_level",
+                  "permissions": {
+                    "read_files": true,
+                    "run_commands": false,
+                    "web_research": false,
+                    "write_files": false
+                  },
+                  "signal_type": "planner_level",
+                  "signals": [
+                    "verification_contract_mismatch",
+                    "evidence_gap",
+                    "scope_ambiguity"
+                  ],
+                  "task_metadata": {
+                    "mode": "verify_only",
+                    "phase": "VERIFY",
+                    "task_id": "billing_rollout_audit"
+                  }
+                },
+                "id": "planner_issue_snapshot",
+                "producer_step_id": "verify_plan_integrity",
+                "worker_type": "verify_worker"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "issue_class": "planner_level",
+              "mocked": true,
+              "recommended_action": "Return a full fixed plan and re-run from a verification-safe sequence.",
+              "replan_level": "planner"
+            },
+            "producer": "verify_worker",
+            "run_id": "run_plan_req_001_reliability_audit",
+            "status": "needs_replan",
+            "summary": "Planner-level issue: verification criteria and mutation outputs are misaligned; re-planning is required before final verification.",
+            "usage": {
+              "model_calls": 0,
+              "tool_calls": 1
+            },
+            "warnings": []
+          }
+        }
+      },
+      "worker_results": [
+        {
+          "artifacts": [
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "refreshed_evidence_bundle",
+                "phase": "DISCOVER",
+                "step_id": "rebaseline_verification_inputs",
+                "worker_type": "verify_worker"
+              },
+              "id": "refreshed_evidence_bundle",
+              "producer_step_id": "rebaseline_verification_inputs",
+              "worker_type": "verify_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "refreshed_guidance_bundle",
+                "phase": "DISCOVER",
+                "step_id": "rebaseline_verification_inputs",
+                "worker_type": "verify_worker"
+              },
+              "id": "refreshed_guidance_bundle",
+              "producer_step_id": "rebaseline_verification_inputs",
+              "worker_type": "verify_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "refreshed_design_bundle",
+                "phase": "DISCOVER",
+                "step_id": "rebaseline_verification_inputs",
+                "worker_type": "verify_worker"
+              },
+              "id": "refreshed_design_bundle",
+              "producer_step_id": "rebaseline_verification_inputs",
+              "worker_type": "verify_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "verification_contract",
+                "phase": "DISCOVER",
+                "step_id": "rebaseline_verification_inputs",
+                "worker_type": "verify_worker"
+              },
+              "id": "verification_contract",
+              "producer_step_id": "rebaseline_verification_inputs",
+              "worker_type": "verify_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "input_artifact_ids": [],
+            "mocked": true,
+            "mode": "observe_only",
+            "phase": "DISCOVER",
+            "task_id": "billing_rollout_audit"
+          },
+          "producer": "verify_worker",
+          "run_id": "run_plan_req_001_reliability_audit_replan_v2",
+          "status": "completed",
+          "summary": "Mock verify_worker completed plan outputs for rebaseline_verification_inputs.",
+          "usage": {
+            "model_calls": 0,
+            "tool_calls": 2
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": {
+                "derived_inputs": [
+                  "refreshed_evidence_bundle",
+                  "refreshed_guidance_bundle",
+                  "refreshed_design_bundle",
+                  "verification_contract"
+                ],
+                "mode": "verify_only",
+                "output_id": "verification_results",
+                "phase": "VERIFY",
+                "step_id": "verify_traceability_and_readiness",
+                "worker_type": "verify_worker"
+              },
+              "id": "verification_results",
+              "producer_step_id": "verify_traceability_and_readiness",
+              "worker_type": "verify_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "refreshed_evidence_bundle",
+                  "refreshed_guidance_bundle",
+                  "refreshed_design_bundle",
+                  "verification_contract"
+                ],
+                "mode": "verify_only",
+                "output_id": "readiness_assessment",
+                "phase": "VERIFY",
+                "step_id": "verify_traceability_and_readiness",
+                "worker_type": "verify_worker"
+              },
+              "id": "readiness_assessment",
+              "producer_step_id": "verify_traceability_and_readiness",
+              "worker_type": "verify_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "refreshed_evidence_bundle",
+                  "refreshed_guidance_bundle",
+                  "refreshed_design_bundle",
+                  "verification_contract"
+                ],
+                "mode": "verify_only",
+                "output_id": "traceability_report",
+                "phase": "VERIFY",
+                "step_id": "verify_traceability_and_readiness",
+                "worker_type": "verify_worker"
+              },
+              "id": "traceability_report",
+              "producer_step_id": "verify_traceability_and_readiness",
+              "worker_type": "verify_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "input_artifact_ids": [
+              "refreshed_evidence_bundle",
+              "refreshed_guidance_bundle",
+              "refreshed_design_bundle",
+              "verification_contract"
+            ],
+            "mocked": true,
+            "mode": "verify_only",
+            "phase": "VERIFY",
+            "task_id": "billing_rollout_audit"
+          },
+          "producer": "verify_worker",
+          "run_id": "run_plan_req_001_reliability_audit_replan_v2",
+          "status": "completed",
+          "summary": "Mock verify_worker completed plan outputs for verify_traceability_and_readiness.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 2
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": {
+                "derived_inputs": [
+                  "verification_results",
+                  "readiness_assessment",
+                  "traceability_report",
+                  "refreshed_design_bundle"
+                ],
+                "mode": "summarize_only",
+                "output_id": "final_report",
+                "phase": "FINALIZE",
+                "step_id": "finalize_audit_report",
+                "worker_type": "verify_worker"
+              },
+              "id": "final_report",
+              "producer_step_id": "finalize_audit_report",
+              "worker_type": "verify_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "input_artifact_ids": [
+              "verification_results",
+              "readiness_assessment",
+              "traceability_report",
+              "refreshed_design_bundle"
+            ],
+            "mocked": true,
+            "mode": "summarize_only",
+            "phase": "FINALIZE",
+            "task_id": "billing_rollout_audit"
+          },
+          "producer": "verify_worker",
+          "run_id": "run_plan_req_001_reliability_audit_replan_v2",
+          "status": "completed",
+          "summary": "Mock verify_worker completed plan outputs for finalize_audit_report.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 0
+          },
+          "warnings": []
+        }
+      ]
+    },
+    "producer": "worker_kernel",
+    "run_id": "run_plan_req_001_reliability_audit_replan_v2",
+    "status": "completed",
+    "summary": "Plan executed successfully.",
+    "usage": {
+      "model_calls": 2,
+      "tool_calls": 4,
+      "workers": 3
+    },
+    "warnings": []
+  },
+  "generated_at": "2026-06-02T14:18:05.993665+00:00",
+  "plan_intent": "complex_scenario_billing_reliability_audit",
+  "planner": {
+    "initial_plan": {
+      "budget": {
+        "max_model_calls": 6,
+        "max_retries": 1,
+        "max_tool_calls": 18,
+        "max_workers": 6
+      },
+      "execution_pattern": "discover_analyze_research_design_verify_finalize",
+      "global_invariants": [
+        "evidence_before_conclusion",
+        "no_file_mutation",
+        "separate_confirmed_defects_from_hypotheses",
+        "authoritative_sources_required_for_standards_comparison",
+        "minimal_scope_recommendations_only",
+        "rollback_and_verification_plans_required_for_confirmed_defects"
+      ],
+      "metadata": {
+        "archetype": "phase_aware_reliability_audit",
+        "complexity": "high",
+        "llm_planner": {
+          "budget_auto_aligned": true,
+          "envelope_complexity_hint": "high",
+          "envelope_input_type": "subscription_billing_rollout_reliability_audit",
+          "mode": "completed",
+          "model_calls": 1,
+          "repair_attempted": false,
+          "resolved_validation_errors": [],
+          "stages": [
+            "draft_plan",
+            "validate_plan"
+          ],
+          "validation_errors": []
+        },
+        "mutation_intent": "propose_only_no_writes",
+        "planner_runtime": {
+          "fallback_reason": null,
+          "mode": "llm_prompt_chain"
+        }
+      },
+      "objective": "Assess subscription billing rollout readiness by collecting repository/design evidence, comparing behavior to authoritative guidance, and delivering minimally scoped remediation, rollback, and verification recommendations for confirmed defects.",
+      "plan_id": "plan_req_001_reliability_audit",
+      "planner": "reliability_audit_planner",
+      "request_id": "req_001",
+      "steps": [
+        {
+          "input_artifacts": [],
+          "instruction": "Known facts: Audit targets system-design.md and billing flows for invoicing, tax, retries, deduplication, and dead-letter recovery. Unknowns: Exact repository paths, module ownership, branch/commit scope, and message-flow boundaries. Do now: Locate system-design.md, map relevant modules/configs/tests, and capture unresolved context gaps needed for reliable assessment. Do not do: Do not modify files, run destructive commands, or infer behavior without file evidence. Output: repo_inventory, module_map, architecture_notes, and context_gaps.",
+          "max_model_calls": 1,
+          "max_tool_calls": 4,
+          "mode": "observe_only",
+          "output_artifacts": [
+            "repo_inventory",
+            "module_map",
+            "architecture_notes",
+            "context_gaps"
+          ],
+          "permissions": {
+            "read_files": true,
+            "run_commands": false,
+            "web_research": false,
+            "write_files": false
+          },
+          "phase": "DISCOVER",
+          "step_id": "discover_billing_context",
+          "task_id": "billing_rollout_audit",
+          "worker_type": "repo_worker"
+        },
+        {
+          "input_artifacts": [
+            "repo_inventory",
+            "module_map",
+            "architecture_notes"
+          ],
+          "instruction": "Known facts: repo_inventory, module_map, and architecture_notes identify likely implementation targets. Unknowns: Whether implemented behavior matches reliability expectations across idempotency, retries, deduplication, ordering, tax, and dead-letter recovery. Do now: Inspect code/config/tests to extract evidence-backed behavior and classify candidate defects versus unverified hypotheses. Do not do: Do not claim root cause without direct evidence and do not propose fixes yet. Output: analysis_evidence, behavior_matrix, confirmed_defects_prelim, and hypothesis_log.",
+          "max_model_calls": 1,
+          "max_tool_calls": 5,
+          "mode": "observe_only",
+          "output_artifacts": [
+            "analysis_evidence",
+            "behavior_matrix",
+            "confirmed_defects_prelim",
+            "hypothesis_log"
+          ],
+          "permissions": {
+            "read_files": true,
+            "run_commands": false,
+            "web_research": false,
+            "write_files": false
+          },
+          "phase": "ANALYZE",
+          "step_id": "analyze_billing_behavior",
+          "task_id": "billing_rollout_audit",
+          "worker_type": "repo_worker"
+        },
+        {
+          "input_artifacts": [],
+          "instruction": "Known facts: Comparison must reference authoritative industry guidance for idempotency, retry backoff, auditability, and ordering guarantees. Unknowns: Which specific standards/vendor-neutral sources are most applicable to this billing architecture. Do now: Gather and cite authoritative guidance, then normalize requirements into a comparison-ready control set. Do not do: Do not invent sources, avoid non-authoritative commentary, and do not mutate repository artifacts. Output: authoritative_guidance_sources and guidance_control_matrix.",
+          "max_model_calls": 1,
+          "max_tool_calls": 4,
+          "mode": "observe_only",
+          "output_artifacts": [
+            "authoritative_guidance_sources",
+            "guidance_control_matrix"
+          ],
+          "permissions": {
+            "read_files": false,
+            "run_commands": false,
+            "web_research": true,
+            "write_files": false
+          },
+          "phase": "RESEARCH",
+          "step_id": "research_authoritative_guidance",
+          "task_id": "billing_rollout_audit",
+          "worker_type": "web_research_worker"
+        },
+        {
+          "input_artifacts": [
+            "analysis_evidence",
+            "behavior_matrix",
+            "confirmed_defects_prelim",
+            "hypothesis_log",
+            "authoritative_guidance_sources",
+            "guidance_control_matrix",
+            "context_gaps"
+          ],
+          "instruction": "Known facts: analysis_evidence and behavior_matrix describe observed implementation; guidance_control_matrix defines expected controls. Unknowns: Final defect confidence where evidence is partial and minimal safe remediation boundaries per confirmed defect. Do now: Produce standards-based gap analysis separating confirmed defects from hypotheses, define minimal mutation_scope for confirmed defects, and draft rollback_plan, verification_plan, and operational_checks_plan tied to changed behavior. Do not do: Do not broaden scope beyond confirmed defects, do not claim certainty where evidence is missing, and do not perform code writes. Output: confirmed_defects, standards_gap_analysis, mutation_scope, change_design, rollback_plan, verification_plan, operational_checks_plan, and evidence_gap.",
+          "max_model_calls": 1,
+          "max_tool_calls": 3,
+          "mode": "plan_only",
+          "output_artifacts": [
+            "confirmed_defects",
+            "standards_gap_analysis",
+            "mutation_scope",
+            "change_design",
+            "rollback_plan",
+            "verification_plan",
+            "operational_checks_plan",
+            "evidence_gap"
+          ],
+          "permissions": {
+            "read_files": true,
+            "run_commands": false,
+            "web_research": false,
+            "write_files": false
+          },
+          "phase": "DESIGN",
+          "step_id": "design_gap_and_remediation_plan",
+          "task_id": "billing_rollout_audit",
+          "worker_type": "research_worker"
+        },
+        {
+          "input_artifacts": [
+            "confirmed_defects",
+            "standards_gap_analysis",
+            "mutation_scope",
+            "change_design",
+            "rollback_plan",
+            "verification_plan",
+            "operational_checks_plan",
+            "analysis_evidence",
+            "authoritative_guidance_sources",
+            "evidence_gap"
+          ],
+          "instruction": "Known facts: Proposed findings and plans are available with explicit evidence and scope artifacts. Unknowns: Whether recommendations fully satisfy constraints on evidence quality, minimal scope, rollback safety, and verification coverage. Do now: Validate traceability from each confirmed defect to evidence and guidance, check scope containment in mutation_scope, and verify rollback/verification/operational plans cover idempotency, retries, deduplication, ordering, and recovery. Do not do: Do not add new speculative defects or alter repository files. Output: verification_results and readiness_assessment.",
+          "max_model_calls": 1,
+          "max_tool_calls": 2,
+          "mode": "verify_only",
+          "output_artifacts": [
+            "verification_results",
+            "readiness_assessment"
+          ],
+          "permissions": {
+            "read_files": true,
+            "run_commands": false,
+            "web_research": false,
+            "write_files": false
+          },
+          "phase": "VERIFY",
+          "step_id": "verify_plan_integrity",
+          "task_id": "billing_rollout_audit",
+          "worker_type": "verify_worker"
+        },
+        {
+          "input_artifacts": [
+            "verification_results",
+            "readiness_assessment",
+            "confirmed_defects",
+            "standards_gap_analysis",
+            "change_design",
+            "rollback_plan",
+            "verification_plan",
+            "operational_checks_plan",
+            "evidence_gap"
+          ],
+          "instruction": "Known facts: readiness_assessment and verification_results reflect evidence-backed audit conclusions. Unknowns: None material beyond documented evidence_gap items. Do now: Deliver a concise final report with release readiness verdict, confirmed defects vs hypotheses, standards comparison outcomes, minimal remediation scope, rollback path, and targeted verification plus post-change operational checks. Do not do: Do not introduce uncited claims or new scope. Output: final_report.",
+          "max_model_calls": 1,
+          "max_tool_calls": 0,
+          "mode": "summarize_only",
+          "output_artifacts": [
+            "final_report"
+          ],
+          "permissions": {
+            "read_files": false,
+            "run_commands": false,
+            "web_research": false,
+            "write_files": false
+          },
+          "phase": "FINALIZE",
+          "step_id": "finalize_audit_report",
+          "task_id": "billing_rollout_audit",
+          "worker_type": "research_worker"
+        }
+      ],
+      "strategy": "discovery_first_evidence_backed_gap_analysis",
+      "success_criteria": [
+        "Repository and design evidence are collected for all targeted billing concerns.",
+        "Behavior is compared against explicitly cited authoritative guidance.",
+        "Findings clearly separate confirmed defects from hypotheses and document any evidence gaps.",
+        "Recommendations remain minimally scoped and include rollback, targeted verification, and operational checks.",
+        "A final readiness report is produced with traceable evidence and actionable next steps."
+      ]
+    },
+    "planner_runtime_mode": "llm_prompt_chain"
+  },
+  "prompt": "Run a release-readiness and reliability audit for a subscription billing platform rollout: review system-design.md and the repository implementation for invoice generation, tax calculation, payment retries with deduplication, and dead-letter recovery. Then compare repository behavior with authoritative industry guidance on idempotency, retry backoff, auditability, and ordering guarantees. If defects are concrete, propose minimal scoped changes, a rollback path, and targeted verification plus post-change operational checks.",
+  "replan": {
+    "replan_depth": 1,
+    "replanned_plan": {
+      "budget": {
+        "max_model_calls": 2,
+        "max_retries": 1,
+        "max_tool_calls": 9,
+        "max_workers": 3
+      },
+      "execution_pattern": "discover_verify_finalize",
+      "global_invariants": [
+        "evidence_before_conclusion",
+        "no_file_mutation",
+        "separate_confirmed_defects_from_hypotheses",
+        "authoritative_sources_required_for_standards_comparison",
+        "minimal_scope_recommendations_only",
+        "rollback_and_verification_plans_required_for_confirmed_defects"
+      ],
+      "metadata": {
+        "archetype": "phase_aware_reliability_audit",
+        "complexity": "high",
+        "llm_planner": {
+          "budget_auto_aligned": true,
+          "envelope_complexity_hint": "high",
+          "envelope_input_type": "subscription_billing_rollout_reliability_audit",
+          "failed_step_id": "verify_plan_integrity",
+          "mode": "completed",
+          "model_calls": 1,
+          "parent_plan_id": "plan_req_001_reliability_audit",
+          "repair_attempted": false,
+          "replan": true,
+          "resolved_validation_errors": [],
+          "stages": [
+            "replan_plan",
+            "validate_plan"
+          ],
+          "validation_errors": []
+        },
+        "mutation_intent": "propose_only_no_writes",
+        "planner_runtime": {
+          "fallback_reason": null,
+          "mode": "llm_prompt_chain_replan"
+        },
+        "replan_reason": "Planner-level verification contract mismatch resolved via verification-safe rebaseline",
+        "source_failed_step_id": "verify_plan_integrity"
+      },
+      "objective": "Assess subscription billing rollout readiness by collecting repository/design evidence, comparing behavior to authoritative guidance, and delivering minimally scoped remediation, rollback, and verification recommendations for confirmed defects.",
+      "plan_id": "plan_req_001_reliability_audit_replan_v2",
+      "planner": "reliability_audit_planner",
+      "request_id": "req_001",
+      "steps": [
+        {
+          "input_artifacts": [],
+          "instruction": "Known facts: Prior DISCOVER/ANALYZE/RESEARCH/DESIGN work completed, and replan is required because verification criteria and mutation-oriented outputs were misaligned for a no-write audit. Unknowns: Exact traceability completeness from each confirmed defect to evidence and guidance, and whether prior design outputs are sufficiently bounded for verification without mutation assumptions. Do now: Re-establish a fresh, read-only verification baseline by consolidating repository/design evidence, authoritative guidance controls, and design-phase defect/remediation artifacts into a single verification contract that is explicitly no-mutation and scope-bounded. Do not do: Do not modify files, do not introduce new defects, do not broaden remediation scope, and do not use uncited or non-authoritative standards claims. Output: refreshed_evidence_bundle, refreshed_guidance_bundle, refreshed_design_bundle, and verification_contract.",
+          "max_model_calls": 0,
+          "max_tool_calls": 4,
+          "mode": "observe_only",
+          "output_artifacts": [
+            "refreshed_evidence_bundle",
+            "refreshed_guidance_bundle",
+            "refreshed_design_bundle",
+            "verification_contract"
+          ],
+          "permissions": {
+            "read_files": true,
+            "run_commands": false,
+            "web_research": false,
+            "write_files": false
+          },
+          "phase": "DISCOVER",
+          "step_id": "rebaseline_verification_inputs",
+          "task_id": "billing_rollout_audit",
+          "worker_type": "verify_worker"
+        },
+        {
+          "input_artifacts": [
+            "refreshed_evidence_bundle",
+            "refreshed_guidance_bundle",
+            "refreshed_design_bundle",
+            "verification_contract"
+          ],
+          "instruction": "Known facts: refreshed_evidence_bundle, refreshed_guidance_bundle, refreshed_design_bundle, and verification_contract provide a no-write, comparison-ready baseline. Unknowns: Whether every confirmed defect is fully traceable to file evidence and authoritative guidance, and whether rollback/verification/operational checks are complete for idempotency, retries, deduplication, ordering, and dead-letter recovery. Do now: Execute strict verification against verification_contract, producing explicit pass/fail traceability per defect and a release-readiness determination with clearly separated confirmed defects, hypotheses, and residual evidence gaps. Do not do: Do not add speculative findings, do not alter repository artifacts, and do not accept conclusions lacking direct evidence-to-guidance linkage. Output: verification_results, readiness_assessment, and traceability_report.",
+          "max_model_calls": 1,
+          "max_tool_calls": 3,
+          "mode": "verify_only",
+          "output_artifacts": [
+            "verification_results",
+            "readiness_assessment",
+            "traceability_report"
+          ],
+          "permissions": {
+            "read_files": true,
+            "run_commands": false,
+            "web_research": false,
+            "write_files": false
+          },
+          "phase": "VERIFY",
+          "step_id": "verify_traceability_and_readiness",
+          "task_id": "billing_rollout_audit",
+          "worker_type": "verify_worker"
+        },
+        {
+          "input_artifacts": [
+            "verification_results",
+            "readiness_assessment",
+            "traceability_report",
+            "refreshed_design_bundle"
+          ],
+          "instruction": "Known facts: verification_results, readiness_assessment, and traceability_report contain the verified no-write audit outcome. Unknowns: None material beyond documented evidence gaps. Do now: Deliver the final report with readiness verdict, confirmed defects versus hypotheses, standards comparison outcomes, minimal remediation scope, rollback path, targeted verification, and operational checks, all grounded in verified traceability. Do not do: Do not introduce uncited claims, do not expand scope, and do not imply code mutations were performed. Output: final_report.",
+          "max_model_calls": 1,
+          "max_tool_calls": 0,
+          "mode": "summarize_only",
+          "output_artifacts": [
+            "final_report"
+          ],
+          "permissions": {
+            "read_files": false,
+            "run_commands": false,
+            "web_research": false,
+            "write_files": false
+          },
+          "phase": "FINALIZE",
+          "step_id": "finalize_audit_report",
+          "task_id": "billing_rollout_audit",
+          "worker_type": "verify_worker"
+        }
+      ],
+      "strategy": "verification_safe_rebaseline_then_traceability_verification",
+      "success_criteria": [
+        "Verification inputs are rebaselined into a no-mutation contract with explicit evidence, guidance, and scope linkage.",
+        "Each confirmed defect has explicit traceability to repository/design evidence and authoritative guidance controls.",
+        "Readiness assessment clearly separates confirmed defects, hypotheses, and unresolved evidence gaps.",
+        "Recommendations remain minimally scoped and include rollback, targeted verification, and operational checks.",
+        "A final evidence-traceable readiness report is produced without repository mutation."
+      ]
+    },
+    "request": {
+      "completed_artifacts": [
+        {
+          "content": {
+            "derived_inputs": [],
+            "mode": "observe_only",
+            "output_id": "repo_inventory",
+            "phase": "DISCOVER",
+            "step_id": "discover_billing_context",
+            "worker_type": "repo_worker"
+          },
+          "id": "repo_inventory",
+          "producer_step_id": "discover_billing_context",
+          "worker_type": "repo_worker"
+        },
+        {
+          "content": {
+            "derived_inputs": [],
+            "mode": "observe_only",
+            "output_id": "module_map",
+            "phase": "DISCOVER",
+            "step_id": "discover_billing_context",
+            "worker_type": "repo_worker"
+          },
+          "id": "module_map",
+          "producer_step_id": "discover_billing_context",
+          "worker_type": "repo_worker"
+        },
+        {
+          "content": {
+            "derived_inputs": [],
+            "mode": "observe_only",
+            "output_id": "architecture_notes",
+            "phase": "DISCOVER",
+            "step_id": "discover_billing_context",
+            "worker_type": "repo_worker"
+          },
+          "id": "architecture_notes",
+          "producer_step_id": "discover_billing_context",
+          "worker_type": "repo_worker"
+        },
+        {
+          "content": {
+            "derived_inputs": [],
+            "mode": "observe_only",
+            "output_id": "context_gaps",
+            "phase": "DISCOVER",
+            "step_id": "discover_billing_context",
+            "worker_type": "repo_worker"
+          },
+          "id": "context_gaps",
+          "producer_step_id": "discover_billing_context",
+          "worker_type": "repo_worker"
+        },
+        {
+          "content": {
+            "derived_inputs": [
+              "repo_inventory",
+              "module_map",
+              "architecture_notes"
+            ],
+            "mode": "observe_only",
+            "output_id": "analysis_evidence",
+            "phase": "ANALYZE",
+            "step_id": "analyze_billing_behavior",
+            "worker_type": "repo_worker"
+          },
+          "id": "analysis_evidence",
+          "producer_step_id": "analyze_billing_behavior",
+          "worker_type": "repo_worker"
+        },
+        {
+          "content": {
+            "derived_inputs": [
+              "repo_inventory",
+              "module_map",
+              "architecture_notes"
+            ],
+            "mode": "observe_only",
+            "output_id": "behavior_matrix",
+            "phase": "ANALYZE",
+            "step_id": "analyze_billing_behavior",
+            "worker_type": "repo_worker"
+          },
+          "id": "behavior_matrix",
+          "producer_step_id": "analyze_billing_behavior",
+          "worker_type": "repo_worker"
+        },
+        {
+          "content": {
+            "derived_inputs": [
+              "repo_inventory",
+              "module_map",
+              "architecture_notes"
+            ],
+            "mode": "observe_only",
+            "output_id": "confirmed_defects_prelim",
+            "phase": "ANALYZE",
+            "step_id": "analyze_billing_behavior",
+            "worker_type": "repo_worker"
+          },
+          "id": "confirmed_defects_prelim",
+          "producer_step_id": "analyze_billing_behavior",
+          "worker_type": "repo_worker"
+        },
+        {
+          "content": {
+            "derived_inputs": [
+              "repo_inventory",
+              "module_map",
+              "architecture_notes"
+            ],
+            "mode": "observe_only",
+            "output_id": "hypothesis_log",
+            "phase": "ANALYZE",
+            "step_id": "analyze_billing_behavior",
+            "worker_type": "repo_worker"
+          },
+          "id": "hypothesis_log",
+          "producer_step_id": "analyze_billing_behavior",
+          "worker_type": "repo_worker"
+        },
+        {
+          "content": {
+            "derived_inputs": [],
+            "mode": "observe_only",
+            "output_id": "authoritative_guidance_sources",
+            "phase": "RESEARCH",
+            "step_id": "research_authoritative_guidance",
+            "worker_type": "web_research_worker"
+          },
+          "id": "authoritative_guidance_sources",
+          "producer_step_id": "research_authoritative_guidance",
+          "worker_type": "web_research_worker"
+        },
+        {
+          "content": {
+            "derived_inputs": [],
+            "mode": "observe_only",
+            "output_id": "guidance_control_matrix",
+            "phase": "RESEARCH",
+            "step_id": "research_authoritative_guidance",
+            "worker_type": "web_research_worker"
+          },
+          "id": "guidance_control_matrix",
+          "producer_step_id": "research_authoritative_guidance",
+          "worker_type": "web_research_worker"
+        },
+        {
+          "content": {
+            "derived_inputs": [
+              "analysis_evidence",
+              "behavior_matrix",
+              "confirmed_defects_prelim",
+              "hypothesis_log",
+              "authoritative_guidance_sources",
+              "guidance_control_matrix",
+              "context_gaps"
+            ],
+            "mode": "plan_only",
+            "output_id": "confirmed_defects",
+            "phase": "DESIGN",
+            "step_id": "design_gap_and_remediation_plan",
+            "worker_type": "research_worker"
+          },
+          "id": "confirmed_defects",
+          "producer_step_id": "design_gap_and_remediation_plan",
+          "worker_type": "research_worker"
+        },
+        {
+          "content": {
+            "derived_inputs": [
+              "analysis_evidence",
+              "behavior_matrix",
+              "confirmed_defects_prelim",
+              "hypothesis_log",
+              "authoritative_guidance_sources",
+              "guidance_control_matrix",
+              "context_gaps"
+            ],
+            "mode": "plan_only",
+            "output_id": "standards_gap_analysis",
+            "phase": "DESIGN",
+            "step_id": "design_gap_and_remediation_plan",
+            "worker_type": "research_worker"
+          },
+          "id": "standards_gap_analysis",
+          "producer_step_id": "design_gap_and_remediation_plan",
+          "worker_type": "research_worker"
+        },
+        {
+          "content": {
+            "derived_inputs": [
+              "analysis_evidence",
+              "behavior_matrix",
+              "confirmed_defects_prelim",
+              "hypothesis_log",
+              "authoritative_guidance_sources",
+              "guidance_control_matrix",
+              "context_gaps"
+            ],
+            "mode": "plan_only",
+            "output_id": "mutation_scope",
+            "phase": "DESIGN",
+            "step_id": "design_gap_and_remediation_plan",
+            "worker_type": "research_worker"
+          },
+          "id": "mutation_scope",
+          "producer_step_id": "design_gap_and_remediation_plan",
+          "worker_type": "research_worker"
+        },
+        {
+          "content": {
+            "derived_inputs": [
+              "analysis_evidence",
+              "behavior_matrix",
+              "confirmed_defects_prelim",
+              "hypothesis_log",
+              "authoritative_guidance_sources",
+              "guidance_control_matrix",
+              "context_gaps"
+            ],
+            "mode": "plan_only",
+            "output_id": "change_design",
+            "phase": "DESIGN",
+            "step_id": "design_gap_and_remediation_plan",
+            "worker_type": "research_worker"
+          },
+          "id": "change_design",
+          "producer_step_id": "design_gap_and_remediation_plan",
+          "worker_type": "research_worker"
+        },
+        {
+          "content": {
+            "derived_inputs": [
+              "analysis_evidence",
+              "behavior_matrix",
+              "confirmed_defects_prelim",
+              "hypothesis_log",
+              "authoritative_guidance_sources",
+              "guidance_control_matrix",
+              "context_gaps"
+            ],
+            "mode": "plan_only",
+            "output_id": "rollback_plan",
+            "phase": "DESIGN",
+            "step_id": "design_gap_and_remediation_plan",
+            "worker_type": "research_worker"
+          },
+          "id": "rollback_plan",
+          "producer_step_id": "design_gap_and_remediation_plan",
+          "worker_type": "research_worker"
+        },
+        {
+          "content": {
+            "derived_inputs": [
+              "analysis_evidence",
+              "behavior_matrix",
+              "confirmed_defects_prelim",
+              "hypothesis_log",
+              "authoritative_guidance_sources",
+              "guidance_control_matrix",
+              "context_gaps"
+            ],
+            "mode": "plan_only",
+            "output_id": "verification_plan",
+            "phase": "DESIGN",
+            "step_id": "design_gap_and_remediation_plan",
+            "worker_type": "research_worker"
+          },
+          "id": "verification_plan",
+          "producer_step_id": "design_gap_and_remediation_plan",
+          "worker_type": "research_worker"
+        },
+        {
+          "content": {
+            "derived_inputs": [
+              "analysis_evidence",
+              "behavior_matrix",
+              "confirmed_defects_prelim",
+              "hypothesis_log",
+              "authoritative_guidance_sources",
+              "guidance_control_matrix",
+              "context_gaps"
+            ],
+            "mode": "plan_only",
+            "output_id": "operational_checks_plan",
+            "phase": "DESIGN",
+            "step_id": "design_gap_and_remediation_plan",
+            "worker_type": "research_worker"
+          },
+          "id": "operational_checks_plan",
+          "producer_step_id": "design_gap_and_remediation_plan",
+          "worker_type": "research_worker"
+        },
+        {
+          "content": {
+            "derived_inputs": [
+              "analysis_evidence",
+              "behavior_matrix",
+              "confirmed_defects_prelim",
+              "hypothesis_log",
+              "authoritative_guidance_sources",
+              "guidance_control_matrix",
+              "context_gaps"
+            ],
+            "mode": "plan_only",
+            "output_id": "evidence_gap",
+            "phase": "DESIGN",
+            "step_id": "design_gap_and_remediation_plan",
+            "worker_type": "research_worker"
+          },
+          "id": "evidence_gap",
+          "producer_step_id": "design_gap_and_remediation_plan",
+          "worker_type": "research_worker"
+        },
+        {
+          "content": {
+            "failed_step_id": "verify_plan_integrity",
+            "input_artifact_ids": [
+              "confirmed_defects",
+              "standards_gap_analysis",
+              "mutation_scope",
+              "change_design",
+              "rollback_plan",
+              "verification_plan",
+              "operational_checks_plan",
+              "analysis_evidence",
+              "authoritative_guidance_sources",
+              "evidence_gap"
+            ],
+            "instruction_excerpt": "Known facts: Proposed findings and plans are available with explicit evidence and scope artifacts. Unknowns: Whether recommendations fully satisfy constraints on evidence quality, minimal scope, rollback safety, and verification coverage. Do now: Validate traceability from each confirmed defect to evidence and guidance, check scope containment in mutation_scope, and verify rollback/verification/operational plans cover idempotency, retries, deduplication, ordering, and recovery. Do not do: Do not add new speculative defects or alter repository files. Output: verification_results and readiness_assessment.",
+            "issue_class": "planner_level",
+            "permissions": {
+              "read_files": true,
+              "run_commands": false,
+              "web_research": false,
+              "write_files": false
+            },
+            "signal_type": "planner_level",
+            "signals": [
+              "verification_contract_mismatch",
+              "evidence_gap",
+              "scope_ambiguity"
+            ],
+            "task_metadata": {
+              "mode": "verify_only",
+              "phase": "VERIFY",
+              "task_id": "billing_rollout_audit"
+            }
+          },
+          "id": "planner_issue_snapshot",
+          "producer_step_id": "verify_plan_integrity",
+          "worker_type": "verify_worker"
+        }
+      ],
+      "completed_step_ids": [
+        "discover_billing_context",
+        "analyze_billing_behavior",
+        "research_authoritative_guidance",
+        "design_gap_and_remediation_plan"
+      ],
+      "failed_step_id": "verify_plan_integrity",
+      "plan_id": "plan_req_001_reliability_audit",
+      "reason": "Planner-level issue: verification criteria and mutation outputs are misaligned; re-planning is required before final verification.",
+      "recommended_action": "Return a full fixed plan and re-run from a verification-safe sequence.",
+      "remaining_budget": {
+        "max_model_calls": 2,
+        "max_retries": 1,
+        "max_tool_calls": 9,
+        "max_workers": 1
+      },
+      "request_id": "req_001",
+      "run_id": "run_plan_req_001_reliability_audit",
+      "worker_result": {
+        "artifacts": [
+          {
+            "content": {
+              "failed_step_id": "verify_plan_integrity",
+              "input_artifact_ids": [
+                "confirmed_defects",
+                "standards_gap_analysis",
+                "mutation_scope",
+                "change_design",
+                "rollback_plan",
+                "verification_plan",
+                "operational_checks_plan",
+                "analysis_evidence",
+                "authoritative_guidance_sources",
+                "evidence_gap"
+              ],
+              "instruction_excerpt": "Known facts: Proposed findings and plans are available with explicit evidence and scope artifacts. Unknowns: Whether recommendations fully satisfy constraints on evidence quality, minimal scope, rollback safety, and verification coverage. Do now: Validate traceability from each confirmed defect to evidence and guidance, check scope containment in mutation_scope, and verify rollback/verification/operational plans cover idempotency, retries, deduplication, ordering, and recovery. Do not do: Do not add new speculative defects or alter repository files. Output: verification_results and readiness_assessment.",
+              "issue_class": "planner_level",
+              "permissions": {
+                "read_files": true,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "signal_type": "planner_level",
+              "signals": [
+                "verification_contract_mismatch",
+                "evidence_gap",
+                "scope_ambiguity"
+              ],
+              "task_metadata": {
+                "mode": "verify_only",
+                "phase": "VERIFY",
+                "task_id": "billing_rollout_audit"
+              }
+            },
+            "id": "planner_issue_snapshot",
+            "producer_step_id": "verify_plan_integrity",
+            "worker_type": "verify_worker"
+          }
+        ],
+        "errors": [],
+        "metadata": {
+          "issue_class": "planner_level",
+          "mocked": true,
+          "recommended_action": "Return a full fixed plan and re-run from a verification-safe sequence.",
+          "replan_level": "planner"
+        },
+        "producer": "verify_worker",
+        "run_id": "run_plan_req_001_reliability_audit",
+        "status": "needs_replan",
+        "summary": "Planner-level issue: verification criteria and mutation outputs are misaligned; re-planning is required before final verification.",
+        "usage": {
+          "model_calls": 0,
+          "tool_calls": 1
+        },
+        "warnings": []
+      }
+    },
+    "requested": true
+  },
+  "selected_replan_step": "verify_plan_integrity",
+  "worker_kernel": {
+    "errors": [],
+    "metadata": {
+      "replan": {
+        "depth": 1,
+        "original_worker_results": [
+          {
+            "artifacts": [
+              {
+                "content": {
+                  "derived_inputs": [],
+                  "mode": "observe_only",
+                  "output_id": "repo_inventory",
+                  "phase": "DISCOVER",
+                  "step_id": "discover_billing_context",
+                  "worker_type": "repo_worker"
+                },
+                "id": "repo_inventory",
+                "producer_step_id": "discover_billing_context",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [],
+                  "mode": "observe_only",
+                  "output_id": "module_map",
+                  "phase": "DISCOVER",
+                  "step_id": "discover_billing_context",
+                  "worker_type": "repo_worker"
+                },
+                "id": "module_map",
+                "producer_step_id": "discover_billing_context",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [],
+                  "mode": "observe_only",
+                  "output_id": "architecture_notes",
+                  "phase": "DISCOVER",
+                  "step_id": "discover_billing_context",
+                  "worker_type": "repo_worker"
+                },
+                "id": "architecture_notes",
+                "producer_step_id": "discover_billing_context",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [],
+                  "mode": "observe_only",
+                  "output_id": "context_gaps",
+                  "phase": "DISCOVER",
+                  "step_id": "discover_billing_context",
+                  "worker_type": "repo_worker"
+                },
+                "id": "context_gaps",
+                "producer_step_id": "discover_billing_context",
+                "worker_type": "repo_worker"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "input_artifact_ids": [],
+              "mocked": true,
+              "mode": "observe_only",
+              "phase": "DISCOVER",
+              "task_id": "billing_rollout_audit"
+            },
+            "producer": "repo_worker",
+            "run_id": "run_plan_req_001_reliability_audit",
+            "status": "completed",
+            "summary": "Mock repo_worker completed plan outputs for discover_billing_context.",
+            "usage": {
+              "model_calls": 1,
+              "tool_calls": 2
+            },
+            "warnings": []
+          },
+          {
+            "artifacts": [
+              {
+                "content": {
+                  "derived_inputs": [
+                    "repo_inventory",
+                    "module_map",
+                    "architecture_notes"
+                  ],
+                  "mode": "observe_only",
+                  "output_id": "analysis_evidence",
+                  "phase": "ANALYZE",
+                  "step_id": "analyze_billing_behavior",
+                  "worker_type": "repo_worker"
+                },
+                "id": "analysis_evidence",
+                "producer_step_id": "analyze_billing_behavior",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [
+                    "repo_inventory",
+                    "module_map",
+                    "architecture_notes"
+                  ],
+                  "mode": "observe_only",
+                  "output_id": "behavior_matrix",
+                  "phase": "ANALYZE",
+                  "step_id": "analyze_billing_behavior",
+                  "worker_type": "repo_worker"
+                },
+                "id": "behavior_matrix",
+                "producer_step_id": "analyze_billing_behavior",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [
+                    "repo_inventory",
+                    "module_map",
+                    "architecture_notes"
+                  ],
+                  "mode": "observe_only",
+                  "output_id": "confirmed_defects_prelim",
+                  "phase": "ANALYZE",
+                  "step_id": "analyze_billing_behavior",
+                  "worker_type": "repo_worker"
+                },
+                "id": "confirmed_defects_prelim",
+                "producer_step_id": "analyze_billing_behavior",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [
+                    "repo_inventory",
+                    "module_map",
+                    "architecture_notes"
+                  ],
+                  "mode": "observe_only",
+                  "output_id": "hypothesis_log",
+                  "phase": "ANALYZE",
+                  "step_id": "analyze_billing_behavior",
+                  "worker_type": "repo_worker"
+                },
+                "id": "hypothesis_log",
+                "producer_step_id": "analyze_billing_behavior",
+                "worker_type": "repo_worker"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "input_artifact_ids": [
+                "repo_inventory",
+                "module_map",
+                "architecture_notes"
+              ],
+              "mocked": true,
+              "mode": "observe_only",
+              "phase": "ANALYZE",
+              "task_id": "billing_rollout_audit"
+            },
+            "producer": "repo_worker",
+            "run_id": "run_plan_req_001_reliability_audit",
+            "status": "completed",
+            "summary": "Mock repo_worker completed plan outputs for analyze_billing_behavior.",
+            "usage": {
+              "model_calls": 1,
+              "tool_calls": 2
+            },
+            "warnings": []
+          },
+          {
+            "artifacts": [
+              {
+                "content": {
+                  "derived_inputs": [],
+                  "mode": "observe_only",
+                  "output_id": "authoritative_guidance_sources",
+                  "phase": "RESEARCH",
+                  "step_id": "research_authoritative_guidance",
+                  "worker_type": "web_research_worker"
+                },
+                "id": "authoritative_guidance_sources",
+                "producer_step_id": "research_authoritative_guidance",
+                "worker_type": "web_research_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [],
+                  "mode": "observe_only",
+                  "output_id": "guidance_control_matrix",
+                  "phase": "RESEARCH",
+                  "step_id": "research_authoritative_guidance",
+                  "worker_type": "web_research_worker"
+                },
+                "id": "guidance_control_matrix",
+                "producer_step_id": "research_authoritative_guidance",
+                "worker_type": "web_research_worker"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "input_artifact_ids": [],
+              "mocked": true,
+              "mode": "observe_only",
+              "phase": "RESEARCH",
+              "task_id": "billing_rollout_audit"
+            },
+            "producer": "web_research_worker",
+            "run_id": "run_plan_req_001_reliability_audit",
+            "status": "completed",
+            "summary": "Mock web_research_worker completed plan outputs for research_authoritative_guidance.",
+            "usage": {
+              "model_calls": 1,
+              "tool_calls": 2
+            },
+            "warnings": []
+          },
+          {
+            "artifacts": [
+              {
+                "content": {
+                  "derived_inputs": [
+                    "analysis_evidence",
+                    "behavior_matrix",
+                    "confirmed_defects_prelim",
+                    "hypothesis_log",
+                    "authoritative_guidance_sources",
+                    "guidance_control_matrix",
+                    "context_gaps"
+                  ],
+                  "mode": "plan_only",
+                  "output_id": "confirmed_defects",
+                  "phase": "DESIGN",
+                  "step_id": "design_gap_and_remediation_plan",
+                  "worker_type": "research_worker"
+                },
+                "id": "confirmed_defects",
+                "producer_step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [
+                    "analysis_evidence",
+                    "behavior_matrix",
+                    "confirmed_defects_prelim",
+                    "hypothesis_log",
+                    "authoritative_guidance_sources",
+                    "guidance_control_matrix",
+                    "context_gaps"
+                  ],
+                  "mode": "plan_only",
+                  "output_id": "standards_gap_analysis",
+                  "phase": "DESIGN",
+                  "step_id": "design_gap_and_remediation_plan",
+                  "worker_type": "research_worker"
+                },
+                "id": "standards_gap_analysis",
+                "producer_step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [
+                    "analysis_evidence",
+                    "behavior_matrix",
+                    "confirmed_defects_prelim",
+                    "hypothesis_log",
+                    "authoritative_guidance_sources",
+                    "guidance_control_matrix",
+                    "context_gaps"
+                  ],
+                  "mode": "plan_only",
+                  "output_id": "mutation_scope",
+                  "phase": "DESIGN",
+                  "step_id": "design_gap_and_remediation_plan",
+                  "worker_type": "research_worker"
+                },
+                "id": "mutation_scope",
+                "producer_step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [
+                    "analysis_evidence",
+                    "behavior_matrix",
+                    "confirmed_defects_prelim",
+                    "hypothesis_log",
+                    "authoritative_guidance_sources",
+                    "guidance_control_matrix",
+                    "context_gaps"
+                  ],
+                  "mode": "plan_only",
+                  "output_id": "change_design",
+                  "phase": "DESIGN",
+                  "step_id": "design_gap_and_remediation_plan",
+                  "worker_type": "research_worker"
+                },
+                "id": "change_design",
+                "producer_step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [
+                    "analysis_evidence",
+                    "behavior_matrix",
+                    "confirmed_defects_prelim",
+                    "hypothesis_log",
+                    "authoritative_guidance_sources",
+                    "guidance_control_matrix",
+                    "context_gaps"
+                  ],
+                  "mode": "plan_only",
+                  "output_id": "rollback_plan",
+                  "phase": "DESIGN",
+                  "step_id": "design_gap_and_remediation_plan",
+                  "worker_type": "research_worker"
+                },
+                "id": "rollback_plan",
+                "producer_step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [
+                    "analysis_evidence",
+                    "behavior_matrix",
+                    "confirmed_defects_prelim",
+                    "hypothesis_log",
+                    "authoritative_guidance_sources",
+                    "guidance_control_matrix",
+                    "context_gaps"
+                  ],
+                  "mode": "plan_only",
+                  "output_id": "verification_plan",
+                  "phase": "DESIGN",
+                  "step_id": "design_gap_and_remediation_plan",
+                  "worker_type": "research_worker"
+                },
+                "id": "verification_plan",
+                "producer_step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [
+                    "analysis_evidence",
+                    "behavior_matrix",
+                    "confirmed_defects_prelim",
+                    "hypothesis_log",
+                    "authoritative_guidance_sources",
+                    "guidance_control_matrix",
+                    "context_gaps"
+                  ],
+                  "mode": "plan_only",
+                  "output_id": "operational_checks_plan",
+                  "phase": "DESIGN",
+                  "step_id": "design_gap_and_remediation_plan",
+                  "worker_type": "research_worker"
+                },
+                "id": "operational_checks_plan",
+                "producer_step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              {
+                "content": {
+                  "derived_inputs": [
+                    "analysis_evidence",
+                    "behavior_matrix",
+                    "confirmed_defects_prelim",
+                    "hypothesis_log",
+                    "authoritative_guidance_sources",
+                    "guidance_control_matrix",
+                    "context_gaps"
+                  ],
+                  "mode": "plan_only",
+                  "output_id": "evidence_gap",
+                  "phase": "DESIGN",
+                  "step_id": "design_gap_and_remediation_plan",
+                  "worker_type": "research_worker"
+                },
+                "id": "evidence_gap",
+                "producer_step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "input_artifact_ids": [
+                "analysis_evidence",
+                "behavior_matrix",
+                "confirmed_defects_prelim",
+                "hypothesis_log",
+                "authoritative_guidance_sources",
+                "guidance_control_matrix",
+                "context_gaps"
+              ],
+              "mocked": true,
+              "mode": "plan_only",
+              "phase": "DESIGN",
+              "task_id": "billing_rollout_audit"
+            },
+            "producer": "research_worker",
+            "run_id": "run_plan_req_001_reliability_audit",
+            "status": "completed",
+            "summary": "Mock research_worker completed plan outputs for design_gap_and_remediation_plan.",
+            "usage": {
+              "model_calls": 1,
+              "tool_calls": 2
+            },
+            "warnings": []
+          },
+          {
+            "artifacts": [
+              {
+                "content": {
+                  "failed_step_id": "verify_plan_integrity",
+                  "input_artifact_ids": [
+                    "confirmed_defects",
+                    "standards_gap_analysis",
+                    "mutation_scope",
+                    "change_design",
+                    "rollback_plan",
+                    "verification_plan",
+                    "operational_checks_plan",
+                    "analysis_evidence",
+                    "authoritative_guidance_sources",
+                    "evidence_gap"
+                  ],
+                  "instruction_excerpt": "Known facts: Proposed findings and plans are available with explicit evidence and scope artifacts. Unknowns: Whether recommendations fully satisfy constraints on evidence quality, minimal scope, rollback safety, and verification coverage. Do now: Validate traceability from each confirmed defect to evidence and guidance, check scope containment in mutation_scope, and verify rollback/verification/operational plans cover idempotency, retries, deduplication, ordering, and recovery. Do not do: Do not add new speculative defects or alter repository files. Output: verification_results and readiness_assessment.",
+                  "issue_class": "planner_level",
+                  "permissions": {
+                    "read_files": true,
+                    "run_commands": false,
+                    "web_research": false,
+                    "write_files": false
+                  },
+                  "signal_type": "planner_level",
+                  "signals": [
+                    "verification_contract_mismatch",
+                    "evidence_gap",
+                    "scope_ambiguity"
+                  ],
+                  "task_metadata": {
+                    "mode": "verify_only",
+                    "phase": "VERIFY",
+                    "task_id": "billing_rollout_audit"
+                  }
+                },
+                "id": "planner_issue_snapshot",
+                "producer_step_id": "verify_plan_integrity",
+                "worker_type": "verify_worker"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "issue_class": "planner_level",
+              "mocked": true,
+              "recommended_action": "Return a full fixed plan and re-run from a verification-safe sequence.",
+              "replan_level": "planner"
+            },
+            "producer": "verify_worker",
+            "run_id": "run_plan_req_001_reliability_audit",
+            "status": "needs_replan",
+            "summary": "Planner-level issue: verification criteria and mutation outputs are misaligned; re-planning is required before final verification.",
+            "usage": {
+              "model_calls": 0,
+              "tool_calls": 1
+            },
+            "warnings": []
+          }
+        ],
+        "replacement_plan": {
+          "budget": {
+            "max_model_calls": 2,
+            "max_retries": 1,
+            "max_tool_calls": 9,
+            "max_workers": 3
+          },
+          "execution_pattern": "discover_verify_finalize",
+          "global_invariants": [
+            "evidence_before_conclusion",
+            "no_file_mutation",
+            "separate_confirmed_defects_from_hypotheses",
+            "authoritative_sources_required_for_standards_comparison",
+            "minimal_scope_recommendations_only",
+            "rollback_and_verification_plans_required_for_confirmed_defects"
+          ],
+          "metadata": {
+            "archetype": "phase_aware_reliability_audit",
+            "complexity": "high",
+            "llm_planner": {
+              "budget_auto_aligned": true,
+              "envelope_complexity_hint": "high",
+              "envelope_input_type": "subscription_billing_rollout_reliability_audit",
+              "failed_step_id": "verify_plan_integrity",
+              "mode": "completed",
+              "model_calls": 1,
+              "parent_plan_id": "plan_req_001_reliability_audit",
+              "repair_attempted": false,
+              "replan": true,
+              "resolved_validation_errors": [],
+              "stages": [
+                "replan_plan",
+                "validate_plan"
+              ],
+              "validation_errors": []
+            },
+            "mutation_intent": "propose_only_no_writes",
+            "planner_runtime": {
+              "fallback_reason": null,
+              "mode": "llm_prompt_chain_replan"
+            },
+            "replan_reason": "Planner-level verification contract mismatch resolved via verification-safe rebaseline",
+            "source_failed_step_id": "verify_plan_integrity"
+          },
+          "objective": "Assess subscription billing rollout readiness by collecting repository/design evidence, comparing behavior to authoritative guidance, and delivering minimally scoped remediation, rollback, and verification recommendations for confirmed defects.",
+          "plan_id": "plan_req_001_reliability_audit_replan_v2",
+          "planner": "reliability_audit_planner",
+          "request_id": "req_001",
+          "steps": [
+            {
+              "input_artifacts": [],
+              "instruction": "Known facts: Prior DISCOVER/ANALYZE/RESEARCH/DESIGN work completed, and replan is required because verification criteria and mutation-oriented outputs were misaligned for a no-write audit. Unknowns: Exact traceability completeness from each confirmed defect to evidence and guidance, and whether prior design outputs are sufficiently bounded for verification without mutation assumptions. Do now: Re-establish a fresh, read-only verification baseline by consolidating repository/design evidence, authoritative guidance controls, and design-phase defect/remediation artifacts into a single verification contract that is explicitly no-mutation and scope-bounded. Do not do: Do not modify files, do not introduce new defects, do not broaden remediation scope, and do not use uncited or non-authoritative standards claims. Output: refreshed_evidence_bundle, refreshed_guidance_bundle, refreshed_design_bundle, and verification_contract.",
+              "max_model_calls": 0,
+              "max_tool_calls": 4,
+              "mode": "observe_only",
+              "output_artifacts": [
+                "refreshed_evidence_bundle",
+                "refreshed_guidance_bundle",
+                "refreshed_design_bundle",
+                "verification_contract"
+              ],
+              "permissions": {
+                "read_files": true,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "DISCOVER",
+              "step_id": "rebaseline_verification_inputs",
+              "task_id": "billing_rollout_audit",
+              "worker_type": "verify_worker"
+            },
+            {
+              "input_artifacts": [
+                "refreshed_evidence_bundle",
+                "refreshed_guidance_bundle",
+                "refreshed_design_bundle",
+                "verification_contract"
+              ],
+              "instruction": "Known facts: refreshed_evidence_bundle, refreshed_guidance_bundle, refreshed_design_bundle, and verification_contract provide a no-write, comparison-ready baseline. Unknowns: Whether every confirmed defect is fully traceable to file evidence and authoritative guidance, and whether rollback/verification/operational checks are complete for idempotency, retries, deduplication, ordering, and dead-letter recovery. Do now: Execute strict verification against verification_contract, producing explicit pass/fail traceability per defect and a release-readiness determination with clearly separated confirmed defects, hypotheses, and residual evidence gaps. Do not do: Do not add speculative findings, do not alter repository artifacts, and do not accept conclusions lacking direct evidence-to-guidance linkage. Output: verification_results, readiness_assessment, and traceability_report.",
+              "max_model_calls": 1,
+              "max_tool_calls": 3,
+              "mode": "verify_only",
+              "output_artifacts": [
+                "verification_results",
+                "readiness_assessment",
+                "traceability_report"
+              ],
+              "permissions": {
+                "read_files": true,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "VERIFY",
+              "step_id": "verify_traceability_and_readiness",
+              "task_id": "billing_rollout_audit",
+              "worker_type": "verify_worker"
+            },
+            {
+              "input_artifacts": [
+                "verification_results",
+                "readiness_assessment",
+                "traceability_report",
+                "refreshed_design_bundle"
+              ],
+              "instruction": "Known facts: verification_results, readiness_assessment, and traceability_report contain the verified no-write audit outcome. Unknowns: None material beyond documented evidence gaps. Do now: Deliver the final report with readiness verdict, confirmed defects versus hypotheses, standards comparison outcomes, minimal remediation scope, rollback path, targeted verification, and operational checks, all grounded in verified traceability. Do not do: Do not introduce uncited claims, do not expand scope, and do not imply code mutations were performed. Output: final_report.",
+              "max_model_calls": 1,
+              "max_tool_calls": 0,
+              "mode": "summarize_only",
+              "output_artifacts": [
+                "final_report"
+              ],
+              "permissions": {
+                "read_files": false,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "FINALIZE",
+              "step_id": "finalize_audit_report",
+              "task_id": "billing_rollout_audit",
+              "worker_type": "verify_worker"
+            }
+          ],
+          "strategy": "verification_safe_rebaseline_then_traceability_verification",
+          "success_criteria": [
+            "Verification inputs are rebaselined into a no-mutation contract with explicit evidence, guidance, and scope linkage.",
+            "Each confirmed defect has explicit traceability to repository/design evidence and authoritative guidance controls.",
+            "Readiness assessment clearly separates confirmed defects, hypotheses, and unresolved evidence gaps.",
+            "Recommendations remain minimally scoped and include rollback, targeted verification, and operational checks.",
+            "A final evidence-traceable readiness report is produced without repository mutation."
+          ]
+        },
+        "request": {
+          "completed_artifacts": [
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "repo_inventory",
+                "phase": "DISCOVER",
+                "step_id": "discover_billing_context",
+                "worker_type": "repo_worker"
+              },
+              "id": "repo_inventory",
+              "producer_step_id": "discover_billing_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "module_map",
+                "phase": "DISCOVER",
+                "step_id": "discover_billing_context",
+                "worker_type": "repo_worker"
+              },
+              "id": "module_map",
+              "producer_step_id": "discover_billing_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "architecture_notes",
+                "phase": "DISCOVER",
+                "step_id": "discover_billing_context",
+                "worker_type": "repo_worker"
+              },
+              "id": "architecture_notes",
+              "producer_step_id": "discover_billing_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "context_gaps",
+                "phase": "DISCOVER",
+                "step_id": "discover_billing_context",
+                "worker_type": "repo_worker"
+              },
+              "id": "context_gaps",
+              "producer_step_id": "discover_billing_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory",
+                  "module_map",
+                  "architecture_notes"
+                ],
+                "mode": "observe_only",
+                "output_id": "analysis_evidence",
+                "phase": "ANALYZE",
+                "step_id": "analyze_billing_behavior",
+                "worker_type": "repo_worker"
+              },
+              "id": "analysis_evidence",
+              "producer_step_id": "analyze_billing_behavior",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory",
+                  "module_map",
+                  "architecture_notes"
+                ],
+                "mode": "observe_only",
+                "output_id": "behavior_matrix",
+                "phase": "ANALYZE",
+                "step_id": "analyze_billing_behavior",
+                "worker_type": "repo_worker"
+              },
+              "id": "behavior_matrix",
+              "producer_step_id": "analyze_billing_behavior",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory",
+                  "module_map",
+                  "architecture_notes"
+                ],
+                "mode": "observe_only",
+                "output_id": "confirmed_defects_prelim",
+                "phase": "ANALYZE",
+                "step_id": "analyze_billing_behavior",
+                "worker_type": "repo_worker"
+              },
+              "id": "confirmed_defects_prelim",
+              "producer_step_id": "analyze_billing_behavior",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "repo_inventory",
+                  "module_map",
+                  "architecture_notes"
+                ],
+                "mode": "observe_only",
+                "output_id": "hypothesis_log",
+                "phase": "ANALYZE",
+                "step_id": "analyze_billing_behavior",
+                "worker_type": "repo_worker"
+              },
+              "id": "hypothesis_log",
+              "producer_step_id": "analyze_billing_behavior",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "authoritative_guidance_sources",
+                "phase": "RESEARCH",
+                "step_id": "research_authoritative_guidance",
+                "worker_type": "web_research_worker"
+              },
+              "id": "authoritative_guidance_sources",
+              "producer_step_id": "research_authoritative_guidance",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "guidance_control_matrix",
+                "phase": "RESEARCH",
+                "step_id": "research_authoritative_guidance",
+                "worker_type": "web_research_worker"
+              },
+              "id": "guidance_control_matrix",
+              "producer_step_id": "research_authoritative_guidance",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "analysis_evidence",
+                  "behavior_matrix",
+                  "confirmed_defects_prelim",
+                  "hypothesis_log",
+                  "authoritative_guidance_sources",
+                  "guidance_control_matrix",
+                  "context_gaps"
+                ],
+                "mode": "plan_only",
+                "output_id": "confirmed_defects",
+                "phase": "DESIGN",
+                "step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              "id": "confirmed_defects",
+              "producer_step_id": "design_gap_and_remediation_plan",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "analysis_evidence",
+                  "behavior_matrix",
+                  "confirmed_defects_prelim",
+                  "hypothesis_log",
+                  "authoritative_guidance_sources",
+                  "guidance_control_matrix",
+                  "context_gaps"
+                ],
+                "mode": "plan_only",
+                "output_id": "standards_gap_analysis",
+                "phase": "DESIGN",
+                "step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              "id": "standards_gap_analysis",
+              "producer_step_id": "design_gap_and_remediation_plan",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "analysis_evidence",
+                  "behavior_matrix",
+                  "confirmed_defects_prelim",
+                  "hypothesis_log",
+                  "authoritative_guidance_sources",
+                  "guidance_control_matrix",
+                  "context_gaps"
+                ],
+                "mode": "plan_only",
+                "output_id": "mutation_scope",
+                "phase": "DESIGN",
+                "step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              "id": "mutation_scope",
+              "producer_step_id": "design_gap_and_remediation_plan",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "analysis_evidence",
+                  "behavior_matrix",
+                  "confirmed_defects_prelim",
+                  "hypothesis_log",
+                  "authoritative_guidance_sources",
+                  "guidance_control_matrix",
+                  "context_gaps"
+                ],
+                "mode": "plan_only",
+                "output_id": "change_design",
+                "phase": "DESIGN",
+                "step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              "id": "change_design",
+              "producer_step_id": "design_gap_and_remediation_plan",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "analysis_evidence",
+                  "behavior_matrix",
+                  "confirmed_defects_prelim",
+                  "hypothesis_log",
+                  "authoritative_guidance_sources",
+                  "guidance_control_matrix",
+                  "context_gaps"
+                ],
+                "mode": "plan_only",
+                "output_id": "rollback_plan",
+                "phase": "DESIGN",
+                "step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              "id": "rollback_plan",
+              "producer_step_id": "design_gap_and_remediation_plan",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "analysis_evidence",
+                  "behavior_matrix",
+                  "confirmed_defects_prelim",
+                  "hypothesis_log",
+                  "authoritative_guidance_sources",
+                  "guidance_control_matrix",
+                  "context_gaps"
+                ],
+                "mode": "plan_only",
+                "output_id": "verification_plan",
+                "phase": "DESIGN",
+                "step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              "id": "verification_plan",
+              "producer_step_id": "design_gap_and_remediation_plan",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "analysis_evidence",
+                  "behavior_matrix",
+                  "confirmed_defects_prelim",
+                  "hypothesis_log",
+                  "authoritative_guidance_sources",
+                  "guidance_control_matrix",
+                  "context_gaps"
+                ],
+                "mode": "plan_only",
+                "output_id": "operational_checks_plan",
+                "phase": "DESIGN",
+                "step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              "id": "operational_checks_plan",
+              "producer_step_id": "design_gap_and_remediation_plan",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "analysis_evidence",
+                  "behavior_matrix",
+                  "confirmed_defects_prelim",
+                  "hypothesis_log",
+                  "authoritative_guidance_sources",
+                  "guidance_control_matrix",
+                  "context_gaps"
+                ],
+                "mode": "plan_only",
+                "output_id": "evidence_gap",
+                "phase": "DESIGN",
+                "step_id": "design_gap_and_remediation_plan",
+                "worker_type": "research_worker"
+              },
+              "id": "evidence_gap",
+              "producer_step_id": "design_gap_and_remediation_plan",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": {
+                "failed_step_id": "verify_plan_integrity",
+                "input_artifact_ids": [
+                  "confirmed_defects",
+                  "standards_gap_analysis",
+                  "mutation_scope",
+                  "change_design",
+                  "rollback_plan",
+                  "verification_plan",
+                  "operational_checks_plan",
+                  "analysis_evidence",
+                  "authoritative_guidance_sources",
+                  "evidence_gap"
+                ],
+                "instruction_excerpt": "Known facts: Proposed findings and plans are available with explicit evidence and scope artifacts. Unknowns: Whether recommendations fully satisfy constraints on evidence quality, minimal scope, rollback safety, and verification coverage. Do now: Validate traceability from each confirmed defect to evidence and guidance, check scope containment in mutation_scope, and verify rollback/verification/operational plans cover idempotency, retries, deduplication, ordering, and recovery. Do not do: Do not add new speculative defects or alter repository files. Output: verification_results and readiness_assessment.",
+                "issue_class": "planner_level",
+                "permissions": {
+                  "read_files": true,
+                  "run_commands": false,
+                  "web_research": false,
+                  "write_files": false
+                },
+                "signal_type": "planner_level",
+                "signals": [
+                  "verification_contract_mismatch",
+                  "evidence_gap",
+                  "scope_ambiguity"
+                ],
+                "task_metadata": {
+                  "mode": "verify_only",
+                  "phase": "VERIFY",
+                  "task_id": "billing_rollout_audit"
+                }
+              },
+              "id": "planner_issue_snapshot",
+              "producer_step_id": "verify_plan_integrity",
+              "worker_type": "verify_worker"
+            }
+          ],
+          "completed_step_ids": [
+            "discover_billing_context",
+            "analyze_billing_behavior",
+            "research_authoritative_guidance",
+            "design_gap_and_remediation_plan"
+          ],
+          "failed_step_id": "verify_plan_integrity",
+          "plan_id": "plan_req_001_reliability_audit",
+          "reason": "Planner-level issue: verification criteria and mutation outputs are misaligned; re-planning is required before final verification.",
+          "recommended_action": "Return a full fixed plan and re-run from a verification-safe sequence.",
+          "remaining_budget": {
+            "max_model_calls": 2,
+            "max_retries": 1,
+            "max_tool_calls": 9,
+            "max_workers": 1
+          },
+          "request_id": "req_001",
+          "run_id": "run_plan_req_001_reliability_audit",
+          "worker_result": {
+            "artifacts": [
+              {
+                "content": {
+                  "failed_step_id": "verify_plan_integrity",
+                  "input_artifact_ids": [
+                    "confirmed_defects",
+                    "standards_gap_analysis",
+                    "mutation_scope",
+                    "change_design",
+                    "rollback_plan",
+                    "verification_plan",
+                    "operational_checks_plan",
+                    "analysis_evidence",
+                    "authoritative_guidance_sources",
+                    "evidence_gap"
+                  ],
+                  "instruction_excerpt": "Known facts: Proposed findings and plans are available with explicit evidence and scope artifacts. Unknowns: Whether recommendations fully satisfy constraints on evidence quality, minimal scope, rollback safety, and verification coverage. Do now: Validate traceability from each confirmed defect to evidence and guidance, check scope containment in mutation_scope, and verify rollback/verification/operational plans cover idempotency, retries, deduplication, ordering, and recovery. Do not do: Do not add new speculative defects or alter repository files. Output: verification_results and readiness_assessment.",
+                  "issue_class": "planner_level",
+                  "permissions": {
+                    "read_files": true,
+                    "run_commands": false,
+                    "web_research": false,
+                    "write_files": false
+                  },
+                  "signal_type": "planner_level",
+                  "signals": [
+                    "verification_contract_mismatch",
+                    "evidence_gap",
+                    "scope_ambiguity"
+                  ],
+                  "task_metadata": {
+                    "mode": "verify_only",
+                    "phase": "VERIFY",
+                    "task_id": "billing_rollout_audit"
+                  }
+                },
+                "id": "planner_issue_snapshot",
+                "producer_step_id": "verify_plan_integrity",
+                "worker_type": "verify_worker"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "issue_class": "planner_level",
+              "mocked": true,
+              "recommended_action": "Return a full fixed plan and re-run from a verification-safe sequence.",
+              "replan_level": "planner"
+            },
+            "producer": "verify_worker",
+            "run_id": "run_plan_req_001_reliability_audit",
+            "status": "needs_replan",
+            "summary": "Planner-level issue: verification criteria and mutation outputs are misaligned; re-planning is required before final verification.",
+            "usage": {
+              "model_calls": 0,
+              "tool_calls": 1
+            },
+            "warnings": []
+          }
+        }
+      },
+      "worker_results": [
+        {
+          "artifacts": [
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "refreshed_evidence_bundle",
+                "phase": "DISCOVER",
+                "step_id": "rebaseline_verification_inputs",
+                "worker_type": "verify_worker"
+              },
+              "id": "refreshed_evidence_bundle",
+              "producer_step_id": "rebaseline_verification_inputs",
+              "worker_type": "verify_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "refreshed_guidance_bundle",
+                "phase": "DISCOVER",
+                "step_id": "rebaseline_verification_inputs",
+                "worker_type": "verify_worker"
+              },
+              "id": "refreshed_guidance_bundle",
+              "producer_step_id": "rebaseline_verification_inputs",
+              "worker_type": "verify_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "refreshed_design_bundle",
+                "phase": "DISCOVER",
+                "step_id": "rebaseline_verification_inputs",
+                "worker_type": "verify_worker"
+              },
+              "id": "refreshed_design_bundle",
+              "producer_step_id": "rebaseline_verification_inputs",
+              "worker_type": "verify_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [],
+                "mode": "observe_only",
+                "output_id": "verification_contract",
+                "phase": "DISCOVER",
+                "step_id": "rebaseline_verification_inputs",
+                "worker_type": "verify_worker"
+              },
+              "id": "verification_contract",
+              "producer_step_id": "rebaseline_verification_inputs",
+              "worker_type": "verify_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "input_artifact_ids": [],
+            "mocked": true,
+            "mode": "observe_only",
+            "phase": "DISCOVER",
+            "task_id": "billing_rollout_audit"
+          },
+          "producer": "verify_worker",
+          "run_id": "run_plan_req_001_reliability_audit_replan_v2",
+          "status": "completed",
+          "summary": "Mock verify_worker completed plan outputs for rebaseline_verification_inputs.",
+          "usage": {
+            "model_calls": 0,
+            "tool_calls": 2
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": {
+                "derived_inputs": [
+                  "refreshed_evidence_bundle",
+                  "refreshed_guidance_bundle",
+                  "refreshed_design_bundle",
+                  "verification_contract"
+                ],
+                "mode": "verify_only",
+                "output_id": "verification_results",
+                "phase": "VERIFY",
+                "step_id": "verify_traceability_and_readiness",
+                "worker_type": "verify_worker"
+              },
+              "id": "verification_results",
+              "producer_step_id": "verify_traceability_and_readiness",
+              "worker_type": "verify_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "refreshed_evidence_bundle",
+                  "refreshed_guidance_bundle",
+                  "refreshed_design_bundle",
+                  "verification_contract"
+                ],
+                "mode": "verify_only",
+                "output_id": "readiness_assessment",
+                "phase": "VERIFY",
+                "step_id": "verify_traceability_and_readiness",
+                "worker_type": "verify_worker"
+              },
+              "id": "readiness_assessment",
+              "producer_step_id": "verify_traceability_and_readiness",
+              "worker_type": "verify_worker"
+            },
+            {
+              "content": {
+                "derived_inputs": [
+                  "refreshed_evidence_bundle",
+                  "refreshed_guidance_bundle",
+                  "refreshed_design_bundle",
+                  "verification_contract"
+                ],
+                "mode": "verify_only",
+                "output_id": "traceability_report",
+                "phase": "VERIFY",
+                "step_id": "verify_traceability_and_readiness",
+                "worker_type": "verify_worker"
+              },
+              "id": "traceability_report",
+              "producer_step_id": "verify_traceability_and_readiness",
+              "worker_type": "verify_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "input_artifact_ids": [
+              "refreshed_evidence_bundle",
+              "refreshed_guidance_bundle",
+              "refreshed_design_bundle",
+              "verification_contract"
+            ],
+            "mocked": true,
+            "mode": "verify_only",
+            "phase": "VERIFY",
+            "task_id": "billing_rollout_audit"
+          },
+          "producer": "verify_worker",
+          "run_id": "run_plan_req_001_reliability_audit_replan_v2",
+          "status": "completed",
+          "summary": "Mock verify_worker completed plan outputs for verify_traceability_and_readiness.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 2
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": {
+                "derived_inputs": [
+                  "verification_results",
+                  "readiness_assessment",
+                  "traceability_report",
+                  "refreshed_design_bundle"
+                ],
+                "mode": "summarize_only",
+                "output_id": "final_report",
+                "phase": "FINALIZE",
+                "step_id": "finalize_audit_report",
+                "worker_type": "verify_worker"
+              },
+              "id": "final_report",
+              "producer_step_id": "finalize_audit_report",
+              "worker_type": "verify_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "input_artifact_ids": [
+              "verification_results",
+              "readiness_assessment",
+              "traceability_report",
+              "refreshed_design_bundle"
+            ],
+            "mocked": true,
+            "mode": "summarize_only",
+            "phase": "FINALIZE",
+            "task_id": "billing_rollout_audit"
+          },
+          "producer": "verify_worker",
+          "run_id": "run_plan_req_001_reliability_audit_replan_v2",
+          "status": "completed",
+          "summary": "Mock verify_worker completed plan outputs for finalize_audit_report.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 0
+          },
+          "warnings": []
+        }
+      ]
+    },
+    "run_status": "completed",
+    "run_summary": "Plan executed successfully.",
+    "usage": {
+      "model_calls": 2,
+      "tool_calls": 4,
+      "workers": 3
+    },
+    "warnings": []
+  },
+  "worker_mock_runs": [
+    {
+      "expected_outputs": [
+        "repo_inventory",
+        "module_map",
+        "architecture_notes",
+        "context_gaps"
+      ],
+      "input_artifacts": [],
+      "metadata": {
+        "input_artifact_ids": [],
+        "mocked": true,
+        "mode": "observe_only",
+        "phase": "DISCOVER",
+        "task_id": "billing_rollout_audit"
+      },
+      "mode": "observe_only",
+      "phase": "DISCOVER",
+      "produced_artifacts": [
+        "repo_inventory",
+        "module_map",
+        "architecture_notes",
+        "context_gaps"
+      ],
+      "recommended_action": null,
+      "status": "completed",
+      "step_id": "discover_billing_context",
+      "summary": "Mock repo_worker completed plan outputs for discover_billing_context.",
+      "task_id": "billing_rollout_audit",
+      "worker_type": "repo_worker"
+    },
+    {
+      "expected_outputs": [
+        "analysis_evidence",
+        "behavior_matrix",
+        "confirmed_defects_prelim",
+        "hypothesis_log"
+      ],
+      "input_artifacts": [
+        "repo_inventory",
+        "module_map",
+        "architecture_notes"
+      ],
+      "metadata": {
+        "input_artifact_ids": [
+          "repo_inventory",
+          "module_map",
+          "architecture_notes"
+        ],
+        "mocked": true,
+        "mode": "observe_only",
+        "phase": "ANALYZE",
+        "task_id": "billing_rollout_audit"
+      },
+      "mode": "observe_only",
+      "phase": "ANALYZE",
+      "produced_artifacts": [
+        "analysis_evidence",
+        "behavior_matrix",
+        "confirmed_defects_prelim",
+        "hypothesis_log"
+      ],
+      "recommended_action": null,
+      "status": "completed",
+      "step_id": "analyze_billing_behavior",
+      "summary": "Mock repo_worker completed plan outputs for analyze_billing_behavior.",
+      "task_id": "billing_rollout_audit",
+      "worker_type": "repo_worker"
+    },
+    {
+      "expected_outputs": [
+        "authoritative_guidance_sources",
+        "guidance_control_matrix"
+      ],
+      "input_artifacts": [],
+      "metadata": {
+        "input_artifact_ids": [],
+        "mocked": true,
+        "mode": "observe_only",
+        "phase": "RESEARCH",
+        "task_id": "billing_rollout_audit"
+      },
+      "mode": "observe_only",
+      "phase": "RESEARCH",
+      "produced_artifacts": [
+        "authoritative_guidance_sources",
+        "guidance_control_matrix"
+      ],
+      "recommended_action": null,
+      "status": "completed",
+      "step_id": "research_authoritative_guidance",
+      "summary": "Mock web_research_worker completed plan outputs for research_authoritative_guidance.",
+      "task_id": "billing_rollout_audit",
+      "worker_type": "web_research_worker"
+    },
+    {
+      "expected_outputs": [
+        "confirmed_defects",
+        "standards_gap_analysis",
+        "mutation_scope",
+        "change_design",
+        "rollback_plan",
+        "verification_plan",
+        "operational_checks_plan",
+        "evidence_gap"
+      ],
+      "input_artifacts": [
+        "analysis_evidence",
+        "behavior_matrix",
+        "confirmed_defects_prelim",
+        "hypothesis_log",
+        "authoritative_guidance_sources",
+        "guidance_control_matrix",
+        "context_gaps"
+      ],
+      "metadata": {
+        "input_artifact_ids": [
+          "analysis_evidence",
+          "behavior_matrix",
+          "confirmed_defects_prelim",
+          "hypothesis_log",
+          "authoritative_guidance_sources",
+          "guidance_control_matrix",
+          "context_gaps"
+        ],
+        "mocked": true,
+        "mode": "plan_only",
+        "phase": "DESIGN",
+        "task_id": "billing_rollout_audit"
+      },
+      "mode": "plan_only",
+      "phase": "DESIGN",
+      "produced_artifacts": [
+        "confirmed_defects",
+        "standards_gap_analysis",
+        "mutation_scope",
+        "change_design",
+        "rollback_plan",
+        "verification_plan",
+        "operational_checks_plan",
+        "evidence_gap"
+      ],
+      "recommended_action": null,
+      "status": "completed",
+      "step_id": "design_gap_and_remediation_plan",
+      "summary": "Mock research_worker completed plan outputs for design_gap_and_remediation_plan.",
+      "task_id": "billing_rollout_audit",
+      "worker_type": "research_worker"
+    },
+    {
+      "expected_outputs": [
+        "verification_results",
+        "readiness_assessment"
+      ],
+      "input_artifacts": [
+        "confirmed_defects",
+        "standards_gap_analysis",
+        "mutation_scope",
+        "change_design",
+        "rollback_plan",
+        "verification_plan",
+        "operational_checks_plan",
+        "analysis_evidence",
+        "authoritative_guidance_sources",
+        "evidence_gap"
+      ],
+      "metadata": {
+        "issue_class": "planner_level",
+        "mocked": true,
+        "recommended_action": "Return a full fixed plan and re-run from a verification-safe sequence.",
+        "replan_level": "planner"
+      },
+      "mode": "verify_only",
+      "phase": "VERIFY",
+      "produced_artifacts": [
+        "planner_issue_snapshot"
+      ],
+      "recommended_action": "Return a full fixed plan and re-run from a verification-safe sequence.",
+      "status": "needs_replan",
+      "step_id": "verify_plan_integrity",
+      "summary": "Planner-level issue: verification criteria and mutation outputs are misaligned; re-planning is required before final verification.",
+      "task_id": "billing_rollout_audit",
+      "worker_type": "verify_worker"
+    },
+    {
+      "expected_outputs": [
+        "refreshed_evidence_bundle",
+        "refreshed_guidance_bundle",
+        "refreshed_design_bundle",
+        "verification_contract"
+      ],
+      "input_artifacts": [],
+      "metadata": {
+        "input_artifact_ids": [],
+        "mocked": true,
+        "mode": "observe_only",
+        "phase": "DISCOVER",
+        "task_id": "billing_rollout_audit"
+      },
+      "mode": "observe_only",
+      "phase": "DISCOVER",
+      "produced_artifacts": [
+        "refreshed_evidence_bundle",
+        "refreshed_guidance_bundle",
+        "refreshed_design_bundle",
+        "verification_contract"
+      ],
+      "recommended_action": null,
+      "status": "completed",
+      "step_id": "rebaseline_verification_inputs",
+      "summary": "Mock verify_worker completed plan outputs for rebaseline_verification_inputs.",
+      "task_id": "billing_rollout_audit",
+      "worker_type": "verify_worker"
+    },
+    {
+      "expected_outputs": [
+        "verification_results",
+        "readiness_assessment",
+        "traceability_report"
+      ],
+      "input_artifacts": [
+        "refreshed_evidence_bundle",
+        "refreshed_guidance_bundle",
+        "refreshed_design_bundle",
+        "verification_contract"
+      ],
+      "metadata": {
+        "input_artifact_ids": [
+          "refreshed_evidence_bundle",
+          "refreshed_guidance_bundle",
+          "refreshed_design_bundle",
+          "verification_contract"
+        ],
+        "mocked": true,
+        "mode": "verify_only",
+        "phase": "VERIFY",
+        "task_id": "billing_rollout_audit"
+      },
+      "mode": "verify_only",
+      "phase": "VERIFY",
+      "produced_artifacts": [
+        "verification_results",
+        "readiness_assessment",
+        "traceability_report"
+      ],
+      "recommended_action": null,
+      "status": "completed",
+      "step_id": "verify_traceability_and_readiness",
+      "summary": "Mock verify_worker completed plan outputs for verify_traceability_and_readiness.",
+      "task_id": "billing_rollout_audit",
+      "worker_type": "verify_worker"
+    },
+    {
+      "expected_outputs": [
+        "final_report"
+      ],
+      "input_artifacts": [
+        "verification_results",
+        "readiness_assessment",
+        "traceability_report",
+        "refreshed_design_bundle"
+      ],
+      "metadata": {
+        "input_artifact_ids": [
+          "verification_results",
+          "readiness_assessment",
+          "traceability_report",
+          "refreshed_design_bundle"
+        ],
+        "mocked": true,
+        "mode": "summarize_only",
+        "phase": "FINALIZE",
+        "task_id": "billing_rollout_audit"
+      },
+      "mode": "summarize_only",
+      "phase": "FINALIZE",
+      "produced_artifacts": [
+        "final_report"
+      ],
+      "recommended_action": null,
+      "status": "completed",
+      "step_id": "finalize_audit_report",
+      "summary": "Mock verify_worker completed plan outputs for finalize_audit_report.",
+      "task_id": "billing_rollout_audit",
+      "worker_type": "verify_worker"
+    }
+  ],
+  "worker_status_counts": {
+    "completed": 7,
+    "needs_replan": 1
+  },
+  "workflow": "decompressor -> planner -> worker mock -> worker replan request -> planner replan -> rerun"
+}

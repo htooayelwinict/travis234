@@ -25,7 +25,7 @@ def build_graph(
             {"client_factory": planner_client_factory} if planner_client_factory is not None else {}
         )
         planner_runtime = PlannerRuntime.from_env(**planner_options)
-    worker_kernel_runtime = WorkerKernelRuntime()
+    worker_kernel_runtime = WorkerKernelRuntime(planner_runtime=planner_runtime)
 
     def decompressor_node(state: RuntimeState) -> RuntimeState:
         user_input = state.get("user_input", "")
@@ -44,8 +44,9 @@ def build_graph(
         }
 
     def worker_kernel_node(state: RuntimeState) -> RuntimeState:
+        envelope = Envelope.model_validate(state["envelope"])
         plan = Plan.model_validate(state["plan"])
-        result = worker_kernel_runtime.run(plan)
+        result = worker_kernel_runtime.run(plan, envelope=envelope)
         return {
             "result": result.model_dump(),
             "errors": state.get("errors", []),

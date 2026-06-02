@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from app.planner.contracts import ALLOWED_MODES, PlannerModelClient, PlannerValidationError, WORKER_CATALOG, WRITE_SCOPE_ARTIFACTS
 from app.planner.validator import PlannerPlanValidator
-from app.schemas import Envelope, Plan
+from app.schemas import Envelope, Plan, ReplanRequest
 
 
 class PlannerPromptChainError(RuntimeError):
@@ -203,6 +203,104 @@ class LLMPlanCompiler:
                 f"planner prompt chain failed after repair: {json.dumps(diagnostics, sort_keys=True)}"
             ) from final_repair_exc
 
+    def replan(self, *, envelope: Envelope, current_plan: Plan, replan_request: ReplanRequest) -> Plan:
+        schema = Plan.model_json_schema()
+        response = self._model_client.complete_json(
+            stage="replan_plan",
+            prompt=self._replan_prompt(
+                envelope=envelope,
+                current_plan=current_plan,
+                replan_request=replan_request,
+                schema=schema,
+            ),
+            schema=schema,
+        )
+
+        try:
+            plan, budget_auto_aligned = self._parse_and_validate(
+                envelope=envelope,
+                response=response,
+            )
+            diagnostics = self._build_diagnostics(
+                mode="completed",
+                stages=["replan_plan", "validate_plan"],
+                model_calls=1,
+                repair_attempted=False,
+                validation_errors=[],
+                resolved_validation_errors=[],
+                budget_auto_aligned=budget_auto_aligned,
+                envelope=envelope,
+            )
+            diagnostics.update(
+                {
+                    "replan": True,
+                    "parent_plan_id": current_plan.plan_id,
+                    "failed_step_id": replan_request.failed_step_id,
+                }
+            )
+            return self._with_metadata(plan, diagnostics)
+        except (ValidationError, PlannerValidationError) as draft_exc:
+            validation_errors = self._serialize_validation_errors(draft_exc)
+
+        repair_response = self._model_client.complete_json(
+            stage="repair_replan_plan_1",
+            prompt=self._repair_replan_prompt(
+                envelope=envelope,
+                current_plan=current_plan,
+                replan_request=replan_request,
+                draft_response=response,
+                validation_errors=validation_errors,
+                schema=schema,
+            ),
+            schema=schema,
+        )
+
+        try:
+            repaired_plan, budget_auto_aligned = self._parse_and_validate(
+                envelope=envelope,
+                response=repair_response,
+            )
+            diagnostics = self._build_diagnostics(
+                mode="repaired",
+                stages=["replan_plan", "validate_plan", "repair_replan_plan_1", "validate_plan"],
+                model_calls=2,
+                repair_attempted=True,
+                validation_errors=[],
+                resolved_validation_errors=validation_errors,
+                budget_auto_aligned=budget_auto_aligned,
+                envelope=envelope,
+            )
+            diagnostics.update(
+                {
+                    "replan": True,
+                    "parent_plan_id": current_plan.plan_id,
+                    "failed_step_id": replan_request.failed_step_id,
+                }
+            )
+            return self._with_metadata(repaired_plan, diagnostics)
+        except (ValidationError, PlannerValidationError) as repair_exc:
+            repair_errors = self._serialize_validation_errors(repair_exc)
+            diagnostics = self._build_diagnostics(
+                mode="failed",
+                stages=["replan_plan", "validate_plan", "repair_replan_plan_1", "validate_plan"],
+                model_calls=2,
+                repair_attempted=True,
+                validation_errors=repair_errors,
+                resolved_validation_errors=validation_errors,
+                budget_auto_aligned=False,
+                envelope=envelope,
+            )
+            diagnostics.update(
+                {
+                    "replan": True,
+                    "parent_plan_id": current_plan.plan_id,
+                    "failed_step_id": replan_request.failed_step_id,
+                }
+            )
+            raise PlannerPromptChainError(
+                f"planner replan prompt chain failed after repair: {json.dumps(diagnostics, sort_keys=True)}"
+            ) from repair_exc
+
     def _parse_and_validate(self, *, envelope: Envelope, response: str) -> tuple[Plan, bool]:
         plan = Plan.model_validate_json(response)
         normalized_plan, budget_auto_aligned = self._normalize_budget(plan)
@@ -237,6 +335,8 @@ class LLMPlanCompiler:
                 "Never copy envelope.artifacts into step.input_artifacts; envelope.artifacts are semantic planning hints only, not runtime artifacts.",
                 "Plan budget must cover all step max_tool_calls/max_model_calls and step count.",
                 "Plan budget must include max_tool_calls, max_model_calls, max_workers, and max_retries.",
+                "If any step permission read_files, write_files, run_commands, or web_research is true, set that step.max_tool_calls to a positive integer.",
+                "Use max_tool_calls=0 only for direct no-tool/no-file/no-command/no-web steps.",
                 "Treat envelope artifacts as search hints unless they are explicit paths.",
                 "Do not treat artifact names like API, dashboard, policy module, pipeline, component, or service as writable paths.",
                 "DISCOVER may output candidate paths/locations only; do not use those artifacts directly as write scope.",
@@ -370,6 +470,8 @@ class LLMPlanCompiler:
                 "If repairing a direct_support plan, use input_artifacts=[] and output_artifacts=[\"direct_guidance\"].",
                 "Ensure budget covers step totals.",
                 "Ensure budget includes max_tool_calls, max_model_calls, max_workers, and max_retries.",
+                "If any step permission read_files, write_files, run_commands, or web_research is true, set that step.max_tool_calls to a positive integer.",
+                "Use max_tool_calls=0 only for direct no-tool/no-file/no-command/no-web steps.",
                 "Ensure discovery-before-mutation and verify-after-write policies.",
                 "Ensure mutating phase-aware plans include FINALIZE after VERIFY.",
                 "Ensure DISCOVER outputs candidate paths only and DESIGN converts them into mutation_scope before mutation.",
@@ -396,6 +498,91 @@ class LLMPlanCompiler:
             "write_scope_artifacts": WRITE_SCOPE_ARTIFACTS,
             "direct_support_archetype": "Use direct_support_plan_template exactly.",
             "direct_support_plan_template": _direct_support_plan_template(),
+            "worker_catalog": WORKER_CATALOG,
+            "instruction_context_block": _instruction_context_block(repair=True),
+            "plan_schema": schema,
+        }
+        return json.dumps(payload, sort_keys=True)
+
+    def _replan_prompt(
+        self,
+        *,
+        envelope: Envelope,
+        current_plan: Plan,
+        replan_request: ReplanRequest,
+        schema: dict[str, Any],
+    ) -> str:
+        payload = {
+            "task": "Create a fixed new full execution plan JSON after a worker requested replan.",
+            "instructions": [
+                "Return only JSON matching the existing Plan schema exactly.",
+                "Return a full replacement Plan, not a patch, not a continuation fragment, and not prose.",
+                "The new Plan must be internally valid under the normal planner validator.",
+                "Do not rely on validator exceptions, old-plan artifact carryover, or hidden worker state.",
+                "Do not reference artifacts from the previous plan as step.input_artifacts unless the new plan produces them in an earlier step.",
+                "Preserve the original envelope objective unless the replan reason proves the old approach is impossible.",
+                "Use only worker types in worker_catalog.",
+                "Use canonical phases: DISCOVER, ANALYZE, RESEARCH, DESIGN, MUTATE, VERIFY, FINALIZE.",
+                "Use allowed_modes exactly: DISCOVER/ANALYZE/RESEARCH=observe_only, DESIGN=plan_only, MUTATE=bounded_mutation, VERIFY=verify_only, FINALIZE=summarize_only.",
+                "Every step.instruction must start with labels in this order: Known facts:, Unknowns:, Do now:, Do not do:, Output:.",
+                "Plan around the failed step and reason; reduce repeated work only if the new plan remains self-contained.",
+                "Treat replan_request.completed_step_ids as authoritative execution history for which previous steps completed successfully.",
+                "Do not include replan_request.failed_step_id in completed work unless it also appears in completed_step_ids.",
+                "If previous context is needed, add an early read-only step that re-establishes that context and outputs fresh artifacts.",
+                "Every step.input_artifacts entry must be produced by an earlier step.output_artifacts in this new plan.",
+                "Every phase-aware step.permissions must explicitly include boolean read_files, write_files, run_commands, and web_research keys.",
+                "If any step permission read_files, write_files, run_commands, or web_research is true, set that step.max_tool_calls to a positive integer.",
+                "Use max_tool_calls=0 only for direct no-tool/no-file/no-command/no-web steps.",
+                "For any mutation plan, DESIGN must output mutation_scope, rollback_plan, and verification_plan or test_plan before MUTATE.",
+                "MUTATE must consume mutation_scope, rollback_plan, and evidence/design context, must scope writes with write_paths_from_artifacts, and must output change_summary plus rollback/revert artifact.",
+                "Any write_files=true step must be followed by VERIFY, and VERIFY must consume change_summary, write scope, and evidence/root-cause context.",
+                "Include FINALIZE after VERIFY for mutating phase-aware plans.",
+                "Plan budget must cover all step max_tool_calls/max_model_calls and worker count.",
+            ],
+            "envelope": envelope.model_dump(mode="json"),
+            "current_plan": current_plan.model_dump(mode="json"),
+            "replan_request": replan_request.model_dump(mode="json"),
+            "allowed_modes": ALLOWED_MODES,
+            "write_scope_artifacts": WRITE_SCOPE_ARTIFACTS,
+            "worker_catalog": WORKER_CATALOG,
+            "instruction_context_block": _instruction_context_block(),
+            "plan_schema": schema,
+        }
+        return json.dumps(payload, sort_keys=True)
+
+    def _repair_replan_prompt(
+        self,
+        *,
+        envelope: Envelope,
+        current_plan: Plan,
+        replan_request: ReplanRequest,
+        draft_response: str,
+        validation_errors: list[dict[str, Any]],
+        schema: dict[str, Any],
+    ) -> str:
+        payload = {
+            "task": "Repair the invalid replan output into a full replacement Plan JSON.",
+            "instructions": [
+                "Return only repaired JSON matching the existing Plan schema.",
+                "Do not return a patch or partial continuation.",
+                "Do not reference old-plan artifacts as input_artifacts unless this repaired plan produces them first.",
+                "Ensure the repaired plan passes the same normal planner validator as any initial plan.",
+                "Use only worker types in worker_catalog.",
+                "Ensure phase/mode/task_id/execution_pattern/global_invariants are populated for phase-aware plans.",
+                "Ensure every step.permissions includes boolean read_files/write_files/run_commands/web_research.",
+                "If any step permission read_files, write_files, run_commands, or web_research is true, set that step.max_tool_calls to a positive integer.",
+                "Treat replan_request.completed_step_ids as the authoritative list of previous steps that completed successfully.",
+                "Ensure budget covers step totals and includes max_tool_calls, max_model_calls, max_workers, and max_retries.",
+                "Ensure artifact dependencies reference only earlier outputs from this repaired plan.",
+                "Ensure mutation plans include discovery/design/mutate/verify/finalize safety contracts.",
+            ],
+            "validation_errors": validation_errors,
+            "previous_response": draft_response[:8000],
+            "envelope": envelope.model_dump(mode="json"),
+            "current_plan": current_plan.model_dump(mode="json"),
+            "replan_request": replan_request.model_dump(mode="json"),
+            "allowed_modes": ALLOWED_MODES,
+            "write_scope_artifacts": WRITE_SCOPE_ARTIFACTS,
             "worker_catalog": WORKER_CATALOG,
             "instruction_context_block": _instruction_context_block(repair=True),
             "plan_schema": schema,
@@ -444,6 +631,17 @@ class LLMPlanCompiler:
         return plan.model_copy(update={"metadata": metadata})
 
     def _normalize_budget(self, plan: Plan) -> tuple[Plan, bool]:
+        normalized_steps = []
+        adjusted_steps = False
+        for step in plan.steps:
+            if step.max_tool_calls == 0 and self._step_requires_tool_budget(step.permissions):
+                step = step.model_copy(update={"max_tool_calls": 1})
+                adjusted_steps = True
+            normalized_steps.append(step)
+
+        if adjusted_steps:
+            plan = plan.model_copy(update={"steps": normalized_steps})
+
         budget = dict(plan.budget or {})
         required_tools = sum(step.max_tool_calls for step in plan.steps)
         required_models = sum(step.max_model_calls for step in plan.steps)
@@ -479,9 +677,13 @@ class LLMPlanCompiler:
         else:
             budget["max_retries"] = max(0, normalized_retries)
 
+        adjusted = adjusted or adjusted_steps
         if not adjusted:
             return plan, False
         return plan.model_copy(update={"budget": budget}), True
+
+    def _step_requires_tool_budget(self, permissions: dict[str, Any]) -> bool:
+        return any(bool(permissions.get(key, False)) for key in ("read_files", "write_files", "run_commands", "web_research"))
 
     def _coerce_int(self, value: Any) -> int | None:
         try:

@@ -1,0 +1,1953 @@
+{
+  "elapsed_ms": 134816.304,
+  "envelope": {
+    "ambiguity": [
+      "repository identity and structure are not provided.",
+      "exact location and scope of the documented algorithm in v8.md are unknown.",
+      "what qualifies as authoritative reference is not explicitly defined.",
+      "rollback artifact format/output is unspecified.",
+      "acceptance criteria for focused verification and post-change checks are unspecified."
+    ],
+    "artifacts": [
+      {
+        "name": "v8.md",
+        "type": "file"
+      },
+      {
+        "name": "async transaction retry implementation",
+        "type": "component"
+      },
+      {
+        "name": "rollback implementation",
+        "type": "component"
+      },
+      {
+        "name": "repository",
+        "type": "codebase"
+      },
+      {
+        "name": "idempotent retries",
+        "type": "topic"
+      },
+      {
+        "name": "bounded concurrency",
+        "type": "topic"
+      },
+      {
+        "name": "backpressure",
+        "type": "topic"
+      },
+      {
+        "name": "rollback safety",
+        "type": "topic"
+      },
+      {
+        "name": "documented algorithm",
+        "type": "documentation_section"
+      },
+      {
+        "name": "project files",
+        "type": "file_set"
+      },
+      {
+        "name": "rollback artifact",
+        "type": "artifact"
+      },
+      {
+        "name": "verification steps",
+        "type": "validation_spec"
+      },
+      {
+        "name": "post-change checks",
+        "type": "validation_spec"
+      }
+    ],
+    "assumptions": [
+      "v8.md exists in or is accessible for the target repository context.",
+      "async transaction retry and rollback logic are implemented in repository code.",
+      "external references are expected to be public and citable.",
+      "code fixes are conditional on finding concrete, reproducible defects."
+    ],
+    "complexity_hint": "high",
+    "confidence": 0.9,
+    "constraints": [
+      "no code mutation unless concrete defects are evidenced",
+      "preserve minimally scoped changes limited to confirmed defect locations",
+      "maintain behavioral compatibility outside the defect scope",
+      "claims about best practices must be backed by authoritative references",
+      "rollback mechanism must be produced for any applied change",
+      "verification requirements must be defined for each modified behavior"
+    ],
+    "context_needed": [
+      "repository tree and file paths",
+      "contents/location of v8.md",
+      "language/runtime/framework used by transaction subsystem",
+      "exact modules/functions implementing async retry and rollback",
+      "test suite availability and execution commands",
+      "definition/format expected for rollback artifact",
+      "criteria for what counts as authoritative external references",
+      "change-control constraints for direct file edits"
+    ],
+    "domains": [
+      "code",
+      "docs",
+      "research",
+      "reliability",
+      "concurrency"
+    ],
+    "input_type": "repository_async_transaction_retry_rollback_audit_with_conditional_patch",
+    "intents": [
+      "docs.analyze",
+      "code.trace",
+      "research.lookup",
+      "algorithm.compare",
+      "code.fix",
+      "change.safety",
+      "verification.define"
+    ],
+    "metadata": {
+      "decompressor_mode": "llm_prompt_chain",
+      "decompressor_runtime": {
+        "elapsed_ms": 22743.428,
+        "failure_rate": 0.0,
+        "latency_ms_p50": 22743.428,
+        "latency_ms_p95": 22743.428,
+        "repair_rate": 0.0
+      },
+      "llm_prompt_chain": {
+        "fallback": null,
+        "mode": "completed",
+        "model_calls": 1,
+        "redacted_prompt_input": false,
+        "stages": [
+          "decompress_request",
+          "validate_envelope"
+        ]
+      }
+    },
+    "normalized_input": "Review v8.md, locate the repository\u2019s async transaction retry/rollback code, compare both docs and implementation against authoritative sources on idempotent retries, bounded concurrency, backpressure, and rollback safety, and if concrete defects are confirmed, apply minimal in-repo fixes with rollback artifact and targeted verification/post-change checks.",
+    "raw_input": "Read v8.md and find the corresponding async transaction retry and rollback implementation in the repository. Research authoritative external references on idempotent retries, bounded concurrency, backpressure, and rollback safety. Compare the documented algorithm and the code against those references, and if you find concrete defects, apply a minimally scoped code fix directly in project files, produce a rollback artifact, and define focused verification steps and post-change checks.",
+    "request_id": "req_001",
+    "risks": [
+      "mutation_requested",
+      "file_mutation",
+      "needs_verification",
+      "cross_source_mismatch_risk",
+      "authoritative_reference_quality_risk",
+      "rollback_safety_regression_risk"
+    ],
+    "user_goal": "Validate and harden async transaction retry/rollback behavior by aligning documentation and code with authoritative practices, then implement minimal verified fixes if real defects exist."
+  },
+  "error": null,
+  "final_worker_kernel_result": {
+    "artifacts": [
+      {
+        "content": "Mock artifact repo_inventory from discover_repo_context_rebuild.",
+        "id": "repo_inventory",
+        "producer_step_id": "discover_repo_context_rebuild",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact candidate_doc_paths from discover_repo_context_rebuild.",
+        "id": "candidate_doc_paths",
+        "producer_step_id": "discover_repo_context_rebuild",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact candidate_code_paths from discover_repo_context_rebuild.",
+        "id": "candidate_code_paths",
+        "producer_step_id": "discover_repo_context_rebuild",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact candidate_test_paths from discover_repo_context_rebuild.",
+        "id": "candidate_test_paths",
+        "producer_step_id": "discover_repo_context_rebuild",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact boundary_hypotheses from discover_repo_context_rebuild.",
+        "id": "boundary_hypotheses",
+        "producer_step_id": "discover_repo_context_rebuild",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact unresolved_context from discover_repo_context_rebuild.",
+        "id": "unresolved_context",
+        "producer_step_id": "discover_repo_context_rebuild",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact documented_algorithm_summary from analyze_docs_code_and_boundaries.",
+        "id": "documented_algorithm_summary",
+        "producer_step_id": "analyze_docs_code_and_boundaries",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact implementation_trace from analyze_docs_code_and_boundaries.",
+        "id": "implementation_trace",
+        "producer_step_id": "analyze_docs_code_and_boundaries",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact boundary_map from analyze_docs_code_and_boundaries.",
+        "id": "boundary_map",
+        "producer_step_id": "analyze_docs_code_and_boundaries",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact dependency_artifacts from analyze_docs_code_and_boundaries.",
+        "id": "dependency_artifacts",
+        "producer_step_id": "analyze_docs_code_and_boundaries",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact analysis_evidence from analyze_docs_code_and_boundaries.",
+        "id": "analysis_evidence",
+        "producer_step_id": "analyze_docs_code_and_boundaries",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact evidence_gap from analyze_docs_code_and_boundaries.",
+        "id": "evidence_gap",
+        "producer_step_id": "analyze_docs_code_and_boundaries",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact source_selection_criteria from research_authoritative_practices_boundary_aligned.",
+        "id": "source_selection_criteria",
+        "producer_step_id": "research_authoritative_practices_boundary_aligned",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "content": "Mock artifact authoritative_sources from research_authoritative_practices_boundary_aligned.",
+        "id": "authoritative_sources",
+        "producer_step_id": "research_authoritative_practices_boundary_aligned",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "content": "Mock artifact research_evidence from research_authoritative_practices_boundary_aligned.",
+        "id": "research_evidence",
+        "producer_step_id": "research_authoritative_practices_boundary_aligned",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "content": "Mock artifact practice_baseline from research_authoritative_practices_boundary_aligned.",
+        "id": "practice_baseline",
+        "producer_step_id": "research_authoritative_practices_boundary_aligned",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "content": "Mock artifact conflict_resolution_log from research_authoritative_practices_boundary_aligned.",
+        "id": "conflict_resolution_log",
+        "producer_step_id": "research_authoritative_practices_boundary_aligned",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "content": "Mock artifact confirmed_defects from design_evidence_gated_change_plan.",
+        "id": "confirmed_defects",
+        "producer_step_id": "design_evidence_gated_change_plan",
+        "worker_type": "code_worker"
+      },
+      {
+        "content": "Mock artifact decision_record from design_evidence_gated_change_plan.",
+        "id": "decision_record",
+        "producer_step_id": "design_evidence_gated_change_plan",
+        "worker_type": "code_worker"
+      },
+      {
+        "content": "Mock artifact mutation_scope from design_evidence_gated_change_plan.",
+        "id": "mutation_scope",
+        "producer_step_id": "design_evidence_gated_change_plan",
+        "worker_type": "code_worker"
+      },
+      {
+        "content": "Mock artifact allowed_write_paths from design_evidence_gated_change_plan.",
+        "id": "allowed_write_paths",
+        "producer_step_id": "design_evidence_gated_change_plan",
+        "worker_type": "code_worker"
+      },
+      {
+        "content": "Mock artifact fix_design from design_evidence_gated_change_plan.",
+        "id": "fix_design",
+        "producer_step_id": "design_evidence_gated_change_plan",
+        "worker_type": "code_worker"
+      },
+      {
+        "content": "Mock artifact rollback_plan from design_evidence_gated_change_plan.",
+        "id": "rollback_plan",
+        "producer_step_id": "design_evidence_gated_change_plan",
+        "worker_type": "code_worker"
+      },
+      {
+        "content": "Mock artifact verification_plan from design_evidence_gated_change_plan.",
+        "id": "verification_plan",
+        "producer_step_id": "design_evidence_gated_change_plan",
+        "worker_type": "code_worker"
+      },
+      {
+        "content": "Mock artifact change_summary from apply_minimal_scoped_patch.",
+        "id": "change_summary",
+        "producer_step_id": "apply_minimal_scoped_patch",
+        "worker_type": "code_worker"
+      },
+      {
+        "content": "Mock artifact rollback_patch from apply_minimal_scoped_patch.",
+        "id": "rollback_patch",
+        "producer_step_id": "apply_minimal_scoped_patch",
+        "worker_type": "code_worker"
+      },
+      {
+        "content": "Mock artifact rollback_artifact from apply_minimal_scoped_patch.",
+        "id": "rollback_artifact",
+        "producer_step_id": "apply_minimal_scoped_patch",
+        "worker_type": "code_worker"
+      },
+      {
+        "content": "Mock artifact verification_results from verify_scoped_changes.",
+        "id": "verification_results",
+        "producer_step_id": "verify_scoped_changes",
+        "worker_type": "verify_worker"
+      },
+      {
+        "content": "Mock artifact post_change_checks from verify_scoped_changes.",
+        "id": "post_change_checks",
+        "producer_step_id": "verify_scoped_changes",
+        "worker_type": "verify_worker"
+      },
+      {
+        "content": "Mock artifact rollback_readiness from verify_scoped_changes.",
+        "id": "rollback_readiness",
+        "producer_step_id": "verify_scoped_changes",
+        "worker_type": "verify_worker"
+      },
+      {
+        "content": "Mock artifact final_report from finalize_audit_report.",
+        "id": "final_report",
+        "producer_step_id": "finalize_audit_report",
+        "worker_type": "verify_worker"
+      }
+    ],
+    "errors": [],
+    "metadata": {
+      "replan": {
+        "depth": 1,
+        "original_worker_results": [
+          {
+            "artifacts": [
+              {
+                "content": "Mock artifact repo_inventory from discover_repo_context.",
+                "id": "repo_inventory",
+                "producer_step_id": "discover_repo_context",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": "Mock artifact candidate_doc_paths from discover_repo_context.",
+                "id": "candidate_doc_paths",
+                "producer_step_id": "discover_repo_context",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": "Mock artifact candidate_code_paths from discover_repo_context.",
+                "id": "candidate_code_paths",
+                "producer_step_id": "discover_repo_context",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": "Mock artifact candidate_test_paths from discover_repo_context.",
+                "id": "candidate_test_paths",
+                "producer_step_id": "discover_repo_context",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": "Mock artifact unresolved_context from discover_repo_context.",
+                "id": "unresolved_context",
+                "producer_step_id": "discover_repo_context",
+                "worker_type": "repo_worker"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "mocked": true
+            },
+            "producer": "repo_worker",
+            "run_id": "run_plan_req_001_async_retry_rollback_audit_patch",
+            "status": "completed",
+            "summary": "Mock repo_worker accepted and completed discover_repo_context.",
+            "usage": {
+              "model_calls": 1,
+              "tool_calls": 1
+            },
+            "warnings": []
+          },
+          {
+            "artifacts": [
+              {
+                "content": "Mock artifact documented_algorithm_summary from analyze_docs_and_code.",
+                "id": "documented_algorithm_summary",
+                "producer_step_id": "analyze_docs_and_code",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": "Mock artifact implementation_trace from analyze_docs_and_code.",
+                "id": "implementation_trace",
+                "producer_step_id": "analyze_docs_and_code",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": "Mock artifact dependency_artifacts from analyze_docs_and_code.",
+                "id": "dependency_artifacts",
+                "producer_step_id": "analyze_docs_and_code",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": "Mock artifact analysis_evidence from analyze_docs_and_code.",
+                "id": "analysis_evidence",
+                "producer_step_id": "analyze_docs_and_code",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": "Mock artifact evidence_gap from analyze_docs_and_code.",
+                "id": "evidence_gap",
+                "producer_step_id": "analyze_docs_and_code",
+                "worker_type": "repo_worker"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "mocked": true
+            },
+            "producer": "repo_worker",
+            "run_id": "run_plan_req_001_async_retry_rollback_audit_patch",
+            "status": "completed",
+            "summary": "Mock repo_worker accepted and completed analyze_docs_and_code.",
+            "usage": {
+              "model_calls": 1,
+              "tool_calls": 1
+            },
+            "warnings": []
+          },
+          {
+            "artifacts": [
+              {
+                "content": {
+                  "failed_step_id": "research_authoritative_practices",
+                  "input_artifact_ids": [
+                    "documented_algorithm_summary",
+                    "implementation_trace",
+                    "analysis_evidence"
+                  ],
+                  "issue_type": "planner_level",
+                  "signals": [
+                    "conflicting_external_sources",
+                    "implementation_boundary_mismatch",
+                    "mutation_scope_unreachable"
+                  ],
+                  "task_metadata": {
+                    "mode": "observe_only",
+                    "phase": "RESEARCH",
+                    "task_id": "async_retry_rollback_audit_patch"
+                  }
+                },
+                "id": "planner_issue_snapshot"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "issue_class": "planner_level",
+              "mocked": true,
+              "recommended_action": "Return a full fixed new Plan using the existing schema and rebuild the context needed for mutation."
+            },
+            "producer": "web_research_worker",
+            "run_id": "run_plan_req_001_async_retry_rollback_audit_patch",
+            "status": "needs_replan",
+            "summary": "Planner-level issue: external evidence is conflicting, discovered implementation boundaries do not line up with the assumed transaction path, and the expected artifact chain to safe mutation cannot be satisfied without a new full plan.",
+            "usage": {
+              "model_calls": 0,
+              "tool_calls": 1
+            },
+            "warnings": []
+          }
+        ],
+        "replacement_plan": {
+          "budget": {
+            "max_model_calls": 5,
+            "max_retries": 1,
+            "max_tool_calls": 29,
+            "max_workers": 7
+          },
+          "execution_pattern": "discover_analyze_research_design_mutate_verify_finalize",
+          "global_invariants": [
+            "evidence_before_mutation",
+            "no_file_writes_without_confirmed_defects",
+            "writes_scoped_to_designated_mutation_scope",
+            "rollback_artifact_required_for_any_change",
+            "verify_after_any_write",
+            "no_uncited_external_best_practice_claims",
+            "boundary_alignment_required_before_external_comparison"
+          ],
+          "metadata": {
+            "archetype": "phase_aware_mutation",
+            "complexity": "high",
+            "llm_planner": {
+              "budget_auto_aligned": true,
+              "envelope_complexity_hint": "high",
+              "envelope_input_type": "repository_async_transaction_retry_rollback_audit_with_conditional_patch",
+              "failed_step_id": "research_authoritative_practices",
+              "mode": "completed",
+              "model_calls": 1,
+              "parent_plan_id": "plan_req_001_async_retry_rollback_audit_patch",
+              "repair_attempted": false,
+              "replan": true,
+              "resolved_validation_errors": [],
+              "stages": [
+                "replan_plan",
+                "validate_plan"
+              ],
+              "validation_errors": []
+            },
+            "planner_runtime": {
+              "fallback_reason": null,
+              "mode": "llm_prompt_chain_replan"
+            },
+            "replan": {
+              "failed_step_id": "research_authoritative_practices",
+              "response": "full_plan_rebuild_with_boundary_first_reconciliation",
+              "signals": [
+                "conflicting_external_sources",
+                "implementation_boundary_mismatch",
+                "mutation_scope_unreachable"
+              ],
+              "trigger": "planner_level_issue"
+            },
+            "source_request": "repository_async_transaction_retry_rollback_audit_with_conditional_patch"
+          },
+          "objective": "Audit v8.md and corresponding async transaction retry/rollback implementation against authoritative practices, then apply only evidence-backed minimal fixes with rollback and focused verification.",
+          "plan_id": "plan_req_001_async_retry_rollback_audit_patch_replan1",
+          "planner": "phase_aware_planner_v1",
+          "request_id": "req_001",
+          "steps": [
+            {
+              "input_artifacts": [],
+              "instruction": "Known facts: Replan is required because prior research hit conflicting sources and implementation-boundary mismatch; repository identity and structure were not guaranteed stable for safe mutation. Unknowns: Current repo tree, exact v8.md location, true async transaction entrypoints, rollback boundaries, and executable test targets. Do now: Re-scan repository to map documentation, retry/rollback code candidates, and concrete transaction boundary hypotheses tied to file paths/symbols. Do not do: Do not edit files, run mutating commands, or assume prior boundary conclusions remain valid. Output: repo_inventory, candidate_doc_paths, candidate_code_paths, candidate_test_paths, boundary_hypotheses, unresolved_context.",
+              "max_model_calls": 1,
+              "max_tool_calls": 4,
+              "mode": "observe_only",
+              "output_artifacts": [
+                "repo_inventory",
+                "candidate_doc_paths",
+                "candidate_code_paths",
+                "candidate_test_paths",
+                "boundary_hypotheses",
+                "unresolved_context"
+              ],
+              "permissions": {
+                "read_files": true,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "DISCOVER",
+              "step_id": "discover_repo_context_rebuild",
+              "task_id": "async_retry_rollback_audit_patch",
+              "worker_type": "repo_worker"
+            },
+            {
+              "input_artifacts": [
+                "repo_inventory",
+                "candidate_doc_paths",
+                "candidate_code_paths",
+                "candidate_test_paths",
+                "boundary_hypotheses",
+                "unresolved_context"
+              ],
+              "instruction": "Known facts: Fresh repository inventory, candidate paths, and boundary hypotheses are available from discovery. Unknowns: Whether v8.md algorithm and implementation align at the same transaction boundary and whether evidence is sufficient for defect confirmation. Do now: Read v8.md and traced code to build a boundary-accurate implementation trace, reconcile docs-to-code mapping, and capture concrete evidence plus explicit gaps. Do not do: Do not mutate files or assert defects without path- and symbol-level repository evidence. Output: documented_algorithm_summary, implementation_trace, boundary_map, dependency_artifacts, analysis_evidence, evidence_gap.",
+              "max_model_calls": 1,
+              "max_tool_calls": 6,
+              "mode": "observe_only",
+              "output_artifacts": [
+                "documented_algorithm_summary",
+                "implementation_trace",
+                "boundary_map",
+                "dependency_artifacts",
+                "analysis_evidence",
+                "evidence_gap"
+              ],
+              "permissions": {
+                "read_files": true,
+                "run_commands": true,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "ANALYZE",
+              "step_id": "analyze_docs_code_and_boundaries",
+              "task_id": "async_retry_rollback_audit_patch",
+              "worker_type": "repo_worker"
+            },
+            {
+              "input_artifacts": [
+                "documented_algorithm_summary",
+                "implementation_trace",
+                "boundary_map",
+                "analysis_evidence"
+              ],
+              "instruction": "Known facts: Internal algorithm summary, implementation trace, and boundary map are available to constrain external comparison domains. Unknowns: Which sources are most authoritative for this runtime and how to resolve conflicting guidance for the exact boundary and failure model. Do now: Collect authoritative references scoped to the identified runtime/boundary, resolve conflicts explicitly, and produce a cited baseline for idempotent retries, concurrency bounds, backpressure, and rollback safety. Do not do: Do not mutate repository files or include uncited best-practice claims. Output: source_selection_criteria, authoritative_sources, research_evidence, practice_baseline, conflict_resolution_log.",
+              "max_model_calls": 1,
+              "max_tool_calls": 6,
+              "mode": "observe_only",
+              "output_artifacts": [
+                "source_selection_criteria",
+                "authoritative_sources",
+                "research_evidence",
+                "practice_baseline",
+                "conflict_resolution_log"
+              ],
+              "permissions": {
+                "read_files": false,
+                "run_commands": false,
+                "web_research": true,
+                "write_files": false
+              },
+              "phase": "RESEARCH",
+              "step_id": "research_authoritative_practices_boundary_aligned",
+              "task_id": "async_retry_rollback_audit_patch",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "input_artifacts": [
+                "documented_algorithm_summary",
+                "implementation_trace",
+                "boundary_map",
+                "analysis_evidence",
+                "evidence_gap",
+                "authoritative_sources",
+                "research_evidence",
+                "practice_baseline",
+                "conflict_resolution_log"
+              ],
+              "instruction": "Known facts: Boundary-aligned internal evidence and external authoritative baseline with conflict resolution are available. Unknowns: Whether concrete defects are confirmed and, if confirmed, the smallest safe writable scope. Do now: Decide confirmed defects versus no-change outcome and produce a minimal scoped design with explicit write boundaries, rollback, and focused verification criteria. Do not do: Do not edit files, expand scope beyond confirmed defects, or bypass evidence gaps. Output: confirmed_defects, decision_record, mutation_scope, allowed_write_paths, fix_design, rollback_plan, verification_plan.",
+              "max_model_calls": 1,
+              "max_tool_calls": 3,
+              "mode": "plan_only",
+              "output_artifacts": [
+                "confirmed_defects",
+                "decision_record",
+                "mutation_scope",
+                "allowed_write_paths",
+                "fix_design",
+                "rollback_plan",
+                "verification_plan"
+              ],
+              "permissions": {
+                "read_files": true,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "DESIGN",
+              "step_id": "design_evidence_gated_change_plan",
+              "task_id": "async_retry_rollback_audit_patch",
+              "worker_type": "code_worker"
+            },
+            {
+              "input_artifacts": [
+                "confirmed_defects",
+                "decision_record",
+                "mutation_scope",
+                "allowed_write_paths",
+                "fix_design",
+                "rollback_plan",
+                "verification_plan",
+                "analysis_evidence"
+              ],
+              "instruction": "Known facts: Defect decision, scoped write paths, fix design, rollback plan, and verification plan are defined. Unknowns: None material except branch where defects are unconfirmed and mutation must not occur. Do now: If confirmed_defects contains concrete defects, apply only minimal edits within allowed scope and generate rollback artifacts; otherwise emit explicit no-change outputs with rollback status. Do not do: Do not write outside mutation_scope/allowed_write_paths, do not perform unrelated refactors, and do not claim changes without artifacted diffs. Output: change_summary, rollback_patch, rollback_artifact.",
+              "max_model_calls": 0,
+              "max_tool_calls": 5,
+              "mode": "bounded_mutation",
+              "output_artifacts": [
+                "change_summary",
+                "rollback_patch",
+                "rollback_artifact"
+              ],
+              "permissions": {
+                "read_files": true,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": true,
+                "write_paths_from_artifacts": [
+                  "mutation_scope",
+                  "allowed_write_paths"
+                ]
+              },
+              "phase": "MUTATE",
+              "step_id": "apply_minimal_scoped_patch",
+              "task_id": "async_retry_rollback_audit_patch",
+              "worker_type": "code_worker"
+            },
+            {
+              "input_artifacts": [
+                "change_summary",
+                "rollback_patch",
+                "rollback_artifact",
+                "mutation_scope",
+                "confirmed_defects",
+                "verification_plan",
+                "analysis_evidence"
+              ],
+              "instruction": "Known facts: Change outputs and rollback artifacts exist, with original evidence and scoped verification plan available. Unknowns: Whether applied edits (if any) match confirmed defects, stay in scope, and pass focused checks. Do now: Execute targeted verification/post-change checks from verification_plan and report scope containment, behavior alignment, and rollback readiness. Do not do: Do not modify files or run unrelated broad validation suites beyond focused checks. Output: verification_results, post_change_checks, rollback_readiness.",
+              "max_model_calls": 1,
+              "max_tool_calls": 5,
+              "mode": "verify_only",
+              "output_artifacts": [
+                "verification_results",
+                "post_change_checks",
+                "rollback_readiness"
+              ],
+              "permissions": {
+                "read_files": true,
+                "run_commands": true,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "VERIFY",
+              "step_id": "verify_scoped_changes",
+              "task_id": "async_retry_rollback_audit_patch",
+              "worker_type": "verify_worker"
+            },
+            {
+              "input_artifacts": [
+                "decision_record",
+                "authoritative_sources",
+                "conflict_resolution_log",
+                "change_summary",
+                "rollback_artifact",
+                "verification_results",
+                "post_change_checks",
+                "rollback_readiness"
+              ],
+              "instruction": "Known facts: Decision, source set, mutation outcome, rollback artifacts, and verification evidence are complete. Unknowns: None material. Do now: Produce the final concise report covering boundary reconciliation, authoritative alignment, defect decision, applied minimal changes or no-change outcome, rollback artifact details, and focused verification results. Do not do: Do not add unsupported claims or new uncited recommendations. Output: final_report.",
+              "max_model_calls": 0,
+              "max_tool_calls": 0,
+              "mode": "summarize_only",
+              "output_artifacts": [
+                "final_report"
+              ],
+              "permissions": {
+                "read_files": false,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "FINALIZE",
+              "step_id": "finalize_audit_report",
+              "task_id": "async_retry_rollback_audit_patch",
+              "worker_type": "verify_worker"
+            }
+          ],
+          "strategy": "rebuild_context_then_boundary_aligned_research_then_evidence_gated_scoped_mutation",
+          "success_criteria": [
+            "Repository targets and transaction boundaries are re-established with explicit unresolved context.",
+            "v8.md algorithm and implementation trace are reconciled to a boundary-accurate mapping with evidence gaps documented.",
+            "Authoritative references are selected with explicit conflict resolution and mapped to idempotency, concurrency bounds, backpressure, and rollback safety.",
+            "Design outputs include confirmed_defects decision, mutation_scope, rollback_plan, and verification_plan before any write.",
+            "Any applied change is minimal, scope-contained, and includes rollback_patch or rollback_artifact.",
+            "Verification confirms scope containment, defect-aligned behavior, and rollback readiness.",
+            "Final report summarizes findings, decisions, changes/no-change outcome, and verification evidence."
+          ]
+        },
+        "request": {
+          "completed_artifacts": [
+            {
+              "content": "Mock artifact repo_inventory from discover_repo_context.",
+              "id": "repo_inventory",
+              "producer_step_id": "discover_repo_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact candidate_doc_paths from discover_repo_context.",
+              "id": "candidate_doc_paths",
+              "producer_step_id": "discover_repo_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact candidate_code_paths from discover_repo_context.",
+              "id": "candidate_code_paths",
+              "producer_step_id": "discover_repo_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact candidate_test_paths from discover_repo_context.",
+              "id": "candidate_test_paths",
+              "producer_step_id": "discover_repo_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact unresolved_context from discover_repo_context.",
+              "id": "unresolved_context",
+              "producer_step_id": "discover_repo_context",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact documented_algorithm_summary from analyze_docs_and_code.",
+              "id": "documented_algorithm_summary",
+              "producer_step_id": "analyze_docs_and_code",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact implementation_trace from analyze_docs_and_code.",
+              "id": "implementation_trace",
+              "producer_step_id": "analyze_docs_and_code",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact dependency_artifacts from analyze_docs_and_code.",
+              "id": "dependency_artifacts",
+              "producer_step_id": "analyze_docs_and_code",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact analysis_evidence from analyze_docs_and_code.",
+              "id": "analysis_evidence",
+              "producer_step_id": "analyze_docs_and_code",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact evidence_gap from analyze_docs_and_code.",
+              "id": "evidence_gap",
+              "producer_step_id": "analyze_docs_and_code",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "failed_step_id": "research_authoritative_practices",
+                "input_artifact_ids": [
+                  "documented_algorithm_summary",
+                  "implementation_trace",
+                  "analysis_evidence"
+                ],
+                "issue_type": "planner_level",
+                "signals": [
+                  "conflicting_external_sources",
+                  "implementation_boundary_mismatch",
+                  "mutation_scope_unreachable"
+                ],
+                "task_metadata": {
+                  "mode": "observe_only",
+                  "phase": "RESEARCH",
+                  "task_id": "async_retry_rollback_audit_patch"
+                }
+              },
+              "id": "planner_issue_snapshot"
+            }
+          ],
+          "failed_step_id": "research_authoritative_practices",
+          "plan_id": "plan_req_001_async_retry_rollback_audit_patch",
+          "reason": "Planner-level issue: external evidence is conflicting, discovered implementation boundaries do not line up with the assumed transaction path, and the expected artifact chain to safe mutation cannot be satisfied without a new full plan.",
+          "recommended_action": "Return a full fixed new Plan using the existing schema and rebuild the context needed for mutation.",
+          "remaining_budget": {
+            "max_model_calls": 5,
+            "max_retries": 1,
+            "max_tool_calls": 29,
+            "max_workers": 4
+          },
+          "request_id": "req_001",
+          "run_id": "run_plan_req_001_async_retry_rollback_audit_patch",
+          "worker_result": {
+            "artifacts": [
+              {
+                "content": {
+                  "failed_step_id": "research_authoritative_practices",
+                  "input_artifact_ids": [
+                    "documented_algorithm_summary",
+                    "implementation_trace",
+                    "analysis_evidence"
+                  ],
+                  "issue_type": "planner_level",
+                  "signals": [
+                    "conflicting_external_sources",
+                    "implementation_boundary_mismatch",
+                    "mutation_scope_unreachable"
+                  ],
+                  "task_metadata": {
+                    "mode": "observe_only",
+                    "phase": "RESEARCH",
+                    "task_id": "async_retry_rollback_audit_patch"
+                  }
+                },
+                "id": "planner_issue_snapshot"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "issue_class": "planner_level",
+              "mocked": true,
+              "recommended_action": "Return a full fixed new Plan using the existing schema and rebuild the context needed for mutation."
+            },
+            "producer": "web_research_worker",
+            "run_id": "run_plan_req_001_async_retry_rollback_audit_patch",
+            "status": "needs_replan",
+            "summary": "Planner-level issue: external evidence is conflicting, discovered implementation boundaries do not line up with the assumed transaction path, and the expected artifact chain to safe mutation cannot be satisfied without a new full plan.",
+            "usage": {
+              "model_calls": 0,
+              "tool_calls": 1
+            },
+            "warnings": []
+          }
+        }
+      },
+      "worker_results": [
+        {
+          "artifacts": [
+            {
+              "content": "Mock artifact repo_inventory from discover_repo_context_rebuild.",
+              "id": "repo_inventory",
+              "producer_step_id": "discover_repo_context_rebuild",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact candidate_doc_paths from discover_repo_context_rebuild.",
+              "id": "candidate_doc_paths",
+              "producer_step_id": "discover_repo_context_rebuild",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact candidate_code_paths from discover_repo_context_rebuild.",
+              "id": "candidate_code_paths",
+              "producer_step_id": "discover_repo_context_rebuild",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact candidate_test_paths from discover_repo_context_rebuild.",
+              "id": "candidate_test_paths",
+              "producer_step_id": "discover_repo_context_rebuild",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact boundary_hypotheses from discover_repo_context_rebuild.",
+              "id": "boundary_hypotheses",
+              "producer_step_id": "discover_repo_context_rebuild",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact unresolved_context from discover_repo_context_rebuild.",
+              "id": "unresolved_context",
+              "producer_step_id": "discover_repo_context_rebuild",
+              "worker_type": "repo_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "mocked": true
+          },
+          "producer": "repo_worker",
+          "run_id": "run_plan_req_001_async_retry_rollback_audit_patch_replan1",
+          "status": "completed",
+          "summary": "Mock repo_worker accepted and completed discover_repo_context_rebuild.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 1
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": "Mock artifact documented_algorithm_summary from analyze_docs_code_and_boundaries.",
+              "id": "documented_algorithm_summary",
+              "producer_step_id": "analyze_docs_code_and_boundaries",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact implementation_trace from analyze_docs_code_and_boundaries.",
+              "id": "implementation_trace",
+              "producer_step_id": "analyze_docs_code_and_boundaries",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact boundary_map from analyze_docs_code_and_boundaries.",
+              "id": "boundary_map",
+              "producer_step_id": "analyze_docs_code_and_boundaries",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact dependency_artifacts from analyze_docs_code_and_boundaries.",
+              "id": "dependency_artifacts",
+              "producer_step_id": "analyze_docs_code_and_boundaries",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact analysis_evidence from analyze_docs_code_and_boundaries.",
+              "id": "analysis_evidence",
+              "producer_step_id": "analyze_docs_code_and_boundaries",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact evidence_gap from analyze_docs_code_and_boundaries.",
+              "id": "evidence_gap",
+              "producer_step_id": "analyze_docs_code_and_boundaries",
+              "worker_type": "repo_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "mocked": true
+          },
+          "producer": "repo_worker",
+          "run_id": "run_plan_req_001_async_retry_rollback_audit_patch_replan1",
+          "status": "completed",
+          "summary": "Mock repo_worker accepted and completed analyze_docs_code_and_boundaries.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 1
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": "Mock artifact source_selection_criteria from research_authoritative_practices_boundary_aligned.",
+              "id": "source_selection_criteria",
+              "producer_step_id": "research_authoritative_practices_boundary_aligned",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "content": "Mock artifact authoritative_sources from research_authoritative_practices_boundary_aligned.",
+              "id": "authoritative_sources",
+              "producer_step_id": "research_authoritative_practices_boundary_aligned",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "content": "Mock artifact research_evidence from research_authoritative_practices_boundary_aligned.",
+              "id": "research_evidence",
+              "producer_step_id": "research_authoritative_practices_boundary_aligned",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "content": "Mock artifact practice_baseline from research_authoritative_practices_boundary_aligned.",
+              "id": "practice_baseline",
+              "producer_step_id": "research_authoritative_practices_boundary_aligned",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "content": "Mock artifact conflict_resolution_log from research_authoritative_practices_boundary_aligned.",
+              "id": "conflict_resolution_log",
+              "producer_step_id": "research_authoritative_practices_boundary_aligned",
+              "worker_type": "web_research_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "mocked": true
+          },
+          "producer": "web_research_worker",
+          "run_id": "run_plan_req_001_async_retry_rollback_audit_patch_replan1",
+          "status": "completed",
+          "summary": "Mock web_research_worker accepted and completed research_authoritative_practices_boundary_aligned.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 1
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": "Mock artifact confirmed_defects from design_evidence_gated_change_plan.",
+              "id": "confirmed_defects",
+              "producer_step_id": "design_evidence_gated_change_plan",
+              "worker_type": "code_worker"
+            },
+            {
+              "content": "Mock artifact decision_record from design_evidence_gated_change_plan.",
+              "id": "decision_record",
+              "producer_step_id": "design_evidence_gated_change_plan",
+              "worker_type": "code_worker"
+            },
+            {
+              "content": "Mock artifact mutation_scope from design_evidence_gated_change_plan.",
+              "id": "mutation_scope",
+              "producer_step_id": "design_evidence_gated_change_plan",
+              "worker_type": "code_worker"
+            },
+            {
+              "content": "Mock artifact allowed_write_paths from design_evidence_gated_change_plan.",
+              "id": "allowed_write_paths",
+              "producer_step_id": "design_evidence_gated_change_plan",
+              "worker_type": "code_worker"
+            },
+            {
+              "content": "Mock artifact fix_design from design_evidence_gated_change_plan.",
+              "id": "fix_design",
+              "producer_step_id": "design_evidence_gated_change_plan",
+              "worker_type": "code_worker"
+            },
+            {
+              "content": "Mock artifact rollback_plan from design_evidence_gated_change_plan.",
+              "id": "rollback_plan",
+              "producer_step_id": "design_evidence_gated_change_plan",
+              "worker_type": "code_worker"
+            },
+            {
+              "content": "Mock artifact verification_plan from design_evidence_gated_change_plan.",
+              "id": "verification_plan",
+              "producer_step_id": "design_evidence_gated_change_plan",
+              "worker_type": "code_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "mocked": true
+          },
+          "producer": "code_worker",
+          "run_id": "run_plan_req_001_async_retry_rollback_audit_patch_replan1",
+          "status": "completed",
+          "summary": "Mock code_worker accepted and completed design_evidence_gated_change_plan.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 1
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": "Mock artifact change_summary from apply_minimal_scoped_patch.",
+              "id": "change_summary",
+              "producer_step_id": "apply_minimal_scoped_patch",
+              "worker_type": "code_worker"
+            },
+            {
+              "content": "Mock artifact rollback_patch from apply_minimal_scoped_patch.",
+              "id": "rollback_patch",
+              "producer_step_id": "apply_minimal_scoped_patch",
+              "worker_type": "code_worker"
+            },
+            {
+              "content": "Mock artifact rollback_artifact from apply_minimal_scoped_patch.",
+              "id": "rollback_artifact",
+              "producer_step_id": "apply_minimal_scoped_patch",
+              "worker_type": "code_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "mocked": true
+          },
+          "producer": "code_worker",
+          "run_id": "run_plan_req_001_async_retry_rollback_audit_patch_replan1",
+          "status": "completed",
+          "summary": "Mock code_worker accepted and completed apply_minimal_scoped_patch.",
+          "usage": {
+            "model_calls": 0,
+            "tool_calls": 1
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": "Mock artifact verification_results from verify_scoped_changes.",
+              "id": "verification_results",
+              "producer_step_id": "verify_scoped_changes",
+              "worker_type": "verify_worker"
+            },
+            {
+              "content": "Mock artifact post_change_checks from verify_scoped_changes.",
+              "id": "post_change_checks",
+              "producer_step_id": "verify_scoped_changes",
+              "worker_type": "verify_worker"
+            },
+            {
+              "content": "Mock artifact rollback_readiness from verify_scoped_changes.",
+              "id": "rollback_readiness",
+              "producer_step_id": "verify_scoped_changes",
+              "worker_type": "verify_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "mocked": true
+          },
+          "producer": "verify_worker",
+          "run_id": "run_plan_req_001_async_retry_rollback_audit_patch_replan1",
+          "status": "completed",
+          "summary": "Mock verify_worker accepted and completed verify_scoped_changes.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 1
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": "Mock artifact final_report from finalize_audit_report.",
+              "id": "final_report",
+              "producer_step_id": "finalize_audit_report",
+              "worker_type": "verify_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "mocked": true
+          },
+          "producer": "verify_worker",
+          "run_id": "run_plan_req_001_async_retry_rollback_audit_patch_replan1",
+          "status": "completed",
+          "summary": "Mock verify_worker accepted and completed finalize_audit_report.",
+          "usage": {
+            "model_calls": 0,
+            "tool_calls": 0
+          },
+          "warnings": []
+        }
+      ]
+    },
+    "producer": "worker_kernel",
+    "run_id": "run_plan_req_001_async_retry_rollback_audit_patch_replan1",
+    "status": "completed",
+    "summary": "Plan executed successfully.",
+    "usage": {
+      "model_calls": 5,
+      "tool_calls": 6,
+      "workers": 7
+    },
+    "warnings": []
+  },
+  "fixed_new_replan_plan": {
+    "budget": {
+      "max_model_calls": 5,
+      "max_retries": 1,
+      "max_tool_calls": 29,
+      "max_workers": 7
+    },
+    "execution_pattern": "discover_analyze_research_design_mutate_verify_finalize",
+    "global_invariants": [
+      "evidence_before_mutation",
+      "no_file_writes_without_confirmed_defects",
+      "writes_scoped_to_designated_mutation_scope",
+      "rollback_artifact_required_for_any_change",
+      "verify_after_any_write",
+      "no_uncited_external_best_practice_claims",
+      "boundary_alignment_required_before_external_comparison"
+    ],
+    "metadata": {
+      "archetype": "phase_aware_mutation",
+      "complexity": "high",
+      "llm_planner": {
+        "budget_auto_aligned": true,
+        "envelope_complexity_hint": "high",
+        "envelope_input_type": "repository_async_transaction_retry_rollback_audit_with_conditional_patch",
+        "failed_step_id": "research_authoritative_practices",
+        "mode": "completed",
+        "model_calls": 1,
+        "parent_plan_id": "plan_req_001_async_retry_rollback_audit_patch",
+        "repair_attempted": false,
+        "replan": true,
+        "resolved_validation_errors": [],
+        "stages": [
+          "replan_plan",
+          "validate_plan"
+        ],
+        "validation_errors": []
+      },
+      "planner_runtime": {
+        "fallback_reason": null,
+        "mode": "llm_prompt_chain_replan"
+      },
+      "replan": {
+        "failed_step_id": "research_authoritative_practices",
+        "response": "full_plan_rebuild_with_boundary_first_reconciliation",
+        "signals": [
+          "conflicting_external_sources",
+          "implementation_boundary_mismatch",
+          "mutation_scope_unreachable"
+        ],
+        "trigger": "planner_level_issue"
+      },
+      "source_request": "repository_async_transaction_retry_rollback_audit_with_conditional_patch"
+    },
+    "objective": "Audit v8.md and corresponding async transaction retry/rollback implementation against authoritative practices, then apply only evidence-backed minimal fixes with rollback and focused verification.",
+    "plan_id": "plan_req_001_async_retry_rollback_audit_patch_replan1",
+    "planner": "phase_aware_planner_v1",
+    "request_id": "req_001",
+    "steps": [
+      {
+        "input_artifacts": [],
+        "instruction": "Known facts: Replan is required because prior research hit conflicting sources and implementation-boundary mismatch; repository identity and structure were not guaranteed stable for safe mutation. Unknowns: Current repo tree, exact v8.md location, true async transaction entrypoints, rollback boundaries, and executable test targets. Do now: Re-scan repository to map documentation, retry/rollback code candidates, and concrete transaction boundary hypotheses tied to file paths/symbols. Do not do: Do not edit files, run mutating commands, or assume prior boundary conclusions remain valid. Output: repo_inventory, candidate_doc_paths, candidate_code_paths, candidate_test_paths, boundary_hypotheses, unresolved_context.",
+        "max_model_calls": 1,
+        "max_tool_calls": 4,
+        "mode": "observe_only",
+        "output_artifacts": [
+          "repo_inventory",
+          "candidate_doc_paths",
+          "candidate_code_paths",
+          "candidate_test_paths",
+          "boundary_hypotheses",
+          "unresolved_context"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "DISCOVER",
+        "step_id": "discover_repo_context_rebuild",
+        "task_id": "async_retry_rollback_audit_patch",
+        "worker_type": "repo_worker"
+      },
+      {
+        "input_artifacts": [
+          "repo_inventory",
+          "candidate_doc_paths",
+          "candidate_code_paths",
+          "candidate_test_paths",
+          "boundary_hypotheses",
+          "unresolved_context"
+        ],
+        "instruction": "Known facts: Fresh repository inventory, candidate paths, and boundary hypotheses are available from discovery. Unknowns: Whether v8.md algorithm and implementation align at the same transaction boundary and whether evidence is sufficient for defect confirmation. Do now: Read v8.md and traced code to build a boundary-accurate implementation trace, reconcile docs-to-code mapping, and capture concrete evidence plus explicit gaps. Do not do: Do not mutate files or assert defects without path- and symbol-level repository evidence. Output: documented_algorithm_summary, implementation_trace, boundary_map, dependency_artifacts, analysis_evidence, evidence_gap.",
+        "max_model_calls": 1,
+        "max_tool_calls": 6,
+        "mode": "observe_only",
+        "output_artifacts": [
+          "documented_algorithm_summary",
+          "implementation_trace",
+          "boundary_map",
+          "dependency_artifacts",
+          "analysis_evidence",
+          "evidence_gap"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": true,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "ANALYZE",
+        "step_id": "analyze_docs_code_and_boundaries",
+        "task_id": "async_retry_rollback_audit_patch",
+        "worker_type": "repo_worker"
+      },
+      {
+        "input_artifacts": [
+          "documented_algorithm_summary",
+          "implementation_trace",
+          "boundary_map",
+          "analysis_evidence"
+        ],
+        "instruction": "Known facts: Internal algorithm summary, implementation trace, and boundary map are available to constrain external comparison domains. Unknowns: Which sources are most authoritative for this runtime and how to resolve conflicting guidance for the exact boundary and failure model. Do now: Collect authoritative references scoped to the identified runtime/boundary, resolve conflicts explicitly, and produce a cited baseline for idempotent retries, concurrency bounds, backpressure, and rollback safety. Do not do: Do not mutate repository files or include uncited best-practice claims. Output: source_selection_criteria, authoritative_sources, research_evidence, practice_baseline, conflict_resolution_log.",
+        "max_model_calls": 1,
+        "max_tool_calls": 6,
+        "mode": "observe_only",
+        "output_artifacts": [
+          "source_selection_criteria",
+          "authoritative_sources",
+          "research_evidence",
+          "practice_baseline",
+          "conflict_resolution_log"
+        ],
+        "permissions": {
+          "read_files": false,
+          "run_commands": false,
+          "web_research": true,
+          "write_files": false
+        },
+        "phase": "RESEARCH",
+        "step_id": "research_authoritative_practices_boundary_aligned",
+        "task_id": "async_retry_rollback_audit_patch",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "input_artifacts": [
+          "documented_algorithm_summary",
+          "implementation_trace",
+          "boundary_map",
+          "analysis_evidence",
+          "evidence_gap",
+          "authoritative_sources",
+          "research_evidence",
+          "practice_baseline",
+          "conflict_resolution_log"
+        ],
+        "instruction": "Known facts: Boundary-aligned internal evidence and external authoritative baseline with conflict resolution are available. Unknowns: Whether concrete defects are confirmed and, if confirmed, the smallest safe writable scope. Do now: Decide confirmed defects versus no-change outcome and produce a minimal scoped design with explicit write boundaries, rollback, and focused verification criteria. Do not do: Do not edit files, expand scope beyond confirmed defects, or bypass evidence gaps. Output: confirmed_defects, decision_record, mutation_scope, allowed_write_paths, fix_design, rollback_plan, verification_plan.",
+        "max_model_calls": 1,
+        "max_tool_calls": 3,
+        "mode": "plan_only",
+        "output_artifacts": [
+          "confirmed_defects",
+          "decision_record",
+          "mutation_scope",
+          "allowed_write_paths",
+          "fix_design",
+          "rollback_plan",
+          "verification_plan"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "DESIGN",
+        "step_id": "design_evidence_gated_change_plan",
+        "task_id": "async_retry_rollback_audit_patch",
+        "worker_type": "code_worker"
+      },
+      {
+        "input_artifacts": [
+          "confirmed_defects",
+          "decision_record",
+          "mutation_scope",
+          "allowed_write_paths",
+          "fix_design",
+          "rollback_plan",
+          "verification_plan",
+          "analysis_evidence"
+        ],
+        "instruction": "Known facts: Defect decision, scoped write paths, fix design, rollback plan, and verification plan are defined. Unknowns: None material except branch where defects are unconfirmed and mutation must not occur. Do now: If confirmed_defects contains concrete defects, apply only minimal edits within allowed scope and generate rollback artifacts; otherwise emit explicit no-change outputs with rollback status. Do not do: Do not write outside mutation_scope/allowed_write_paths, do not perform unrelated refactors, and do not claim changes without artifacted diffs. Output: change_summary, rollback_patch, rollback_artifact.",
+        "max_model_calls": 0,
+        "max_tool_calls": 5,
+        "mode": "bounded_mutation",
+        "output_artifacts": [
+          "change_summary",
+          "rollback_patch",
+          "rollback_artifact"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": true,
+          "write_paths_from_artifacts": [
+            "mutation_scope",
+            "allowed_write_paths"
+          ]
+        },
+        "phase": "MUTATE",
+        "step_id": "apply_minimal_scoped_patch",
+        "task_id": "async_retry_rollback_audit_patch",
+        "worker_type": "code_worker"
+      },
+      {
+        "input_artifacts": [
+          "change_summary",
+          "rollback_patch",
+          "rollback_artifact",
+          "mutation_scope",
+          "confirmed_defects",
+          "verification_plan",
+          "analysis_evidence"
+        ],
+        "instruction": "Known facts: Change outputs and rollback artifacts exist, with original evidence and scoped verification plan available. Unknowns: Whether applied edits (if any) match confirmed defects, stay in scope, and pass focused checks. Do now: Execute targeted verification/post-change checks from verification_plan and report scope containment, behavior alignment, and rollback readiness. Do not do: Do not modify files or run unrelated broad validation suites beyond focused checks. Output: verification_results, post_change_checks, rollback_readiness.",
+        "max_model_calls": 1,
+        "max_tool_calls": 5,
+        "mode": "verify_only",
+        "output_artifacts": [
+          "verification_results",
+          "post_change_checks",
+          "rollback_readiness"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": true,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "VERIFY",
+        "step_id": "verify_scoped_changes",
+        "task_id": "async_retry_rollback_audit_patch",
+        "worker_type": "verify_worker"
+      },
+      {
+        "input_artifacts": [
+          "decision_record",
+          "authoritative_sources",
+          "conflict_resolution_log",
+          "change_summary",
+          "rollback_artifact",
+          "verification_results",
+          "post_change_checks",
+          "rollback_readiness"
+        ],
+        "instruction": "Known facts: Decision, source set, mutation outcome, rollback artifacts, and verification evidence are complete. Unknowns: None material. Do now: Produce the final concise report covering boundary reconciliation, authoritative alignment, defect decision, applied minimal changes or no-change outcome, rollback artifact details, and focused verification results. Do not do: Do not add unsupported claims or new uncited recommendations. Output: final_report.",
+        "max_model_calls": 0,
+        "max_tool_calls": 0,
+        "mode": "summarize_only",
+        "output_artifacts": [
+          "final_report"
+        ],
+        "permissions": {
+          "read_files": false,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "FINALIZE",
+        "step_id": "finalize_audit_report",
+        "task_id": "async_retry_rollback_audit_patch",
+        "worker_type": "verify_worker"
+      }
+    ],
+    "strategy": "rebuild_context_then_boundary_aligned_research_then_evidence_gated_scoped_mutation",
+    "success_criteria": [
+      "Repository targets and transaction boundaries are re-established with explicit unresolved context.",
+      "v8.md algorithm and implementation trace are reconciled to a boundary-accurate mapping with evidence gaps documented.",
+      "Authoritative references are selected with explicit conflict resolution and mapped to idempotency, concurrency bounds, backpressure, and rollback safety.",
+      "Design outputs include confirmed_defects decision, mutation_scope, rollback_plan, and verification_plan before any write.",
+      "Any applied change is minimal, scope-contained, and includes rollback_patch or rollback_artifact.",
+      "Verification confirms scope containment, defect-aligned behavior, and rollback readiness.",
+      "Final report summarizes findings, decisions, changes/no-change outcome, and verification evidence."
+    ]
+  },
+  "generated_at": "2026-06-02T19:05:46.034963",
+  "initial_plan": {
+    "budget": {
+      "max_model_calls": 7,
+      "max_retries": 1,
+      "max_tool_calls": 32,
+      "max_workers": 7
+    },
+    "execution_pattern": "discover_analyze_research_design_mutate_verify_finalize",
+    "global_invariants": [
+      "evidence_before_mutation",
+      "no_file_writes_without_confirmed_defects",
+      "writes_scoped_to_designated_mutation_scope",
+      "rollback_artifact_required_for_any_change",
+      "verify_after_any_write",
+      "no_uncited_external_best_practice_claims"
+    ],
+    "metadata": {
+      "archetype": "phase_aware_mutation",
+      "complexity": "high",
+      "llm_planner": {
+        "budget_auto_aligned": true,
+        "envelope_complexity_hint": "high",
+        "envelope_input_type": "repository_async_transaction_retry_rollback_audit_with_conditional_patch",
+        "mode": "completed",
+        "model_calls": 1,
+        "repair_attempted": false,
+        "resolved_validation_errors": [],
+        "stages": [
+          "draft_plan",
+          "validate_plan"
+        ],
+        "validation_errors": []
+      },
+      "planner_runtime": {
+        "fallback_reason": null,
+        "mode": "llm_prompt_chain"
+      },
+      "source_request": "repository_async_transaction_retry_rollback_audit_with_conditional_patch"
+    },
+    "objective": "Audit v8.md and corresponding async transaction retry/rollback implementation against authoritative practices, then apply only evidence-backed minimal fixes with rollback and focused verification.",
+    "plan_id": "plan_req_001_async_retry_rollback_audit_patch",
+    "planner": "phase_aware_planner_v1",
+    "request_id": "req_001",
+    "steps": [
+      {
+        "input_artifacts": [],
+        "instruction": "Known facts: Request targets repository async transaction retry/rollback behavior and v8.md alignment, but paths and structure are unknown. Unknowns: Exact repo tree, v8.md location, implementation modules, test entry points, and rollback artifact format. Do now: Inspect repository structure to locate documentation, candidate retry/rollback code paths, and test/config files; capture unresolved context gaps explicitly. Do not do: Do not edit files, run mutating commands, or assume component names are file paths. Output: repo_inventory, candidate_doc_paths, candidate_code_paths, candidate_test_paths, unresolved_context.",
+        "max_model_calls": 1,
+        "max_tool_calls": 4,
+        "mode": "observe_only",
+        "output_artifacts": [
+          "repo_inventory",
+          "candidate_doc_paths",
+          "candidate_code_paths",
+          "candidate_test_paths",
+          "unresolved_context"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "DISCOVER",
+        "step_id": "discover_repo_context",
+        "task_id": "async_retry_rollback_audit_patch",
+        "worker_type": "repo_worker"
+      },
+      {
+        "input_artifacts": [
+          "repo_inventory",
+          "candidate_doc_paths",
+          "candidate_code_paths",
+          "candidate_test_paths",
+          "unresolved_context"
+        ],
+        "instruction": "Known facts: Candidate documentation/code/test locations and repo inventory are available. Unknowns: Whether documented algorithm matches implementation and whether dependency/test context is sufficient. Do now: Read v8.md and traced code to extract documented algorithm, implementation behavior, retry/rollback control flow, and dependency/test availability; produce concrete internal evidence and explicit evidence gaps. Do not do: Do not change files or claim defects without repository evidence. Output: documented_algorithm_summary, implementation_trace, dependency_artifacts, analysis_evidence, evidence_gap.",
+        "max_model_calls": 1,
+        "max_tool_calls": 6,
+        "mode": "observe_only",
+        "output_artifacts": [
+          "documented_algorithm_summary",
+          "implementation_trace",
+          "dependency_artifacts",
+          "analysis_evidence",
+          "evidence_gap"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": true,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "ANALYZE",
+        "step_id": "analyze_docs_and_code",
+        "task_id": "async_retry_rollback_audit_patch",
+        "worker_type": "repo_worker"
+      },
+      {
+        "input_artifacts": [
+          "documented_algorithm_summary",
+          "implementation_trace",
+          "analysis_evidence"
+        ],
+        "instruction": "Known facts: Internal algorithm and implementation evidence are extracted and comparison domains are idempotent retries, bounded concurrency, backpressure, and rollback safety. Unknowns: Which external sources best satisfy authoritative-reference requirements for this stack. Do now: Gather and synthesize high-quality authoritative sources and produce a comparison baseline mapped to the requested reliability/concurrency topics. Do not do: Do not mutate repository files or present uncited best-practice claims. Output: authoritative_sources, research_evidence, practice_baseline.",
+        "max_model_calls": 1,
+        "max_tool_calls": 6,
+        "mode": "observe_only",
+        "output_artifacts": [
+          "authoritative_sources",
+          "research_evidence",
+          "practice_baseline"
+        ],
+        "permissions": {
+          "read_files": false,
+          "run_commands": false,
+          "web_research": true,
+          "write_files": false
+        },
+        "phase": "RESEARCH",
+        "step_id": "research_authoritative_practices",
+        "task_id": "async_retry_rollback_audit_patch",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "input_artifacts": [
+          "documented_algorithm_summary",
+          "implementation_trace",
+          "dependency_artifacts",
+          "analysis_evidence",
+          "evidence_gap",
+          "authoritative_sources",
+          "research_evidence",
+          "practice_baseline"
+        ],
+        "instruction": "Known facts: Internal evidence, dependency context, and external authoritative baseline are available for comparison. Unknowns: Whether evidence is sufficient to confirm concrete defects requiring code changes. Do now: Produce defect confirmation decision and, only for confirmed defects, create minimally scoped mutation plan including mutation_scope, allowed_write_paths, fix_design, rollback_plan, and verification_plan; if evidence is insufficient, record evidence-gated no-change decision. Do not do: Do not edit files, broaden scope beyond confirmed defect locations, or bypass rollback/verification planning. Output: confirmed_defects, decision_record, mutation_scope, allowed_write_paths, fix_design, rollback_plan, verification_plan.",
+        "max_model_calls": 1,
+        "max_tool_calls": 4,
+        "mode": "plan_only",
+        "output_artifacts": [
+          "confirmed_defects",
+          "decision_record",
+          "mutation_scope",
+          "allowed_write_paths",
+          "fix_design",
+          "rollback_plan",
+          "verification_plan"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "DESIGN",
+        "step_id": "design_scoped_change_and_rollback",
+        "task_id": "async_retry_rollback_audit_patch",
+        "worker_type": "code_worker"
+      },
+      {
+        "input_artifacts": [
+          "confirmed_defects",
+          "decision_record",
+          "mutation_scope",
+          "allowed_write_paths",
+          "fix_design",
+          "rollback_plan",
+          "analysis_evidence"
+        ],
+        "instruction": "Known facts: Defect decision, scoped write targets, fix design, rollback plan, and verification plan are defined. Unknowns: None, except branch where defects are unconfirmed and no mutation is permitted. Do now: If and only if confirmed_defects indicates concrete defects, apply minimal scoped file edits consistent with fix_design and produce rollback patch artifacts; otherwise emit explicit no-change summary with rollback status. Do not do: Do not write outside mutation_scope/allowed_write_paths, do not perform unrelated refactors, and do not claim success without verifiable change outputs. Output: change_summary, rollback_patch, rollback_artifact.",
+        "max_model_calls": 1,
+        "max_tool_calls": 6,
+        "mode": "bounded_mutation",
+        "output_artifacts": [
+          "change_summary",
+          "rollback_patch",
+          "rollback_artifact"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": true,
+          "write_paths_from_artifacts": [
+            "mutation_scope",
+            "allowed_write_paths"
+          ]
+        },
+        "phase": "MUTATE",
+        "step_id": "apply_minimal_patch",
+        "task_id": "async_retry_rollback_audit_patch",
+        "worker_type": "code_worker"
+      },
+      {
+        "input_artifacts": [
+          "change_summary",
+          "rollback_patch",
+          "rollback_artifact",
+          "mutation_scope",
+          "confirmed_defects",
+          "verification_plan",
+          "analysis_evidence"
+        ],
+        "instruction": "Known facts: Change outputs, rollback artifacts, scoped write plan, and root-cause/design context are available. Unknowns: Whether implemented changes fully match root cause, stay in scope, and satisfy focused post-change checks. Do now: Run targeted verification defined in verification_plan and assess scope containment, behavior alignment to confirmed defects, and rollback readiness. Do not do: Do not modify files or run unrelated broad validation beyond focused checks. Output: verification_results, post_change_checks, rollback_readiness.",
+        "max_model_calls": 1,
+        "max_tool_calls": 6,
+        "mode": "verify_only",
+        "output_artifacts": [
+          "verification_results",
+          "post_change_checks",
+          "rollback_readiness"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": true,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "VERIFY",
+        "step_id": "verify_changes_and_checks",
+        "task_id": "async_retry_rollback_audit_patch",
+        "worker_type": "verify_worker"
+      },
+      {
+        "input_artifacts": [
+          "decision_record",
+          "authoritative_sources",
+          "change_summary",
+          "rollback_artifact",
+          "verification_results",
+          "post_change_checks",
+          "rollback_readiness"
+        ],
+        "instruction": "Known facts: Discovery, analysis, research, design decisions, mutation outputs, and verification evidence are complete. Unknowns: None material after verification artifacts are present. Do now: Produce a concise final report covering findings, authoritative alignment, defect decision, applied minimal changes (or no-change outcome), rollback artifact details, and focused verification/post-change results. Do not do: Do not introduce new claims unsupported by produced artifacts. Output: final_report.",
+        "max_model_calls": 1,
+        "max_tool_calls": 0,
+        "mode": "summarize_only",
+        "output_artifacts": [
+          "final_report"
+        ],
+        "permissions": {
+          "read_files": false,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "FINALIZE",
+        "step_id": "finalize_report",
+        "task_id": "async_retry_rollback_audit_patch",
+        "worker_type": "research_worker"
+      }
+    ],
+    "strategy": "discovery_first_evidence_gated_research_and_scoped_mutation",
+    "success_criteria": [
+      "Repository targets and algorithm/code trace are identified with explicit evidence gaps.",
+      "Authoritative external references are collected and mapped to idempotency, concurrency bounds, backpressure, and rollback safety.",
+      "Design artifacts include confirmed_defects decision, mutation_scope, rollback_plan, and verification_plan before any write.",
+      "Any applied code change is minimal, scope-contained, and accompanied by rollback_patch or rollback_artifact.",
+      "Verification outputs demonstrate root-cause match, focused post-change checks, and rollback readiness.",
+      "Final report summarizes findings, decisions, changes/no-change outcome, and verification evidence."
+    ]
+  },
+  "mocked_worker_replan_result": {
+    "artifacts": [
+      {
+        "content": {
+          "failed_step_id": "research_authoritative_practices",
+          "input_artifact_ids": [
+            "documented_algorithm_summary",
+            "implementation_trace",
+            "analysis_evidence"
+          ],
+          "issue_type": "planner_level",
+          "signals": [
+            "conflicting_external_sources",
+            "implementation_boundary_mismatch",
+            "mutation_scope_unreachable"
+          ],
+          "task_metadata": {
+            "mode": "observe_only",
+            "phase": "RESEARCH",
+            "task_id": "async_retry_rollback_audit_patch"
+          }
+        },
+        "id": "planner_issue_snapshot"
+      }
+    ],
+    "errors": [],
+    "metadata": {
+      "issue_class": "planner_level",
+      "mocked": true,
+      "recommended_action": "Return a full fixed new Plan using the existing schema and rebuild the context needed for mutation."
+    },
+    "producer": "web_research_worker",
+    "run_id": "run_plan_req_001_async_retry_rollback_audit_patch",
+    "status": "needs_replan",
+    "summary": "Planner-level issue: external evidence is conflicting, discovered implementation boundaries do not line up with the assumed transaction path, and the expected artifact chain to safe mutation cannot be satisfied without a new full plan.",
+    "usage": {
+      "model_calls": 0,
+      "tool_calls": 1
+    },
+    "warnings": []
+  },
+  "prompt": "Read v8.md and find the corresponding async transaction retry and rollback implementation in the repository. Research authoritative external references on idempotent retries, bounded concurrency, backpressure, and rollback safety. Compare the documented algorithm and the code against those references, and if you find concrete defects, apply a minimally scoped code fix directly in project files, produce a rollback artifact, and define focused verification steps and post-change checks.",
+  "replan_request": {
+    "completed_artifacts": [
+      {
+        "content": "Mock artifact repo_inventory from discover_repo_context.",
+        "id": "repo_inventory",
+        "producer_step_id": "discover_repo_context",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact candidate_doc_paths from discover_repo_context.",
+        "id": "candidate_doc_paths",
+        "producer_step_id": "discover_repo_context",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact candidate_code_paths from discover_repo_context.",
+        "id": "candidate_code_paths",
+        "producer_step_id": "discover_repo_context",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact candidate_test_paths from discover_repo_context.",
+        "id": "candidate_test_paths",
+        "producer_step_id": "discover_repo_context",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact unresolved_context from discover_repo_context.",
+        "id": "unresolved_context",
+        "producer_step_id": "discover_repo_context",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact documented_algorithm_summary from analyze_docs_and_code.",
+        "id": "documented_algorithm_summary",
+        "producer_step_id": "analyze_docs_and_code",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact implementation_trace from analyze_docs_and_code.",
+        "id": "implementation_trace",
+        "producer_step_id": "analyze_docs_and_code",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact dependency_artifacts from analyze_docs_and_code.",
+        "id": "dependency_artifacts",
+        "producer_step_id": "analyze_docs_and_code",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact analysis_evidence from analyze_docs_and_code.",
+        "id": "analysis_evidence",
+        "producer_step_id": "analyze_docs_and_code",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact evidence_gap from analyze_docs_and_code.",
+        "id": "evidence_gap",
+        "producer_step_id": "analyze_docs_and_code",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": {
+          "failed_step_id": "research_authoritative_practices",
+          "input_artifact_ids": [
+            "documented_algorithm_summary",
+            "implementation_trace",
+            "analysis_evidence"
+          ],
+          "issue_type": "planner_level",
+          "signals": [
+            "conflicting_external_sources",
+            "implementation_boundary_mismatch",
+            "mutation_scope_unreachable"
+          ],
+          "task_metadata": {
+            "mode": "observe_only",
+            "phase": "RESEARCH",
+            "task_id": "async_retry_rollback_audit_patch"
+          }
+        },
+        "id": "planner_issue_snapshot"
+      }
+    ],
+    "failed_step_id": "research_authoritative_practices",
+    "plan_id": "plan_req_001_async_retry_rollback_audit_patch",
+    "reason": "Planner-level issue: external evidence is conflicting, discovered implementation boundaries do not line up with the assumed transaction path, and the expected artifact chain to safe mutation cannot be satisfied without a new full plan.",
+    "recommended_action": "Return a full fixed new Plan using the existing schema and rebuild the context needed for mutation.",
+    "remaining_budget": {
+      "max_model_calls": 5,
+      "max_retries": 1,
+      "max_tool_calls": 29,
+      "max_workers": 4
+    },
+    "request_id": "req_001",
+    "run_id": "run_plan_req_001_async_retry_rollback_audit_patch",
+    "worker_result": {
+      "artifacts": [
+        {
+          "content": {
+            "failed_step_id": "research_authoritative_practices",
+            "input_artifact_ids": [
+              "documented_algorithm_summary",
+              "implementation_trace",
+              "analysis_evidence"
+            ],
+            "issue_type": "planner_level",
+            "signals": [
+              "conflicting_external_sources",
+              "implementation_boundary_mismatch",
+              "mutation_scope_unreachable"
+            ],
+            "task_metadata": {
+              "mode": "observe_only",
+              "phase": "RESEARCH",
+              "task_id": "async_retry_rollback_audit_patch"
+            }
+          },
+          "id": "planner_issue_snapshot"
+        }
+      ],
+      "errors": [],
+      "metadata": {
+        "issue_class": "planner_level",
+        "mocked": true,
+        "recommended_action": "Return a full fixed new Plan using the existing schema and rebuild the context needed for mutation."
+      },
+      "producer": "web_research_worker",
+      "run_id": "run_plan_req_001_async_retry_rollback_audit_patch",
+      "status": "needs_replan",
+      "summary": "Planner-level issue: external evidence is conflicting, discovered implementation boundaries do not line up with the assumed transaction path, and the expected artifact chain to safe mutation cannot be satisfied without a new full plan.",
+      "usage": {
+        "model_calls": 0,
+        "tool_calls": 1
+      },
+      "warnings": []
+    }
+  },
+  "selected_replan_step": {
+    "phase": "RESEARCH",
+    "step_id": "research_authoritative_practices",
+    "worker_type": "web_research_worker"
+  },
+  "status": "success"
+}

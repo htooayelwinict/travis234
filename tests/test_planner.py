@@ -7,7 +7,7 @@ from app.planner.env_config import build_planner_model_client
 from app.planner.prompt_chain import LLMPlanCompiler, PlannerPromptChainError
 from app.planner.runtime import PlannerRuntime
 from app.planner.validator import PlannerPlanValidator
-from app.schemas import Envelope, Plan
+from app.schemas import Envelope, Plan, ReplanRequest
 
 
 class FakePlannerClient:
@@ -29,6 +29,24 @@ class FakeConfiguredPlannerClient(FakePlannerClient):
     def __init__(self, **config: Any) -> None:
         self.configs.append(config)
         super().__init__({"draft_plan": _complex_multi_intent_plan()})
+
+
+def _permissions(
+    *,
+    read_files: bool,
+    write_files: bool,
+    run_commands: bool,
+    web_research: bool = False,
+    **extra: Any,
+) -> dict[str, Any]:
+    permissions = {
+        "read_files": read_files,
+        "write_files": write_files,
+        "run_commands": run_commands,
+        "web_research": web_research,
+    }
+    permissions.update(extra)
+    return permissions
 
 
 def _envelope(**overrides: Any) -> Envelope:
@@ -113,7 +131,7 @@ def _observe_only_plan(request_id: str = "req_123") -> Plan:
                     "output_artifacts": ["repo_inventory"],
                     "max_tool_calls": 2,
                     "max_model_calls": 1,
-                    "permissions": {"read_files": True, "write_files": False, "run_commands": False},
+                    "permissions": _permissions(read_files=True, write_files=False, run_commands=False),
                 }
             ],
             "budget": {"max_tool_calls": 2, "max_model_calls": 1, "max_workers": 1, "max_retries": 0},
@@ -149,7 +167,7 @@ def _complex_multi_intent_plan(request_id: str = "req_123") -> dict[str, Any]:
                 "output_artifacts": ["repo_inventory", "target_files", "dependency_manifest"],
                 "max_tool_calls": 4,
                 "max_model_calls": 1,
-                "permissions": {"read_files": True, "write_files": False, "run_commands": False},
+                "permissions": _permissions(read_files=True, write_files=False, run_commands=False),
             },
             {
                 "step_id": "performance_context",
@@ -162,7 +180,7 @@ def _complex_multi_intent_plan(request_id: str = "req_123") -> dict[str, Any]:
                 "output_artifacts": ["performance_evidence"],
                 "max_tool_calls": 4,
                 "max_model_calls": 1,
-                "permissions": {"read_files": True, "write_files": False, "run_commands": False},
+                "permissions": _permissions(read_files=True, write_files=False, run_commands=False),
             },
             {
                 "step_id": "sdk_research",
@@ -175,7 +193,7 @@ def _complex_multi_intent_plan(request_id: str = "req_123") -> dict[str, Any]:
                 "output_artifacts": ["sdk_dependency_notes"],
                 "max_tool_calls": 3,
                 "max_model_calls": 1,
-                "permissions": {"read_files": True, "write_files": False, "run_commands": False},
+                "permissions": _permissions(read_files=True, write_files=False, run_commands=False),
             },
             {
                 "step_id": "integration_design",
@@ -188,7 +206,7 @@ def _complex_multi_intent_plan(request_id: str = "req_123") -> dict[str, Any]:
                 "output_artifacts": ["mutation_scope", "patch_design", "rollback_plan", "verification_plan"],
                 "max_tool_calls": 3,
                 "max_model_calls": 1,
-                "permissions": {"read_files": True, "write_files": False, "run_commands": False},
+                "permissions": _permissions(read_files=True, write_files=False, run_commands=False),
             },
             {
                 "step_id": "async_integration_patch",
@@ -201,12 +219,12 @@ def _complex_multi_intent_plan(request_id: str = "req_123") -> dict[str, Any]:
                 "output_artifacts": ["patch_result", "change_summary", "rollback_patch"],
                 "max_tool_calls": 6,
                 "max_model_calls": 1,
-                "permissions": {
-                    "read_files": True,
-                    "write_files": True,
-                    "run_commands": False,
-                    "write_paths_from_artifacts": ["mutation_scope"],
-                },
+                "permissions": _permissions(
+                    read_files=True,
+                    write_files=True,
+                    run_commands=False,
+                    write_paths_from_artifacts=["mutation_scope"],
+                ),
             },
             {
                 "step_id": "verify_integration",
@@ -226,7 +244,7 @@ def _complex_multi_intent_plan(request_id: str = "req_123") -> dict[str, Any]:
                 "output_artifacts": ["verification_result"],
                 "max_tool_calls": 3,
                 "max_model_calls": 0,
-                "permissions": {"read_files": True, "write_files": False, "run_commands": True},
+                "permissions": _permissions(read_files=True, write_files=False, run_commands=True),
             },
             {
                 "step_id": "finalize_summary",
@@ -239,7 +257,7 @@ def _complex_multi_intent_plan(request_id: str = "req_123") -> dict[str, Any]:
                 "output_artifacts": ["final_report"],
                 "max_tool_calls": 1,
                 "max_model_calls": 0,
-                "permissions": {"read_files": True, "write_files": False, "run_commands": False},
+                "permissions": _permissions(read_files=True, write_files=False, run_commands=False),
             },
         ],
         "budget": {"max_tool_calls": 24, "max_model_calls": 5, "max_workers": 7, "max_retries": 0},
@@ -283,7 +301,7 @@ def _direct_support_plan(request_id: str = "req_123") -> dict[str, Any]:
                 "output_artifacts": ["direct_guidance"],
                 "max_tool_calls": 0,
                 "max_model_calls": 1,
-                "permissions": {"read_files": False, "write_files": False, "run_commands": False},
+                "permissions": _permissions(read_files=False, write_files=False, run_commands=False),
             }
         ],
         "budget": {"max_tool_calls": 0, "max_model_calls": 1, "max_workers": 1, "max_retries": 0},
@@ -447,7 +465,7 @@ def test_validator_rejects_verify_without_evidence_context() -> None:
 def test_validator_rejects_unscoped_write_permissions() -> None:
     envelope = _envelope()
     payload = _complex_multi_intent_plan()
-    payload["steps"][4]["permissions"] = {"read_files": True, "write_files": True, "run_commands": False}
+    payload["steps"][4]["permissions"] = _permissions(read_files=True, write_files=True, run_commands=False)
 
     with pytest.raises(ValueError, match="restrict writes"):
         PlannerPlanValidator().validate(envelope, Plan.model_validate(payload))
@@ -761,6 +779,63 @@ def test_prompt_chain_fails_after_invalid_repair() -> None:
         LLMPlanCompiler(model_client=client).run(envelope)
 
 
+def test_prompt_chain_replan_returns_full_valid_plan() -> None:
+    envelope = _envelope()
+    current_plan = Plan.model_validate(_complex_multi_intent_plan())
+    replan_request = ReplanRequest(
+        request_id=envelope.request_id,
+        plan_id=current_plan.plan_id,
+        run_id=f"run_{current_plan.plan_id}",
+        failed_step_id="sdk_research",
+        reason="worker needs different research path",
+        worker_result={"status": "needs_replan", "summary": "source evidence unavailable"},
+        completed_artifacts=[{"id": "repo_inventory", "content": "repo context"}],
+        completed_step_ids=["repo_discovery"],
+        remaining_budget={"max_tool_calls": 10, "max_model_calls": 3, "max_workers": 4, "max_retries": 0},
+        recommended_action="create a fresh self-contained plan with a new research step",
+    )
+    client = FakePlannerClient({"replan_plan": _complex_multi_intent_plan()})
+
+    plan = LLMPlanCompiler(model_client=client).replan(
+        envelope=envelope,
+        current_plan=current_plan,
+        replan_request=replan_request,
+    )
+
+    assert [call["stage"] for call in client.calls] == ["replan_plan"]
+    assert plan.request_id == envelope.request_id
+    assert plan.metadata["llm_planner"]["replan"] is True
+    assert plan.metadata["llm_planner"]["parent_plan_id"] == current_plan.plan_id
+    assert plan.metadata["llm_planner"]["failed_step_id"] == "sdk_research"
+
+
+def test_replan_prompt_demands_full_existing_schema_plan() -> None:
+    envelope = _envelope()
+    current_plan = Plan.model_validate(_complex_multi_intent_plan())
+    replan_request = ReplanRequest(
+        request_id=envelope.request_id,
+        plan_id=current_plan.plan_id,
+        run_id=f"run_{current_plan.plan_id}",
+        failed_step_id="sdk_research",
+        reason="worker needs replan",
+    )
+    client = FakePlannerClient({"replan_plan": _complex_multi_intent_plan()})
+
+    LLMPlanCompiler(model_client=client).replan(
+        envelope=envelope,
+        current_plan=current_plan,
+        replan_request=replan_request,
+    )
+
+    replan_prompt = client.calls[0]["prompt"]
+    assert "full replacement Plan" in replan_prompt
+    assert "existing Plan schema" in replan_prompt
+    assert "not a patch" in replan_prompt
+    assert "Do not reference artifacts from the previous plan" in replan_prompt
+    assert "completed_step_ids" in replan_prompt
+    assert "authoritative execution history" in replan_prompt
+
+
 def test_prompt_contains_worker_catalog_and_envelope() -> None:
     envelope = _envelope()
     client = FakePlannerClient({"draft_plan": _complex_multi_intent_plan()})
@@ -891,6 +966,30 @@ def test_runtime_without_compiler_uses_safe_fallback() -> None:
 
     assert plan.planner == "fallback"
     assert plan.metadata["planner_runtime"]["fallback_reason"] == "planner_llm_unavailable"
+
+
+def test_runtime_replan_uses_injected_compiler() -> None:
+    envelope = _envelope()
+    current_plan = Plan.model_validate(_complex_multi_intent_plan())
+    replan_request = ReplanRequest(
+        request_id=envelope.request_id,
+        plan_id=current_plan.plan_id,
+        run_id=f"run_{current_plan.plan_id}",
+        failed_step_id="sdk_research",
+        reason="worker requested replan",
+    )
+
+    class FakeCompiler:
+        def replan(self, *, envelope: Envelope, current_plan: Plan, replan_request: ReplanRequest) -> Plan:
+            plan = Plan.model_validate(_complex_multi_intent_plan(request_id=envelope.request_id))
+            return plan.model_copy(update={"metadata": {"compiler": "fake_replan"}})
+
+    runtime = PlannerRuntime(compiler=FakeCompiler(), fallback_on_error=False)
+    plan = runtime.replan(envelope, current_plan, replan_request)
+
+    assert plan.planner == "llm_planner"
+    assert plan.metadata["compiler"] == "fake_replan"
+    assert plan.metadata["planner_runtime"]["mode"] == "llm_prompt_chain_replan"
 
 
 def test_complex_multi_intent_plan_shape() -> None:

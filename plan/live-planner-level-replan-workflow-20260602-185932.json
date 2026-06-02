@@ -1,0 +1,1349 @@
+{
+  "elapsed_ms": 153528.666,
+  "envelope": {
+    "ambiguity": [
+      "The exact user goal for the pipeline is referenced but not explicitly provided.",
+      "Scope of codebase areas to compare is not specified.",
+      "No concrete failure examples or incident evidence are included.",
+      "Authoritative source preferences (vendor docs, RFCs, papers) are not defined.",
+      "It is unclear whether implementation changes are expected now or only a fix path proposal."
+    ],
+    "artifacts": [
+      {
+        "name": "v8.md",
+        "type": "document"
+      },
+      {
+        "name": "async transaction pipeline",
+        "type": "component"
+      },
+      {
+        "name": "retry design",
+        "type": "design_area"
+      },
+      {
+        "name": "failure-handling design",
+        "type": "design_area"
+      },
+      {
+        "name": "idempotent retries",
+        "type": "reliability_concept"
+      },
+      {
+        "name": "bounded concurrency",
+        "type": "reliability_concept"
+      },
+      {
+        "name": "backpressure",
+        "type": "reliability_concept"
+      },
+      {
+        "name": "rollback safety",
+        "type": "reliability_concept"
+      },
+      {
+        "name": "repo",
+        "type": "codebase"
+      },
+      {
+        "name": "codebase intent",
+        "type": "architecture_intent"
+      },
+      {
+        "name": "user goal",
+        "type": "objective"
+      }
+    ],
+    "assumptions": [
+      "v8.md exists and captures intended design details relevant to failure handling and retries.",
+      "The repository contains an async transaction pipeline implementation to compare against intent.",
+      "The requested output includes analysis and a proposed remediation path, not direct code mutation.",
+      "Rollback and targeted verification are required only if concrete issues are substantiated."
+    ],
+    "complexity_hint": "high",
+    "confidence": 0.86,
+    "constraints": [
+      "Do not invent repository facts, API shapes, or root causes",
+      "Conclusions about mismatches must be evidence-backed from docs/code and references",
+      "Reliability recommendations must come from credible external sources",
+      "Any proposed fix path must remain narrowly scoped and rollback-capable",
+      "Verification guidance must target the identified issues directly",
+      "Intent-vs-goal assessment must distinguish explicit evidence from inference"
+    ],
+    "context_needed": [
+      "Full contents of v8.md",
+      "Repository modules implementing the async transaction pipeline",
+      "Explicit statement of the user goal/success criteria for the pipeline",
+      "Current retry, concurrency, backpressure, and rollback behaviors in code/config",
+      "Error model and failure modes the pipeline must handle",
+      "Transaction side-effect semantics and idempotency boundaries",
+      "Operational constraints (throughput, latency, resource limits)",
+      "Existing tests/telemetry/incidents related to pipeline failures"
+    ],
+    "domains": [
+      "code",
+      "docs",
+      "research",
+      "architecture",
+      "reliability"
+    ],
+    "input_type": "async_pipeline_reliability_design_audit",
+    "intents": [
+      "design.audit",
+      "research.lookup",
+      "reliability.assess",
+      "architecture.compare",
+      "intent_goal_alignment.evaluate",
+      "remediation.scope",
+      "verification.strategy_define"
+    ],
+    "metadata": {
+      "decompressor_mode": "llm_prompt_chain",
+      "decompressor_runtime": {
+        "elapsed_ms": 26133.375,
+        "failure_rate": 0.0,
+        "latency_ms_p50": 26133.375,
+        "latency_ms_p95": 26133.375,
+        "repair_rate": 0.0
+      },
+      "llm_prompt_chain": {
+        "fallback": null,
+        "mode": "completed",
+        "model_calls": 1,
+        "redacted_prompt_input": false,
+        "stages": [
+          "decompress_request",
+          "validate_envelope"
+        ]
+      }
+    },
+    "normalized_input": "Evaluate the async transaction pipeline reliability design described in v8.md, using external authoritative guidance on idempotent retries, bounded concurrency, backpressure, and rollback safety; compare that guidance to the repo\u2019s intended behavior, identify intent-to-goal mismatches, and, if issues are concrete, define a narrowly scoped remediation path with rollback and focused verification.",
+    "raw_input": "Audit the failure-handling and retry design implied by v8.md for an async transaction pipeline. Research reliable external references for idempotent retries, bounded concurrency, backpressure, and rollback safety. Compare the repo's intended design against those references, determine whether the codebase intent appears mismatched with the user goal, and if concrete issues exist produce a narrowly scoped fix path with rollback and targeted verification.",
+    "request_id": "req_001",
+    "risks": [
+      "needs_verification",
+      "ambiguous_scope",
+      "intent_inference_risk",
+      "external_reference_quality_risk",
+      "rollback_safety_critical"
+    ],
+    "user_goal": "Determine whether the repository\u2019s intended async transaction failure/retry design aligns with reliable best practices and the user\u2019s objective, and obtain a minimal-risk corrective path plus targeted validation if misalignment is found."
+  },
+  "error": null,
+  "final_worker_kernel_result": {
+    "artifacts": [
+      {
+        "content": "Mock artifact boundary_definition from discover_rebuild_scope_and_boundary.",
+        "id": "boundary_definition",
+        "producer_step_id": "discover_rebuild_scope_and_boundary",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact refreshed_repo_intent_evidence from discover_rebuild_scope_and_boundary.",
+        "id": "refreshed_repo_intent_evidence",
+        "producer_step_id": "discover_rebuild_scope_and_boundary",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact refreshed_behavior_baseline from discover_rebuild_scope_and_boundary.",
+        "id": "refreshed_behavior_baseline",
+        "producer_step_id": "discover_rebuild_scope_and_boundary",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact ownership_map from discover_rebuild_scope_and_boundary.",
+        "id": "ownership_map",
+        "producer_step_id": "discover_rebuild_scope_and_boundary",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact evidence_gaps from discover_rebuild_scope_and_boundary.",
+        "id": "evidence_gaps",
+        "producer_step_id": "discover_rebuild_scope_and_boundary",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact authoritative_source_set from research_authoritative_guidance_with_conflict_triage.",
+        "id": "authoritative_source_set",
+        "producer_step_id": "research_authoritative_guidance_with_conflict_triage",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "content": "Mock artifact guidance_matrix from research_authoritative_guidance_with_conflict_triage.",
+        "id": "guidance_matrix",
+        "producer_step_id": "research_authoritative_guidance_with_conflict_triage",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "content": "Mock artifact source_conflict_log from research_authoritative_guidance_with_conflict_triage.",
+        "id": "source_conflict_log",
+        "producer_step_id": "research_authoritative_guidance_with_conflict_triage",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "content": "Mock artifact applicability_notes from research_authoritative_guidance_with_conflict_triage.",
+        "id": "applicability_notes",
+        "producer_step_id": "research_authoritative_guidance_with_conflict_triage",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "content": "Mock artifact source_quality_assessment from research_authoritative_guidance_with_conflict_triage.",
+        "id": "source_quality_assessment",
+        "producer_step_id": "research_authoritative_guidance_with_conflict_triage",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "content": "Mock artifact intent_goal_alignment_report from design_evidence_bound_alignment_and_remediation_path.",
+        "id": "intent_goal_alignment_report",
+        "producer_step_id": "design_evidence_bound_alignment_and_remediation_path",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": "Mock artifact mismatch_evidence from design_evidence_bound_alignment_and_remediation_path.",
+        "id": "mismatch_evidence",
+        "producer_step_id": "design_evidence_bound_alignment_and_remediation_path",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": "Mock artifact concrete_issue_list from design_evidence_bound_alignment_and_remediation_path.",
+        "id": "concrete_issue_list",
+        "producer_step_id": "design_evidence_bound_alignment_and_remediation_path",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": "Mock artifact inference_log from design_evidence_bound_alignment_and_remediation_path.",
+        "id": "inference_log",
+        "producer_step_id": "design_evidence_bound_alignment_and_remediation_path",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": "Mock artifact patch_scope from design_evidence_bound_alignment_and_remediation_path.",
+        "id": "patch_scope",
+        "producer_step_id": "design_evidence_bound_alignment_and_remediation_path",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": "Mock artifact remediation_plan from design_evidence_bound_alignment_and_remediation_path.",
+        "id": "remediation_plan",
+        "producer_step_id": "design_evidence_bound_alignment_and_remediation_path",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": "Mock artifact rollback_plan from design_evidence_bound_alignment_and_remediation_path.",
+        "id": "rollback_plan",
+        "producer_step_id": "design_evidence_bound_alignment_and_remediation_path",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": "Mock artifact verification_plan from design_evidence_bound_alignment_and_remediation_path.",
+        "id": "verification_plan",
+        "producer_step_id": "design_evidence_bound_alignment_and_remediation_path",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": "Mock artifact no_change_rationale from design_evidence_bound_alignment_and_remediation_path.",
+        "id": "no_change_rationale",
+        "producer_step_id": "design_evidence_bound_alignment_and_remediation_path",
+        "worker_type": "research_worker"
+      },
+      {
+        "content": "Mock artifact final_report from finalize_evidence_backed_audit_report.",
+        "id": "final_report",
+        "producer_step_id": "finalize_evidence_backed_audit_report",
+        "worker_type": "research_worker"
+      }
+    ],
+    "errors": [],
+    "metadata": {
+      "replan": {
+        "depth": 1,
+        "original_worker_results": [
+          {
+            "artifacts": [
+              {
+                "content": "Mock artifact repo_intent_evidence from discover_intent_and_baseline.",
+                "id": "repo_intent_evidence",
+                "producer_step_id": "discover_intent_and_baseline",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": "Mock artifact pipeline_component_inventory from discover_intent_and_baseline.",
+                "id": "pipeline_component_inventory",
+                "producer_step_id": "discover_intent_and_baseline",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": "Mock artifact behavior_baseline from discover_intent_and_baseline.",
+                "id": "behavior_baseline",
+                "producer_step_id": "discover_intent_and_baseline",
+                "worker_type": "repo_worker"
+              },
+              {
+                "content": "Mock artifact discovery_gaps from discover_intent_and_baseline.",
+                "id": "discovery_gaps",
+                "producer_step_id": "discover_intent_and_baseline",
+                "worker_type": "repo_worker"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "mocked": true
+            },
+            "producer": "repo_worker",
+            "run_id": "run_plan_req_001_reliability_audit",
+            "status": "completed",
+            "summary": "Mock repo_worker accepted and completed discover_intent_and_baseline.",
+            "usage": {
+              "model_calls": 1,
+              "tool_calls": 1
+            },
+            "warnings": []
+          },
+          {
+            "artifacts": [
+              {
+                "content": {
+                  "failed_step_id": "research_authoritative_reliability_guidance",
+                  "input_artifact_ids": [
+                    "behavior_baseline",
+                    "discovery_gaps"
+                  ],
+                  "issue_type": "planner_level",
+                  "signals": [
+                    "web_sources_limited",
+                    "repo_intent_mismatch",
+                    "artifact_chain_unreachable"
+                  ],
+                  "task_metadata": {
+                    "mode": "observe_only",
+                    "phase": "RESEARCH",
+                    "task_id": "async_reliability_audit"
+                  }
+                },
+                "id": "planner_issue_snapshot"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "issue_class": "planner_level",
+              "mocked": true,
+              "recommended_action": "Return a full fixed new Plan that rebuilds context and chooses a safer evidence/mutation route."
+            },
+            "producer": "web_research_worker",
+            "run_id": "run_plan_req_001_reliability_audit",
+            "status": "needs_replan",
+            "summary": "Planner-level issue: reliable external sources are too limited or conflicting for the current comparison path, discovered repository intent no longer matches the assumed async transaction boundary, and the expected artifact chain to safe mutation cannot be satisfied from this step.",
+            "usage": {
+              "model_calls": 0,
+              "tool_calls": 1
+            },
+            "warnings": []
+          }
+        ],
+        "replacement_plan": {
+          "budget": {
+            "max_model_calls": 4,
+            "max_retries": 1,
+            "max_tool_calls": 9,
+            "max_workers": 4
+          },
+          "execution_pattern": "discover_research_design_finalize",
+          "global_invariants": [
+            "evidence_backed_conclusions_only",
+            "no_file_mutation",
+            "no_unscoped_inference",
+            "authoritative_sources_required_for_reliability_guidance",
+            "separate_explicit_evidence_from_inference"
+          ],
+          "metadata": {
+            "archetype": "phase_aware_audit",
+            "complexity": "high",
+            "llm_planner": {
+              "budget_auto_aligned": true,
+              "envelope_complexity_hint": "high",
+              "envelope_input_type": "async_pipeline_reliability_design_audit",
+              "failed_step_id": "research_authoritative_reliability_guidance",
+              "mode": "completed",
+              "model_calls": 1,
+              "parent_plan_id": "plan_req_001_reliability_audit",
+              "repair_attempted": false,
+              "replan": true,
+              "resolved_validation_errors": [],
+              "stages": [
+                "replan_plan",
+                "validate_plan"
+              ],
+              "validation_errors": []
+            },
+            "mutation_planned": false,
+            "planner_runtime": {
+              "fallback_reason": null,
+              "mode": "llm_prompt_chain_replan"
+            },
+            "replan_from_failed_step": "research_authoritative_reliability_guidance",
+            "replan_reason": "web source limitations, boundary mismatch, and broken artifact chain"
+          },
+          "objective": "Evaluate async transaction pipeline failure/retry design intent against authoritative reliability guidance, determine intent-to-goal alignment, and produce an evidence-backed minimal-risk remediation path with rollback and focused verification guidance when concrete issues exist.",
+          "plan_id": "plan_req_001_reliability_audit_replan1",
+          "planner": "phase_aware_planner",
+          "request_id": "req_001",
+          "steps": [
+            {
+              "input_artifacts": [],
+              "instruction": "Known facts: Prior run reported repo_intent_mismatch and async transaction boundary uncertainty; v8.md and repository artifacts are available for read-only inspection. Unknowns: Correct pipeline boundary, module ownership, and whether retry/backpressure/rollback responsibilities are split across components. Do now: Re-read v8.md and repository code/config to re-establish the actual reliability boundary, map owning modules, and produce citation-backed intent and behavior evidence focused on retries, concurrency limits, backpressure, and rollback semantics. Do not do: Do not use web research, run commands, mutate files, or infer behavior without direct repo/doc evidence. Output: boundary_definition, refreshed_repo_intent_evidence, refreshed_behavior_baseline, ownership_map, evidence_gaps.",
+              "max_model_calls": 1,
+              "max_tool_calls": 2,
+              "mode": "observe_only",
+              "output_artifacts": [
+                "boundary_definition",
+                "refreshed_repo_intent_evidence",
+                "refreshed_behavior_baseline",
+                "ownership_map",
+                "evidence_gaps"
+              ],
+              "permissions": {
+                "read_files": true,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "DISCOVER",
+              "step_id": "discover_rebuild_scope_and_boundary",
+              "task_id": "async_reliability_audit",
+              "worker_type": "repo_worker"
+            },
+            {
+              "input_artifacts": [
+                "boundary_definition",
+                "refreshed_behavior_baseline",
+                "evidence_gaps"
+              ],
+              "instruction": "Known facts: boundary_definition and refreshed repository baseline are available; prior run signaled limited/conflicting sources. Unknowns: Which authoritative references best match the validated boundary and failure model. Do now: Gather high-authority guidance (standards/vendor reliability docs/peer-reviewed or widely accepted engineering references) for idempotent retries, bounded concurrency, backpressure, and rollback safety; explicitly triage conflicts and record applicability constraints to the discovered boundary. Do not do: Do not claim repository mismatch yet, do not use low-credibility or unattributed sources, and do not produce implementation prescriptions. Output: authoritative_source_set, guidance_matrix, source_conflict_log, applicability_notes, source_quality_assessment.",
+              "max_model_calls": 1,
+              "max_tool_calls": 3,
+              "mode": "observe_only",
+              "output_artifacts": [
+                "authoritative_source_set",
+                "guidance_matrix",
+                "source_conflict_log",
+                "applicability_notes",
+                "source_quality_assessment"
+              ],
+              "permissions": {
+                "read_files": false,
+                "run_commands": false,
+                "web_research": true,
+                "write_files": false
+              },
+              "phase": "RESEARCH",
+              "step_id": "research_authoritative_guidance_with_conflict_triage",
+              "task_id": "async_reliability_audit",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "input_artifacts": [
+                "boundary_definition",
+                "refreshed_repo_intent_evidence",
+                "refreshed_behavior_baseline",
+                "ownership_map",
+                "guidance_matrix",
+                "source_conflict_log",
+                "applicability_notes",
+                "source_quality_assessment",
+                "evidence_gaps"
+              ],
+              "instruction": "Known facts: Refreshed repository intent/behavior evidence and authoritative guidance with conflict triage are available. Unknowns: Whether concrete, citation-backed mismatches exist versus unresolved evidence gaps. Do now: Produce an evidence-only alignment assessment and a minimal-risk remediation design limited to concrete issues; include explicit patch_scope, rollback_plan, and verification_plan, or provide a no_change_rationale plus evidence acquisition path when proof is insufficient. Do not do: Do not invent facts, do not expand beyond evidenced issues, and do not suggest code mutation steps. Output: intent_goal_alignment_report, mismatch_evidence, concrete_issue_list, inference_log, patch_scope, remediation_plan, rollback_plan, verification_plan, no_change_rationale.",
+              "max_model_calls": 1,
+              "max_tool_calls": 0,
+              "mode": "plan_only",
+              "output_artifacts": [
+                "intent_goal_alignment_report",
+                "mismatch_evidence",
+                "concrete_issue_list",
+                "inference_log",
+                "patch_scope",
+                "remediation_plan",
+                "rollback_plan",
+                "verification_plan",
+                "no_change_rationale"
+              ],
+              "permissions": {
+                "read_files": false,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "DESIGN",
+              "step_id": "design_evidence_bound_alignment_and_remediation_path",
+              "task_id": "async_reliability_audit",
+              "worker_type": "research_worker"
+            },
+            {
+              "input_artifacts": [
+                "intent_goal_alignment_report",
+                "mismatch_evidence",
+                "concrete_issue_list",
+                "inference_log",
+                "remediation_plan",
+                "patch_scope",
+                "rollback_plan",
+                "verification_plan",
+                "no_change_rationale",
+                "source_quality_assessment"
+              ],
+              "instruction": "Known facts: Alignment, mismatch evidence, remediation design outputs, rollback/verification plans, and inference separation are complete. Unknowns: None material for final reporting. Do now: Deliver a concise final report with alignment verdict, evidence-backed mismatches, confidence and uncertainty notes, minimal-risk recommended path (or justified no-change), rollback readiness, and targeted verification steps. Do not do: Do not add new claims, new evidence, or unstated assumptions. Output: final_report.",
+              "max_model_calls": 1,
+              "max_tool_calls": 0,
+              "mode": "summarize_only",
+              "output_artifacts": [
+                "final_report"
+              ],
+              "permissions": {
+                "read_files": false,
+                "run_commands": false,
+                "web_research": false,
+                "write_files": false
+              },
+              "phase": "FINALIZE",
+              "step_id": "finalize_evidence_backed_audit_report",
+              "task_id": "async_reliability_audit",
+              "worker_type": "research_worker"
+            }
+          ],
+          "strategy": "rebuild_boundary_context_then_source_triage_then_evidence_only_alignment_then_scoped_no-mutation_remediation_design",
+          "success_criteria": [
+            "Re-establishes async reliability boundary and ownership with citations from v8.md/repo evidence.",
+            "Produces authoritative external guidance with explicit source-quality and conflict-triage records.",
+            "Determines intent-to-goal alignment using only citation-backed mismatches and explicit uncertainty handling.",
+            "Outputs minimally scoped remediation/no-change path including rollback and targeted verification guidance.",
+            "Delivers final_report without new unsupported claims."
+          ]
+        },
+        "request": {
+          "completed_artifacts": [
+            {
+              "content": "Mock artifact repo_intent_evidence from discover_intent_and_baseline.",
+              "id": "repo_intent_evidence",
+              "producer_step_id": "discover_intent_and_baseline",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact pipeline_component_inventory from discover_intent_and_baseline.",
+              "id": "pipeline_component_inventory",
+              "producer_step_id": "discover_intent_and_baseline",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact behavior_baseline from discover_intent_and_baseline.",
+              "id": "behavior_baseline",
+              "producer_step_id": "discover_intent_and_baseline",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact discovery_gaps from discover_intent_and_baseline.",
+              "id": "discovery_gaps",
+              "producer_step_id": "discover_intent_and_baseline",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": {
+                "failed_step_id": "research_authoritative_reliability_guidance",
+                "input_artifact_ids": [
+                  "behavior_baseline",
+                  "discovery_gaps"
+                ],
+                "issue_type": "planner_level",
+                "signals": [
+                  "web_sources_limited",
+                  "repo_intent_mismatch",
+                  "artifact_chain_unreachable"
+                ],
+                "task_metadata": {
+                  "mode": "observe_only",
+                  "phase": "RESEARCH",
+                  "task_id": "async_reliability_audit"
+                }
+              },
+              "id": "planner_issue_snapshot"
+            }
+          ],
+          "failed_step_id": "research_authoritative_reliability_guidance",
+          "plan_id": "plan_req_001_reliability_audit",
+          "reason": "Planner-level issue: reliable external sources are too limited or conflicting for the current comparison path, discovered repository intent no longer matches the assumed async transaction boundary, and the expected artifact chain to safe mutation cannot be satisfied from this step.",
+          "recommended_action": "Return a full fixed new Plan that rebuilds context and chooses a safer evidence/mutation route.",
+          "remaining_budget": {
+            "max_model_calls": 4,
+            "max_retries": 1,
+            "max_tool_calls": 9,
+            "max_workers": 3
+          },
+          "request_id": "req_001",
+          "run_id": "run_plan_req_001_reliability_audit",
+          "worker_result": {
+            "artifacts": [
+              {
+                "content": {
+                  "failed_step_id": "research_authoritative_reliability_guidance",
+                  "input_artifact_ids": [
+                    "behavior_baseline",
+                    "discovery_gaps"
+                  ],
+                  "issue_type": "planner_level",
+                  "signals": [
+                    "web_sources_limited",
+                    "repo_intent_mismatch",
+                    "artifact_chain_unreachable"
+                  ],
+                  "task_metadata": {
+                    "mode": "observe_only",
+                    "phase": "RESEARCH",
+                    "task_id": "async_reliability_audit"
+                  }
+                },
+                "id": "planner_issue_snapshot"
+              }
+            ],
+            "errors": [],
+            "metadata": {
+              "issue_class": "planner_level",
+              "mocked": true,
+              "recommended_action": "Return a full fixed new Plan that rebuilds context and chooses a safer evidence/mutation route."
+            },
+            "producer": "web_research_worker",
+            "run_id": "run_plan_req_001_reliability_audit",
+            "status": "needs_replan",
+            "summary": "Planner-level issue: reliable external sources are too limited or conflicting for the current comparison path, discovered repository intent no longer matches the assumed async transaction boundary, and the expected artifact chain to safe mutation cannot be satisfied from this step.",
+            "usage": {
+              "model_calls": 0,
+              "tool_calls": 1
+            },
+            "warnings": []
+          }
+        }
+      },
+      "worker_results": [
+        {
+          "artifacts": [
+            {
+              "content": "Mock artifact boundary_definition from discover_rebuild_scope_and_boundary.",
+              "id": "boundary_definition",
+              "producer_step_id": "discover_rebuild_scope_and_boundary",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact refreshed_repo_intent_evidence from discover_rebuild_scope_and_boundary.",
+              "id": "refreshed_repo_intent_evidence",
+              "producer_step_id": "discover_rebuild_scope_and_boundary",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact refreshed_behavior_baseline from discover_rebuild_scope_and_boundary.",
+              "id": "refreshed_behavior_baseline",
+              "producer_step_id": "discover_rebuild_scope_and_boundary",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact ownership_map from discover_rebuild_scope_and_boundary.",
+              "id": "ownership_map",
+              "producer_step_id": "discover_rebuild_scope_and_boundary",
+              "worker_type": "repo_worker"
+            },
+            {
+              "content": "Mock artifact evidence_gaps from discover_rebuild_scope_and_boundary.",
+              "id": "evidence_gaps",
+              "producer_step_id": "discover_rebuild_scope_and_boundary",
+              "worker_type": "repo_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "mocked": true
+          },
+          "producer": "repo_worker",
+          "run_id": "run_plan_req_001_reliability_audit_replan1",
+          "status": "completed",
+          "summary": "Mock repo_worker accepted and completed discover_rebuild_scope_and_boundary.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 1
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": "Mock artifact authoritative_source_set from research_authoritative_guidance_with_conflict_triage.",
+              "id": "authoritative_source_set",
+              "producer_step_id": "research_authoritative_guidance_with_conflict_triage",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "content": "Mock artifact guidance_matrix from research_authoritative_guidance_with_conflict_triage.",
+              "id": "guidance_matrix",
+              "producer_step_id": "research_authoritative_guidance_with_conflict_triage",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "content": "Mock artifact source_conflict_log from research_authoritative_guidance_with_conflict_triage.",
+              "id": "source_conflict_log",
+              "producer_step_id": "research_authoritative_guidance_with_conflict_triage",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "content": "Mock artifact applicability_notes from research_authoritative_guidance_with_conflict_triage.",
+              "id": "applicability_notes",
+              "producer_step_id": "research_authoritative_guidance_with_conflict_triage",
+              "worker_type": "web_research_worker"
+            },
+            {
+              "content": "Mock artifact source_quality_assessment from research_authoritative_guidance_with_conflict_triage.",
+              "id": "source_quality_assessment",
+              "producer_step_id": "research_authoritative_guidance_with_conflict_triage",
+              "worker_type": "web_research_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "mocked": true
+          },
+          "producer": "web_research_worker",
+          "run_id": "run_plan_req_001_reliability_audit_replan1",
+          "status": "completed",
+          "summary": "Mock web_research_worker accepted and completed research_authoritative_guidance_with_conflict_triage.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 1
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": "Mock artifact intent_goal_alignment_report from design_evidence_bound_alignment_and_remediation_path.",
+              "id": "intent_goal_alignment_report",
+              "producer_step_id": "design_evidence_bound_alignment_and_remediation_path",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": "Mock artifact mismatch_evidence from design_evidence_bound_alignment_and_remediation_path.",
+              "id": "mismatch_evidence",
+              "producer_step_id": "design_evidence_bound_alignment_and_remediation_path",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": "Mock artifact concrete_issue_list from design_evidence_bound_alignment_and_remediation_path.",
+              "id": "concrete_issue_list",
+              "producer_step_id": "design_evidence_bound_alignment_and_remediation_path",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": "Mock artifact inference_log from design_evidence_bound_alignment_and_remediation_path.",
+              "id": "inference_log",
+              "producer_step_id": "design_evidence_bound_alignment_and_remediation_path",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": "Mock artifact patch_scope from design_evidence_bound_alignment_and_remediation_path.",
+              "id": "patch_scope",
+              "producer_step_id": "design_evidence_bound_alignment_and_remediation_path",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": "Mock artifact remediation_plan from design_evidence_bound_alignment_and_remediation_path.",
+              "id": "remediation_plan",
+              "producer_step_id": "design_evidence_bound_alignment_and_remediation_path",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": "Mock artifact rollback_plan from design_evidence_bound_alignment_and_remediation_path.",
+              "id": "rollback_plan",
+              "producer_step_id": "design_evidence_bound_alignment_and_remediation_path",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": "Mock artifact verification_plan from design_evidence_bound_alignment_and_remediation_path.",
+              "id": "verification_plan",
+              "producer_step_id": "design_evidence_bound_alignment_and_remediation_path",
+              "worker_type": "research_worker"
+            },
+            {
+              "content": "Mock artifact no_change_rationale from design_evidence_bound_alignment_and_remediation_path.",
+              "id": "no_change_rationale",
+              "producer_step_id": "design_evidence_bound_alignment_and_remediation_path",
+              "worker_type": "research_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "mocked": true
+          },
+          "producer": "research_worker",
+          "run_id": "run_plan_req_001_reliability_audit_replan1",
+          "status": "completed",
+          "summary": "Mock research_worker accepted and completed design_evidence_bound_alignment_and_remediation_path.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 0
+          },
+          "warnings": []
+        },
+        {
+          "artifacts": [
+            {
+              "content": "Mock artifact final_report from finalize_evidence_backed_audit_report.",
+              "id": "final_report",
+              "producer_step_id": "finalize_evidence_backed_audit_report",
+              "worker_type": "research_worker"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "mocked": true
+          },
+          "producer": "research_worker",
+          "run_id": "run_plan_req_001_reliability_audit_replan1",
+          "status": "completed",
+          "summary": "Mock research_worker accepted and completed finalize_evidence_backed_audit_report.",
+          "usage": {
+            "model_calls": 1,
+            "tool_calls": 0
+          },
+          "warnings": []
+        }
+      ]
+    },
+    "producer": "worker_kernel",
+    "run_id": "run_plan_req_001_reliability_audit_replan1",
+    "status": "completed",
+    "summary": "Plan executed successfully.",
+    "usage": {
+      "model_calls": 4,
+      "tool_calls": 2,
+      "workers": 4
+    },
+    "warnings": []
+  },
+  "fixed_new_replan_plan": {
+    "budget": {
+      "max_model_calls": 4,
+      "max_retries": 1,
+      "max_tool_calls": 9,
+      "max_workers": 4
+    },
+    "execution_pattern": "discover_research_design_finalize",
+    "global_invariants": [
+      "evidence_backed_conclusions_only",
+      "no_file_mutation",
+      "no_unscoped_inference",
+      "authoritative_sources_required_for_reliability_guidance",
+      "separate_explicit_evidence_from_inference"
+    ],
+    "metadata": {
+      "archetype": "phase_aware_audit",
+      "complexity": "high",
+      "llm_planner": {
+        "budget_auto_aligned": true,
+        "envelope_complexity_hint": "high",
+        "envelope_input_type": "async_pipeline_reliability_design_audit",
+        "failed_step_id": "research_authoritative_reliability_guidance",
+        "mode": "completed",
+        "model_calls": 1,
+        "parent_plan_id": "plan_req_001_reliability_audit",
+        "repair_attempted": false,
+        "replan": true,
+        "resolved_validation_errors": [],
+        "stages": [
+          "replan_plan",
+          "validate_plan"
+        ],
+        "validation_errors": []
+      },
+      "mutation_planned": false,
+      "planner_runtime": {
+        "fallback_reason": null,
+        "mode": "llm_prompt_chain_replan"
+      },
+      "replan_from_failed_step": "research_authoritative_reliability_guidance",
+      "replan_reason": "web source limitations, boundary mismatch, and broken artifact chain"
+    },
+    "objective": "Evaluate async transaction pipeline failure/retry design intent against authoritative reliability guidance, determine intent-to-goal alignment, and produce an evidence-backed minimal-risk remediation path with rollback and focused verification guidance when concrete issues exist.",
+    "plan_id": "plan_req_001_reliability_audit_replan1",
+    "planner": "phase_aware_planner",
+    "request_id": "req_001",
+    "steps": [
+      {
+        "input_artifacts": [],
+        "instruction": "Known facts: Prior run reported repo_intent_mismatch and async transaction boundary uncertainty; v8.md and repository artifacts are available for read-only inspection. Unknowns: Correct pipeline boundary, module ownership, and whether retry/backpressure/rollback responsibilities are split across components. Do now: Re-read v8.md and repository code/config to re-establish the actual reliability boundary, map owning modules, and produce citation-backed intent and behavior evidence focused on retries, concurrency limits, backpressure, and rollback semantics. Do not do: Do not use web research, run commands, mutate files, or infer behavior without direct repo/doc evidence. Output: boundary_definition, refreshed_repo_intent_evidence, refreshed_behavior_baseline, ownership_map, evidence_gaps.",
+        "max_model_calls": 1,
+        "max_tool_calls": 2,
+        "mode": "observe_only",
+        "output_artifacts": [
+          "boundary_definition",
+          "refreshed_repo_intent_evidence",
+          "refreshed_behavior_baseline",
+          "ownership_map",
+          "evidence_gaps"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "DISCOVER",
+        "step_id": "discover_rebuild_scope_and_boundary",
+        "task_id": "async_reliability_audit",
+        "worker_type": "repo_worker"
+      },
+      {
+        "input_artifacts": [
+          "boundary_definition",
+          "refreshed_behavior_baseline",
+          "evidence_gaps"
+        ],
+        "instruction": "Known facts: boundary_definition and refreshed repository baseline are available; prior run signaled limited/conflicting sources. Unknowns: Which authoritative references best match the validated boundary and failure model. Do now: Gather high-authority guidance (standards/vendor reliability docs/peer-reviewed or widely accepted engineering references) for idempotent retries, bounded concurrency, backpressure, and rollback safety; explicitly triage conflicts and record applicability constraints to the discovered boundary. Do not do: Do not claim repository mismatch yet, do not use low-credibility or unattributed sources, and do not produce implementation prescriptions. Output: authoritative_source_set, guidance_matrix, source_conflict_log, applicability_notes, source_quality_assessment.",
+        "max_model_calls": 1,
+        "max_tool_calls": 3,
+        "mode": "observe_only",
+        "output_artifacts": [
+          "authoritative_source_set",
+          "guidance_matrix",
+          "source_conflict_log",
+          "applicability_notes",
+          "source_quality_assessment"
+        ],
+        "permissions": {
+          "read_files": false,
+          "run_commands": false,
+          "web_research": true,
+          "write_files": false
+        },
+        "phase": "RESEARCH",
+        "step_id": "research_authoritative_guidance_with_conflict_triage",
+        "task_id": "async_reliability_audit",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "input_artifacts": [
+          "boundary_definition",
+          "refreshed_repo_intent_evidence",
+          "refreshed_behavior_baseline",
+          "ownership_map",
+          "guidance_matrix",
+          "source_conflict_log",
+          "applicability_notes",
+          "source_quality_assessment",
+          "evidence_gaps"
+        ],
+        "instruction": "Known facts: Refreshed repository intent/behavior evidence and authoritative guidance with conflict triage are available. Unknowns: Whether concrete, citation-backed mismatches exist versus unresolved evidence gaps. Do now: Produce an evidence-only alignment assessment and a minimal-risk remediation design limited to concrete issues; include explicit patch_scope, rollback_plan, and verification_plan, or provide a no_change_rationale plus evidence acquisition path when proof is insufficient. Do not do: Do not invent facts, do not expand beyond evidenced issues, and do not suggest code mutation steps. Output: intent_goal_alignment_report, mismatch_evidence, concrete_issue_list, inference_log, patch_scope, remediation_plan, rollback_plan, verification_plan, no_change_rationale.",
+        "max_model_calls": 1,
+        "max_tool_calls": 0,
+        "mode": "plan_only",
+        "output_artifacts": [
+          "intent_goal_alignment_report",
+          "mismatch_evidence",
+          "concrete_issue_list",
+          "inference_log",
+          "patch_scope",
+          "remediation_plan",
+          "rollback_plan",
+          "verification_plan",
+          "no_change_rationale"
+        ],
+        "permissions": {
+          "read_files": false,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "DESIGN",
+        "step_id": "design_evidence_bound_alignment_and_remediation_path",
+        "task_id": "async_reliability_audit",
+        "worker_type": "research_worker"
+      },
+      {
+        "input_artifacts": [
+          "intent_goal_alignment_report",
+          "mismatch_evidence",
+          "concrete_issue_list",
+          "inference_log",
+          "remediation_plan",
+          "patch_scope",
+          "rollback_plan",
+          "verification_plan",
+          "no_change_rationale",
+          "source_quality_assessment"
+        ],
+        "instruction": "Known facts: Alignment, mismatch evidence, remediation design outputs, rollback/verification plans, and inference separation are complete. Unknowns: None material for final reporting. Do now: Deliver a concise final report with alignment verdict, evidence-backed mismatches, confidence and uncertainty notes, minimal-risk recommended path (or justified no-change), rollback readiness, and targeted verification steps. Do not do: Do not add new claims, new evidence, or unstated assumptions. Output: final_report.",
+        "max_model_calls": 1,
+        "max_tool_calls": 0,
+        "mode": "summarize_only",
+        "output_artifacts": [
+          "final_report"
+        ],
+        "permissions": {
+          "read_files": false,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "FINALIZE",
+        "step_id": "finalize_evidence_backed_audit_report",
+        "task_id": "async_reliability_audit",
+        "worker_type": "research_worker"
+      }
+    ],
+    "strategy": "rebuild_boundary_context_then_source_triage_then_evidence_only_alignment_then_scoped_no-mutation_remediation_design",
+    "success_criteria": [
+      "Re-establishes async reliability boundary and ownership with citations from v8.md/repo evidence.",
+      "Produces authoritative external guidance with explicit source-quality and conflict-triage records.",
+      "Determines intent-to-goal alignment using only citation-backed mismatches and explicit uncertainty handling.",
+      "Outputs minimally scoped remediation/no-change path including rollback and targeted verification guidance.",
+      "Delivers final_report without new unsupported claims."
+    ]
+  },
+  "generated_at": "2026-06-02T18:56:59.354294",
+  "initial_plan": {
+    "budget": {
+      "max_model_calls": 5,
+      "max_retries": 1,
+      "max_tool_calls": 11,
+      "max_workers": 5
+    },
+    "execution_pattern": "discover_research_synthesize_design_finalize",
+    "global_invariants": [
+      "evidence_backed_conclusions_only",
+      "no_file_mutation",
+      "no_unscoped_inference",
+      "authoritative_sources_required_for_reliability_guidance",
+      "separate_explicit_evidence_from_inference"
+    ],
+    "metadata": {
+      "archetype": "phase_aware_audit",
+      "complexity": "high",
+      "llm_planner": {
+        "budget_auto_aligned": true,
+        "envelope_complexity_hint": "high",
+        "envelope_input_type": "async_pipeline_reliability_design_audit",
+        "mode": "repaired",
+        "model_calls": 2,
+        "repair_attempted": true,
+        "resolved_validation_errors": [
+          {
+            "msg": "plan phase order regresses at step index 2",
+            "type": "planner_validation"
+          }
+        ],
+        "stages": [
+          "draft_plan",
+          "validate_plan",
+          "repair_plan_1",
+          "validate_plan"
+        ],
+        "validation_errors": []
+      },
+      "mutation_planned": false,
+      "planner_runtime": {
+        "fallback_reason": null,
+        "mode": "llm_prompt_chain"
+      }
+    },
+    "objective": "Evaluate async transaction pipeline failure/retry design intent against authoritative reliability guidance, determine intent-to-goal alignment, and produce an evidence-backed minimal-risk remediation path with rollback and focused verification guidance when concrete issues exist.",
+    "plan_id": "plan_req_001_reliability_audit",
+    "planner": "phase_aware_planner",
+    "request_id": "req_001",
+    "steps": [
+      {
+        "input_artifacts": [],
+        "instruction": "Known facts: The audit targets v8.md and repository async transaction pipeline intent for retries, concurrency limits, backpressure, and rollback safety. Unknowns: Exact module boundaries, current behavior details, and explicit user success criteria wording in-project. Do now: Read v8.md and relevant repo code/config to produce a cited baseline of intended behavior and candidate implementation locations. Do not do: Do not use web research, run commands, mutate files, or infer unsupported root causes. Output: repo_intent_evidence, pipeline_component_inventory, behavior_baseline, discovery_gaps.",
+        "max_model_calls": 1,
+        "max_tool_calls": 4,
+        "mode": "observe_only",
+        "output_artifacts": [
+          "repo_intent_evidence",
+          "pipeline_component_inventory",
+          "behavior_baseline",
+          "discovery_gaps"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "DISCOVER",
+        "step_id": "discover_intent_and_baseline",
+        "task_id": "async_reliability_audit",
+        "worker_type": "repo_worker"
+      },
+      {
+        "input_artifacts": [
+          "behavior_baseline",
+          "discovery_gaps"
+        ],
+        "instruction": "Known facts: Repository intent baseline and discovery gaps are available for comparison framing. Unknowns: Which external sources best match this pipeline's constraints and failure model. Do now: Collect authoritative external guidance for idempotent retries, bounded concurrency, backpressure, and rollback safety, then synthesize applicability with source quality notes. Do not do: Do not mutate files, claim repo mismatches yet, or use low-credibility/unattributed sources. Output: external_sources, external_guidance_matrix, source_quality_assessment.",
+        "max_model_calls": 1,
+        "max_tool_calls": 4,
+        "mode": "observe_only",
+        "output_artifacts": [
+          "external_sources",
+          "external_guidance_matrix",
+          "source_quality_assessment"
+        ],
+        "permissions": {
+          "read_files": false,
+          "run_commands": false,
+          "web_research": true,
+          "write_files": false
+        },
+        "phase": "RESEARCH",
+        "step_id": "research_authoritative_reliability_guidance",
+        "task_id": "async_reliability_audit",
+        "worker_type": "web_research_worker"
+      },
+      {
+        "input_artifacts": [
+          "repo_intent_evidence",
+          "pipeline_component_inventory",
+          "external_guidance_matrix",
+          "external_sources",
+          "source_quality_assessment"
+        ],
+        "instruction": "Known facts: Repo intent evidence and external guidance matrix are available with source quality metadata. Unknowns: Whether observed gaps are concrete issues versus inference under missing evidence. Do now: Synthesize and compare repo intent/behavior against external guidance and the stated user goal, separating explicit evidence from inference and identifying only citation-backed mismatches. Do not do: Do not invent facts, overstate confidence, or prescribe changes without evidence linkage. Output: intent_goal_alignment_report, mismatch_evidence, concrete_issue_list, inference_log, evidence_gap.",
+        "max_model_calls": 1,
+        "max_tool_calls": 3,
+        "mode": "observe_only",
+        "output_artifacts": [
+          "intent_goal_alignment_report",
+          "mismatch_evidence",
+          "concrete_issue_list",
+          "inference_log",
+          "evidence_gap"
+        ],
+        "permissions": {
+          "read_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "RESEARCH",
+        "step_id": "analyze_alignment_and_mismatches",
+        "task_id": "async_reliability_audit",
+        "worker_type": "research_worker"
+      },
+      {
+        "input_artifacts": [
+          "intent_goal_alignment_report",
+          "mismatch_evidence",
+          "concrete_issue_list",
+          "evidence_gap"
+        ],
+        "instruction": "Known facts: Alignment analysis, concrete issue candidates, and evidence gaps are available. Unknowns: Whether evidence suffices for actionable remediation versus deferral. Do now: Produce a narrowly scoped fix path only for concrete issues, including patch_scope, rollback_plan, and targeted verification_plan; if evidence is insufficient, produce a no-change rationale and evidence acquisition path. Do not do: Do not mutate files, broaden scope beyond evidenced issues, or omit rollback/verification constraints. Output: remediation_plan, patch_scope, rollback_plan, verification_plan, no_change_rationale.",
+        "max_model_calls": 1,
+        "max_tool_calls": 0,
+        "mode": "plan_only",
+        "output_artifacts": [
+          "remediation_plan",
+          "patch_scope",
+          "rollback_plan",
+          "verification_plan",
+          "no_change_rationale"
+        ],
+        "permissions": {
+          "read_files": false,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "DESIGN",
+        "step_id": "design_scoped_remediation_and_validation",
+        "task_id": "async_reliability_audit",
+        "worker_type": "research_worker"
+      },
+      {
+        "input_artifacts": [
+          "intent_goal_alignment_report",
+          "mismatch_evidence",
+          "remediation_plan",
+          "rollback_plan",
+          "verification_plan",
+          "no_change_rationale",
+          "source_quality_assessment",
+          "inference_log"
+        ],
+        "instruction": "Known facts: Analysis and remediation design artifacts are complete, including source quality and inference separation. Unknowns: None material for reporting. Do now: Deliver a concise final report stating alignment verdict, evidence-backed mismatches, recommended minimal-risk path (or justified no-change), rollback readiness, and focused verification steps. Do not do: Do not add new claims, tools, or unstated assumptions. Output: final_report.",
+        "max_model_calls": 1,
+        "max_tool_calls": 0,
+        "mode": "summarize_only",
+        "output_artifacts": [
+          "final_report"
+        ],
+        "permissions": {
+          "read_files": false,
+          "run_commands": false,
+          "web_research": false,
+          "write_files": false
+        },
+        "phase": "FINALIZE",
+        "step_id": "finalize_audit_report",
+        "task_id": "async_reliability_audit",
+        "worker_type": "research_worker"
+      }
+    ],
+    "strategy": "discovery_first_evidence_backed_audit_then_scoped_remediation_design",
+    "success_criteria": [
+      "Produces cited repo intent baseline and authoritative external reliability guidance matrix.",
+      "Determines intent-to-goal alignment with explicit evidence and clear uncertainty handling.",
+      "Outputs a narrowly scoped remediation path with rollback and targeted verification only when concrete issues are evidenced.",
+      "Provides a final_report that distinguishes concrete findings from inference and includes safe next actions."
+    ]
+  },
+  "mocked_worker_replan_result": {
+    "artifacts": [
+      {
+        "content": {
+          "failed_step_id": "research_authoritative_reliability_guidance",
+          "input_artifact_ids": [
+            "behavior_baseline",
+            "discovery_gaps"
+          ],
+          "issue_type": "planner_level",
+          "signals": [
+            "web_sources_limited",
+            "repo_intent_mismatch",
+            "artifact_chain_unreachable"
+          ],
+          "task_metadata": {
+            "mode": "observe_only",
+            "phase": "RESEARCH",
+            "task_id": "async_reliability_audit"
+          }
+        },
+        "id": "planner_issue_snapshot"
+      }
+    ],
+    "errors": [],
+    "metadata": {
+      "issue_class": "planner_level",
+      "mocked": true,
+      "recommended_action": "Return a full fixed new Plan that rebuilds context and chooses a safer evidence/mutation route."
+    },
+    "producer": "web_research_worker",
+    "run_id": "run_plan_req_001_reliability_audit",
+    "status": "needs_replan",
+    "summary": "Planner-level issue: reliable external sources are too limited or conflicting for the current comparison path, discovered repository intent no longer matches the assumed async transaction boundary, and the expected artifact chain to safe mutation cannot be satisfied from this step.",
+    "usage": {
+      "model_calls": 0,
+      "tool_calls": 1
+    },
+    "warnings": []
+  },
+  "prompt": "Audit the failure-handling and retry design implied by v8.md for an async transaction pipeline. Research reliable external references for idempotent retries, bounded concurrency, backpressure, and rollback safety. Compare the repo's intended design against those references, determine whether the codebase intent appears mismatched with the user goal, and if concrete issues exist produce a narrowly scoped fix path with rollback and targeted verification.",
+  "replan_request": {
+    "completed_artifacts": [
+      {
+        "content": "Mock artifact repo_intent_evidence from discover_intent_and_baseline.",
+        "id": "repo_intent_evidence",
+        "producer_step_id": "discover_intent_and_baseline",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact pipeline_component_inventory from discover_intent_and_baseline.",
+        "id": "pipeline_component_inventory",
+        "producer_step_id": "discover_intent_and_baseline",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact behavior_baseline from discover_intent_and_baseline.",
+        "id": "behavior_baseline",
+        "producer_step_id": "discover_intent_and_baseline",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": "Mock artifact discovery_gaps from discover_intent_and_baseline.",
+        "id": "discovery_gaps",
+        "producer_step_id": "discover_intent_and_baseline",
+        "worker_type": "repo_worker"
+      },
+      {
+        "content": {
+          "failed_step_id": "research_authoritative_reliability_guidance",
+          "input_artifact_ids": [
+            "behavior_baseline",
+            "discovery_gaps"
+          ],
+          "issue_type": "planner_level",
+          "signals": [
+            "web_sources_limited",
+            "repo_intent_mismatch",
+            "artifact_chain_unreachable"
+          ],
+          "task_metadata": {
+            "mode": "observe_only",
+            "phase": "RESEARCH",
+            "task_id": "async_reliability_audit"
+          }
+        },
+        "id": "planner_issue_snapshot"
+      }
+    ],
+    "failed_step_id": "research_authoritative_reliability_guidance",
+    "plan_id": "plan_req_001_reliability_audit",
+    "reason": "Planner-level issue: reliable external sources are too limited or conflicting for the current comparison path, discovered repository intent no longer matches the assumed async transaction boundary, and the expected artifact chain to safe mutation cannot be satisfied from this step.",
+    "recommended_action": "Return a full fixed new Plan that rebuilds context and chooses a safer evidence/mutation route.",
+    "remaining_budget": {
+      "max_model_calls": 4,
+      "max_retries": 1,
+      "max_tool_calls": 9,
+      "max_workers": 3
+    },
+    "request_id": "req_001",
+    "run_id": "run_plan_req_001_reliability_audit",
+    "worker_result": {
+      "artifacts": [
+        {
+          "content": {
+            "failed_step_id": "research_authoritative_reliability_guidance",
+            "input_artifact_ids": [
+              "behavior_baseline",
+              "discovery_gaps"
+            ],
+            "issue_type": "planner_level",
+            "signals": [
+              "web_sources_limited",
+              "repo_intent_mismatch",
+              "artifact_chain_unreachable"
+            ],
+            "task_metadata": {
+              "mode": "observe_only",
+              "phase": "RESEARCH",
+              "task_id": "async_reliability_audit"
+            }
+          },
+          "id": "planner_issue_snapshot"
+        }
+      ],
+      "errors": [],
+      "metadata": {
+        "issue_class": "planner_level",
+        "mocked": true,
+        "recommended_action": "Return a full fixed new Plan that rebuilds context and chooses a safer evidence/mutation route."
+      },
+      "producer": "web_research_worker",
+      "run_id": "run_plan_req_001_reliability_audit",
+      "status": "needs_replan",
+      "summary": "Planner-level issue: reliable external sources are too limited or conflicting for the current comparison path, discovered repository intent no longer matches the assumed async transaction boundary, and the expected artifact chain to safe mutation cannot be satisfied from this step.",
+      "usage": {
+        "model_calls": 0,
+        "tool_calls": 1
+      },
+      "warnings": []
+    }
+  },
+  "selected_replan_step": {
+    "phase": "RESEARCH",
+    "step_id": "research_authoritative_reliability_guidance",
+    "worker_type": "web_research_worker"
+  },
+  "status": "success"
+}
