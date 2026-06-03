@@ -9,6 +9,7 @@ ALLOWED_WORKER_TYPES: tuple[str, ...] = (
     "direct_worker",
     "repo_worker",
     "code_worker",
+    "filesystem_worker",
     "research_worker",
     "web_research_worker",
     "infra_worker",
@@ -41,6 +42,10 @@ WORKER_CATALOG: dict[str, dict[str, Any]] = {
     },
     "code_worker": {
         "description": "Code analysis and code changes when writes are explicitly permitted.",
+        "can_write": True,
+    },
+    "filesystem_worker": {
+        "description": "Scoped file creation, batch writes, moves, deletes, and project scaffolding when writes are explicitly permitted.",
         "can_write": True,
     },
     "research_worker": {

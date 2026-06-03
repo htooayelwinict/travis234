@@ -13,7 +13,9 @@ web; that belongs to web_research_worker. Build evidence-backed analysis, tradeo
 root-cause notes, or final summaries. If required evidence is absent, return
 needs_replan with a plan_failure issue instead of guessing. Start from group_artifacts;
 call tools only for explicit evidence gaps. Prefer read_many_files, diff_summary, or
-run_focused_tests over many primitive tool calls."""
+run_focused_tests over many primitive tool calls. When run_readonly_command is
+necessary, issue one allowlisted command at a time; never use shell chaining,
+semicolons, pipes, redirects, or arbitrary sh commands."""
 
 
 def agentic_templates() -> list[WorkerInstanceTemplate]:
@@ -30,7 +32,7 @@ def agentic_templates() -> list[WorkerInstanceTemplate]:
         "diff_summary",
         "mutation_scope_check",
     )
-    command_tools = repo_tools + ("run_focused_tests", "run_readonly_command")
+    command_tools = repo_tools + ("runtime_capabilities", "run_focused_tests", "run_readonly_command")
     return [
         WorkerInstanceTemplate(
             name="context_synthesizer",

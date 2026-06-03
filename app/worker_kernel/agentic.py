@@ -24,6 +24,10 @@ from app.worker_kernel.workers.agentic_templates import get_agentic_worker_templ
 from app.worker_kernel.workers.templates import WorkerInstanceTemplate
 
 
+MUTATING_WORKER_TYPES = {"code_worker", "filesystem_worker"}
+WRITE_TOOL_NAMES = {"write_file", "write_many_files", "replace_in_file", "move_file", "delete_file"}
+
+
 class WorkerToolCall(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -236,7 +240,7 @@ def _normalize_issue(value: Any, *, status: str) -> Any:
     if isinstance(value, dict):
         issue = dict(value)
         raw_issue_type = issue.pop("type", None)
-        issue.setdefault("issue_type", _normalize_issue_type(raw_issue_type or issue_type))
+        issue["issue_type"] = _normalize_issue_type(raw_issue_type or issue.get("issue_type") or issue_type)
         issue.setdefault("code", "worker_reported_issue")
         issue.setdefault(
             "message",
@@ -269,6 +273,9 @@ def _normalize_issue_type(value: Any) -> str:
         "kernel_error": "kernel_failure",
         "tool_error": "instance_failure",
         "model_error": "instance_failure",
+        "implementation_failure": "instance_failure",
+        "verification_failure": "instance_failure",
+        "worker_failure": "instance_failure",
     }.get(normalized, normalized)
 
 
@@ -923,7 +930,7 @@ class AgenticWorkerGroupRunner:
         final: WorkerFinalResult,
         state: WorkerGroupState,
     ) -> bool:
-        if self.worker_type != "code_worker" or not task.permissions.write_files:
+        if self.worker_type not in MUTATING_WORKER_TYPES or not task.permissions.write_files:
             return False
         if final.status != "completed":
             return False
@@ -933,10 +940,31 @@ class AgenticWorkerGroupRunner:
         return [
             observation
             for observation in state.observations
-            if observation.get("tool_name") in {"write_file", "replace_in_file"}
+            if observation.get("tool_name") in WRITE_TOOL_NAMES
             and isinstance(observation.get("observation"), dict)
-            and observation["observation"].get("path")
+            and self._write_observation_paths(observation)
         ]
+
+    def _write_observation_paths(self, observation: dict[str, Any]) -> list[str]:
+        payload = observation.get("observation")
+        if not isinstance(payload, dict):
+            return []
+        tool_name = observation.get("tool_name")
+        if tool_name == "write_many_files":
+            return [
+                str(item.get("path"))
+                for item in payload.get("files_written", [])
+                if isinstance(item, dict) and item.get("path")
+            ]
+        if tool_name == "move_file":
+            return [
+                str(path)
+                for path in (payload.get("source"), payload.get("destination"))
+                if path
+            ]
+        if tool_name in {"write_file", "replace_in_file", "delete_file"} and payload.get("path"):
+            return [str(payload["path"])]
+        return []
 
     def _verification_fallback_from_observations(
         self,
@@ -1012,7 +1040,7 @@ class AgenticWorkerGroupRunner:
         usage: dict[str, int],
         base_artifacts: list[ArtifactPayload],
     ) -> Result | None:
-        if self.worker_type != "code_worker" or not task.permissions.write_files:
+        if self.worker_type not in MUTATING_WORKER_TYPES or not task.permissions.write_files:
             return None
 
         write_observations = self._write_observations(state)
@@ -1021,8 +1049,9 @@ class AgenticWorkerGroupRunner:
 
         changed_paths = sorted(
             {
-                str(observation["observation"]["path"])
+                path
                 for observation in write_observations
+                for path in self._write_observation_paths(observation)
             }
         )
         diff = self._git_diff_for_paths(task=task, paths=changed_paths)
@@ -1095,9 +1124,11 @@ class AgenticWorkerGroupRunner:
                 "write_tools": [
                     {
                         "tool_name": observation.get("tool_name"),
-                        "path": observation.get("observation", {}).get("path"),
+                        "paths": self._write_observation_paths(observation),
                         "replacements": observation.get("observation", {}).get("replacements"),
                         "bytes_written": observation.get("observation", {}).get("bytes_written"),
+                        "count": observation.get("observation", {}).get("count"),
+                        "deleted": observation.get("observation", {}).get("deleted"),
                     }
                     for observation in write_observations
                 ],
@@ -1121,12 +1152,12 @@ class AgenticWorkerGroupRunner:
         diffs: list[str] = []
         for path in paths:
             try:
-                result = self._toolbox.execute(task=task, tool_name="git_diff", arguments={"path": path})
+                result = self._toolbox.execute(task=task, tool_name="diff_summary", arguments={"path": path})
             except WorkerToolError:
                 continue
-            stdout = result.get("stdout")
-            if isinstance(stdout, str) and stdout:
-                diffs.append(stdout)
+            diff = result.get("diff")
+            if isinstance(diff, str) and diff:
+                diffs.append(diff)
         return "\n".join(diffs)
 
     def _prompt(
@@ -1280,9 +1311,9 @@ def _permitted_tool_names(permissions: PermissionSet) -> set[str]:
             }
         )
     if permissions.write_files:
-        tools.update({"write_file", "replace_in_file"})
+        tools.update(WRITE_TOOL_NAMES)
     if permissions.run_commands:
-        tools.update({"run_readonly_command", "run_focused_tests"})
+        tools.update({"runtime_capabilities", "run_readonly_command", "run_focused_tests"})
     if permissions.web_research:
         tools.update({"web_search", "web_fetch"})
     return tools

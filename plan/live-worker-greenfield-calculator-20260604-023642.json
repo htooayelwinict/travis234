@@ -1,0 +1,2657 @@
+{
+  "generated_at": "2026-06-03T20:08:21.923345+00:00",
+  "scenario": "greenfield_calculator_api_no_mock",
+  "prompt": "In the empty repo rooted at live_worker_greenfield_calculator_api_20260604-023642, create a deploy-ready calculator API from scratch. You may choose any language and framework, but choose a simple maintainable stack that the worker runtime can verify locally. Implement JSON HTTP endpoints for add, subtract, multiply, divide, and health. Handle invalid input and divide-by-zero with clear error responses. Create automated tests, minimal dependency/config files, a Dockerfile or equivalent deployment artifact, and README instructions for running, testing, and deploying. Keep the implementation small but production-shaped, run verification, and provide a concise final summary of files created, API contract, test evidence, and remaining risks.",
+  "repo_path": "/Users/htooayelwin/Documents/VScode/allthebest/live_worker_greenfield_calculator_api_20260604-023642",
+  "worker_env": {
+    "WORKER_LLM_ENABLED": "true",
+    "WORKER_LLM_MODEL": "qwen/qwen3.7-max",
+    "WORKER_LLM_PROVIDER_SORT": "latency",
+    "WORKER_LLM_TIMEOUT_SECONDS": "120",
+    "WORKER_LLM_MAX_TOKENS": "3600",
+    "WORKER_MAX_PARALLEL_INSTANCES": "3",
+    "WORKER_TOOL_TIMEOUT_SECONDS": "25"
+  },
+  "runtime_matrix": {
+    "trace_id": "trace_0001",
+    "started_at": "2026-06-03T20:06:42.206397+00:00",
+    "row_count": 39,
+    "rows": [
+      {
+        "seq": 1,
+        "timestamp": "2026-06-03T20:06:43.446920+00:00",
+        "component": "decompressor_runtime",
+        "stage": "decompress_request",
+        "event": "run_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": null,
+        "run_id": null,
+        "step_id": null,
+        "attempt_id": null,
+        "worker_type": null,
+        "elapsed_ms": null,
+        "details": {
+          "input_chars": 747
+        }
+      },
+      {
+        "seq": 2,
+        "timestamp": "2026-06-03T20:07:08.297961+00:00",
+        "component": "decompressor_runtime",
+        "stage": "decompress_request",
+        "event": "run_completed",
+        "status": "completed",
+        "request_id": "req_001",
+        "plan_id": null,
+        "run_id": null,
+        "step_id": null,
+        "attempt_id": null,
+        "worker_type": null,
+        "elapsed_ms": 24850.817,
+        "details": {
+          "model_calls": 1,
+          "confidence": 0.94,
+          "ambiguity_count": 5
+        }
+      },
+      {
+        "seq": 3,
+        "timestamp": "2026-06-03T20:07:08.298240+00:00",
+        "component": "planner_runtime",
+        "stage": "draft_plan",
+        "event": "run_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": null,
+        "run_id": null,
+        "step_id": null,
+        "attempt_id": null,
+        "worker_type": null,
+        "elapsed_ms": null,
+        "details": {
+          "input_type": "greenfield_calculator_api_bootstrap_spec",
+          "complexity_hint": "medium"
+        }
+      },
+      {
+        "seq": 4,
+        "timestamp": "2026-06-03T20:07:42.080821+00:00",
+        "component": "planner_runtime",
+        "stage": "draft_plan",
+        "event": "run_completed",
+        "status": "completed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": null,
+        "step_id": null,
+        "attempt_id": null,
+        "worker_type": null,
+        "elapsed_ms": null,
+        "details": {
+          "planner": "phase_aware_mutation_planner",
+          "step_count": 6,
+          "mode": "llm_prompt_chain"
+        }
+      },
+      {
+        "seq": 5,
+        "timestamp": "2026-06-03T20:07:42.081201+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "plan_execution",
+        "event": "run_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": null,
+        "attempt_id": null,
+        "worker_type": null,
+        "elapsed_ms": null,
+        "details": {
+          "planner": "phase_aware_mutation_planner",
+          "step_count": 6,
+          "replan_depth": 0
+        }
+      },
+      {
+        "seq": 6,
+        "timestamp": "2026-06-03T20:07:42.081212+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "plan_execution",
+        "event": "plan_normalized",
+        "status": "completed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": null,
+        "attempt_id": null,
+        "worker_type": null,
+        "elapsed_ms": null,
+        "details": {
+          "adjustments": [
+            {
+              "field": "budget.max_retries",
+              "from": 1,
+              "to": 2,
+              "reason": "worker runtime retries are capped per stage, with two instance retries per stage"
+            },
+            {
+              "step_id": "discover_repo_and_runtime",
+              "worker_type": "repo_worker",
+              "field": "max_model_calls",
+              "from": 1,
+              "to": 5,
+              "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+            },
+            {
+              "step_id": "analyze_requirements_and_contract",
+              "worker_type": "research_worker",
+              "field": "max_model_calls",
+              "from": 1,
+              "to": 2,
+              "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+            },
+            {
+              "step_id": "design_scoped_change_and_rollback",
+              "worker_type": "code_worker",
+              "field": "max_model_calls",
+              "from": 1,
+              "to": 2,
+              "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+            },
+            {
+              "step_id": "implement_calculator_api_scaffold",
+              "worker_type": "code_worker",
+              "field": "max_model_calls",
+              "from": 1,
+              "to": 2,
+              "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+            },
+            {
+              "step_id": "verify_tests_and_local_runtime",
+              "worker_type": "verify_worker",
+              "field": "max_model_calls",
+              "from": 1,
+              "to": 2,
+              "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+            },
+            {
+              "field": "budget.max_tool_calls",
+              "from": 18,
+              "to": 126,
+              "reason": "budget must cover kernel-owned per-stage retry tool-call envelope"
+            },
+            {
+              "field": "budget.max_model_calls",
+              "from": 6,
+              "to": 98,
+              "reason": "budget must cover kernel-owned per-stage retry model-call envelope"
+            }
+          ]
+        }
+      },
+      {
+        "seq": 7,
+        "timestamp": "2026-06-03T20:07:42.081867+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "plan_execution",
+        "event": "preflight_completed",
+        "status": "completed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": null,
+        "attempt_id": null,
+        "worker_type": null,
+        "elapsed_ms": null,
+        "details": {
+          "budget": {
+            "max_tool_calls": 126,
+            "max_model_calls": 98,
+            "max_workers": 6,
+            "max_retries": 2
+          }
+        }
+      },
+      {
+        "seq": 8,
+        "timestamp": "2026-06-03T20:07:42.081893+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "DISCOVER",
+        "event": "step_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": null,
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "mode": "observe_only",
+          "input_artifacts": [],
+          "output_artifacts": [
+            "repo_inventory",
+            "runtime_constraints",
+            "candidate_stack_options"
+          ]
+        }
+      },
+      {
+        "seq": 9,
+        "timestamp": "2026-06-03T20:07:42.081990+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "DISCOVER",
+        "event": "task_compiled",
+        "status": "completed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": null,
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "input_count": 0,
+          "expected_outputs": [
+            "repo_inventory",
+            "runtime_constraints",
+            "candidate_stack_options"
+          ]
+        }
+      },
+      {
+        "seq": 10,
+        "timestamp": "2026-06-03T20:07:42.082029+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "DISCOVER",
+        "event": "attempt_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_1",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "attempt_number": 1
+        }
+      },
+      {
+        "seq": 11,
+        "timestamp": "2026-06-03T20:07:42.082396+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_group_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_1",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": null,
+          "template_count": 3
+        }
+      },
+      {
+        "seq": 12,
+        "timestamp": "2026-06-03T20:07:42.082418+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_instance_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_1",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_locator",
+          "role": "Locate target files, tests, and repo clues with cheap readonly discovery tools."
+        }
+      },
+      {
+        "seq": 13,
+        "timestamp": "2026-06-03T20:07:42.082433+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_model_call_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_1",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_locator",
+          "round": 1,
+          "model_calls_used_including_this_turn": 1,
+          "remaining_tool_calls": 2
+        }
+      },
+      {
+        "seq": 14,
+        "timestamp": "2026-06-03T20:07:53.563683+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_model_call_completed",
+        "status": "completed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_1",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_locator",
+          "round": 1,
+          "tool_call_count": 1,
+          "has_final_result": false,
+          "final_status": null
+        }
+      },
+      {
+        "seq": 15,
+        "timestamp": "2026-06-03T20:07:53.563762+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_tool_call_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_1",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_locator",
+          "tool_name": "repo_snapshot",
+          "tool_index": 1,
+          "reason": null
+        }
+      },
+      {
+        "seq": 16,
+        "timestamp": "2026-06-03T20:07:53.564922+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_tool_call_failed",
+        "status": "failed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_1",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_locator",
+          "tool_name": "repo_snapshot",
+          "error": "path does not exist: live_worker_greenfield_calculator_api_20260604-023642",
+          "code": "tool_execution_error"
+        }
+      },
+      {
+        "seq": 17,
+        "timestamp": "2026-06-03T20:07:53.565145+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_instance_completed",
+        "status": "failed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_1",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_locator",
+          "artifact_count": 0,
+          "tool_calls_used": 1,
+          "model_calls_used": 1
+        }
+      },
+      {
+        "seq": 18,
+        "timestamp": "2026-06-03T20:07:53.565308+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "DISCOVER",
+        "event": "attempt_completed",
+        "status": "failed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_1",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "artifact_count": 0,
+          "tool_calls": 1,
+          "model_calls": 1
+        }
+      },
+      {
+        "seq": 19,
+        "timestamp": "2026-06-03T20:07:53.565408+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "DISCOVER",
+        "event": "attempt_retry_scheduled",
+        "status": "retrying",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_1",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "reason": "worker_runtime_failure",
+          "task_recompiled": true,
+          "adjustments": [
+            {
+              "field": "max_tool_calls",
+              "from": 2,
+              "to": 4,
+              "reason": "local retry after worker/tool budget or tool-call failure"
+            }
+          ]
+        }
+      },
+      {
+        "seq": 20,
+        "timestamp": "2026-06-03T20:07:53.565440+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "DISCOVER",
+        "event": "attempt_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_2",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "attempt_number": 2
+        }
+      },
+      {
+        "seq": 21,
+        "timestamp": "2026-06-03T20:07:53.565585+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_group_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_2",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": null,
+          "template_count": 3
+        }
+      },
+      {
+        "seq": 22,
+        "timestamp": "2026-06-03T20:07:53.565599+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_instance_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_2",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_locator",
+          "role": "Locate target files, tests, and repo clues with cheap readonly discovery tools."
+        }
+      },
+      {
+        "seq": 23,
+        "timestamp": "2026-06-03T20:07:53.565614+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_model_call_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_2",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_locator",
+          "round": 1,
+          "model_calls_used_including_this_turn": 1,
+          "remaining_tool_calls": 4
+        }
+      },
+      {
+        "seq": 24,
+        "timestamp": "2026-06-03T20:08:10.208670+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_model_call_completed",
+        "status": "completed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_2",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_locator",
+          "round": 1,
+          "tool_call_count": 1,
+          "has_final_result": false,
+          "final_status": null
+        }
+      },
+      {
+        "seq": 25,
+        "timestamp": "2026-06-03T20:08:10.208724+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_tool_call_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_2",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_locator",
+          "tool_name": "repo_snapshot",
+          "tool_index": 1,
+          "reason": null
+        }
+      },
+      {
+        "seq": 26,
+        "timestamp": "2026-06-03T20:08:10.209298+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_tool_call_failed",
+        "status": "failed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_2",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_locator",
+          "tool_name": "repo_snapshot",
+          "error": "path does not exist: live_worker_greenfield_calculator_api_20260604-023642",
+          "code": "tool_execution_error"
+        }
+      },
+      {
+        "seq": 27,
+        "timestamp": "2026-06-03T20:08:10.209448+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_instance_completed",
+        "status": "failed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_2",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_locator",
+          "artifact_count": 0,
+          "tool_calls_used": 1,
+          "model_calls_used": 1
+        }
+      },
+      {
+        "seq": 28,
+        "timestamp": "2026-06-03T20:08:10.209564+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "DISCOVER",
+        "event": "attempt_completed",
+        "status": "failed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_2",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "artifact_count": 0,
+          "tool_calls": 1,
+          "model_calls": 1
+        }
+      },
+      {
+        "seq": 29,
+        "timestamp": "2026-06-03T20:08:10.209637+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "DISCOVER",
+        "event": "attempt_retry_scheduled",
+        "status": "retrying",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_2",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "reason": "worker_runtime_failure",
+          "task_recompiled": true,
+          "adjustments": [
+            {
+              "field": "max_tool_calls",
+              "from": 4,
+              "to": 8,
+              "reason": "local retry after worker/tool budget or tool-call failure"
+            }
+          ]
+        }
+      },
+      {
+        "seq": 30,
+        "timestamp": "2026-06-03T20:08:10.209660+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "DISCOVER",
+        "event": "attempt_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_3",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "attempt_number": 3
+        }
+      },
+      {
+        "seq": 31,
+        "timestamp": "2026-06-03T20:08:10.209805+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_group_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_3",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": null,
+          "template_count": 3
+        }
+      },
+      {
+        "seq": 32,
+        "timestamp": "2026-06-03T20:08:10.209816+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_instance_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_3",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_locator",
+          "role": "Locate target files, tests, and repo clues with cheap readonly discovery tools."
+        }
+      },
+      {
+        "seq": 33,
+        "timestamp": "2026-06-03T20:08:10.209827+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_model_call_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_3",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_locator",
+          "round": 1,
+          "model_calls_used_including_this_turn": 1,
+          "remaining_tool_calls": 8
+        }
+      },
+      {
+        "seq": 34,
+        "timestamp": "2026-06-03T20:08:21.196926+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_model_call_completed",
+        "status": "completed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_3",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_locator",
+          "round": 1,
+          "tool_call_count": 1,
+          "has_final_result": false,
+          "final_status": null
+        }
+      },
+      {
+        "seq": 35,
+        "timestamp": "2026-06-03T20:08:21.196985+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_tool_call_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_3",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_locator",
+          "tool_name": "repo_snapshot",
+          "tool_index": 1,
+          "reason": null
+        }
+      },
+      {
+        "seq": 36,
+        "timestamp": "2026-06-03T20:08:21.197466+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_tool_call_failed",
+        "status": "failed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_3",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_locator",
+          "tool_name": "repo_snapshot",
+          "error": "path does not exist: live_worker_greenfield_calculator_api_20260604-023642",
+          "code": "tool_execution_error"
+        }
+      },
+      {
+        "seq": 37,
+        "timestamp": "2026-06-03T20:08:21.197590+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_instance_completed",
+        "status": "failed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_3",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_locator",
+          "artifact_count": 0,
+          "tool_calls_used": 1,
+          "model_calls_used": 1
+        }
+      },
+      {
+        "seq": 38,
+        "timestamp": "2026-06-03T20:08:21.197688+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "DISCOVER",
+        "event": "attempt_completed",
+        "status": "failed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": "discover_repo_and_runtime_attempt_3",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "artifact_count": 0,
+          "tool_calls": 1,
+          "model_calls": 1
+        }
+      },
+      {
+        "seq": 39,
+        "timestamp": "2026-06-03T20:08:21.197717+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "DISCOVER",
+        "event": "step_terminal",
+        "status": "failed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_and_runtime",
+        "attempt_id": null,
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "summary": "path does not exist: live_worker_greenfield_calculator_api_20260604-023642"
+        }
+      }
+    ]
+  },
+  "baseline_pytest": {
+    "label": "before",
+    "returncode": 5,
+    "stdout": "\nno tests ran in 0.01s\n",
+    "stderr": ""
+  },
+  "envelope": {
+    "request_id": "req_001",
+    "raw_input": "In the empty repo rooted at live_worker_greenfield_calculator_api_20260604-023642, create a deploy-ready calculator API from scratch. You may choose any language and framework, but choose a simple maintainable stack that the worker runtime can verify locally. Implement JSON HTTP endpoints for add, subtract, multiply, divide, and health. Handle invalid input and divide-by-zero with clear error responses. Create automated tests, minimal dependency/config files, a Dockerfile or equivalent deployment artifact, and README instructions for running, testing, and deploying. Keep the implementation small but production-shaped, run verification, and provide a concise final summary of files created, API contract, test evidence, and remaining risks.",
+    "normalized_input": "Initialize an empty repository at live_worker_greenfield_calculator_api_20260604-023642 with a small, maintainable, deploy-ready calculator API that exposes JSON HTTP endpoints for add, subtract, multiply, divide, and health; include robust error handling, automated tests, minimal config/dependency files, a deployment artifact (e.g., Dockerfile), README run/test/deploy instructions, local verification, and a concise final report of files, API contract, test evidence, and remaining risks.",
+    "user_goal": "Obtain a complete, production-shaped but minimal calculator API project scaffolded from scratch in an empty repo, with tests, deployment packaging, documentation, and verification evidence.",
+    "input_type": "greenfield_calculator_api_bootstrap_spec",
+    "intents": [
+      "code.scaffold",
+      "api.implementation",
+      "api.error_handling",
+      "testing.automation",
+      "containerization.packaging",
+      "docs.authoring",
+      "verification.execution",
+      "delivery.summary"
+    ],
+    "domains": [
+      "code",
+      "infra",
+      "docs",
+      "testing"
+    ],
+    "risks": [
+      "mutation_requested",
+      "file_mutation",
+      "needs_verification",
+      "ambiguous_stack_choice",
+      "ambiguous_deployment_target",
+      "api_contract_details_unspecified"
+    ],
+    "artifacts": [
+      {
+        "name": "live_worker_greenfield_calculator_api_20260604-023642",
+        "type": "repository_root"
+      },
+      {
+        "name": "calculator API",
+        "type": "service"
+      },
+      {
+        "name": "JSON HTTP endpoints",
+        "type": "api_interface"
+      },
+      {
+        "name": "add",
+        "type": "endpoint"
+      },
+      {
+        "name": "subtract",
+        "type": "endpoint"
+      },
+      {
+        "name": "multiply",
+        "type": "endpoint"
+      },
+      {
+        "name": "divide",
+        "type": "endpoint"
+      },
+      {
+        "name": "health",
+        "type": "endpoint"
+      },
+      {
+        "name": "invalid input handling",
+        "type": "error_behavior"
+      },
+      {
+        "name": "divide-by-zero handling",
+        "type": "error_behavior"
+      },
+      {
+        "name": "automated tests",
+        "type": "test_suite"
+      },
+      {
+        "name": "minimal dependency/config files",
+        "type": "configuration_files"
+      },
+      {
+        "name": "Dockerfile",
+        "type": "deployment_artifact"
+      },
+      {
+        "name": "README",
+        "type": "documentation"
+      },
+      {
+        "name": "final summary",
+        "type": "delivery_report"
+      }
+    ],
+    "context_needed": [
+      "preferred language/framework constraints if any",
+      "expected runtime version/toolchain availability in worker environment",
+      "target deployment platform expectations",
+      "required port/interface conventions",
+      "desired API request/response schema details and status code conventions",
+      "test command and verification command expectations"
+    ],
+    "constraints": [
+      "must preserve repository root identity as provided",
+      "implementation must remain small and maintainable while production-shaped",
+      "endpoints must be JSON over HTTP for add/subtract/multiply/divide/health",
+      "invalid input and divide-by-zero must return clear error responses",
+      "tests must exist and validate core endpoint behaviors including error cases",
+      "deployment artifact must support local verification",
+      "documentation must include run/test/deploy instructions",
+      "final output must include files created, API contract, test evidence, and remaining risks"
+    ],
+    "complexity_hint": "medium",
+    "confidence": 0.94,
+    "ambiguity": [
+      "No explicit language or framework preference beyond simplicity and maintainability.",
+      "Deployment target is not specified beyond being locally verifiable.",
+      "Exact API schema (methods, payload fields, status codes) is not explicitly defined.",
+      "Extent of 'production-shaped' expectations (logging, observability, security hardening) is not fully specified.",
+      "Specific verification commands and evidence format are not explicitly prescribed."
+    ],
+    "assumptions": [
+      "The repository is empty as stated.",
+      "Either Docker or an equivalent deployment artifact is acceptable.",
+      "A concise summary format is acceptable if it includes the requested evidence categories."
+    ],
+    "metadata": {
+      "decompressor_mode": "llm_prompt_chain",
+      "llm_prompt_chain": {
+        "mode": "completed",
+        "stages": [
+          "decompress_request",
+          "validate_envelope"
+        ],
+        "fallback": null,
+        "redacted_prompt_input": false,
+        "model_calls": 1
+      },
+      "decompressor_runtime": {
+        "elapsed_ms": 24850.817,
+        "failure_rate": 0.0,
+        "repair_rate": 0.0,
+        "latency_ms_p50": 24850.817,
+        "latency_ms_p95": 24850.817
+      },
+      "runtime_matrix": {
+        "trace_id": "trace_0001",
+        "started_at": "2026-06-03T20:06:42.206397+00:00",
+        "row_count": 2,
+        "rows": [
+          {
+            "seq": 1,
+            "timestamp": "2026-06-03T20:06:43.446920+00:00",
+            "component": "decompressor_runtime",
+            "stage": "decompress_request",
+            "event": "run_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": null,
+            "run_id": null,
+            "step_id": null,
+            "attempt_id": null,
+            "worker_type": null,
+            "elapsed_ms": null,
+            "details": {
+              "input_chars": 747
+            }
+          },
+          {
+            "seq": 2,
+            "timestamp": "2026-06-03T20:07:08.297961+00:00",
+            "component": "decompressor_runtime",
+            "stage": "decompress_request",
+            "event": "run_completed",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": null,
+            "run_id": null,
+            "step_id": null,
+            "attempt_id": null,
+            "worker_type": null,
+            "elapsed_ms": 24850.817,
+            "details": {
+              "model_calls": 1,
+              "confidence": 0.94,
+              "ambiguity_count": 5
+            }
+          }
+        ]
+      }
+    }
+  },
+  "plan": {
+    "plan_id": "plan_req_001_calculator_api_bootstrap",
+    "request_id": "req_001",
+    "planner": "phase_aware_mutation_planner",
+    "objective": "Bootstrap a small, maintainable, deploy-ready calculator JSON HTTP API in the provided empty repository with robust error handling, automated tests, deployment artifact, documentation, and verification evidence.",
+    "strategy": "discovery_first_phase_aware_mutation_with_scoped_writes_and_post_change_verification",
+    "execution_pattern": "discover_analyze_design_mutate_verify_finalize",
+    "steps": [
+      {
+        "step_id": "discover_repo_and_runtime",
+        "worker_type": "repo_worker",
+        "phase": "DISCOVER",
+        "mode": "observe_only",
+        "task_id": "calculator_api_bootstrap",
+        "instruction": "Known facts: Repository root is live_worker_greenfield_calculator_api_20260604-023642 and request requires a full greenfield API scaffold with tests, Docker artifact, docs, and local verification evidence. Unknowns: Actual runtime/toolchain availability, default shell/test tooling, and any existing hidden bootstrap files. Do now: Inspect repository state and local runtime capabilities, then produce a concise inventory and feasible stack/tooling candidates that can be verified locally. Do not do: Do not modify files, run destructive commands, or assume unavailable tooling. Output: repo_inventory, runtime_constraints, candidate_stack_options.",
+        "input_artifacts": [],
+        "output_artifacts": [
+          "repo_inventory",
+          "runtime_constraints",
+          "candidate_stack_options"
+        ],
+        "max_tool_calls": 2,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": true,
+          "write_files": false,
+          "run_commands": true,
+          "web_research": false,
+          "write_paths": [],
+          "write_paths_from_artifacts": []
+        }
+      },
+      {
+        "step_id": "analyze_requirements_and_contract",
+        "worker_type": "research_worker",
+        "phase": "ANALYZE",
+        "mode": "observe_only",
+        "task_id": "calculator_api_bootstrap",
+        "instruction": "Known facts: repo_inventory, runtime_constraints, and candidate_stack_options are available; required endpoints are add/subtract/multiply/divide/health with JSON HTTP and clear invalid-input/divide-by-zero errors. Unknowns: Preferred payload/status-code conventions and strict production hardening depth. Do now: Derive a minimal production-shaped requirements baseline, propose a concrete API contract and error semantics, and record assumptions/evidence needed for implementation and verification. Do not do: Do not mutate files or over-specify beyond user constraints. Output: requirements_baseline, api_contract_spec, analysis_evidence.",
+        "input_artifacts": [
+          "repo_inventory",
+          "runtime_constraints",
+          "candidate_stack_options"
+        ],
+        "output_artifacts": [
+          "requirements_baseline",
+          "api_contract_spec",
+          "analysis_evidence"
+        ],
+        "max_tool_calls": 2,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": true,
+          "write_files": false,
+          "run_commands": false,
+          "web_research": false,
+          "write_paths": [],
+          "write_paths_from_artifacts": []
+        }
+      },
+      {
+        "step_id": "design_scoped_change_and_rollback",
+        "worker_type": "code_worker",
+        "phase": "DESIGN",
+        "mode": "plan_only",
+        "task_id": "calculator_api_bootstrap",
+        "instruction": "Known facts: requirements_baseline, api_contract_spec, analysis_evidence, and runtime constraints are defined from prior steps. Unknowns: None material for initial scaffold. Do now: Produce concrete implementation design and verification design, including exact writable scope, rollback approach, dependency plan, and test/verification plan aligned to required outputs. Do not do: Do not write files or run mutation commands. Output: change_design, mutation_scope, rollback_plan, verification_plan, dependency_artifacts.",
+        "input_artifacts": [
+          "requirements_baseline",
+          "api_contract_spec",
+          "analysis_evidence",
+          "runtime_constraints"
+        ],
+        "output_artifacts": [
+          "change_design",
+          "mutation_scope",
+          "rollback_plan",
+          "verification_plan",
+          "dependency_artifacts"
+        ],
+        "max_tool_calls": 2,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": true,
+          "write_files": false,
+          "run_commands": false,
+          "web_research": false,
+          "write_paths": [],
+          "write_paths_from_artifacts": []
+        }
+      },
+      {
+        "step_id": "implement_calculator_api_scaffold",
+        "worker_type": "code_worker",
+        "phase": "MUTATE",
+        "mode": "bounded_mutation",
+        "task_id": "calculator_api_bootstrap",
+        "instruction": "Known facts: change_design defines implementation details; mutation_scope defines allowed write targets; rollback_plan defines revert path; dependency_artifacts and analysis_evidence constrain feasible stack and behavior. Unknowns: Minor implementation details discovered during coding. Do now: Create the calculator API project files within mutation_scope only, implementing endpoints, validation/error handling, tests, minimal configs, Docker artifact, and README instructions per design. Do not do: Do not write outside scoped paths, do not drift from api_contract_spec, and do not claim verification success in this step. Output: change_summary, rollback_patch, implementation_artifacts, api_contract_final.",
+        "input_artifacts": [
+          "change_design",
+          "mutation_scope",
+          "rollback_plan",
+          "dependency_artifacts",
+          "analysis_evidence",
+          "api_contract_spec"
+        ],
+        "output_artifacts": [
+          "change_summary",
+          "rollback_patch",
+          "implementation_artifacts",
+          "api_contract_final"
+        ],
+        "max_tool_calls": 6,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": true,
+          "write_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_paths": [],
+          "write_paths_from_artifacts": [
+            "mutation_scope"
+          ]
+        }
+      },
+      {
+        "step_id": "verify_tests_and_local_runtime",
+        "worker_type": "verify_worker",
+        "phase": "VERIFY",
+        "mode": "verify_only",
+        "task_id": "calculator_api_bootstrap",
+        "instruction": "Known facts: change_summary and implementation_artifacts are available from mutation; mutation_scope and analysis_evidence define expected scope and behavior; verification_plan defines required checks. Unknowns: Whether all tests and endpoint checks pass in this runtime. Do now: Execute verification commands and focused endpoint checks for health/add/subtract/multiply/divide plus invalid input and divide-by-zero, then confirm scope containment and rollback availability evidence. Do not do: Do not modify files or expand verification beyond plan necessities. Output: verification_evidence, test_evidence, api_probe_evidence.",
+        "input_artifacts": [
+          "change_summary",
+          "implementation_artifacts",
+          "mutation_scope",
+          "analysis_evidence",
+          "verification_plan",
+          "rollback_patch"
+        ],
+        "output_artifacts": [
+          "verification_evidence",
+          "test_evidence",
+          "api_probe_evidence"
+        ],
+        "max_tool_calls": 6,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": true,
+          "write_files": false,
+          "run_commands": true,
+          "web_research": false,
+          "write_paths": [],
+          "write_paths_from_artifacts": []
+        }
+      },
+      {
+        "step_id": "finalize_delivery_summary",
+        "worker_type": "research_worker",
+        "phase": "FINALIZE",
+        "mode": "summarize_only",
+        "task_id": "calculator_api_bootstrap",
+        "instruction": "Known facts: Implementation and verification artifacts are complete, including api_contract_final, test evidence, and verification outcomes. Unknowns: None. Do now: Produce a concise final report covering files created, final API contract, verification/test evidence, and remaining risks/assumptions. Do not do: Do not run tools or mutate files; do not omit unresolved risks. Output: final_summary.",
+        "input_artifacts": [
+          "change_summary",
+          "api_contract_final",
+          "verification_evidence",
+          "test_evidence",
+          "api_probe_evidence"
+        ],
+        "output_artifacts": [
+          "final_summary"
+        ],
+        "max_tool_calls": 0,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": false,
+          "write_files": false,
+          "run_commands": false,
+          "web_research": false,
+          "write_paths": [],
+          "write_paths_from_artifacts": []
+        }
+      }
+    ],
+    "budget": {
+      "max_tool_calls": 18,
+      "max_model_calls": 6,
+      "max_workers": 6,
+      "max_retries": 1
+    },
+    "global_invariants": [
+      "respect_phase_mode_mapping",
+      "no_writes_before_design_outputs",
+      "writes_scoped_by_mutation_scope_only",
+      "mutation_must_consume_design_and_evidence_artifacts",
+      "verify_after_write_with_commands_and_scope_checks",
+      "no_envelope_artifact_names_as_runtime_inputs"
+    ],
+    "success_criteria": [
+      "Repository is scaffolded with a working JSON HTTP calculator API and health endpoint.",
+      "Invalid input and divide-by-zero return clear error responses.",
+      "Automated tests exist and run successfully for core and error behaviors.",
+      "Deployment artifact supports local verification.",
+      "README includes run/test/deploy instructions.",
+      "Final summary includes files created, API contract, test evidence, and remaining risks."
+    ],
+    "metadata": {
+      "archetype": "phase_aware_mutation",
+      "complexity": "medium",
+      "confidence": 0.94,
+      "llm_planner": {
+        "mode": "completed",
+        "stages": [
+          "draft_plan",
+          "validate_plan"
+        ],
+        "model_calls": 1,
+        "repair_attempted": false,
+        "validation_errors": [],
+        "resolved_validation_errors": [],
+        "budget_auto_aligned": true,
+        "envelope_input_type": "greenfield_calculator_api_bootstrap_spec",
+        "envelope_complexity_hint": "medium"
+      },
+      "planner_runtime": {
+        "mode": "llm_prompt_chain",
+        "fallback_reason": null
+      },
+      "runtime_matrix": {
+        "trace_id": "trace_0001",
+        "started_at": "2026-06-03T20:06:42.206397+00:00",
+        "row_count": 4,
+        "rows": [
+          {
+            "seq": 1,
+            "timestamp": "2026-06-03T20:06:43.446920+00:00",
+            "component": "decompressor_runtime",
+            "stage": "decompress_request",
+            "event": "run_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": null,
+            "run_id": null,
+            "step_id": null,
+            "attempt_id": null,
+            "worker_type": null,
+            "elapsed_ms": null,
+            "details": {
+              "input_chars": 747
+            }
+          },
+          {
+            "seq": 2,
+            "timestamp": "2026-06-03T20:07:08.297961+00:00",
+            "component": "decompressor_runtime",
+            "stage": "decompress_request",
+            "event": "run_completed",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": null,
+            "run_id": null,
+            "step_id": null,
+            "attempt_id": null,
+            "worker_type": null,
+            "elapsed_ms": 24850.817,
+            "details": {
+              "model_calls": 1,
+              "confidence": 0.94,
+              "ambiguity_count": 5
+            }
+          },
+          {
+            "seq": 3,
+            "timestamp": "2026-06-03T20:07:08.298240+00:00",
+            "component": "planner_runtime",
+            "stage": "draft_plan",
+            "event": "run_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": null,
+            "run_id": null,
+            "step_id": null,
+            "attempt_id": null,
+            "worker_type": null,
+            "elapsed_ms": null,
+            "details": {
+              "input_type": "greenfield_calculator_api_bootstrap_spec",
+              "complexity_hint": "medium"
+            }
+          },
+          {
+            "seq": 4,
+            "timestamp": "2026-06-03T20:07:42.080821+00:00",
+            "component": "planner_runtime",
+            "stage": "draft_plan",
+            "event": "run_completed",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": null,
+            "step_id": null,
+            "attempt_id": null,
+            "worker_type": null,
+            "elapsed_ms": null,
+            "details": {
+              "planner": "phase_aware_mutation_planner",
+              "step_count": 6,
+              "mode": "llm_prompt_chain"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "result": {
+    "run_id": "run_plan_req_001_calculator_api_bootstrap",
+    "producer": "worker_kernel",
+    "status": "failed",
+    "summary": "Execution stopped at step discover_repo_and_runtime: path does not exist: live_worker_greenfield_calculator_api_20260604-023642",
+    "artifacts": [],
+    "usage": {},
+    "errors": [
+      "path does not exist: live_worker_greenfield_calculator_api_20260604-023642"
+    ],
+    "warnings": [],
+    "metadata": {
+      "worker_results": [
+        {
+          "run_id": "run_plan_req_001_calculator_api_bootstrap",
+          "producer": "repo_worker",
+          "status": "failed",
+          "summary": "path does not exist: live_worker_greenfield_calculator_api_20260604-023642",
+          "artifacts": [],
+          "usage": {
+            "tool_calls": 1,
+            "model_calls": 1
+          },
+          "errors": [
+            "path does not exist: live_worker_greenfield_calculator_api_20260604-023642"
+          ],
+          "warnings": [],
+          "metadata": {
+            "issues": [
+              {
+                "issue_type": "instance_failure",
+                "code": "tool_execution_error",
+                "message": "path does not exist: live_worker_greenfield_calculator_api_20260604-023642",
+                "step_id": "discover_repo_and_runtime",
+                "worker_type": "repo_worker",
+                "attempt_id": null,
+                "retryable": true,
+                "metadata": {
+                  "worker_instance": "repo_locator"
+                }
+              }
+            ],
+            "issue_type": "instance_failure",
+            "issue_code": "tool_execution_error",
+            "retryable": true,
+            "worker_type": "repo_worker",
+            "worker_instance": "repo_locator",
+            "worker_group_results": [
+              {
+                "run_id": "run_plan_req_001_calculator_api_bootstrap",
+                "producer": "repo_worker",
+                "status": "failed",
+                "summary": "path does not exist: live_worker_greenfield_calculator_api_20260604-023642",
+                "artifacts": [],
+                "usage": {
+                  "tool_calls": 1,
+                  "model_calls": 1
+                },
+                "errors": [
+                  "path does not exist: live_worker_greenfield_calculator_api_20260604-023642"
+                ],
+                "warnings": [],
+                "metadata": {
+                  "issues": [
+                    {
+                      "issue_type": "instance_failure",
+                      "code": "tool_execution_error",
+                      "message": "path does not exist: live_worker_greenfield_calculator_api_20260604-023642",
+                      "step_id": "discover_repo_and_runtime",
+                      "worker_type": "repo_worker",
+                      "attempt_id": null,
+                      "retryable": true,
+                      "metadata": {
+                        "worker_instance": "repo_locator"
+                      }
+                    }
+                  ],
+                  "issue_type": "instance_failure",
+                  "issue_code": "tool_execution_error",
+                  "retryable": true,
+                  "worker_type": "repo_worker",
+                  "worker_instance": "repo_locator"
+                }
+              }
+            ],
+            "skipped_worker_instances": [],
+            "attempt_id": "discover_repo_and_runtime_attempt_1"
+          }
+        },
+        {
+          "run_id": "run_plan_req_001_calculator_api_bootstrap",
+          "producer": "repo_worker",
+          "status": "failed",
+          "summary": "path does not exist: live_worker_greenfield_calculator_api_20260604-023642",
+          "artifacts": [],
+          "usage": {
+            "tool_calls": 1,
+            "model_calls": 1
+          },
+          "errors": [
+            "path does not exist: live_worker_greenfield_calculator_api_20260604-023642"
+          ],
+          "warnings": [],
+          "metadata": {
+            "issues": [
+              {
+                "issue_type": "instance_failure",
+                "code": "tool_execution_error",
+                "message": "path does not exist: live_worker_greenfield_calculator_api_20260604-023642",
+                "step_id": "discover_repo_and_runtime",
+                "worker_type": "repo_worker",
+                "attempt_id": null,
+                "retryable": true,
+                "metadata": {
+                  "worker_instance": "repo_locator"
+                }
+              }
+            ],
+            "issue_type": "instance_failure",
+            "issue_code": "tool_execution_error",
+            "retryable": true,
+            "worker_type": "repo_worker",
+            "worker_instance": "repo_locator",
+            "worker_group_results": [
+              {
+                "run_id": "run_plan_req_001_calculator_api_bootstrap",
+                "producer": "repo_worker",
+                "status": "failed",
+                "summary": "path does not exist: live_worker_greenfield_calculator_api_20260604-023642",
+                "artifacts": [],
+                "usage": {
+                  "tool_calls": 1,
+                  "model_calls": 1
+                },
+                "errors": [
+                  "path does not exist: live_worker_greenfield_calculator_api_20260604-023642"
+                ],
+                "warnings": [],
+                "metadata": {
+                  "issues": [
+                    {
+                      "issue_type": "instance_failure",
+                      "code": "tool_execution_error",
+                      "message": "path does not exist: live_worker_greenfield_calculator_api_20260604-023642",
+                      "step_id": "discover_repo_and_runtime",
+                      "worker_type": "repo_worker",
+                      "attempt_id": null,
+                      "retryable": true,
+                      "metadata": {
+                        "worker_instance": "repo_locator"
+                      }
+                    }
+                  ],
+                  "issue_type": "instance_failure",
+                  "issue_code": "tool_execution_error",
+                  "retryable": true,
+                  "worker_type": "repo_worker",
+                  "worker_instance": "repo_locator"
+                }
+              }
+            ],
+            "skipped_worker_instances": [],
+            "attempt_id": "discover_repo_and_runtime_attempt_2"
+          }
+        },
+        {
+          "run_id": "run_plan_req_001_calculator_api_bootstrap",
+          "producer": "repo_worker",
+          "status": "failed",
+          "summary": "path does not exist: live_worker_greenfield_calculator_api_20260604-023642",
+          "artifacts": [],
+          "usage": {
+            "tool_calls": 1,
+            "model_calls": 1
+          },
+          "errors": [
+            "path does not exist: live_worker_greenfield_calculator_api_20260604-023642"
+          ],
+          "warnings": [],
+          "metadata": {
+            "issues": [
+              {
+                "issue_type": "instance_failure",
+                "code": "tool_execution_error",
+                "message": "path does not exist: live_worker_greenfield_calculator_api_20260604-023642",
+                "step_id": "discover_repo_and_runtime",
+                "worker_type": "repo_worker",
+                "attempt_id": null,
+                "retryable": true,
+                "metadata": {
+                  "worker_instance": "repo_locator"
+                }
+              }
+            ],
+            "issue_type": "instance_failure",
+            "issue_code": "tool_execution_error",
+            "retryable": true,
+            "worker_type": "repo_worker",
+            "worker_instance": "repo_locator",
+            "worker_group_results": [
+              {
+                "run_id": "run_plan_req_001_calculator_api_bootstrap",
+                "producer": "repo_worker",
+                "status": "failed",
+                "summary": "path does not exist: live_worker_greenfield_calculator_api_20260604-023642",
+                "artifacts": [],
+                "usage": {
+                  "tool_calls": 1,
+                  "model_calls": 1
+                },
+                "errors": [
+                  "path does not exist: live_worker_greenfield_calculator_api_20260604-023642"
+                ],
+                "warnings": [],
+                "metadata": {
+                  "issues": [
+                    {
+                      "issue_type": "instance_failure",
+                      "code": "tool_execution_error",
+                      "message": "path does not exist: live_worker_greenfield_calculator_api_20260604-023642",
+                      "step_id": "discover_repo_and_runtime",
+                      "worker_type": "repo_worker",
+                      "attempt_id": null,
+                      "retryable": true,
+                      "metadata": {
+                        "worker_instance": "repo_locator"
+                      }
+                    }
+                  ],
+                  "issue_type": "instance_failure",
+                  "issue_code": "tool_execution_error",
+                  "retryable": true,
+                  "worker_type": "repo_worker",
+                  "worker_instance": "repo_locator"
+                }
+              }
+            ],
+            "skipped_worker_instances": [],
+            "attempt_id": "discover_repo_and_runtime_attempt_3"
+          }
+        }
+      ],
+      "issues": [
+        {
+          "issue_type": "instance_failure",
+          "code": "tool_execution_error",
+          "message": "path does not exist: live_worker_greenfield_calculator_api_20260604-023642",
+          "step_id": "discover_repo_and_runtime",
+          "worker_type": "repo_worker",
+          "attempt_id": null,
+          "retryable": true,
+          "metadata": {
+            "worker_instance": "repo_locator"
+          }
+        }
+      ],
+      "partial_artifacts": [],
+      "failed_step_artifacts": [],
+      "retry_count": 2,
+      "instance_attempts_used": 3,
+      "issue_type": "instance_failure",
+      "issue_code": "tool_execution_error",
+      "retryable": true,
+      "worker_type": "repo_worker",
+      "worker_instance": "repo_locator",
+      "worker_group_results": [
+        {
+          "run_id": "run_plan_req_001_calculator_api_bootstrap",
+          "producer": "repo_worker",
+          "status": "failed",
+          "summary": "path does not exist: live_worker_greenfield_calculator_api_20260604-023642",
+          "artifacts": [],
+          "usage": {
+            "tool_calls": 1,
+            "model_calls": 1
+          },
+          "errors": [
+            "path does not exist: live_worker_greenfield_calculator_api_20260604-023642"
+          ],
+          "warnings": [],
+          "metadata": {
+            "issues": [
+              {
+                "issue_type": "instance_failure",
+                "code": "tool_execution_error",
+                "message": "path does not exist: live_worker_greenfield_calculator_api_20260604-023642",
+                "step_id": "discover_repo_and_runtime",
+                "worker_type": "repo_worker",
+                "attempt_id": null,
+                "retryable": true,
+                "metadata": {
+                  "worker_instance": "repo_locator"
+                }
+              }
+            ],
+            "issue_type": "instance_failure",
+            "issue_code": "tool_execution_error",
+            "retryable": true,
+            "worker_type": "repo_worker",
+            "worker_instance": "repo_locator"
+          }
+        }
+      ],
+      "skipped_worker_instances": [],
+      "attempt_id": "discover_repo_and_runtime_attempt_3",
+      "control_plane_adjustments": [
+        {
+          "field": "budget.max_retries",
+          "from": 1,
+          "to": 2,
+          "reason": "worker runtime retries are capped per stage, with two instance retries per stage"
+        },
+        {
+          "step_id": "discover_repo_and_runtime",
+          "worker_type": "repo_worker",
+          "field": "max_model_calls",
+          "from": 1,
+          "to": 5,
+          "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+        },
+        {
+          "step_id": "analyze_requirements_and_contract",
+          "worker_type": "research_worker",
+          "field": "max_model_calls",
+          "from": 1,
+          "to": 2,
+          "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+        },
+        {
+          "step_id": "design_scoped_change_and_rollback",
+          "worker_type": "code_worker",
+          "field": "max_model_calls",
+          "from": 1,
+          "to": 2,
+          "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+        },
+        {
+          "step_id": "implement_calculator_api_scaffold",
+          "worker_type": "code_worker",
+          "field": "max_model_calls",
+          "from": 1,
+          "to": 2,
+          "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+        },
+        {
+          "step_id": "verify_tests_and_local_runtime",
+          "worker_type": "verify_worker",
+          "field": "max_model_calls",
+          "from": 1,
+          "to": 2,
+          "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+        },
+        {
+          "field": "budget.max_tool_calls",
+          "from": 18,
+          "to": 126,
+          "reason": "budget must cover kernel-owned per-stage retry tool-call envelope"
+        },
+        {
+          "field": "budget.max_model_calls",
+          "from": 6,
+          "to": 98,
+          "reason": "budget must cover kernel-owned per-stage retry model-call envelope"
+        }
+      ],
+      "runtime_matrix": {
+        "trace_id": "trace_0001",
+        "started_at": "2026-06-03T20:06:42.206397+00:00",
+        "row_count": 39,
+        "rows": [
+          {
+            "seq": 1,
+            "timestamp": "2026-06-03T20:06:43.446920+00:00",
+            "component": "decompressor_runtime",
+            "stage": "decompress_request",
+            "event": "run_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": null,
+            "run_id": null,
+            "step_id": null,
+            "attempt_id": null,
+            "worker_type": null,
+            "elapsed_ms": null,
+            "details": {
+              "input_chars": 747
+            }
+          },
+          {
+            "seq": 2,
+            "timestamp": "2026-06-03T20:07:08.297961+00:00",
+            "component": "decompressor_runtime",
+            "stage": "decompress_request",
+            "event": "run_completed",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": null,
+            "run_id": null,
+            "step_id": null,
+            "attempt_id": null,
+            "worker_type": null,
+            "elapsed_ms": 24850.817,
+            "details": {
+              "model_calls": 1,
+              "confidence": 0.94,
+              "ambiguity_count": 5
+            }
+          },
+          {
+            "seq": 3,
+            "timestamp": "2026-06-03T20:07:08.298240+00:00",
+            "component": "planner_runtime",
+            "stage": "draft_plan",
+            "event": "run_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": null,
+            "run_id": null,
+            "step_id": null,
+            "attempt_id": null,
+            "worker_type": null,
+            "elapsed_ms": null,
+            "details": {
+              "input_type": "greenfield_calculator_api_bootstrap_spec",
+              "complexity_hint": "medium"
+            }
+          },
+          {
+            "seq": 4,
+            "timestamp": "2026-06-03T20:07:42.080821+00:00",
+            "component": "planner_runtime",
+            "stage": "draft_plan",
+            "event": "run_completed",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": null,
+            "step_id": null,
+            "attempt_id": null,
+            "worker_type": null,
+            "elapsed_ms": null,
+            "details": {
+              "planner": "phase_aware_mutation_planner",
+              "step_count": 6,
+              "mode": "llm_prompt_chain"
+            }
+          },
+          {
+            "seq": 5,
+            "timestamp": "2026-06-03T20:07:42.081201+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "plan_execution",
+            "event": "run_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": null,
+            "attempt_id": null,
+            "worker_type": null,
+            "elapsed_ms": null,
+            "details": {
+              "planner": "phase_aware_mutation_planner",
+              "step_count": 6,
+              "replan_depth": 0
+            }
+          },
+          {
+            "seq": 6,
+            "timestamp": "2026-06-03T20:07:42.081212+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "plan_execution",
+            "event": "plan_normalized",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": null,
+            "attempt_id": null,
+            "worker_type": null,
+            "elapsed_ms": null,
+            "details": {
+              "adjustments": [
+                {
+                  "field": "budget.max_retries",
+                  "from": 1,
+                  "to": 2,
+                  "reason": "worker runtime retries are capped per stage, with two instance retries per stage"
+                },
+                {
+                  "step_id": "discover_repo_and_runtime",
+                  "worker_type": "repo_worker",
+                  "field": "max_model_calls",
+                  "from": 1,
+                  "to": 5,
+                  "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+                },
+                {
+                  "step_id": "analyze_requirements_and_contract",
+                  "worker_type": "research_worker",
+                  "field": "max_model_calls",
+                  "from": 1,
+                  "to": 2,
+                  "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+                },
+                {
+                  "step_id": "design_scoped_change_and_rollback",
+                  "worker_type": "code_worker",
+                  "field": "max_model_calls",
+                  "from": 1,
+                  "to": 2,
+                  "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+                },
+                {
+                  "step_id": "implement_calculator_api_scaffold",
+                  "worker_type": "code_worker",
+                  "field": "max_model_calls",
+                  "from": 1,
+                  "to": 2,
+                  "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+                },
+                {
+                  "step_id": "verify_tests_and_local_runtime",
+                  "worker_type": "verify_worker",
+                  "field": "max_model_calls",
+                  "from": 1,
+                  "to": 2,
+                  "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+                },
+                {
+                  "field": "budget.max_tool_calls",
+                  "from": 18,
+                  "to": 126,
+                  "reason": "budget must cover kernel-owned per-stage retry tool-call envelope"
+                },
+                {
+                  "field": "budget.max_model_calls",
+                  "from": 6,
+                  "to": 98,
+                  "reason": "budget must cover kernel-owned per-stage retry model-call envelope"
+                }
+              ]
+            }
+          },
+          {
+            "seq": 7,
+            "timestamp": "2026-06-03T20:07:42.081867+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "plan_execution",
+            "event": "preflight_completed",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": null,
+            "attempt_id": null,
+            "worker_type": null,
+            "elapsed_ms": null,
+            "details": {
+              "budget": {
+                "max_tool_calls": 126,
+                "max_model_calls": 98,
+                "max_workers": 6,
+                "max_retries": 2
+              }
+            }
+          },
+          {
+            "seq": 8,
+            "timestamp": "2026-06-03T20:07:42.081893+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "DISCOVER",
+            "event": "step_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": null,
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "mode": "observe_only",
+              "input_artifacts": [],
+              "output_artifacts": [
+                "repo_inventory",
+                "runtime_constraints",
+                "candidate_stack_options"
+              ]
+            }
+          },
+          {
+            "seq": 9,
+            "timestamp": "2026-06-03T20:07:42.081990+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "DISCOVER",
+            "event": "task_compiled",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": null,
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "input_count": 0,
+              "expected_outputs": [
+                "repo_inventory",
+                "runtime_constraints",
+                "candidate_stack_options"
+              ]
+            }
+          },
+          {
+            "seq": 10,
+            "timestamp": "2026-06-03T20:07:42.082029+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "DISCOVER",
+            "event": "attempt_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_1",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "attempt_number": 1
+            }
+          },
+          {
+            "seq": 11,
+            "timestamp": "2026-06-03T20:07:42.082396+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_group_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_1",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": null,
+              "template_count": 3
+            }
+          },
+          {
+            "seq": 12,
+            "timestamp": "2026-06-03T20:07:42.082418+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_instance_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_1",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_locator",
+              "role": "Locate target files, tests, and repo clues with cheap readonly discovery tools."
+            }
+          },
+          {
+            "seq": 13,
+            "timestamp": "2026-06-03T20:07:42.082433+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_model_call_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_1",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_locator",
+              "round": 1,
+              "model_calls_used_including_this_turn": 1,
+              "remaining_tool_calls": 2
+            }
+          },
+          {
+            "seq": 14,
+            "timestamp": "2026-06-03T20:07:53.563683+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_model_call_completed",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_1",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_locator",
+              "round": 1,
+              "tool_call_count": 1,
+              "has_final_result": false,
+              "final_status": null
+            }
+          },
+          {
+            "seq": 15,
+            "timestamp": "2026-06-03T20:07:53.563762+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_tool_call_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_1",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_locator",
+              "tool_name": "repo_snapshot",
+              "tool_index": 1,
+              "reason": null
+            }
+          },
+          {
+            "seq": 16,
+            "timestamp": "2026-06-03T20:07:53.564922+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_tool_call_failed",
+            "status": "failed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_1",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_locator",
+              "tool_name": "repo_snapshot",
+              "error": "path does not exist: live_worker_greenfield_calculator_api_20260604-023642",
+              "code": "tool_execution_error"
+            }
+          },
+          {
+            "seq": 17,
+            "timestamp": "2026-06-03T20:07:53.565145+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_instance_completed",
+            "status": "failed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_1",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_locator",
+              "artifact_count": 0,
+              "tool_calls_used": 1,
+              "model_calls_used": 1
+            }
+          },
+          {
+            "seq": 18,
+            "timestamp": "2026-06-03T20:07:53.565308+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "DISCOVER",
+            "event": "attempt_completed",
+            "status": "failed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_1",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "artifact_count": 0,
+              "tool_calls": 1,
+              "model_calls": 1
+            }
+          },
+          {
+            "seq": 19,
+            "timestamp": "2026-06-03T20:07:53.565408+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "DISCOVER",
+            "event": "attempt_retry_scheduled",
+            "status": "retrying",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_1",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "reason": "worker_runtime_failure",
+              "task_recompiled": true,
+              "adjustments": [
+                {
+                  "field": "max_tool_calls",
+                  "from": 2,
+                  "to": 4,
+                  "reason": "local retry after worker/tool budget or tool-call failure"
+                }
+              ]
+            }
+          },
+          {
+            "seq": 20,
+            "timestamp": "2026-06-03T20:07:53.565440+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "DISCOVER",
+            "event": "attempt_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_2",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "attempt_number": 2
+            }
+          },
+          {
+            "seq": 21,
+            "timestamp": "2026-06-03T20:07:53.565585+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_group_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_2",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": null,
+              "template_count": 3
+            }
+          },
+          {
+            "seq": 22,
+            "timestamp": "2026-06-03T20:07:53.565599+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_instance_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_2",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_locator",
+              "role": "Locate target files, tests, and repo clues with cheap readonly discovery tools."
+            }
+          },
+          {
+            "seq": 23,
+            "timestamp": "2026-06-03T20:07:53.565614+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_model_call_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_2",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_locator",
+              "round": 1,
+              "model_calls_used_including_this_turn": 1,
+              "remaining_tool_calls": 4
+            }
+          },
+          {
+            "seq": 24,
+            "timestamp": "2026-06-03T20:08:10.208670+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_model_call_completed",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_2",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_locator",
+              "round": 1,
+              "tool_call_count": 1,
+              "has_final_result": false,
+              "final_status": null
+            }
+          },
+          {
+            "seq": 25,
+            "timestamp": "2026-06-03T20:08:10.208724+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_tool_call_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_2",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_locator",
+              "tool_name": "repo_snapshot",
+              "tool_index": 1,
+              "reason": null
+            }
+          },
+          {
+            "seq": 26,
+            "timestamp": "2026-06-03T20:08:10.209298+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_tool_call_failed",
+            "status": "failed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_2",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_locator",
+              "tool_name": "repo_snapshot",
+              "error": "path does not exist: live_worker_greenfield_calculator_api_20260604-023642",
+              "code": "tool_execution_error"
+            }
+          },
+          {
+            "seq": 27,
+            "timestamp": "2026-06-03T20:08:10.209448+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_instance_completed",
+            "status": "failed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_2",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_locator",
+              "artifact_count": 0,
+              "tool_calls_used": 1,
+              "model_calls_used": 1
+            }
+          },
+          {
+            "seq": 28,
+            "timestamp": "2026-06-03T20:08:10.209564+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "DISCOVER",
+            "event": "attempt_completed",
+            "status": "failed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_2",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "artifact_count": 0,
+              "tool_calls": 1,
+              "model_calls": 1
+            }
+          },
+          {
+            "seq": 29,
+            "timestamp": "2026-06-03T20:08:10.209637+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "DISCOVER",
+            "event": "attempt_retry_scheduled",
+            "status": "retrying",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_2",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "reason": "worker_runtime_failure",
+              "task_recompiled": true,
+              "adjustments": [
+                {
+                  "field": "max_tool_calls",
+                  "from": 4,
+                  "to": 8,
+                  "reason": "local retry after worker/tool budget or tool-call failure"
+                }
+              ]
+            }
+          },
+          {
+            "seq": 30,
+            "timestamp": "2026-06-03T20:08:10.209660+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "DISCOVER",
+            "event": "attempt_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_3",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "attempt_number": 3
+            }
+          },
+          {
+            "seq": 31,
+            "timestamp": "2026-06-03T20:08:10.209805+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_group_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_3",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": null,
+              "template_count": 3
+            }
+          },
+          {
+            "seq": 32,
+            "timestamp": "2026-06-03T20:08:10.209816+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_instance_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_3",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_locator",
+              "role": "Locate target files, tests, and repo clues with cheap readonly discovery tools."
+            }
+          },
+          {
+            "seq": 33,
+            "timestamp": "2026-06-03T20:08:10.209827+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_model_call_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_3",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_locator",
+              "round": 1,
+              "model_calls_used_including_this_turn": 1,
+              "remaining_tool_calls": 8
+            }
+          },
+          {
+            "seq": 34,
+            "timestamp": "2026-06-03T20:08:21.196926+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_model_call_completed",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_3",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_locator",
+              "round": 1,
+              "tool_call_count": 1,
+              "has_final_result": false,
+              "final_status": null
+            }
+          },
+          {
+            "seq": 35,
+            "timestamp": "2026-06-03T20:08:21.196985+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_tool_call_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_3",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_locator",
+              "tool_name": "repo_snapshot",
+              "tool_index": 1,
+              "reason": null
+            }
+          },
+          {
+            "seq": 36,
+            "timestamp": "2026-06-03T20:08:21.197466+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_tool_call_failed",
+            "status": "failed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_3",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_locator",
+              "tool_name": "repo_snapshot",
+              "error": "path does not exist: live_worker_greenfield_calculator_api_20260604-023642",
+              "code": "tool_execution_error"
+            }
+          },
+          {
+            "seq": 37,
+            "timestamp": "2026-06-03T20:08:21.197590+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_instance_completed",
+            "status": "failed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_3",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_locator",
+              "artifact_count": 0,
+              "tool_calls_used": 1,
+              "model_calls_used": 1
+            }
+          },
+          {
+            "seq": 38,
+            "timestamp": "2026-06-03T20:08:21.197688+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "DISCOVER",
+            "event": "attempt_completed",
+            "status": "failed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": "discover_repo_and_runtime_attempt_3",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "artifact_count": 0,
+              "tool_calls": 1,
+              "model_calls": 1
+            }
+          },
+          {
+            "seq": 39,
+            "timestamp": "2026-06-03T20:08:21.197717+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "DISCOVER",
+            "event": "step_terminal",
+            "status": "failed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_and_runtime",
+            "attempt_id": null,
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "summary": "path does not exist: live_worker_greenfield_calculator_api_20260604-023642"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "after_pytest": {
+    "label": "after",
+    "returncode": 5,
+    "stdout": "\nno tests ran in 0.01s\n",
+    "stderr": ""
+  },
+  "git_status": {
+    "command": [
+      "git",
+      "status",
+      "--short"
+    ],
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "git_diff": {
+    "command": [
+      "git",
+      "diff"
+    ],
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "final_files": {}
+}

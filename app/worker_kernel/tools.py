@@ -6,6 +6,8 @@ between agent decisions and local side effects.
 
 from __future__ import annotations
 
+import fnmatch
+import difflib
 import json
 import os
 import shlex
@@ -20,8 +22,16 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
 
-from app.schemas import ArtifactPayload, MutationScope, Task, extract_repo_path_candidates
+from app.schemas import (
+    ArtifactPayload,
+    MutationScope,
+    Task,
+    extract_repo_path_candidates,
+    resolve_mutation_scope_proposal,
+)
 
+
+STRICT_WRITE_SCOPE_ARTIFACT_IDS = {"mutation_scope", "allowed_write_paths", "writable_targets", "patch_scope"}
 
 IGNORED_DIR_NAMES = {
     ".git",
@@ -96,12 +106,16 @@ class WorkerToolbox:
             tools.extend(
                 [
                     _tool_spec("write_file", "Write a full file inside approved write scope.", "write_files", {"path": "string", "content": "string"}),
+                    _tool_spec("write_many_files", "Write multiple full files inside approved write scope in one atomic preflighted batch.", "write_files", {"files": "file_write_array"}),
                     _tool_spec("replace_in_file", "Replace one exact text occurrence inside approved write scope.", "write_files", {"path": "string", "old": "string", "new": "string"}),
+                    _tool_spec("move_file", "Move one file when both source and destination are inside approved write scope.", "write_files", {"source": "string", "destination": "string", "overwrite": "boolean"}),
+                    _tool_spec("delete_file", "Delete one file inside approved write scope.", "write_files", {"path": "string"}),
                 ]
             )
         if task.permissions.run_commands:
             tools.extend(
                 [
+                    _tool_spec("runtime_capabilities", "Return structured availability/version checks for common local runtimes and package/test tools.", "run_commands", {}),
                     _tool_spec("run_readonly_command", "Run an allowlisted readonly verification command.", "run_commands", {"command": "string_or_string_array"}),
                     _tool_spec("run_focused_tests", "Run pytest for selected repo-relative test paths with PYTHONPATH set to the repo root.", "run_commands", {"paths": "string_or_string_array"}),
                 ]
@@ -117,14 +131,16 @@ class WorkerToolbox:
 
     def validate_write_scope(self, task: Task) -> dict[str, Any]:
         if not task.permissions.write_files:
-            return {"write_scope_paths": [], "forbidden_paths": []}
+            return {"write_scope_paths": [], "forbidden_paths": [], "forbidden_globs": []}
         allowed = self._allowed_write_paths(task)
         if not allowed:
             raise ToolUnavailableError("write_files was allowed but no write scope paths were provided")
         forbidden = self._forbidden_write_paths(task)
+        forbidden_globs = self._forbidden_write_globs(task)
         return {
             "write_scope_paths": [self._display_path(path) for path in allowed],
             "forbidden_paths": [self._display_path(path) for path in forbidden],
+            "forbidden_globs": forbidden_globs,
         }
 
     def execute(self, *, task: Task, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -167,9 +183,21 @@ class WorkerToolbox:
         if tool_name == "write_file":
             self._require(task.permissions.write_files, "write_files", tool_name)
             return self._write_file(task, arguments)
+        if tool_name == "write_many_files":
+            self._require(task.permissions.write_files, "write_files", tool_name)
+            return self._write_many_files(task, arguments)
         if tool_name == "replace_in_file":
             self._require(task.permissions.write_files, "write_files", tool_name)
             return self._replace_in_file(task, arguments)
+        if tool_name == "move_file":
+            self._require(task.permissions.write_files, "write_files", tool_name)
+            return self._move_file(task, arguments)
+        if tool_name == "delete_file":
+            self._require(task.permissions.write_files, "write_files", tool_name)
+            return self._delete_file(task, arguments)
+        if tool_name == "runtime_capabilities":
+            self._require(task.permissions.run_commands, "run_commands", tool_name)
+            return self._runtime_capabilities()
         if tool_name == "run_readonly_command":
             self._require(task.permissions.run_commands, "run_commands", tool_name)
             return self._run_readonly_command(arguments)
@@ -234,6 +262,7 @@ class WorkerToolbox:
             "path": self._display_path(start),
             "directories": sorted(dirs)[:100],
             "files": files[:300],
+            "is_empty": not files and not dirs,
             "test_candidates": test_candidates[:50],
             "config_files": config_files[:30],
             "git_status": git_status,
@@ -314,6 +343,28 @@ class WorkerToolbox:
         path.write_text(content, encoding="utf-8")
         return {"path": self._display_path(path), "bytes_written": len(content.encode("utf-8"))}
 
+    def _write_many_files(self, task: Task, arguments: dict[str, Any]) -> dict[str, Any]:
+        raw_files = arguments.get("files")
+        if not isinstance(raw_files, list) or not raw_files:
+            raise ToolExecutionError("write_many_files requires a non-empty files array")
+        if len(raw_files) > 50:
+            raise ToolExecutionError("write_many_files supports at most 50 files per call")
+
+        planned: list[tuple[Path, str]] = []
+        for index, item in enumerate(raw_files, start=1):
+            if not isinstance(item, dict):
+                raise ToolExecutionError(f"write_many_files item {index} must be an object")
+            path = self._resolve_write_path(task, str(item.get("path") or ""))
+            content = str(item.get("content") or "")
+            planned.append((path, content))
+
+        written = []
+        for path, content in planned:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+            written.append({"path": self._display_path(path), "bytes_written": len(content.encode("utf-8"))})
+        return {"files_written": written, "count": len(written)}
+
     def _replace_in_file(self, task: Task, arguments: dict[str, Any]) -> dict[str, Any]:
         path = self._resolve_write_path(task, str(arguments.get("path") or ""))
         old = str(arguments.get("old") or "")
@@ -326,6 +377,55 @@ class WorkerToolbox:
         updated = content.replace(old, new, 1)
         path.write_text(updated, encoding="utf-8")
         return {"path": self._display_path(path), "replacements": 1}
+
+    def _move_file(self, task: Task, arguments: dict[str, Any]) -> dict[str, Any]:
+        source = self._resolve_write_path(task, str(arguments.get("source") or ""))
+        destination = self._resolve_write_path(task, str(arguments.get("destination") or ""))
+        overwrite = bool(arguments.get("overwrite", False))
+        if not source.is_file():
+            raise ToolExecutionError(f"move_file source is not a file: {self._display_path(source)}")
+        if destination.exists() and not overwrite:
+            raise ToolExecutionError(f"move_file destination exists: {self._display_path(destination)}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        source.replace(destination)
+        return {"source": self._display_path(source), "destination": self._display_path(destination), "overwritten": overwrite}
+
+    def _delete_file(self, task: Task, arguments: dict[str, Any]) -> dict[str, Any]:
+        path = self._resolve_write_path(task, str(arguments.get("path") or ""))
+        if not path.exists():
+            return {"path": self._display_path(path), "deleted": False, "reason": "not_found"}
+        if not path.is_file():
+            raise ToolExecutionError(f"delete_file path is not a file: {self._display_path(path)}")
+        path.unlink()
+        return {"path": self._display_path(path), "deleted": True}
+
+    def _runtime_capabilities(self) -> dict[str, Any]:
+        checks = {
+            "python": [sys.executable, "--version"],
+            "pytest": [sys.executable, "-m", "pytest", "--version"],
+            "uv": ["uv", "--version"],
+            "node": ["node", "--version"],
+            "npm": ["npm", "--version"],
+            "go": ["go", "version"],
+            "docker": ["docker", "--version"],
+            "git": ["git", "--version"],
+        }
+        results: dict[str, Any] = {}
+        for name, command in checks.items():
+            try:
+                result = self._run_checked(command, allowed_returncodes=None)
+            except WorkerToolError as exc:
+                results[name] = {"available": False, "command": command, "error": str(exc)}
+                continue
+            output = (str(result.get("stdout") or "") or str(result.get("stderr") or "")).strip()
+            results[name] = {
+                "available": result.get("returncode") == 0,
+                "command": command,
+                "returncode": result.get("returncode"),
+                "version": output.splitlines()[0] if output else "",
+            }
+        preferred = "python" if results.get("python", {}).get("available") else None
+        return {"capabilities": results, "preferred_local_stack": preferred}
 
     def _run_readonly_command(self, arguments: dict[str, Any]) -> dict[str, Any]:
         raw_command = arguments.get("command")
@@ -351,18 +451,22 @@ class WorkerToolbox:
         path = str(arguments.get("path") or "")
         command_suffix = ["--", path] if path else []
         diff = self._run_checked(["git", "diff", *command_suffix])
-        names = self._run_checked(["git", "diff", "--name-only", *command_suffix])
-        changed_files = [line for line in str(names.get("stdout") or "").splitlines() if line.strip()]
+        changed_files = self._changed_file_names(path=path)
+        diff_text = str(diff.get("stdout", ""))
+        untracked_diffs = [
+            self._new_file_diff(changed_file)
+            for changed_file in changed_files
+            if changed_file not in diff_text and (self._root / changed_file).is_file()
+        ]
         return {
             "changed_files": changed_files,
-            "diff": diff.get("stdout", ""),
+            "diff": "\n".join(part for part in [diff_text, *untracked_diffs] if part),
             "returncode": diff.get("returncode"),
         }
 
     def _mutation_scope_check(self, task: Task) -> dict[str, Any]:
         scope = self._mutation_scope_from_task(task)
-        names = self._run_checked(["git", "diff", "--name-only"])
-        changed_files = [line for line in str(names.get("stdout") or "").splitlines() if line.strip()]
+        changed_files = self._changed_file_names()
         if scope is None:
             return {
                 "scope_available": False,
@@ -374,6 +478,7 @@ class WorkerToolbox:
 
         targets = set(scope.target_paths)
         forbidden = set(scope.forbidden_paths)
+        forbidden_globs = set(scope.forbidden_globs)
         in_scope = [
             path for path in changed_files if any(path == target or path.startswith(f"{target}/") for target in targets)
         ]
@@ -382,17 +487,57 @@ class WorkerToolbox:
             path
             for path in changed_files
             if any(path == forbidden_path or path.startswith(f"{forbidden_path}/") for forbidden_path in forbidden)
+            or any(_matches_repo_glob(path, forbidden_glob) for forbidden_glob in forbidden_globs)
         ]
         return {
             "scope_available": True,
             "target_paths": scope.target_paths,
             "forbidden_paths": scope.forbidden_paths,
+            "forbidden_globs": scope.forbidden_globs,
             "changed_files": changed_files,
             "in_scope": in_scope,
             "out_of_scope": out_of_scope,
             "forbidden_changes": forbidden_changes,
             "passed": not out_of_scope and not forbidden_changes,
         }
+
+    def _changed_file_names(self, *, path: str = "") -> list[str]:
+        command_suffix = ["--", path] if path else []
+        names = self._run_checked(["git", "diff", "--name-only", *command_suffix])
+        changed: list[str] = [line.strip() for line in str(names.get("stdout") or "").splitlines() if line.strip()]
+        status = self._run_checked(["git", "status", "--short", *command_suffix])
+        for line in str(status.get("stdout") or "").splitlines():
+            parsed = _parse_git_status_path(line)
+            for changed_path in self._expand_changed_status_path(parsed):
+                if changed_path not in changed:
+                    changed.append(changed_path)
+        return sorted(changed)
+
+    def _new_file_diff(self, relative_path: str) -> str:
+        path = self._root / relative_path
+        if not path.is_file():
+            return ""
+        content = path.read_text(encoding="utf-8", errors="replace")[: self._config.max_file_bytes]
+        return "".join(
+            difflib.unified_diff(
+                [],
+                content.splitlines(keepends=True),
+                fromfile="/dev/null",
+                tofile=relative_path,
+            )
+        )
+
+    def _expand_changed_status_path(self, relative_path: str | None) -> list[str]:
+        if not relative_path:
+            return []
+        path = self._root / relative_path
+        if path.is_dir():
+            return [
+                self._display_path(child)
+                for child in sorted(path.rglob("*"))
+                if child.is_file() and not self._is_ignored_path(child)
+            ]
+        return [relative_path.rstrip("/")]
 
     def _web_fetch(self, arguments: dict[str, Any]) -> dict[str, Any]:
         url = str(arguments.get("url") or "")
@@ -612,10 +757,24 @@ class WorkerToolbox:
     def _resolve_read_path(self, raw_path: str) -> Path:
         if not raw_path:
             raise ToolExecutionError("path is required")
-        path = (self._root / raw_path).resolve()
+        path = (self._root / self._normalize_worker_root_relative_path(raw_path)).resolve()
         if not path.is_relative_to(self._root):
             raise ToolPermissionError("path escapes worker root")
         return path
+
+    def _normalize_worker_root_relative_path(self, raw_path: str) -> str:
+        normalized = raw_path.strip()
+        if normalized.startswith("./"):
+            normalized = normalized[2:]
+        if normalized in {"", "."}:
+            return "."
+        root_name = self._root.name
+        if normalized == root_name:
+            return "."
+        prefix = f"{root_name}/"
+        if normalized.startswith(prefix):
+            return normalized[len(prefix) :] or "."
+        return normalized
 
     def _resolve_write_path(self, task: Task, raw_path: str) -> Path:
         path = self._resolve_read_path(raw_path)
@@ -626,6 +785,9 @@ class WorkerToolbox:
         forbidden = [self._resolve_read_path(raw_path) for raw_path in scope["forbidden_paths"]]
         if any(path == forbidden_path or path.is_relative_to(forbidden_path) for forbidden_path in forbidden):
             raise ToolPermissionError(f"write path is inside forbidden scope: {self._display_path(path)}")
+        relative_path = self._display_path(path)
+        if any(_matches_repo_glob(relative_path, pattern) for pattern in scope.get("forbidden_globs", [])):
+            raise ToolPermissionError(f"write path is inside forbidden scope: {relative_path}")
         return path
 
     def _allowed_write_paths(self, task: Task) -> list[Path]:
@@ -646,22 +808,30 @@ class WorkerToolbox:
 
     def _paths_from_artifact(self, artifact: ArtifactPayload) -> list[str]:
         try:
-            return MutationScope.model_validate(artifact.content).write_scope_paths
-        except ValueError:
+            return resolve_mutation_scope_proposal(
+                artifact.content,
+                source_artifact_id=artifact.id,
+            ).write_scope_paths
+        except ValueError as exc:
+            if artifact.id in STRICT_WRITE_SCOPE_ARTIFACT_IDS:
+                raise ToolPermissionError(f"invalid write scope artifact {artifact.id}: {exc}") from exc
             return extract_repo_path_candidates(artifact.content)
 
     def _mutation_scope_from_task(self, task: Task) -> MutationScope | None:
         write_scope = task.metadata.get("write_scope")
         if isinstance(write_scope, dict):
             try:
-                return MutationScope.model_validate(write_scope)
+                return resolve_mutation_scope_proposal(write_scope)
             except ValueError:
                 return None
         for artifact in task.input_artifacts:
             if artifact.id != "mutation_scope":
                 continue
             try:
-                return MutationScope.model_validate(artifact.content)
+                return resolve_mutation_scope_proposal(
+                    artifact.content,
+                    source_artifact_id=artifact.id,
+                )
             except ValueError:
                 return None
         return None
@@ -670,7 +840,11 @@ class WorkerToolbox:
         raw_paths: list[str] = []
         write_scope = task.metadata.get("write_scope")
         if isinstance(write_scope, dict):
-            raw_paths.extend(str(path) for path in write_scope.get("forbidden_paths") or [])
+            raw_paths.extend(
+                str(path)
+                for path in write_scope.get("forbidden_paths") or []
+                if not _has_glob_meta(str(path))
+            )
         resolved: list[Path] = []
         for raw_path in raw_paths:
             try:
@@ -678,6 +852,27 @@ class WorkerToolbox:
             except WorkerToolError as exc:
                 raise ToolPermissionError(f"invalid forbidden write scope path: {raw_path}") from exc
         return resolved
+
+    def _forbidden_write_globs(self, task: Task) -> list[str]:
+        raw_globs: list[str] = []
+        write_scope = task.metadata.get("write_scope")
+        if isinstance(write_scope, dict):
+            raw_globs.extend(str(pattern) for pattern in write_scope.get("forbidden_globs") or [])
+            raw_globs.extend(
+                str(path)
+                for path in write_scope.get("forbidden_paths") or []
+                if _has_glob_meta(str(path))
+            )
+        globs: list[str] = []
+        seen: set[str] = set()
+        for raw_glob in raw_globs:
+            normalized = _normalize_repo_glob(raw_glob)
+            if normalized is None:
+                raise ToolPermissionError(f"invalid forbidden write scope glob: {raw_glob}")
+            if normalized not in seen:
+                seen.add(normalized)
+                globs.append(normalized)
+        return globs
 
     def _display_path(self, path: Path) -> str:
         try:
@@ -718,6 +913,21 @@ def _parameter_schema(value: str) -> dict[str, Any]:
                 {"type": "array", "items": {"type": "string"}},
             ]
         }
+    if value == "boolean":
+        return {"type": "boolean"}
+    if value == "file_write_array":
+        return {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "content": {"type": "string"},
+                },
+                "required": ["path", "content"],
+                "additionalProperties": False,
+            },
+        }
     return {"type": "string"}
 
 
@@ -751,6 +961,43 @@ def _looks_like_repo_path(value: str) -> bool:
     if value.startswith(("-", "git ", "pytest ", "python ")):
         return False
     return "/" in value or "." in Path(value).name
+
+
+def _has_glob_meta(value: str) -> bool:
+    return any(char in value for char in "*?[]")
+
+
+def _normalize_repo_glob(value: str) -> str | None:
+    raw = value.strip().strip("`'\".,;)]}")
+    if raw.startswith("./"):
+        raw = raw[2:]
+    if not raw or any(char.isspace() for char in raw):
+        return None
+    if not _has_glob_meta(raw):
+        return None
+    if raw.startswith(("-", "~", "/")) or "://" in raw or "\\" in raw:
+        return None
+    if any(part in {"", ".", ".."} for part in raw.split("/")):
+        return None
+    return raw
+
+
+def _matches_repo_glob(path: str, pattern: str) -> bool:
+    normalized = _normalize_repo_glob(pattern)
+    if normalized is None:
+        return False
+    return fnmatch.fnmatchcase(path, normalized) or fnmatch.fnmatchcase(Path(path).name, normalized)
+
+
+def _parse_git_status_path(line: str) -> str | None:
+    if not line or len(line) < 4:
+        return None
+    if line[:2] != "??" and line[1] == " ":
+        return None
+    path = line[3:].strip()
+    if " -> " in path:
+        path = path.split(" -> ", 1)[1].strip()
+    return path or None
 
 
 def _looks_like_test_path(value: str) -> bool:

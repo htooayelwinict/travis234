@@ -4,7 +4,16 @@ from __future__ import annotations
 
 from pydantic import ValidationError
 
-from app.schemas import ArtifactPayload, Envelope, MutationScope, PermissionSet, Plan, PlanStep, Task
+from app.schemas import (
+    ArtifactPayload,
+    Envelope,
+    MutationScope,
+    PermissionSet,
+    Plan,
+    PlanStep,
+    Task,
+    resolve_mutation_scope_proposal,
+)
 
 
 class MissingInputArtifacts(Exception):
@@ -123,7 +132,7 @@ class TaskCompiler:
             if artifact is None:
                 continue
             try:
-                scope = MutationScope.model_validate(artifact.content)
+                scope = resolve_mutation_scope_proposal(artifact.content, source_artifact_id=artifact_id)
             except ValidationError as exc:
                 validation_errors = _json_safe_validation_errors(exc)
                 raise InvalidWriteScope(
@@ -168,24 +177,32 @@ class TaskCompiler:
         target_paths = list(explicit_paths)
         test_paths: list[str] = []
         forbidden_paths: list[str] = []
+        forbidden_globs: list[str] = []
         reasons: list[str] = []
-        max_files = 5
+        max_files = len(explicit_paths)
         for scope in scopes:
             target_paths.extend(scope.target_paths)
             test_paths.extend(scope.test_paths)
             forbidden_paths.extend(scope.forbidden_paths)
+            forbidden_globs.extend(scope.forbidden_globs)
             if scope.reason:
                 reasons.append(scope.reason)
-            max_files = min(max_files, scope.max_files)
+            max_files += scope.max_files
+
+        max_files = max(1, max_files, len(set(target_paths)))
 
         return MutationScope.model_validate(
             {
                 "target_paths": target_paths,
                 "test_paths": test_paths,
                 "forbidden_paths": forbidden_paths,
+                "forbidden_globs": forbidden_globs,
                 "reason": "; ".join(reasons) or "derived from explicit write paths",
                 "max_files": max_files,
-                "metadata": {"source_artifact_ids": source_artifact_ids},
+                "metadata": {
+                    "resolver": "mutation_scope_proposal_v1",
+                    "source_artifact_ids": source_artifact_ids,
+                },
             }
         )
 

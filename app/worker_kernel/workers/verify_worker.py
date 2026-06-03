@@ -15,7 +15,10 @@ on whether the cause is implementation failure or planner-level mismatch. Prefer
 inside nested repositories. A collection/import error is not proof that code is correct;
 report the exact command failure and do not mark verification passed from scope review alone.
 Prefer run_focused_tests, mutation_scope_check, and diff_summary over raw command and
-primitive git calls when they satisfy the verification contract."""
+primitive git calls when they satisfy the verification contract. Use runtime_capabilities
+for local toolchain discovery. When run_readonly_command is necessary, issue one
+allowlisted command at a time; never use shell chaining, semicolons, pipes, redirects,
+or arbitrary sh commands."""
 
 
 def agentic_templates() -> list[WorkerInstanceTemplate]:
@@ -32,7 +35,7 @@ def agentic_templates() -> list[WorkerInstanceTemplate]:
         "diff_summary",
         "mutation_scope_check",
     )
-    command_tools = repo_tools + ("run_focused_tests", "run_readonly_command")
+    command_tools = repo_tools + ("runtime_capabilities", "run_focused_tests", "run_readonly_command")
     return [
         WorkerInstanceTemplate(
             name="verification_runner",

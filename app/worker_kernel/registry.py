@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.worker_kernel.workers import (
     CodeWorker,
     DirectWorker,
+    FilesystemWorker,
     InfraWorker,
     RepoWorker,
     ResearchWorker,
@@ -37,6 +38,7 @@ def build_default_registry() -> WorkerRegistry:
     registry.register(DirectWorker())
     registry.register(RepoWorker())
     registry.register(CodeWorker())
+    registry.register(FilesystemWorker())
     registry.register(ResearchWorker())
     registry.register(WebResearchWorker())
     registry.register(InfraWorker())

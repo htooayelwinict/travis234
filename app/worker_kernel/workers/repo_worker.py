@@ -11,13 +11,17 @@ Find likely target files, tests, and command/config clues using the fewest reado
 calls possible. Prefer one repo_snapshot call before primitive search. Use file_search
 or text_search only when repo_snapshot does not expose enough evidence. Avoid reading
 large files in this instance unless there is no reader instance left. Produce candidate
-path artifacts with evidence from tool observations. Never mutate files."""
+path artifacts with evidence from tool observations. Tool paths are relative to the
+already-mounted repository root; use "." for whole-repo inventory. Never mutate files."""
 
 REPO_READER_SYSTEM_PROMPT = """You are the repository reader instance.
 Read the highest-value candidate source and test files from earlier group artifacts and
 tool observations. Prefer one read_many_files call over repeated read_file calls.
 Extract exact functions, failing assertions, commands, and local contracts. Keep
-evidence concise and path-specific. Never mutate files."""
+evidence concise and path-specific. Tool paths are relative to the mounted repository
+root, not parent workspace paths. If command evidence is needed, prefer
+run_focused_tests or one allowlisted run_readonly_command at a time. Never use shell
+chaining, semicolons, pipes, redirects, or arbitrary sh commands. Never mutate files."""
 
 REPO_SUMMARIZER_SYSTEM_PROMPT = """You are the repository discovery summarizer.
 Use only group artifacts and tool observations to produce the exact expected output
@@ -42,7 +46,7 @@ def agentic_templates() -> list[WorkerInstanceTemplate]:
         "mutation_scope_check",
     )
     locator_tools = ("repo_snapshot", "file_search", "text_search", "git_status", "diff_summary")
-    reader_tools = repo_tools + ("run_focused_tests", "run_readonly_command")
+    reader_tools = repo_tools + ("runtime_capabilities", "run_focused_tests", "run_readonly_command")
     return [
         WorkerInstanceTemplate(
             name="repo_locator",

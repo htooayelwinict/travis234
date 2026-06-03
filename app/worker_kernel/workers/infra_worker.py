@@ -11,7 +11,10 @@ Inspect configs, logs, scripts, environment examples, and readonly command evide
 Do not mutate infrastructure or secrets. Separate confirmed findings from operational
 recommendations. If required infra artifacts or permissions are missing, return
 needs_replan or blocked with a structured issue. Prefer repo_snapshot, read_many_files,
-diff_summary, and focused readonly commands over repeated primitive scans."""
+diff_summary, runtime_capabilities, and focused readonly commands over repeated
+primitive scans. Use runtime_capabilities for local toolchain/version discovery.
+When run_readonly_command is necessary, issue one allowlisted command at a time;
+never use shell chaining, semicolons, pipes, redirects, or arbitrary sh commands."""
 
 
 def agentic_templates() -> list[WorkerInstanceTemplate]:
@@ -28,7 +31,7 @@ def agentic_templates() -> list[WorkerInstanceTemplate]:
         "diff_summary",
         "mutation_scope_check",
     )
-    command_tools = repo_tools + ("run_focused_tests", "run_readonly_command")
+    command_tools = repo_tools + ("runtime_capabilities", "run_focused_tests", "run_readonly_command")
     return [
         WorkerInstanceTemplate(
             name="infra_diagnoser",

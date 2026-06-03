@@ -5,12 +5,14 @@ from typing import Any
 
 import pytest
 
-from app.schemas import ArtifactPayload, MutationScope, Plan, Task
+from app.schemas import ArtifactPayload, MutationScope, Plan, PlanStep, Task, resolve_mutation_scope_proposal
 from app.runtime_matrix import RuntimeMatrixLogger
+from app.worker_kernel.compiler import TaskCompiler
 from app.worker_kernel.agentic import (
     AgenticWorkerGroupRunner,
     WorkerInstanceTemplate,
     WorkerLLMController,
+    _normalize_worker_decision,
 )
 from app.worker_kernel.env_config import build_worker_model_client, load_worker_runtime_config
 from app.worker_kernel.runtime import WorkerKernelRuntime
@@ -150,6 +152,39 @@ def test_repo_worker_agentic_templates_are_split_by_role() -> None:
     assert "read_file" in templates[1].allowed_tools
     assert templates[2].allowed_tools == ()
     assert "Every artifact must be an object" in templates[2].system_prompt
+
+
+def test_filesystem_worker_template_exposes_scoped_file_tools() -> None:
+    templates = get_agentic_worker_templates()["filesystem_worker"]
+
+    assert [template.name for template in templates] == ["filesystem_operator"]
+    assert "write_many_files" in templates[0].allowed_tools
+    assert "move_file" in templates[0].allowed_tools
+    assert "delete_file" in templates[0].allowed_tools
+    assert "runtime_capabilities" in templates[0].allowed_tools
+    assert "shell chaining" in templates[0].system_prompt
+    assert "hatchling" in templates[0].system_prompt
+    assert 'packages = ["app"]' in templates[0].system_prompt
+
+
+def test_worker_decision_normalizes_implementation_failure_issue_type() -> None:
+    normalized = _normalize_worker_decision(
+        {
+            "final_result": {
+                "status": "failed",
+                "summary": "Generated package failed verification.",
+                "issues": [
+                    {
+                        "issue_type": "implementation_failure",
+                        "code": "pytest_failed",
+                        "message": "pytest failed after scaffold",
+                    }
+                ],
+            }
+        }
+    )
+
+    assert normalized["final_result"]["issues"][0]["issue_type"] == "instance_failure"
 
 
 def test_toolbox_enforces_read_write_command_and_web_permissions(tmp_path: Path) -> None:
@@ -502,6 +537,132 @@ def test_toolbox_excludes_repo_noise_from_discovery(tmp_path: Path) -> None:
     assert not any(".git" in match or "__pycache__" in match for match in searched["matches"])
 
 
+def test_toolbox_treats_root_basename_as_mounted_repo_root(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("value = 1\n", encoding="utf-8")
+    toolbox = WorkerToolbox(WorkerToolConfig(root_path=tmp_path))
+    task = _task()
+
+    snapshot = toolbox.execute(task=task, tool_name="repo_snapshot", arguments={"path": tmp_path.name})
+    read = toolbox.execute(
+        task=task,
+        tool_name="read_file",
+        arguments={"path": f"{tmp_path.name}/src/app.py"},
+    )
+
+    assert snapshot["path"] == "."
+    assert snapshot["is_empty"] is False
+    assert "src/app.py" in snapshot["files"]
+    assert read["path"] == "src/app.py"
+
+
+def test_toolbox_runtime_capabilities_is_structured_command_tool(tmp_path: Path) -> None:
+    toolbox = WorkerToolbox(WorkerToolConfig(root_path=tmp_path))
+    task = _task(
+        permissions={
+            "read_files": False,
+            "write_files": False,
+            "run_commands": True,
+            "web_research": False,
+        }
+    )
+
+    result = toolbox.execute(task=task, tool_name="runtime_capabilities", arguments={})
+
+    assert result["preferred_local_stack"] == "python"
+    assert result["capabilities"]["python"]["available"] is True
+    assert result["capabilities"]["pytest"]["command"][1:3] == ["-m", "pytest"]
+
+
+def test_toolbox_batch_write_move_and_delete_are_scoped(tmp_path: Path) -> None:
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "staging").mkdir()
+    (tmp_path / "staging" / "draft.md").write_text("draft", encoding="utf-8")
+    toolbox = WorkerToolbox(WorkerToolConfig(root_path=tmp_path))
+    task = _task(
+        permissions={
+            "read_files": True,
+            "write_files": True,
+            "run_commands": False,
+            "web_research": False,
+            "write_paths": ["docs", "staging/draft.md"],
+        }
+    )
+
+    written = toolbox.execute(
+        task=task,
+        tool_name="write_many_files",
+        arguments={
+            "files": [
+                {"path": "docs/a.md", "content": "# A\n"},
+                {"path": "docs/b.md", "content": "# B\n"},
+            ]
+        },
+    )
+    moved = toolbox.execute(
+        task=task,
+        tool_name="move_file",
+        arguments={"source": "staging/draft.md", "destination": "docs/draft.md"},
+    )
+    deleted = toolbox.execute(task=task, tool_name="delete_file", arguments={"path": "docs/b.md"})
+
+    assert written["count"] == 2
+    assert moved["destination"] == "docs/draft.md"
+    assert deleted["deleted"] is True
+    assert (tmp_path / "docs" / "a.md").read_text(encoding="utf-8") == "# A\n"
+    assert not (tmp_path / "staging" / "draft.md").exists()
+    with pytest.raises(ToolPermissionError, match="outside allowed scope"):
+        toolbox.execute(
+            task=task,
+            tool_name="write_many_files",
+            arguments={"files": [{"path": "src/app.py", "content": "bad"}]},
+        )
+    assert not (tmp_path / "src" / "app.py").exists()
+
+
+def test_toolbox_reports_empty_repo_snapshot(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    toolbox = WorkerToolbox(WorkerToolConfig(root_path=tmp_path))
+    snapshot = toolbox.execute(task=_task(), tool_name="repo_snapshot", arguments={"path": tmp_path.name})
+
+    assert snapshot["path"] == "."
+    assert snapshot["is_empty"] is True
+    assert snapshot["files"] == []
+    assert snapshot["directories"] == []
+
+
+def test_diff_summary_and_scope_check_include_untracked_new_files(tmp_path: Path) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("value = 1\n", encoding="utf-8")
+    toolbox = WorkerToolbox(WorkerToolConfig(root_path=tmp_path))
+    task = _task(
+        permissions={
+            "read_files": True,
+            "write_files": False,
+            "run_commands": False,
+            "web_research": False,
+        },
+    ).model_copy(
+        update={
+            "input_artifacts": [
+                ArtifactPayload(
+                    id="mutation_scope",
+                    content={"target_paths": ["src/app.py"], "reason": "new file", "max_files": 1},
+                )
+            ]
+        }
+    )
+
+    diff = toolbox.execute(task=task, tool_name="diff_summary", arguments={"path": "src/app.py"})
+    scope = toolbox.execute(task=task, tool_name="mutation_scope_check", arguments={})
+
+    assert diff["changed_files"] == ["src/app.py"]
+    assert "+++ src/app.py" in diff["diff"]
+    assert scope["passed"] is True
+    assert scope["in_scope"] == ["src/app.py"]
+
+
 def test_toolbox_extracts_nested_write_scope_paths_from_artifacts(tmp_path: Path) -> None:
     (tmp_path / "src").mkdir()
     target = tmp_path / "src" / "checkout.py"
@@ -564,6 +725,20 @@ def test_mutation_scope_accepts_structured_target_paths() -> None:
     assert scope.write_scope_paths == ["src/fulfillment/events.py"]
 
 
+def test_mutation_scope_normalizes_forbidden_globs() -> None:
+    scope = MutationScope.model_validate(
+        {
+            "target_paths": ["src/fulfillment/events.py"],
+            "forbidden_paths": ["**/*.py"],
+            "reason": "source code should remain untouched",
+            "max_files": 1,
+        }
+    )
+
+    assert scope.forbidden_paths == []
+    assert scope.forbidden_globs == ["**/*.py"]
+
+
 def test_mutation_scope_accepts_legacy_file_label() -> None:
     scope = MutationScope.model_validate(
         {
@@ -597,6 +772,57 @@ def test_mutation_scope_rejects_too_many_files() -> None:
                 "max_files": 2,
             }
         )
+
+
+def test_mutation_scope_extracts_move_destinations_and_skips_manifest_noise() -> None:
+    scope = MutationScope.model_validate(
+        {
+            "moves": [
+                {"source": "notes/drafts/task_notes.md", "destination": "docs/task_notes.md"},
+                {"source": "tmp/tmp_report.md", "destination": "docs/tmp_report.md"},
+            ],
+            "manifest_target": "docs/workspace_manifest.json",
+            "excluded": [
+                {"file": "notes/raw/old_blob.txt", "reason": "not markdown"},
+                "misc/legacy.txt",
+            ],
+            "missing_sources": ["misc"],
+        }
+    )
+
+    assert scope.target_paths == [
+        "docs/task_notes.md",
+        "docs/tmp_report.md",
+        "docs/workspace_manifest.json",
+    ]
+    assert scope.max_files == 3
+
+
+def test_mutation_scope_extracts_operation_paths_for_greenfield_scaffold() -> None:
+    scope = MutationScope.model_validate(
+        {
+            "operations": [
+                {"action": "create", "path": "pyproject.toml"},
+                {"action": "create", "path": ".dockerignore"},
+                {"action": "create", "path": "calculator/main.py"},
+                {"action": "create", "path": "tests/test_api.py"},
+            ]
+        }
+    )
+
+    assert scope.target_paths == ["pyproject.toml", ".dockerignore", "calculator/main.py", "tests/test_api.py"]
+    assert scope.max_files == 4
+
+
+def test_mutation_scope_resolver_marks_proposal_source() -> None:
+    scope = resolve_mutation_scope_proposal(
+        {"target_paths": [".gitignore", ".prettierrc", "app/main.py"]},
+        source_artifact_id="mutation_scope",
+    )
+
+    assert scope.target_paths == [".gitignore", ".prettierrc", "app/main.py"]
+    assert scope.metadata["resolver"] == "mutation_scope_proposal_v1"
+    assert scope.metadata["source_artifact_id"] == "mutation_scope"
 
 
 def test_toolbox_rejects_write_outside_approved_scope(tmp_path: Path) -> None:
@@ -656,6 +882,125 @@ def test_toolbox_rejects_forbidden_subpath(tmp_path: Path) -> None:
             tool_name="replace_in_file",
             arguments={"path": "src/secret.py", "old": "old", "new": "new"},
         )
+
+
+def test_toolbox_rejects_forbidden_glob(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    target = tmp_path / "src" / "app.py"
+    target.write_text("value = 'old'\n", encoding="utf-8")
+    toolbox = WorkerToolbox(WorkerToolConfig(root_path=tmp_path))
+    task = _task(
+        permissions={
+            "read_files": True,
+            "write_files": True,
+            "run_commands": False,
+            "web_research": False,
+            "write_paths": ["src/app.py"],
+        },
+    ).model_copy(
+        update={
+            "metadata": {
+                "write_scope": {
+                    "target_paths": ["src/app.py"],
+                    "forbidden_paths": ["**/*.py"],
+                    "reason": "glob exclusion",
+                    "max_files": 1,
+                }
+            }
+        }
+    )
+
+    with pytest.raises(ToolPermissionError, match="forbidden scope"):
+        toolbox.execute(
+            task=task,
+            tool_name="replace_in_file",
+            arguments={"path": "src/app.py", "old": "old", "new": "new"},
+        )
+
+
+def test_toolbox_normalizes_root_basename_in_write_scope(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    target = tmp_path / "src" / "app.py"
+    target.write_text("value = 'old'\n", encoding="utf-8")
+    toolbox = WorkerToolbox(WorkerToolConfig(root_path=tmp_path))
+    task = _task(
+        permissions={
+            "read_files": True,
+            "write_files": True,
+            "run_commands": False,
+            "web_research": False,
+            "write_paths": [f"{tmp_path.name}/src/app.py"],
+        }
+    )
+
+    result = toolbox.execute(
+        task=task,
+        tool_name="replace_in_file",
+        arguments={"path": f"{tmp_path.name}/src/app.py", "old": "old", "new": "new"},
+    )
+
+    assert result["path"] == "src/app.py"
+    assert "new" in target.read_text(encoding="utf-8")
+
+
+def test_toolbox_rejects_invalid_strict_scope_artifact_without_fallback(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("value = 'old'\n", encoding="utf-8")
+    toolbox = WorkerToolbox(WorkerToolConfig(root_path=tmp_path))
+    task = _task(
+        permissions={
+            "read_files": True,
+            "write_files": True,
+            "run_commands": False,
+            "web_research": False,
+            "write_paths_from_artifacts": ["mutation_scope"],
+        },
+    ).model_copy(
+        update={
+            "input_artifacts": [
+                ArtifactPayload(
+                    id="mutation_scope",
+                    content={"target_paths": ["../secret.py"], "reason": "bad scope"},
+                )
+            ]
+        }
+    )
+
+    with pytest.raises(ToolPermissionError, match="invalid write scope artifact mutation_scope"):
+        toolbox.validate_write_scope(task)
+
+
+def test_task_compiler_merge_scope_ceiling_tracks_merged_paths() -> None:
+    step = PlanStep(
+        step_id="mutate",
+        worker_type="code_worker",
+        phase="MUTATE",
+        mode="bounded_mutation",
+        instruction="apply scoped edit",
+        input_artifacts=["mutation_scope"],
+        output_artifacts=["change_summary"],
+        permissions={
+            "read_files": True,
+            "write_files": True,
+            "run_commands": False,
+            "web_research": False,
+            "write_paths": ["src/b.py"],
+            "write_paths_from_artifacts": ["mutation_scope"],
+        },
+    )
+    artifact_store = {
+        "mutation_scope": ArtifactPayload(
+            id="mutation_scope",
+            content={"target_paths": ["src/a.py"], "reason": "one file", "max_files": 1},
+        )
+    }
+
+    task = TaskCompiler().compile("run", step, artifact_store)
+
+    assert task.permissions.write_paths == ["src/b.py", "src/a.py"]
+    assert task.metadata["write_scope"]["max_files"] == 2
+    assert task.metadata["write_scope"]["metadata"]["resolver"] == "mutation_scope_proposal_v1"
+    assert task.metadata["write_scope"]["metadata"]["source_artifact_ids"] == ["mutation_scope"]
 
 
 def test_agentic_group_blocks_missing_write_scope_before_model_call(tmp_path: Path) -> None:
@@ -753,6 +1098,67 @@ def test_code_worker_synthesizes_mutation_artifacts_after_write_budget_exhaustio
     assert "new" in target.read_text(encoding="utf-8")
     artifact_ids = {artifact.id for artifact in result.artifacts}
     assert {"change_summary", "rollback_patch", "patch_diff"} <= artifact_ids
+    assert result.metadata["fallback"] == "mutation_observation_synthesis"
+
+
+def test_filesystem_worker_synthesizes_mutation_artifacts_after_batch_write_budget_exhaustion(tmp_path: Path) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    client = QueueClient(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "tool_name": "write_many_files",
+                        "arguments": {
+                            "files": [
+                                {"path": "src/calculator.py", "content": "def add(a, b):\n    return a + b\n"},
+                                {
+                                    "path": "tests/test_calculator.py",
+                                    "content": "from src.calculator import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n",
+                                },
+                                {"path": "README.md", "content": "# Calculator API\n"},
+                            ]
+                        },
+                    }
+                ]
+            }
+        ]
+    )
+    runner = AgenticWorkerGroupRunner(
+        worker_type="filesystem_worker",
+        templates=[
+            WorkerInstanceTemplate(
+                name="filesystem_operator",
+                role="scaffold",
+                system_prompt="scaffold",
+                allowed_tools=("write_many_files", "diff_summary"),
+            )
+        ],
+        controller=WorkerLLMController(client),
+        toolbox=WorkerToolbox(WorkerToolConfig(root_path=tmp_path)),
+    )
+    task = _task(
+        worker_type="filesystem_worker",
+        expected_outputs=["change_summary", "rollback_patch"],
+        permissions={
+            "read_files": True,
+            "write_files": True,
+            "run_commands": False,
+            "web_research": False,
+            "write_paths": ["src", "tests", "README.md"],
+        },
+        max_tool_calls=1,
+        max_model_calls=1,
+    )
+
+    result = runner.run(task)
+
+    assert result.status == "completed"
+    assert (tmp_path / "src" / "calculator.py").exists()
+    artifact_ids = {artifact.id for artifact in result.artifacts}
+    assert {"change_summary", "rollback_patch", "patch_diff"} <= artifact_ids
+    patch_diff = next(artifact for artifact in result.artifacts if artifact.id == "patch_diff")
+    assert "src/calculator.py" in patch_diff.content["diff"]
     assert result.metadata["fallback"] == "mutation_observation_synthesis"
 
 

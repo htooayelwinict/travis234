@@ -42,11 +42,25 @@ FILE_WORKSPACE_MANAGEMENT_PROMPT = (
     "Keep edits limited to file moves/creation and leave source code untouched. "
     "Run tests, then summarize exactly what you moved and any risk of data loss."
 )
+GREENFIELD_CALCULATOR_API_PROMPT = (
+    "In the repo rooted at live_worker_greenfield_calculator_api, I need you to create a small calculator API "
+    "from scratch that is ready to deploy. The repository is intentionally empty except for git metadata, so first "
+    "inspect the workspace and choose the simplest production-friendly stack that is available locally. Create the "
+    "API source code, tests, README, dependency or project metadata, and a Dockerfile or equivalent deploy notes. "
+    "The API should support add, subtract, multiply, and divide operations, handle invalid input cleanly, include "
+    "basic health/readiness behavior, and have focused tests that can run in this repo. Keep the implementation "
+    "small, avoid unnecessary frameworks if the environment does not need them, verify with tests, and summarize "
+    "how to run and deploy it."
+)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--scenario", choices=["payment_retry", "webhook_fulfillment", "file_workspace_cleanup"], default="payment_retry")
+    parser.add_argument(
+        "--scenario",
+        choices=["payment_retry", "webhook_fulfillment", "file_workspace_cleanup", "greenfield_calculator_api"],
+        default="payment_retry",
+    )
     parser.add_argument("--repo", default=None)
     parser.add_argument("--prompt", default=None)
     parser.add_argument("--worker-model", default="qwen/qwen3.7-max")
@@ -234,6 +248,11 @@ def _scenario_config(scenario: str) -> dict[str, str]:
             "repo": "live_worker_workspace_repo",
             "prompt": FILE_WORKSPACE_MANAGEMENT_PROMPT,
         }
+    if scenario == "greenfield_calculator_api":
+        return {
+            "repo": "live_worker_greenfield_calculator_api",
+            "prompt": GREENFIELD_CALCULATOR_API_PROMPT,
+        }
     return {"repo": "live_worker_mock_repo", "prompt": DEFAULT_PROMPT}
 
 
@@ -243,6 +262,9 @@ def _ensure_mock_repo(repo_path: Path, *, scenario: str) -> None:
         return
     if scenario == "file_workspace_cleanup":
         _ensure_file_workspace_repo(repo_path)
+        return
+    if scenario == "greenfield_calculator_api":
+        _ensure_greenfield_repo(repo_path)
         return
 
     (repo_path / "src").mkdir(parents=True, exist_ok=True)
@@ -297,6 +319,27 @@ def test_retries_reuse_same_idempotency_key() -> None:
     if not (repo_path / ".git").exists():
         subprocess.run(["git", "init"], cwd=repo_path, check=True, capture_output=True, text=True)
     subprocess.run(["git", "add", "."], cwd=repo_path, check=True, capture_output=True, text=True)
+
+
+def _ensure_greenfield_repo(repo_path: Path) -> None:
+    repo_path.mkdir(parents=True, exist_ok=True)
+    real_files = [
+        path
+        for path in repo_path.rglob("*")
+        if path.is_file()
+        and ".git" not in path.parts
+        and not str(path.relative_to(repo_path)).startswith(".pytest_cache/")
+        and "__pycache__" not in path.parts
+    ]
+    if real_files:
+        examples = ", ".join(str(path.relative_to(repo_path)) for path in real_files[:5])
+        raise SystemExit(
+            f"greenfield scenario requires an empty repo target; {repo_path} already has files: {examples}. "
+            "Use --repo with a fresh directory name."
+        )
+    _remove_generated_runtime_dirs(repo_path)
+    if not (repo_path / ".git").exists():
+        subprocess.run(["git", "init"], cwd=repo_path, check=True, capture_output=True, text=True)
 
 
 def _ensure_webhook_fulfillment_repo(repo_path: Path) -> None:
@@ -607,8 +650,11 @@ def _snapshot_repo_files(repo_path: Path) -> dict[str, str]:
 
 
 def _run_pytest(repo_path: Path, label: str) -> dict[str, object]:
+    command = [sys.executable, "-m", "pytest", "-q"]
+    if (repo_path / "pyproject.toml").exists():
+        command = ["uv", "run", "pytest", "-q"]
     completed = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q"],
+        command,
         cwd=repo_path,
         capture_output=True,
         text=True,
@@ -616,6 +662,7 @@ def _run_pytest(repo_path: Path, label: str) -> dict[str, object]:
     )
     return {
         "label": label,
+        "command": command,
         "returncode": completed.returncode,
         "stdout": completed.stdout,
         "stderr": completed.stderr,

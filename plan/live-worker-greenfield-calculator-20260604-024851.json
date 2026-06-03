@@ -1,0 +1,3996 @@
+{
+  "generated_at": "2026-06-03T20:21:15.218864+00:00",
+  "scenario": "greenfield_calculator_api_no_mock",
+  "prompt": "In the repo rooted at live_worker_greenfield_calculator_api_20260604-024851, create a deploy-ready calculator API from scratch. You may choose any language and framework, but choose a simple maintainable stack that the worker runtime can verify locally. Implement JSON HTTP endpoints for add, subtract, multiply, divide, and health. Handle invalid input and divide-by-zero with clear error responses. Create automated tests, minimal dependency/config files, a Dockerfile or equivalent deployment artifact, and README instructions for running, testing, and deploying. Keep the implementation small but production-shaped, run verification, and provide a concise final summary of files created, API contract, test evidence, and remaining risks.",
+  "repo_path": "/Users/htooayelwin/Documents/VScode/allthebest/live_worker_greenfield_calculator_api_20260604-024851",
+  "worker_env": {
+    "WORKER_LLM_ENABLED": "true",
+    "WORKER_LLM_MODEL": "qwen/qwen3.7-max",
+    "WORKER_LLM_PROVIDER_SORT": "latency",
+    "WORKER_LLM_TIMEOUT_SECONDS": "120",
+    "WORKER_LLM_MAX_TOKENS": "3600",
+    "WORKER_MAX_PARALLEL_INSTANCES": "3",
+    "WORKER_TOOL_TIMEOUT_SECONDS": "25"
+  },
+  "runtime_matrix": {
+    "trace_id": "trace_0001",
+    "started_at": "2026-06-03T20:18:51.845198+00:00",
+    "row_count": 56,
+    "rows": [
+      {
+        "seq": 1,
+        "timestamp": "2026-06-03T20:18:52.758392+00:00",
+        "component": "decompressor_runtime",
+        "stage": "decompress_request",
+        "event": "run_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": null,
+        "run_id": null,
+        "step_id": null,
+        "attempt_id": null,
+        "worker_type": null,
+        "elapsed_ms": null,
+        "details": {
+          "input_chars": 741
+        }
+      },
+      {
+        "seq": 2,
+        "timestamp": "2026-06-03T20:19:10.154917+00:00",
+        "component": "decompressor_runtime",
+        "stage": "decompress_request",
+        "event": "run_completed",
+        "status": "completed",
+        "request_id": "req_001",
+        "plan_id": null,
+        "run_id": null,
+        "step_id": null,
+        "attempt_id": null,
+        "worker_type": null,
+        "elapsed_ms": 17396.408,
+        "details": {
+          "model_calls": 1,
+          "confidence": 0.92,
+          "ambiguity_count": 5
+        }
+      },
+      {
+        "seq": 3,
+        "timestamp": "2026-06-03T20:19:10.155130+00:00",
+        "component": "planner_runtime",
+        "stage": "draft_plan",
+        "event": "run_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": null,
+        "run_id": null,
+        "step_id": null,
+        "attempt_id": null,
+        "worker_type": null,
+        "elapsed_ms": null,
+        "details": {
+          "input_type": "greenfield_calculator_api_bootstrap",
+          "complexity_hint": "medium"
+        }
+      },
+      {
+        "seq": 4,
+        "timestamp": "2026-06-03T20:19:57.153125+00:00",
+        "component": "planner_runtime",
+        "stage": "draft_plan",
+        "event": "run_completed",
+        "status": "completed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": null,
+        "step_id": null,
+        "attempt_id": null,
+        "worker_type": null,
+        "elapsed_ms": null,
+        "details": {
+          "planner": "phase_aware_execution_planner",
+          "step_count": 6,
+          "mode": "llm_prompt_chain"
+        }
+      },
+      {
+        "seq": 5,
+        "timestamp": "2026-06-03T20:19:57.153491+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "plan_execution",
+        "event": "run_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": null,
+        "attempt_id": null,
+        "worker_type": null,
+        "elapsed_ms": null,
+        "details": {
+          "planner": "phase_aware_execution_planner",
+          "step_count": 6,
+          "replan_depth": 0
+        }
+      },
+      {
+        "seq": 6,
+        "timestamp": "2026-06-03T20:19:57.153502+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "plan_execution",
+        "event": "plan_normalized",
+        "status": "completed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": null,
+        "attempt_id": null,
+        "worker_type": null,
+        "elapsed_ms": null,
+        "details": {
+          "adjustments": [
+            {
+              "field": "budget.max_retries",
+              "from": 1,
+              "to": 2,
+              "reason": "worker runtime retries are capped per stage, with two instance retries per stage"
+            },
+            {
+              "step_id": "discover_repo_context",
+              "worker_type": "repo_worker",
+              "field": "max_model_calls",
+              "from": 1,
+              "to": 5,
+              "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+            },
+            {
+              "step_id": "analyze_runtime_and_dependencies",
+              "worker_type": "infra_worker",
+              "field": "max_model_calls",
+              "from": 1,
+              "to": 2,
+              "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+            },
+            {
+              "step_id": "design_scoped_implementation",
+              "worker_type": "research_worker",
+              "field": "max_model_calls",
+              "from": 1,
+              "to": 2,
+              "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+            },
+            {
+              "step_id": "mutate_implement_calculator_api",
+              "worker_type": "code_worker",
+              "field": "max_model_calls",
+              "from": 1,
+              "to": 2,
+              "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+            },
+            {
+              "step_id": "verify_changes_and_tests",
+              "worker_type": "verify_worker",
+              "field": "max_model_calls",
+              "from": 1,
+              "to": 2,
+              "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+            },
+            {
+              "field": "budget.max_tool_calls",
+              "from": 23,
+              "to": 161,
+              "reason": "budget must cover kernel-owned per-stage retry tool-call envelope"
+            },
+            {
+              "field": "budget.max_model_calls",
+              "from": 6,
+              "to": 98,
+              "reason": "budget must cover kernel-owned per-stage retry model-call envelope"
+            }
+          ]
+        }
+      },
+      {
+        "seq": 7,
+        "timestamp": "2026-06-03T20:19:57.153790+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "plan_execution",
+        "event": "preflight_completed",
+        "status": "completed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": null,
+        "attempt_id": null,
+        "worker_type": null,
+        "elapsed_ms": null,
+        "details": {
+          "budget": {
+            "max_tool_calls": 161,
+            "max_model_calls": 98,
+            "max_workers": 6,
+            "max_retries": 2
+          }
+        }
+      },
+      {
+        "seq": 8,
+        "timestamp": "2026-06-03T20:19:57.153871+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "DISCOVER",
+        "event": "step_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_context",
+        "attempt_id": null,
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "mode": "observe_only",
+          "input_artifacts": [],
+          "output_artifacts": [
+            "repo_inventory",
+            "candidate_paths",
+            "current_state_evidence"
+          ]
+        }
+      },
+      {
+        "seq": 9,
+        "timestamp": "2026-06-03T20:19:57.153979+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "DISCOVER",
+        "event": "task_compiled",
+        "status": "completed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_context",
+        "attempt_id": null,
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "input_count": 0,
+          "expected_outputs": [
+            "repo_inventory",
+            "candidate_paths",
+            "current_state_evidence"
+          ]
+        }
+      },
+      {
+        "seq": 10,
+        "timestamp": "2026-06-03T20:19:57.154034+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "DISCOVER",
+        "event": "attempt_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_context",
+        "attempt_id": "discover_repo_context_attempt_1",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "attempt_number": 1
+        }
+      },
+      {
+        "seq": 11,
+        "timestamp": "2026-06-03T20:19:57.154273+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_group_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_context",
+        "attempt_id": "discover_repo_context_attempt_1",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": null,
+          "template_count": 3
+        }
+      },
+      {
+        "seq": 12,
+        "timestamp": "2026-06-03T20:19:57.154294+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_instance_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_context",
+        "attempt_id": "discover_repo_context_attempt_1",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_locator",
+          "role": "Locate target files, tests, and repo clues with cheap readonly discovery tools."
+        }
+      },
+      {
+        "seq": 13,
+        "timestamp": "2026-06-03T20:19:57.154310+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_model_call_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_context",
+        "attempt_id": "discover_repo_context_attempt_1",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_locator",
+          "round": 1,
+          "model_calls_used_including_this_turn": 1,
+          "remaining_tool_calls": 3
+        }
+      },
+      {
+        "seq": 14,
+        "timestamp": "2026-06-03T20:20:04.904570+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_model_call_completed",
+        "status": "completed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_context",
+        "attempt_id": "discover_repo_context_attempt_1",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_locator",
+          "round": 1,
+          "tool_call_count": 1,
+          "has_final_result": false,
+          "final_status": null
+        }
+      },
+      {
+        "seq": 15,
+        "timestamp": "2026-06-03T20:20:04.904626+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_tool_call_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_context",
+        "attempt_id": "discover_repo_context_attempt_1",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_locator",
+          "tool_name": "repo_snapshot",
+          "tool_index": 1,
+          "reason": null
+        }
+      },
+      {
+        "seq": 16,
+        "timestamp": "2026-06-03T20:20:04.954274+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_tool_call_completed",
+        "status": "completed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_context",
+        "attempt_id": "discover_repo_context_attempt_1",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_locator",
+          "tool_name": "repo_snapshot",
+          "tool_index": 1,
+          "observation_keys": [
+            "config_files",
+            "directories",
+            "files",
+            "git_status",
+            "is_empty",
+            "path",
+            "test_candidates"
+          ],
+          "returncode": null
+        }
+      },
+      {
+        "seq": 17,
+        "timestamp": "2026-06-03T20:20:04.954396+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_model_call_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_context",
+        "attempt_id": "discover_repo_context_attempt_1",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_locator",
+          "round": 2,
+          "model_calls_used_including_this_turn": 2,
+          "remaining_tool_calls": 2
+        }
+      },
+      {
+        "seq": 18,
+        "timestamp": "2026-06-03T20:20:26.879904+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_model_call_completed",
+        "status": "completed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_context",
+        "attempt_id": "discover_repo_context_attempt_1",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_locator",
+          "round": 2,
+          "tool_call_count": 0,
+          "has_final_result": true,
+          "final_status": "completed"
+        }
+      },
+      {
+        "seq": 19,
+        "timestamp": "2026-06-03T20:20:26.880014+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_instance_completed",
+        "status": "completed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_context",
+        "attempt_id": "discover_repo_context_attempt_1",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_locator",
+          "artifact_count": 3,
+          "tool_calls_used": 1,
+          "model_calls_used": 2
+        }
+      },
+      {
+        "seq": 20,
+        "timestamp": "2026-06-03T20:20:26.880039+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_instance_skipped",
+        "status": "skipped",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_context",
+        "attempt_id": "discover_repo_context_attempt_1",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_reader",
+          "reason": "expected_outputs_already_produced"
+        }
+      },
+      {
+        "seq": 21,
+        "timestamp": "2026-06-03T20:20:26.880052+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_instance_skipped",
+        "status": "skipped",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_context",
+        "attempt_id": "discover_repo_context_attempt_1",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "repo_summarizer",
+          "reason": "expected_outputs_already_produced"
+        }
+      },
+      {
+        "seq": 22,
+        "timestamp": "2026-06-03T20:20:26.880063+00:00",
+        "component": "worker_agentic_group",
+        "stage": "DISCOVER",
+        "event": "worker_group_completed",
+        "status": "completed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_context",
+        "attempt_id": "discover_repo_context_attempt_1",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": null,
+          "artifact_count": 4,
+          "skipped_worker_instances": [
+            "repo_reader",
+            "repo_summarizer"
+          ]
+        }
+      },
+      {
+        "seq": 23,
+        "timestamp": "2026-06-03T20:20:26.880202+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "DISCOVER",
+        "event": "attempt_completed",
+        "status": "completed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_context",
+        "attempt_id": "discover_repo_context_attempt_1",
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "artifact_count": 4,
+          "tool_calls": 1,
+          "model_calls": 2
+        }
+      },
+      {
+        "seq": 24,
+        "timestamp": "2026-06-03T20:20:26.880295+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "DISCOVER",
+        "event": "step_completed",
+        "status": "completed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "discover_repo_context",
+        "attempt_id": null,
+        "worker_type": "repo_worker",
+        "elapsed_ms": null,
+        "details": {
+          "artifact_ids": [
+            "discover_repo_context_repo_locator_tool_1",
+            "repo_inventory",
+            "candidate_paths",
+            "current_state_evidence"
+          ]
+        }
+      },
+      {
+        "seq": 25,
+        "timestamp": "2026-06-03T20:20:26.880314+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "ANALYZE",
+        "event": "step_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": null,
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "mode": "observe_only",
+          "input_artifacts": [
+            "repo_inventory",
+            "candidate_paths",
+            "current_state_evidence"
+          ],
+          "output_artifacts": [
+            "runtime_capabilities",
+            "dependency_artifacts",
+            "analysis_evidence"
+          ]
+        }
+      },
+      {
+        "seq": 26,
+        "timestamp": "2026-06-03T20:20:26.880385+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "ANALYZE",
+        "event": "task_compiled",
+        "status": "completed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": null,
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "input_count": 3,
+          "expected_outputs": [
+            "runtime_capabilities",
+            "dependency_artifacts",
+            "analysis_evidence"
+          ]
+        }
+      },
+      {
+        "seq": 27,
+        "timestamp": "2026-06-03T20:20:26.880413+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "ANALYZE",
+        "event": "attempt_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_1",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "attempt_number": 1
+        }
+      },
+      {
+        "seq": 28,
+        "timestamp": "2026-06-03T20:20:26.880791+00:00",
+        "component": "worker_agentic_group",
+        "stage": "ANALYZE",
+        "event": "worker_group_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_1",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": null,
+          "template_count": 1
+        }
+      },
+      {
+        "seq": 29,
+        "timestamp": "2026-06-03T20:20:26.880828+00:00",
+        "component": "worker_agentic_group",
+        "stage": "ANALYZE",
+        "event": "worker_instance_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_1",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "infra_diagnoser",
+          "role": "Diagnose infrastructure, configuration, and operational issues using readonly evidence."
+        }
+      },
+      {
+        "seq": 30,
+        "timestamp": "2026-06-03T20:20:26.880839+00:00",
+        "component": "worker_agentic_group",
+        "stage": "ANALYZE",
+        "event": "worker_model_call_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_1",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "infra_diagnoser",
+          "round": 1,
+          "model_calls_used_including_this_turn": 1,
+          "remaining_tool_calls": 4
+        }
+      },
+      {
+        "seq": 31,
+        "timestamp": "2026-06-03T20:20:45.977807+00:00",
+        "component": "worker_agentic_group",
+        "stage": "ANALYZE",
+        "event": "worker_model_call_completed",
+        "status": "completed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_1",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "infra_diagnoser",
+          "round": 1,
+          "tool_call_count": 1,
+          "has_final_result": false,
+          "final_status": null
+        }
+      },
+      {
+        "seq": 32,
+        "timestamp": "2026-06-03T20:20:45.977846+00:00",
+        "component": "worker_agentic_group",
+        "stage": "ANALYZE",
+        "event": "worker_tool_call_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_1",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "infra_diagnoser",
+          "tool_name": "run_readonly_command",
+          "tool_index": 1,
+          "reason": null
+        }
+      },
+      {
+        "seq": 33,
+        "timestamp": "2026-06-03T20:20:45.978143+00:00",
+        "component": "worker_agentic_group",
+        "stage": "ANALYZE",
+        "event": "worker_tool_call_failed",
+        "status": "failed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_1",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "infra_diagnoser",
+          "tool_name": "run_readonly_command",
+          "error": "command is not in the readonly allowlist: python3 --version; python3 -m pip --version; python3 -m pytest --version; node --version; npm --version; go version; docker --version; git --version",
+          "code": "tool_permission_denied"
+        }
+      },
+      {
+        "seq": 34,
+        "timestamp": "2026-06-03T20:20:45.978253+00:00",
+        "component": "worker_agentic_group",
+        "stage": "ANALYZE",
+        "event": "worker_instance_completed",
+        "status": "failed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_1",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "infra_diagnoser",
+          "artifact_count": 0,
+          "tool_calls_used": 1,
+          "model_calls_used": 1
+        }
+      },
+      {
+        "seq": 35,
+        "timestamp": "2026-06-03T20:20:45.978332+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "ANALYZE",
+        "event": "attempt_completed",
+        "status": "failed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_1",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "artifact_count": 3,
+          "tool_calls": 1,
+          "model_calls": 1
+        }
+      },
+      {
+        "seq": 36,
+        "timestamp": "2026-06-03T20:20:45.978401+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "ANALYZE",
+        "event": "attempt_retry_scheduled",
+        "status": "retrying",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_1",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "reason": "worker_runtime_failure",
+          "task_recompiled": true,
+          "adjustments": [
+            {
+              "field": "max_tool_calls",
+              "from": 4,
+              "to": 8,
+              "reason": "local retry after worker/tool budget or tool-call failure"
+            }
+          ]
+        }
+      },
+      {
+        "seq": 37,
+        "timestamp": "2026-06-03T20:20:45.978433+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "ANALYZE",
+        "event": "attempt_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_2",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "attempt_number": 2
+        }
+      },
+      {
+        "seq": 38,
+        "timestamp": "2026-06-03T20:20:45.978524+00:00",
+        "component": "worker_agentic_group",
+        "stage": "ANALYZE",
+        "event": "worker_group_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_2",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": null,
+          "template_count": 1
+        }
+      },
+      {
+        "seq": 39,
+        "timestamp": "2026-06-03T20:20:45.978532+00:00",
+        "component": "worker_agentic_group",
+        "stage": "ANALYZE",
+        "event": "worker_instance_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_2",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "infra_diagnoser",
+          "role": "Diagnose infrastructure, configuration, and operational issues using readonly evidence."
+        }
+      },
+      {
+        "seq": 40,
+        "timestamp": "2026-06-03T20:20:45.978540+00:00",
+        "component": "worker_agentic_group",
+        "stage": "ANALYZE",
+        "event": "worker_model_call_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_2",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "infra_diagnoser",
+          "round": 1,
+          "model_calls_used_including_this_turn": 1,
+          "remaining_tool_calls": 8
+        }
+      },
+      {
+        "seq": 41,
+        "timestamp": "2026-06-03T20:20:57.551148+00:00",
+        "component": "worker_agentic_group",
+        "stage": "ANALYZE",
+        "event": "worker_model_call_completed",
+        "status": "completed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_2",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "infra_diagnoser",
+          "round": 1,
+          "tool_call_count": 1,
+          "has_final_result": false,
+          "final_status": null
+        }
+      },
+      {
+        "seq": 42,
+        "timestamp": "2026-06-03T20:20:57.551200+00:00",
+        "component": "worker_agentic_group",
+        "stage": "ANALYZE",
+        "event": "worker_tool_call_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_2",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "infra_diagnoser",
+          "tool_name": "run_readonly_command",
+          "tool_index": 1,
+          "reason": null
+        }
+      },
+      {
+        "seq": 43,
+        "timestamp": "2026-06-03T20:20:57.551622+00:00",
+        "component": "worker_agentic_group",
+        "stage": "ANALYZE",
+        "event": "worker_tool_call_failed",
+        "status": "failed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_2",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "infra_diagnoser",
+          "tool_name": "run_readonly_command",
+          "error": "command is not in the readonly allowlist: python3 --version || true; pip3 --version || true; pytest --version || true; node --version || true; npm --version || true; go version || true; docker --version || true; git --version || true",
+          "code": "tool_permission_denied"
+        }
+      },
+      {
+        "seq": 44,
+        "timestamp": "2026-06-03T20:20:57.551743+00:00",
+        "component": "worker_agentic_group",
+        "stage": "ANALYZE",
+        "event": "worker_instance_completed",
+        "status": "failed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_2",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "infra_diagnoser",
+          "artifact_count": 0,
+          "tool_calls_used": 1,
+          "model_calls_used": 1
+        }
+      },
+      {
+        "seq": 45,
+        "timestamp": "2026-06-03T20:20:57.551860+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "ANALYZE",
+        "event": "attempt_completed",
+        "status": "failed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_2",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "artifact_count": 3,
+          "tool_calls": 1,
+          "model_calls": 1
+        }
+      },
+      {
+        "seq": 46,
+        "timestamp": "2026-06-03T20:20:57.551942+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "ANALYZE",
+        "event": "attempt_retry_scheduled",
+        "status": "retrying",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_2",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "reason": "worker_runtime_failure",
+          "task_recompiled": true,
+          "adjustments": [
+            {
+              "field": "max_tool_calls",
+              "from": 8,
+              "to": 16,
+              "reason": "local retry after worker/tool budget or tool-call failure"
+            }
+          ]
+        }
+      },
+      {
+        "seq": 47,
+        "timestamp": "2026-06-03T20:20:57.551988+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "ANALYZE",
+        "event": "attempt_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_3",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "attempt_number": 3
+        }
+      },
+      {
+        "seq": 48,
+        "timestamp": "2026-06-03T20:20:57.552125+00:00",
+        "component": "worker_agentic_group",
+        "stage": "ANALYZE",
+        "event": "worker_group_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_3",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": null,
+          "template_count": 1
+        }
+      },
+      {
+        "seq": 49,
+        "timestamp": "2026-06-03T20:20:57.552137+00:00",
+        "component": "worker_agentic_group",
+        "stage": "ANALYZE",
+        "event": "worker_instance_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_3",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "infra_diagnoser",
+          "role": "Diagnose infrastructure, configuration, and operational issues using readonly evidence."
+        }
+      },
+      {
+        "seq": 50,
+        "timestamp": "2026-06-03T20:20:57.552149+00:00",
+        "component": "worker_agentic_group",
+        "stage": "ANALYZE",
+        "event": "worker_model_call_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_3",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "infra_diagnoser",
+          "round": 1,
+          "model_calls_used_including_this_turn": 1,
+          "remaining_tool_calls": 16
+        }
+      },
+      {
+        "seq": 51,
+        "timestamp": "2026-06-03T20:21:14.184389+00:00",
+        "component": "worker_agentic_group",
+        "stage": "ANALYZE",
+        "event": "worker_model_call_completed",
+        "status": "completed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_3",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "infra_diagnoser",
+          "round": 1,
+          "tool_call_count": 1,
+          "has_final_result": false,
+          "final_status": null
+        }
+      },
+      {
+        "seq": 52,
+        "timestamp": "2026-06-03T20:21:14.184465+00:00",
+        "component": "worker_agentic_group",
+        "stage": "ANALYZE",
+        "event": "worker_tool_call_started",
+        "status": "started",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_3",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "infra_diagnoser",
+          "tool_name": "run_readonly_command",
+          "tool_index": 1,
+          "reason": null
+        }
+      },
+      {
+        "seq": 53,
+        "timestamp": "2026-06-03T20:21:14.184730+00:00",
+        "component": "worker_agentic_group",
+        "stage": "ANALYZE",
+        "event": "worker_tool_call_failed",
+        "status": "failed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_3",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "infra_diagnoser",
+          "tool_name": "run_readonly_command",
+          "error": "command is not in the readonly allowlist: python3 --version; pip3 --version; pytest --version; node --version; npm --version; go version; docker --version; ruby --version",
+          "code": "tool_permission_denied"
+        }
+      },
+      {
+        "seq": 54,
+        "timestamp": "2026-06-03T20:21:14.184844+00:00",
+        "component": "worker_agentic_group",
+        "stage": "ANALYZE",
+        "event": "worker_instance_completed",
+        "status": "failed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_3",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "worker_instance": "infra_diagnoser",
+          "artifact_count": 0,
+          "tool_calls_used": 1,
+          "model_calls_used": 1
+        }
+      },
+      {
+        "seq": 55,
+        "timestamp": "2026-06-03T20:21:14.184965+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "ANALYZE",
+        "event": "attempt_completed",
+        "status": "failed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": "analyze_runtime_and_dependencies_attempt_3",
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "artifact_count": 3,
+          "tool_calls": 1,
+          "model_calls": 1
+        }
+      },
+      {
+        "seq": 56,
+        "timestamp": "2026-06-03T20:21:14.185027+00:00",
+        "component": "worker_kernel_runtime",
+        "stage": "ANALYZE",
+        "event": "step_terminal",
+        "status": "failed",
+        "request_id": "req_001",
+        "plan_id": "plan_req_001_calculator_api_bootstrap",
+        "run_id": "run_plan_req_001_calculator_api_bootstrap",
+        "step_id": "analyze_runtime_and_dependencies",
+        "attempt_id": null,
+        "worker_type": "infra_worker",
+        "elapsed_ms": null,
+        "details": {
+          "summary": "command is not in the readonly allowlist: python3 --version; pip3 --version; pytest --version; node --version; npm --version; go version; docker --version; ruby --version"
+        }
+      }
+    ]
+  },
+  "baseline_pytest": {
+    "label": "before",
+    "returncode": 5,
+    "stdout": "\nno tests ran in 0.01s\n",
+    "stderr": ""
+  },
+  "envelope": {
+    "request_id": "req_001",
+    "raw_input": "In the repo rooted at live_worker_greenfield_calculator_api_20260604-024851, create a deploy-ready calculator API from scratch. You may choose any language and framework, but choose a simple maintainable stack that the worker runtime can verify locally. Implement JSON HTTP endpoints for add, subtract, multiply, divide, and health. Handle invalid input and divide-by-zero with clear error responses. Create automated tests, minimal dependency/config files, a Dockerfile or equivalent deployment artifact, and README instructions for running, testing, and deploying. Keep the implementation small but production-shaped, run verification, and provide a concise final summary of files created, API contract, test evidence, and remaining risks.",
+    "normalized_input": "Build a deploy-ready calculator API from scratch in repo live_worker_greenfield_calculator_api_20260604-024851 using a simple locally verifiable stack, with JSON HTTP endpoints (add, subtract, multiply, divide, health), robust error handling, automated tests, minimal config/dependencies, deployment artifact, README run/test/deploy instructions, local verification, and a concise final report of files, API contract, test evidence, and residual risks.",
+    "user_goal": "Produce a small but production-shaped, fully testable and deployable calculator HTTP API implementation in the specified repository, including documentation and verification evidence.",
+    "input_type": "greenfield_calculator_api_bootstrap",
+    "intents": [
+      "code.scaffold",
+      "api.implement",
+      "validation.error_handling",
+      "tests.create",
+      "containerization.setup",
+      "docs.write",
+      "local_verification"
+    ],
+    "domains": [
+      "code",
+      "api",
+      "testing",
+      "infra",
+      "docs"
+    ],
+    "risks": [
+      "mutation_requested",
+      "file_mutation",
+      "new_project_bootstrap",
+      "needs_verification",
+      "ambiguous_stack_selection",
+      "deployment_target_unspecified"
+    ],
+    "artifacts": [
+      {
+        "name": "live_worker_greenfield_calculator_api_20260604-024851",
+        "type": "repository"
+      },
+      {
+        "name": "add",
+        "type": "http_endpoint"
+      },
+      {
+        "name": "subtract",
+        "type": "http_endpoint"
+      },
+      {
+        "name": "multiply",
+        "type": "http_endpoint"
+      },
+      {
+        "name": "divide",
+        "type": "http_endpoint"
+      },
+      {
+        "name": "health",
+        "type": "http_endpoint"
+      },
+      {
+        "name": "Dockerfile",
+        "type": "deployment_artifact"
+      },
+      {
+        "name": "README",
+        "type": "documentation"
+      },
+      {
+        "name": "JSON",
+        "type": "data_format"
+      }
+    ],
+    "context_needed": [
+      "existing_repo_tree",
+      "allowed_runtime_languages_and_versions",
+      "worker_runtime_local_verification_capabilities",
+      "expected_http_port_or_binding_convention",
+      "deployment_environment_target",
+      "error_response_schema_expectations",
+      "test_framework_preferences_or_constraints"
+    ],
+    "constraints": [
+      "target_locations_must_be_identified_before_mutation",
+      "mutation_requires_verification",
+      "api_responses_must_be_json",
+      "divide_by_zero_must_return_clear_non_success_error",
+      "invalid_input_must_return_clear_non_success_error",
+      "implementation_should_remain_small_and_maintainable",
+      "final_output_must_include_files_api_contract_test_evidence_and_remaining_risks"
+    ],
+    "complexity_hint": "medium",
+    "confidence": 0.92,
+    "ambiguity": [
+      "No required language/framework is specified, only selection criteria.",
+      "Exact deployment platform is not specified beyond Dockerfile or equivalent artifact.",
+      "Specific HTTP method/path conventions are not explicitly defined.",
+      "Required level of production hardening is qualitative ('production-shaped') rather than strictly specified.",
+      "Verification command expectations are not explicitly enumerated."
+    ],
+    "assumptions": [
+      "The named repository path exists and is the intended mutation target.",
+      "Any language/framework choice is acceptable if simple, maintainable, and locally verifiable.",
+      "Arithmetic operations should use standard calculator semantics.",
+      "Health endpoint is expected to provide a basic service status response.",
+      "A concise summary is expected after implementation and verification."
+    ],
+    "metadata": {
+      "decompressor_mode": "llm_prompt_chain",
+      "llm_prompt_chain": {
+        "mode": "completed",
+        "stages": [
+          "decompress_request",
+          "validate_envelope"
+        ],
+        "fallback": null,
+        "redacted_prompt_input": false,
+        "model_calls": 1
+      },
+      "decompressor_runtime": {
+        "elapsed_ms": 17396.408,
+        "failure_rate": 0.0,
+        "repair_rate": 0.0,
+        "latency_ms_p50": 17396.408,
+        "latency_ms_p95": 17396.408
+      },
+      "runtime_matrix": {
+        "trace_id": "trace_0001",
+        "started_at": "2026-06-03T20:18:51.845198+00:00",
+        "row_count": 2,
+        "rows": [
+          {
+            "seq": 1,
+            "timestamp": "2026-06-03T20:18:52.758392+00:00",
+            "component": "decompressor_runtime",
+            "stage": "decompress_request",
+            "event": "run_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": null,
+            "run_id": null,
+            "step_id": null,
+            "attempt_id": null,
+            "worker_type": null,
+            "elapsed_ms": null,
+            "details": {
+              "input_chars": 741
+            }
+          },
+          {
+            "seq": 2,
+            "timestamp": "2026-06-03T20:19:10.154917+00:00",
+            "component": "decompressor_runtime",
+            "stage": "decompress_request",
+            "event": "run_completed",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": null,
+            "run_id": null,
+            "step_id": null,
+            "attempt_id": null,
+            "worker_type": null,
+            "elapsed_ms": 17396.408,
+            "details": {
+              "model_calls": 1,
+              "confidence": 0.92,
+              "ambiguity_count": 5
+            }
+          }
+        ]
+      }
+    }
+  },
+  "plan": {
+    "plan_id": "plan_req_001_calculator_api_bootstrap",
+    "request_id": "req_001",
+    "planner": "phase_aware_execution_planner",
+    "objective": "Bootstrap a small, production-shaped, locally verifiable calculator JSON HTTP API in the target repository with tests, containerization, docs, and verified evidence.",
+    "strategy": "discovery_first_design_scoped_mutation_with_post_change_verification",
+    "execution_pattern": "discover_analyze_design_mutate_verify_finalize",
+    "steps": [
+      {
+        "step_id": "discover_repo_context",
+        "worker_type": "repo_worker",
+        "phase": "DISCOVER",
+        "mode": "observe_only",
+        "task_id": "calculator_api_bootstrap",
+        "instruction": "Known facts: The target is a greenfield calculator API bootstrap in repository live_worker_greenfield_calculator_api_20260604-024851 with JSON endpoints and deploy/test/docs requirements. Unknowns: Existing repo tree, baseline files, and current project state. Do now: Inspect repository structure and identify candidate implementation/test/docs/deployment locations without writing files. Do not do: Do not mutate files, run destructive commands, or assume writable scope from artifact names. Output: repo_inventory, candidate_paths, and current_state_evidence.",
+        "input_artifacts": [],
+        "output_artifacts": [
+          "repo_inventory",
+          "candidate_paths",
+          "current_state_evidence"
+        ],
+        "max_tool_calls": 3,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": true,
+          "write_files": false,
+          "run_commands": false,
+          "web_research": false,
+          "write_paths": [],
+          "write_paths_from_artifacts": []
+        }
+      },
+      {
+        "step_id": "analyze_runtime_and_dependencies",
+        "worker_type": "infra_worker",
+        "phase": "ANALYZE",
+        "mode": "observe_only",
+        "task_id": "calculator_api_bootstrap",
+        "instruction": "Known facts: repo_inventory, candidate_paths, and current_state_evidence are available; stack must be simple and locally verifiable in worker runtime. Unknowns: Available language/runtime/tool versions and whether required test/build/container commands are supported. Do now: Check runtime/tooling availability and derive dependency feasibility evidence for a minimal maintainable stack. Do not do: Do not write files, do not select a stack without evidence, and do not ignore capability gaps. Output: runtime_capabilities, dependency_artifacts, and analysis_evidence.",
+        "input_artifacts": [
+          "repo_inventory",
+          "candidate_paths",
+          "current_state_evidence"
+        ],
+        "output_artifacts": [
+          "runtime_capabilities",
+          "dependency_artifacts",
+          "analysis_evidence"
+        ],
+        "max_tool_calls": 4,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": true,
+          "write_files": false,
+          "run_commands": true,
+          "web_research": false,
+          "write_paths": [],
+          "write_paths_from_artifacts": []
+        }
+      },
+      {
+        "step_id": "design_scoped_implementation",
+        "worker_type": "research_worker",
+        "phase": "DESIGN",
+        "mode": "plan_only",
+        "task_id": "calculator_api_bootstrap",
+        "instruction": "Known facts: candidate_paths, runtime_capabilities, dependency_artifacts, and analysis_evidence are available; mutation requires scoped writes, rollback planning, and verification planning. Unknowns: Final stack choice and exact file-level mutation boundaries. Do now: Produce a concrete implementation design including API/error contract, test approach, narrow mutation scope, rollback plan, and verification plan aligned to constraints. Do not do: Do not mutate files, do not leave write scope broad/implicit, and do not omit rollback or verification strategy. Output: change_design, api_contract, test_plan, mutation_scope, rollback_plan, verification_plan, and allowed_write_paths.",
+        "input_artifacts": [
+          "candidate_paths",
+          "runtime_capabilities",
+          "dependency_artifacts",
+          "analysis_evidence"
+        ],
+        "output_artifacts": [
+          "change_design",
+          "api_contract",
+          "test_plan",
+          "mutation_scope",
+          "rollback_plan",
+          "verification_plan",
+          "allowed_write_paths"
+        ],
+        "max_tool_calls": 2,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": true,
+          "write_files": false,
+          "run_commands": false,
+          "web_research": false,
+          "write_paths": [],
+          "write_paths_from_artifacts": []
+        }
+      },
+      {
+        "step_id": "mutate_implement_calculator_api",
+        "worker_type": "code_worker",
+        "phase": "MUTATE",
+        "mode": "bounded_mutation",
+        "task_id": "calculator_api_bootstrap",
+        "instruction": "Known facts: change_design, api_contract, test_plan, mutation_scope, rollback_plan, verification_plan, allowed_write_paths, dependency_artifacts, and analysis_evidence define what to build and where to write. Unknowns: Minor implementation details discovered during coding. Do now: Implement the scoped calculator API, tests, deployment artifact, and README exactly within mutation_scope following design and dependency evidence. Do not do: Do not write outside scoped paths, do not deviate from JSON/error-handling requirements, and do not claim verification here. Output: change_summary, implemented_files, and rollback_patch.",
+        "input_artifacts": [
+          "change_design",
+          "api_contract",
+          "test_plan",
+          "mutation_scope",
+          "rollback_plan",
+          "verification_plan",
+          "allowed_write_paths",
+          "dependency_artifacts",
+          "analysis_evidence"
+        ],
+        "output_artifacts": [
+          "change_summary",
+          "implemented_files",
+          "rollback_patch"
+        ],
+        "max_tool_calls": 8,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": true,
+          "write_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_paths": [],
+          "write_paths_from_artifacts": [
+            "mutation_scope"
+          ]
+        }
+      },
+      {
+        "step_id": "verify_changes_and_tests",
+        "worker_type": "verify_worker",
+        "phase": "VERIFY",
+        "mode": "verify_only",
+        "task_id": "calculator_api_bootstrap",
+        "instruction": "Known facts: change_summary and implemented_files were produced within mutation_scope; analysis_evidence and verification_plan define expected behavior and checks; rollback_patch exists. Unknowns: Whether all endpoints, error paths, and deployment/test flows pass locally. Do now: Run focused verification to confirm API contract compliance, invalid input/divide-by-zero behavior, test execution, scope containment, and rollback readiness. Do not do: Do not mutate files, do not skip failing checks, and do not report success without command evidence. Output: verification_results, test_evidence, scope_verification, and residual_risks.",
+        "input_artifacts": [
+          "change_summary",
+          "implemented_files",
+          "mutation_scope",
+          "analysis_evidence",
+          "verification_plan",
+          "rollback_patch",
+          "api_contract"
+        ],
+        "output_artifacts": [
+          "verification_results",
+          "test_evidence",
+          "scope_verification",
+          "residual_risks"
+        ],
+        "max_tool_calls": 6,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": true,
+          "write_files": false,
+          "run_commands": true,
+          "web_research": false,
+          "write_paths": [],
+          "write_paths_from_artifacts": []
+        }
+      },
+      {
+        "step_id": "finalize_report",
+        "worker_type": "research_worker",
+        "phase": "FINALIZE",
+        "mode": "summarize_only",
+        "task_id": "calculator_api_bootstrap",
+        "instruction": "Known facts: implemented_files, api_contract, verification_results, test_evidence, scope_verification, and residual_risks are available. Unknowns: None material if verification artifacts are complete. Do now: Produce a concise final report summarizing created files, API contract, verification/test evidence, and remaining risks. Do not do: Do not mutate files, do not run commands, and do not omit unresolved risks. Output: final_report.",
+        "input_artifacts": [
+          "implemented_files",
+          "api_contract",
+          "verification_results",
+          "test_evidence",
+          "scope_verification",
+          "residual_risks"
+        ],
+        "output_artifacts": [
+          "final_report"
+        ],
+        "max_tool_calls": 0,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": false,
+          "write_files": false,
+          "run_commands": false,
+          "web_research": false,
+          "write_paths": [],
+          "write_paths_from_artifacts": []
+        }
+      }
+    ],
+    "budget": {
+      "max_tool_calls": 23,
+      "max_model_calls": 6,
+      "max_workers": 6,
+      "max_retries": 1
+    },
+    "global_invariants": [
+      "phase_order_enforced",
+      "no_write_before_design_outputs",
+      "writes_scoped_by_mutation_scope_only",
+      "rollback_plan_required_before_mutation",
+      "verify_after_write_with_command_evidence",
+      "no_claims_without_artifact_backed_evidence"
+    ],
+    "success_criteria": [
+      "Calculator API exposes JSON endpoints add/subtract/multiply/divide/health with clear non-success errors for invalid input and divide-by-zero.",
+      "Implementation remains small and maintainable with minimal dependencies/configuration and includes deployment artifact and README run/test/deploy instructions.",
+      "Verification artifacts show tests/checks executed successfully and final report includes files, API contract, test evidence, and residual risks."
+    ],
+    "metadata": {
+      "archetype": "phase_aware_mutation",
+      "complexity": "medium",
+      "source_request": "req_001",
+      "llm_planner": {
+        "mode": "completed",
+        "stages": [
+          "draft_plan",
+          "validate_plan"
+        ],
+        "model_calls": 1,
+        "repair_attempted": false,
+        "validation_errors": [],
+        "resolved_validation_errors": [],
+        "budget_auto_aligned": true,
+        "envelope_input_type": "greenfield_calculator_api_bootstrap",
+        "envelope_complexity_hint": "medium"
+      },
+      "planner_runtime": {
+        "mode": "llm_prompt_chain",
+        "fallback_reason": null
+      },
+      "runtime_matrix": {
+        "trace_id": "trace_0001",
+        "started_at": "2026-06-03T20:18:51.845198+00:00",
+        "row_count": 4,
+        "rows": [
+          {
+            "seq": 1,
+            "timestamp": "2026-06-03T20:18:52.758392+00:00",
+            "component": "decompressor_runtime",
+            "stage": "decompress_request",
+            "event": "run_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": null,
+            "run_id": null,
+            "step_id": null,
+            "attempt_id": null,
+            "worker_type": null,
+            "elapsed_ms": null,
+            "details": {
+              "input_chars": 741
+            }
+          },
+          {
+            "seq": 2,
+            "timestamp": "2026-06-03T20:19:10.154917+00:00",
+            "component": "decompressor_runtime",
+            "stage": "decompress_request",
+            "event": "run_completed",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": null,
+            "run_id": null,
+            "step_id": null,
+            "attempt_id": null,
+            "worker_type": null,
+            "elapsed_ms": 17396.408,
+            "details": {
+              "model_calls": 1,
+              "confidence": 0.92,
+              "ambiguity_count": 5
+            }
+          },
+          {
+            "seq": 3,
+            "timestamp": "2026-06-03T20:19:10.155130+00:00",
+            "component": "planner_runtime",
+            "stage": "draft_plan",
+            "event": "run_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": null,
+            "run_id": null,
+            "step_id": null,
+            "attempt_id": null,
+            "worker_type": null,
+            "elapsed_ms": null,
+            "details": {
+              "input_type": "greenfield_calculator_api_bootstrap",
+              "complexity_hint": "medium"
+            }
+          },
+          {
+            "seq": 4,
+            "timestamp": "2026-06-03T20:19:57.153125+00:00",
+            "component": "planner_runtime",
+            "stage": "draft_plan",
+            "event": "run_completed",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": null,
+            "step_id": null,
+            "attempt_id": null,
+            "worker_type": null,
+            "elapsed_ms": null,
+            "details": {
+              "planner": "phase_aware_execution_planner",
+              "step_count": 6,
+              "mode": "llm_prompt_chain"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "result": {
+    "run_id": "run_plan_req_001_calculator_api_bootstrap",
+    "producer": "worker_kernel",
+    "status": "failed",
+    "summary": "Execution stopped at step analyze_runtime_and_dependencies: command is not in the readonly allowlist: python3 --version; pip3 --version; pytest --version; node --version; npm --version; go version; docker --version; ruby --version",
+    "artifacts": [
+      {
+        "id": "discover_repo_context_repo_locator_tool_1",
+        "content": {
+          "instance": "repo_locator",
+          "tool_name": "repo_snapshot",
+          "arguments": {
+            "path": "."
+          },
+          "observation": {
+            "path": ".",
+            "directories": [],
+            "files": [],
+            "is_empty": true,
+            "test_candidates": [],
+            "config_files": [],
+            "git_status": {
+              "command": [
+                "git",
+                "status",
+                "--short"
+              ],
+              "env": {},
+              "stdout": "",
+              "stderr": "",
+              "returncode": 0
+            }
+          }
+        },
+        "kind": "tool_observation",
+        "producer": "repo_worker",
+        "step_id": "discover_repo_context",
+        "attempt_id": "discover_repo_context_attempt_1",
+        "trust_level": "worker_reported",
+        "metadata": {
+          "tool_name": "repo_snapshot",
+          "tool_index": 1
+        }
+      },
+      {
+        "id": "repo_inventory",
+        "content": {
+          "evidence": [
+            "repo_snapshot returned is_empty: true",
+            "files: []",
+            "directories: []",
+            "config_files: []"
+          ],
+          "notes": "The repository is completely empty. No files, directories, or configuration detected."
+        },
+        "kind": "worker_output",
+        "producer": "repo_worker",
+        "step_id": "discover_repo_context",
+        "attempt_id": "discover_repo_context_attempt_1",
+        "trust_level": "worker_reported",
+        "metadata": {}
+      },
+      {
+        "id": "candidate_paths",
+        "content": {
+          "evidence": [
+            "src/ (e.g., src/main.py, src/calculator.py)",
+            "tests/ (e.g., tests/test_api.py, tests/test_calculator.py)",
+            "Dockerfile",
+            "requirements.txt (or package.json / go.mod)",
+            "README.md",
+            ".gitignore"
+          ],
+          "notes": "Since the repository is empty, these are the proposed candidate paths for the greenfield calculator API bootstrap."
+        },
+        "kind": "worker_output",
+        "producer": "repo_worker",
+        "step_id": "discover_repo_context",
+        "attempt_id": "discover_repo_context_attempt_1",
+        "trust_level": "worker_reported",
+        "metadata": {}
+      },
+      {
+        "id": "current_state_evidence",
+        "content": {
+          "evidence": [
+            "git_status stdout: ''",
+            "git_status returncode: 0",
+            "is_empty: true"
+          ],
+          "notes": "Current state is an empty git repository with no commits, tracked files, or untracked changes."
+        },
+        "kind": "worker_output",
+        "producer": "repo_worker",
+        "step_id": "discover_repo_context",
+        "attempt_id": "discover_repo_context_attempt_1",
+        "trust_level": "worker_reported",
+        "metadata": {}
+      }
+    ],
+    "usage": {},
+    "errors": [
+      "command is not in the readonly allowlist: python3 --version; pip3 --version; pytest --version; node --version; npm --version; go version; docker --version; ruby --version"
+    ],
+    "warnings": [],
+    "metadata": {
+      "worker_results": [
+        {
+          "run_id": "run_plan_req_001_calculator_api_bootstrap",
+          "producer": "repo_worker",
+          "status": "completed",
+          "summary": "Repository inspection complete; the target repository is entirely empty, confirming a greenfield bootstrap scenario with proposed candidate paths for implementation, testing, and deployment.",
+          "artifacts": [
+            {
+              "id": "discover_repo_context_repo_locator_tool_1",
+              "content": {
+                "instance": "repo_locator",
+                "tool_name": "repo_snapshot",
+                "arguments": {
+                  "path": "."
+                },
+                "observation": {
+                  "path": ".",
+                  "directories": [],
+                  "files": [],
+                  "is_empty": true,
+                  "test_candidates": [],
+                  "config_files": [],
+                  "git_status": {
+                    "command": [
+                      "git",
+                      "status",
+                      "--short"
+                    ],
+                    "env": {},
+                    "stdout": "",
+                    "stderr": "",
+                    "returncode": 0
+                  }
+                }
+              },
+              "kind": "tool_observation",
+              "producer": "repo_worker",
+              "step_id": "discover_repo_context",
+              "attempt_id": null,
+              "trust_level": "worker_reported",
+              "metadata": {
+                "tool_name": "repo_snapshot",
+                "tool_index": 1
+              }
+            },
+            {
+              "id": "repo_inventory",
+              "content": {
+                "evidence": [
+                  "repo_snapshot returned is_empty: true",
+                  "files: []",
+                  "directories: []",
+                  "config_files: []"
+                ],
+                "notes": "The repository is completely empty. No files, directories, or configuration detected."
+              },
+              "kind": "worker_output",
+              "producer": null,
+              "step_id": null,
+              "attempt_id": null,
+              "trust_level": "worker_reported",
+              "metadata": {}
+            },
+            {
+              "id": "candidate_paths",
+              "content": {
+                "evidence": [
+                  "src/ (e.g., src/main.py, src/calculator.py)",
+                  "tests/ (e.g., tests/test_api.py, tests/test_calculator.py)",
+                  "Dockerfile",
+                  "requirements.txt (or package.json / go.mod)",
+                  "README.md",
+                  ".gitignore"
+                ],
+                "notes": "Since the repository is empty, these are the proposed candidate paths for the greenfield calculator API bootstrap."
+              },
+              "kind": "worker_output",
+              "producer": null,
+              "step_id": null,
+              "attempt_id": null,
+              "trust_level": "worker_reported",
+              "metadata": {}
+            },
+            {
+              "id": "current_state_evidence",
+              "content": {
+                "evidence": [
+                  "git_status stdout: ''",
+                  "git_status returncode: 0",
+                  "is_empty: true"
+                ],
+                "notes": "Current state is an empty git repository with no commits, tracked files, or untracked changes."
+              },
+              "kind": "worker_output",
+              "producer": null,
+              "step_id": null,
+              "attempt_id": null,
+              "trust_level": "worker_reported",
+              "metadata": {}
+            }
+          ],
+          "usage": {
+            "tool_calls": 1,
+            "model_calls": 2
+          },
+          "errors": [],
+          "warnings": [],
+          "metadata": {
+            "worker_type": "repo_worker",
+            "worker_instance": "repo_locator",
+            "worker_group_results": [
+              {
+                "run_id": "run_plan_req_001_calculator_api_bootstrap",
+                "producer": "repo_worker",
+                "status": "completed",
+                "summary": "Repository inspection complete; the target repository is entirely empty, confirming a greenfield bootstrap scenario with proposed candidate paths for implementation, testing, and deployment.",
+                "artifacts": [
+                  {
+                    "id": "repo_inventory",
+                    "content": {
+                      "evidence": [
+                        "repo_snapshot returned is_empty: true",
+                        "files: []",
+                        "directories: []",
+                        "config_files: []"
+                      ],
+                      "notes": "The repository is completely empty. No files, directories, or configuration detected."
+                    },
+                    "kind": "worker_output",
+                    "producer": null,
+                    "step_id": null,
+                    "attempt_id": null,
+                    "trust_level": "worker_reported",
+                    "metadata": {}
+                  },
+                  {
+                    "id": "candidate_paths",
+                    "content": {
+                      "evidence": [
+                        "src/ (e.g., src/main.py, src/calculator.py)",
+                        "tests/ (e.g., tests/test_api.py, tests/test_calculator.py)",
+                        "Dockerfile",
+                        "requirements.txt (or package.json / go.mod)",
+                        "README.md",
+                        ".gitignore"
+                      ],
+                      "notes": "Since the repository is empty, these are the proposed candidate paths for the greenfield calculator API bootstrap."
+                    },
+                    "kind": "worker_output",
+                    "producer": null,
+                    "step_id": null,
+                    "attempt_id": null,
+                    "trust_level": "worker_reported",
+                    "metadata": {}
+                  },
+                  {
+                    "id": "current_state_evidence",
+                    "content": {
+                      "evidence": [
+                        "git_status stdout: ''",
+                        "git_status returncode: 0",
+                        "is_empty: true"
+                      ],
+                      "notes": "Current state is an empty git repository with no commits, tracked files, or untracked changes."
+                    },
+                    "kind": "worker_output",
+                    "producer": null,
+                    "step_id": null,
+                    "attempt_id": null,
+                    "trust_level": "worker_reported",
+                    "metadata": {}
+                  }
+                ],
+                "usage": {
+                  "tool_calls": 1,
+                  "model_calls": 2
+                },
+                "errors": [],
+                "warnings": [],
+                "metadata": {
+                  "worker_type": "repo_worker",
+                  "worker_instance": "repo_locator"
+                }
+              }
+            ],
+            "skipped_worker_instances": [
+              "repo_reader",
+              "repo_summarizer"
+            ],
+            "attempt_id": "discover_repo_context_attempt_1"
+          }
+        },
+        {
+          "run_id": "run_plan_req_001_calculator_api_bootstrap",
+          "producer": "infra_worker",
+          "status": "failed",
+          "summary": "command is not in the readonly allowlist: python3 --version; python3 -m pip --version; python3 -m pytest --version; node --version; npm --version; go version; docker --version; git --version",
+          "artifacts": [
+            {
+              "id": "repo_inventory",
+              "content": {
+                "evidence": [
+                  "repo_snapshot returned is_empty: true",
+                  "files: []",
+                  "directories: []",
+                  "config_files: []"
+                ],
+                "notes": "The repository is completely empty. No files, directories, or configuration detected."
+              },
+              "kind": "worker_output",
+              "producer": "repo_worker",
+              "step_id": "discover_repo_context",
+              "attempt_id": "discover_repo_context_attempt_1",
+              "trust_level": "worker_reported",
+              "metadata": {}
+            },
+            {
+              "id": "candidate_paths",
+              "content": {
+                "evidence": [
+                  "src/ (e.g., src/main.py, src/calculator.py)",
+                  "tests/ (e.g., tests/test_api.py, tests/test_calculator.py)",
+                  "Dockerfile",
+                  "requirements.txt (or package.json / go.mod)",
+                  "README.md",
+                  ".gitignore"
+                ],
+                "notes": "Since the repository is empty, these are the proposed candidate paths for the greenfield calculator API bootstrap."
+              },
+              "kind": "worker_output",
+              "producer": "repo_worker",
+              "step_id": "discover_repo_context",
+              "attempt_id": "discover_repo_context_attempt_1",
+              "trust_level": "worker_reported",
+              "metadata": {}
+            },
+            {
+              "id": "current_state_evidence",
+              "content": {
+                "evidence": [
+                  "git_status stdout: ''",
+                  "git_status returncode: 0",
+                  "is_empty: true"
+                ],
+                "notes": "Current state is an empty git repository with no commits, tracked files, or untracked changes."
+              },
+              "kind": "worker_output",
+              "producer": "repo_worker",
+              "step_id": "discover_repo_context",
+              "attempt_id": "discover_repo_context_attempt_1",
+              "trust_level": "worker_reported",
+              "metadata": {}
+            }
+          ],
+          "usage": {
+            "tool_calls": 1,
+            "model_calls": 1
+          },
+          "errors": [
+            "command is not in the readonly allowlist: python3 --version; python3 -m pip --version; python3 -m pytest --version; node --version; npm --version; go version; docker --version; git --version"
+          ],
+          "warnings": [],
+          "metadata": {
+            "issues": [
+              {
+                "issue_type": "instance_failure",
+                "code": "tool_permission_denied",
+                "message": "command is not in the readonly allowlist: python3 --version; python3 -m pip --version; python3 -m pytest --version; node --version; npm --version; go version; docker --version; git --version",
+                "step_id": "analyze_runtime_and_dependencies",
+                "worker_type": "infra_worker",
+                "attempt_id": null,
+                "retryable": true,
+                "metadata": {
+                  "worker_instance": "infra_diagnoser"
+                }
+              }
+            ],
+            "issue_type": "instance_failure",
+            "issue_code": "tool_permission_denied",
+            "retryable": true,
+            "worker_type": "infra_worker",
+            "worker_instance": "infra_diagnoser",
+            "worker_group_results": [
+              {
+                "run_id": "run_plan_req_001_calculator_api_bootstrap",
+                "producer": "infra_worker",
+                "status": "failed",
+                "summary": "command is not in the readonly allowlist: python3 --version; python3 -m pip --version; python3 -m pytest --version; node --version; npm --version; go version; docker --version; git --version",
+                "artifacts": [],
+                "usage": {
+                  "tool_calls": 1,
+                  "model_calls": 1
+                },
+                "errors": [
+                  "command is not in the readonly allowlist: python3 --version; python3 -m pip --version; python3 -m pytest --version; node --version; npm --version; go version; docker --version; git --version"
+                ],
+                "warnings": [],
+                "metadata": {
+                  "issues": [
+                    {
+                      "issue_type": "instance_failure",
+                      "code": "tool_permission_denied",
+                      "message": "command is not in the readonly allowlist: python3 --version; python3 -m pip --version; python3 -m pytest --version; node --version; npm --version; go version; docker --version; git --version",
+                      "step_id": "analyze_runtime_and_dependencies",
+                      "worker_type": "infra_worker",
+                      "attempt_id": null,
+                      "retryable": true,
+                      "metadata": {
+                        "worker_instance": "infra_diagnoser"
+                      }
+                    }
+                  ],
+                  "issue_type": "instance_failure",
+                  "issue_code": "tool_permission_denied",
+                  "retryable": true,
+                  "worker_type": "infra_worker",
+                  "worker_instance": "infra_diagnoser"
+                }
+              }
+            ],
+            "skipped_worker_instances": [],
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_1"
+          }
+        },
+        {
+          "run_id": "run_plan_req_001_calculator_api_bootstrap",
+          "producer": "infra_worker",
+          "status": "failed",
+          "summary": "command is not in the readonly allowlist: python3 --version || true; pip3 --version || true; pytest --version || true; node --version || true; npm --version || true; go version || true; docker --version || true; git --version || true",
+          "artifacts": [
+            {
+              "id": "repo_inventory",
+              "content": {
+                "evidence": [
+                  "repo_snapshot returned is_empty: true",
+                  "files: []",
+                  "directories: []",
+                  "config_files: []"
+                ],
+                "notes": "The repository is completely empty. No files, directories, or configuration detected."
+              },
+              "kind": "worker_output",
+              "producer": "repo_worker",
+              "step_id": "discover_repo_context",
+              "attempt_id": "discover_repo_context_attempt_1",
+              "trust_level": "worker_reported",
+              "metadata": {}
+            },
+            {
+              "id": "candidate_paths",
+              "content": {
+                "evidence": [
+                  "src/ (e.g., src/main.py, src/calculator.py)",
+                  "tests/ (e.g., tests/test_api.py, tests/test_calculator.py)",
+                  "Dockerfile",
+                  "requirements.txt (or package.json / go.mod)",
+                  "README.md",
+                  ".gitignore"
+                ],
+                "notes": "Since the repository is empty, these are the proposed candidate paths for the greenfield calculator API bootstrap."
+              },
+              "kind": "worker_output",
+              "producer": "repo_worker",
+              "step_id": "discover_repo_context",
+              "attempt_id": "discover_repo_context_attempt_1",
+              "trust_level": "worker_reported",
+              "metadata": {}
+            },
+            {
+              "id": "current_state_evidence",
+              "content": {
+                "evidence": [
+                  "git_status stdout: ''",
+                  "git_status returncode: 0",
+                  "is_empty: true"
+                ],
+                "notes": "Current state is an empty git repository with no commits, tracked files, or untracked changes."
+              },
+              "kind": "worker_output",
+              "producer": "repo_worker",
+              "step_id": "discover_repo_context",
+              "attempt_id": "discover_repo_context_attempt_1",
+              "trust_level": "worker_reported",
+              "metadata": {}
+            }
+          ],
+          "usage": {
+            "tool_calls": 1,
+            "model_calls": 1
+          },
+          "errors": [
+            "command is not in the readonly allowlist: python3 --version || true; pip3 --version || true; pytest --version || true; node --version || true; npm --version || true; go version || true; docker --version || true; git --version || true"
+          ],
+          "warnings": [],
+          "metadata": {
+            "issues": [
+              {
+                "issue_type": "instance_failure",
+                "code": "tool_permission_denied",
+                "message": "command is not in the readonly allowlist: python3 --version || true; pip3 --version || true; pytest --version || true; node --version || true; npm --version || true; go version || true; docker --version || true; git --version || true",
+                "step_id": "analyze_runtime_and_dependencies",
+                "worker_type": "infra_worker",
+                "attempt_id": null,
+                "retryable": true,
+                "metadata": {
+                  "worker_instance": "infra_diagnoser"
+                }
+              }
+            ],
+            "issue_type": "instance_failure",
+            "issue_code": "tool_permission_denied",
+            "retryable": true,
+            "worker_type": "infra_worker",
+            "worker_instance": "infra_diagnoser",
+            "worker_group_results": [
+              {
+                "run_id": "run_plan_req_001_calculator_api_bootstrap",
+                "producer": "infra_worker",
+                "status": "failed",
+                "summary": "command is not in the readonly allowlist: python3 --version || true; pip3 --version || true; pytest --version || true; node --version || true; npm --version || true; go version || true; docker --version || true; git --version || true",
+                "artifacts": [],
+                "usage": {
+                  "tool_calls": 1,
+                  "model_calls": 1
+                },
+                "errors": [
+                  "command is not in the readonly allowlist: python3 --version || true; pip3 --version || true; pytest --version || true; node --version || true; npm --version || true; go version || true; docker --version || true; git --version || true"
+                ],
+                "warnings": [],
+                "metadata": {
+                  "issues": [
+                    {
+                      "issue_type": "instance_failure",
+                      "code": "tool_permission_denied",
+                      "message": "command is not in the readonly allowlist: python3 --version || true; pip3 --version || true; pytest --version || true; node --version || true; npm --version || true; go version || true; docker --version || true; git --version || true",
+                      "step_id": "analyze_runtime_and_dependencies",
+                      "worker_type": "infra_worker",
+                      "attempt_id": null,
+                      "retryable": true,
+                      "metadata": {
+                        "worker_instance": "infra_diagnoser"
+                      }
+                    }
+                  ],
+                  "issue_type": "instance_failure",
+                  "issue_code": "tool_permission_denied",
+                  "retryable": true,
+                  "worker_type": "infra_worker",
+                  "worker_instance": "infra_diagnoser"
+                }
+              }
+            ],
+            "skipped_worker_instances": [],
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_2"
+          }
+        },
+        {
+          "run_id": "run_plan_req_001_calculator_api_bootstrap",
+          "producer": "infra_worker",
+          "status": "failed",
+          "summary": "command is not in the readonly allowlist: python3 --version; pip3 --version; pytest --version; node --version; npm --version; go version; docker --version; ruby --version",
+          "artifacts": [
+            {
+              "id": "repo_inventory",
+              "content": {
+                "evidence": [
+                  "repo_snapshot returned is_empty: true",
+                  "files: []",
+                  "directories: []",
+                  "config_files: []"
+                ],
+                "notes": "The repository is completely empty. No files, directories, or configuration detected."
+              },
+              "kind": "worker_output",
+              "producer": "repo_worker",
+              "step_id": "discover_repo_context",
+              "attempt_id": "discover_repo_context_attempt_1",
+              "trust_level": "worker_reported",
+              "metadata": {}
+            },
+            {
+              "id": "candidate_paths",
+              "content": {
+                "evidence": [
+                  "src/ (e.g., src/main.py, src/calculator.py)",
+                  "tests/ (e.g., tests/test_api.py, tests/test_calculator.py)",
+                  "Dockerfile",
+                  "requirements.txt (or package.json / go.mod)",
+                  "README.md",
+                  ".gitignore"
+                ],
+                "notes": "Since the repository is empty, these are the proposed candidate paths for the greenfield calculator API bootstrap."
+              },
+              "kind": "worker_output",
+              "producer": "repo_worker",
+              "step_id": "discover_repo_context",
+              "attempt_id": "discover_repo_context_attempt_1",
+              "trust_level": "worker_reported",
+              "metadata": {}
+            },
+            {
+              "id": "current_state_evidence",
+              "content": {
+                "evidence": [
+                  "git_status stdout: ''",
+                  "git_status returncode: 0",
+                  "is_empty: true"
+                ],
+                "notes": "Current state is an empty git repository with no commits, tracked files, or untracked changes."
+              },
+              "kind": "worker_output",
+              "producer": "repo_worker",
+              "step_id": "discover_repo_context",
+              "attempt_id": "discover_repo_context_attempt_1",
+              "trust_level": "worker_reported",
+              "metadata": {}
+            }
+          ],
+          "usage": {
+            "tool_calls": 1,
+            "model_calls": 1
+          },
+          "errors": [
+            "command is not in the readonly allowlist: python3 --version; pip3 --version; pytest --version; node --version; npm --version; go version; docker --version; ruby --version"
+          ],
+          "warnings": [],
+          "metadata": {
+            "issues": [
+              {
+                "issue_type": "instance_failure",
+                "code": "tool_permission_denied",
+                "message": "command is not in the readonly allowlist: python3 --version; pip3 --version; pytest --version; node --version; npm --version; go version; docker --version; ruby --version",
+                "step_id": "analyze_runtime_and_dependencies",
+                "worker_type": "infra_worker",
+                "attempt_id": null,
+                "retryable": true,
+                "metadata": {
+                  "worker_instance": "infra_diagnoser"
+                }
+              }
+            ],
+            "issue_type": "instance_failure",
+            "issue_code": "tool_permission_denied",
+            "retryable": true,
+            "worker_type": "infra_worker",
+            "worker_instance": "infra_diagnoser",
+            "worker_group_results": [
+              {
+                "run_id": "run_plan_req_001_calculator_api_bootstrap",
+                "producer": "infra_worker",
+                "status": "failed",
+                "summary": "command is not in the readonly allowlist: python3 --version; pip3 --version; pytest --version; node --version; npm --version; go version; docker --version; ruby --version",
+                "artifacts": [],
+                "usage": {
+                  "tool_calls": 1,
+                  "model_calls": 1
+                },
+                "errors": [
+                  "command is not in the readonly allowlist: python3 --version; pip3 --version; pytest --version; node --version; npm --version; go version; docker --version; ruby --version"
+                ],
+                "warnings": [],
+                "metadata": {
+                  "issues": [
+                    {
+                      "issue_type": "instance_failure",
+                      "code": "tool_permission_denied",
+                      "message": "command is not in the readonly allowlist: python3 --version; pip3 --version; pytest --version; node --version; npm --version; go version; docker --version; ruby --version",
+                      "step_id": "analyze_runtime_and_dependencies",
+                      "worker_type": "infra_worker",
+                      "attempt_id": null,
+                      "retryable": true,
+                      "metadata": {
+                        "worker_instance": "infra_diagnoser"
+                      }
+                    }
+                  ],
+                  "issue_type": "instance_failure",
+                  "issue_code": "tool_permission_denied",
+                  "retryable": true,
+                  "worker_type": "infra_worker",
+                  "worker_instance": "infra_diagnoser"
+                }
+              }
+            ],
+            "skipped_worker_instances": [],
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_3"
+          }
+        }
+      ],
+      "issues": [
+        {
+          "issue_type": "instance_failure",
+          "code": "tool_permission_denied",
+          "message": "command is not in the readonly allowlist: python3 --version; pip3 --version; pytest --version; node --version; npm --version; go version; docker --version; ruby --version",
+          "step_id": "analyze_runtime_and_dependencies",
+          "worker_type": "infra_worker",
+          "attempt_id": null,
+          "retryable": true,
+          "metadata": {
+            "worker_instance": "infra_diagnoser"
+          }
+        }
+      ],
+      "partial_artifacts": [],
+      "failed_step_artifacts": [
+        {
+          "id": "repo_inventory",
+          "content": {
+            "evidence": [
+              "repo_snapshot returned is_empty: true",
+              "files: []",
+              "directories: []",
+              "config_files: []"
+            ],
+            "notes": "The repository is completely empty. No files, directories, or configuration detected."
+          },
+          "kind": "worker_output",
+          "producer": "repo_worker",
+          "step_id": "discover_repo_context",
+          "attempt_id": "discover_repo_context_attempt_1",
+          "trust_level": "worker_reported",
+          "metadata": {}
+        },
+        {
+          "id": "candidate_paths",
+          "content": {
+            "evidence": [
+              "src/ (e.g., src/main.py, src/calculator.py)",
+              "tests/ (e.g., tests/test_api.py, tests/test_calculator.py)",
+              "Dockerfile",
+              "requirements.txt (or package.json / go.mod)",
+              "README.md",
+              ".gitignore"
+            ],
+            "notes": "Since the repository is empty, these are the proposed candidate paths for the greenfield calculator API bootstrap."
+          },
+          "kind": "worker_output",
+          "producer": "repo_worker",
+          "step_id": "discover_repo_context",
+          "attempt_id": "discover_repo_context_attempt_1",
+          "trust_level": "worker_reported",
+          "metadata": {}
+        },
+        {
+          "id": "current_state_evidence",
+          "content": {
+            "evidence": [
+              "git_status stdout: ''",
+              "git_status returncode: 0",
+              "is_empty: true"
+            ],
+            "notes": "Current state is an empty git repository with no commits, tracked files, or untracked changes."
+          },
+          "kind": "worker_output",
+          "producer": "repo_worker",
+          "step_id": "discover_repo_context",
+          "attempt_id": "discover_repo_context_attempt_1",
+          "trust_level": "worker_reported",
+          "metadata": {}
+        },
+        {
+          "id": "repo_inventory",
+          "content": {
+            "evidence": [
+              "repo_snapshot returned is_empty: true",
+              "files: []",
+              "directories: []",
+              "config_files: []"
+            ],
+            "notes": "The repository is completely empty. No files, directories, or configuration detected."
+          },
+          "kind": "worker_output",
+          "producer": "repo_worker",
+          "step_id": "discover_repo_context",
+          "attempt_id": "discover_repo_context_attempt_1",
+          "trust_level": "worker_reported",
+          "metadata": {}
+        },
+        {
+          "id": "candidate_paths",
+          "content": {
+            "evidence": [
+              "src/ (e.g., src/main.py, src/calculator.py)",
+              "tests/ (e.g., tests/test_api.py, tests/test_calculator.py)",
+              "Dockerfile",
+              "requirements.txt (or package.json / go.mod)",
+              "README.md",
+              ".gitignore"
+            ],
+            "notes": "Since the repository is empty, these are the proposed candidate paths for the greenfield calculator API bootstrap."
+          },
+          "kind": "worker_output",
+          "producer": "repo_worker",
+          "step_id": "discover_repo_context",
+          "attempt_id": "discover_repo_context_attempt_1",
+          "trust_level": "worker_reported",
+          "metadata": {}
+        },
+        {
+          "id": "current_state_evidence",
+          "content": {
+            "evidence": [
+              "git_status stdout: ''",
+              "git_status returncode: 0",
+              "is_empty: true"
+            ],
+            "notes": "Current state is an empty git repository with no commits, tracked files, or untracked changes."
+          },
+          "kind": "worker_output",
+          "producer": "repo_worker",
+          "step_id": "discover_repo_context",
+          "attempt_id": "discover_repo_context_attempt_1",
+          "trust_level": "worker_reported",
+          "metadata": {}
+        },
+        {
+          "id": "repo_inventory",
+          "content": {
+            "evidence": [
+              "repo_snapshot returned is_empty: true",
+              "files: []",
+              "directories: []",
+              "config_files: []"
+            ],
+            "notes": "The repository is completely empty. No files, directories, or configuration detected."
+          },
+          "kind": "worker_output",
+          "producer": "repo_worker",
+          "step_id": "discover_repo_context",
+          "attempt_id": "discover_repo_context_attempt_1",
+          "trust_level": "worker_reported",
+          "metadata": {}
+        },
+        {
+          "id": "candidate_paths",
+          "content": {
+            "evidence": [
+              "src/ (e.g., src/main.py, src/calculator.py)",
+              "tests/ (e.g., tests/test_api.py, tests/test_calculator.py)",
+              "Dockerfile",
+              "requirements.txt (or package.json / go.mod)",
+              "README.md",
+              ".gitignore"
+            ],
+            "notes": "Since the repository is empty, these are the proposed candidate paths for the greenfield calculator API bootstrap."
+          },
+          "kind": "worker_output",
+          "producer": "repo_worker",
+          "step_id": "discover_repo_context",
+          "attempt_id": "discover_repo_context_attempt_1",
+          "trust_level": "worker_reported",
+          "metadata": {}
+        },
+        {
+          "id": "current_state_evidence",
+          "content": {
+            "evidence": [
+              "git_status stdout: ''",
+              "git_status returncode: 0",
+              "is_empty: true"
+            ],
+            "notes": "Current state is an empty git repository with no commits, tracked files, or untracked changes."
+          },
+          "kind": "worker_output",
+          "producer": "repo_worker",
+          "step_id": "discover_repo_context",
+          "attempt_id": "discover_repo_context_attempt_1",
+          "trust_level": "worker_reported",
+          "metadata": {}
+        }
+      ],
+      "retry_count": 2,
+      "instance_attempts_used": 4,
+      "issue_type": "instance_failure",
+      "issue_code": "tool_permission_denied",
+      "retryable": true,
+      "worker_type": "infra_worker",
+      "worker_instance": "infra_diagnoser",
+      "worker_group_results": [
+        {
+          "run_id": "run_plan_req_001_calculator_api_bootstrap",
+          "producer": "infra_worker",
+          "status": "failed",
+          "summary": "command is not in the readonly allowlist: python3 --version; pip3 --version; pytest --version; node --version; npm --version; go version; docker --version; ruby --version",
+          "artifacts": [],
+          "usage": {
+            "tool_calls": 1,
+            "model_calls": 1
+          },
+          "errors": [
+            "command is not in the readonly allowlist: python3 --version; pip3 --version; pytest --version; node --version; npm --version; go version; docker --version; ruby --version"
+          ],
+          "warnings": [],
+          "metadata": {
+            "issues": [
+              {
+                "issue_type": "instance_failure",
+                "code": "tool_permission_denied",
+                "message": "command is not in the readonly allowlist: python3 --version; pip3 --version; pytest --version; node --version; npm --version; go version; docker --version; ruby --version",
+                "step_id": "analyze_runtime_and_dependencies",
+                "worker_type": "infra_worker",
+                "attempt_id": null,
+                "retryable": true,
+                "metadata": {
+                  "worker_instance": "infra_diagnoser"
+                }
+              }
+            ],
+            "issue_type": "instance_failure",
+            "issue_code": "tool_permission_denied",
+            "retryable": true,
+            "worker_type": "infra_worker",
+            "worker_instance": "infra_diagnoser"
+          }
+        }
+      ],
+      "skipped_worker_instances": [],
+      "attempt_id": "analyze_runtime_and_dependencies_attempt_3",
+      "control_plane_adjustments": [
+        {
+          "field": "budget.max_retries",
+          "from": 1,
+          "to": 2,
+          "reason": "worker runtime retries are capped per stage, with two instance retries per stage"
+        },
+        {
+          "step_id": "discover_repo_context",
+          "worker_type": "repo_worker",
+          "field": "max_model_calls",
+          "from": 1,
+          "to": 5,
+          "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+        },
+        {
+          "step_id": "analyze_runtime_and_dependencies",
+          "worker_type": "infra_worker",
+          "field": "max_model_calls",
+          "from": 1,
+          "to": 2,
+          "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+        },
+        {
+          "step_id": "design_scoped_implementation",
+          "worker_type": "research_worker",
+          "field": "max_model_calls",
+          "from": 1,
+          "to": 2,
+          "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+        },
+        {
+          "step_id": "mutate_implement_calculator_api",
+          "worker_type": "code_worker",
+          "field": "max_model_calls",
+          "from": 1,
+          "to": 2,
+          "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+        },
+        {
+          "step_id": "verify_changes_and_tests",
+          "worker_type": "verify_worker",
+          "field": "max_model_calls",
+          "from": 1,
+          "to": 2,
+          "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+        },
+        {
+          "field": "budget.max_tool_calls",
+          "from": 23,
+          "to": 161,
+          "reason": "budget must cover kernel-owned per-stage retry tool-call envelope"
+        },
+        {
+          "field": "budget.max_model_calls",
+          "from": 6,
+          "to": 98,
+          "reason": "budget must cover kernel-owned per-stage retry model-call envelope"
+        }
+      ],
+      "runtime_matrix": {
+        "trace_id": "trace_0001",
+        "started_at": "2026-06-03T20:18:51.845198+00:00",
+        "row_count": 56,
+        "rows": [
+          {
+            "seq": 1,
+            "timestamp": "2026-06-03T20:18:52.758392+00:00",
+            "component": "decompressor_runtime",
+            "stage": "decompress_request",
+            "event": "run_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": null,
+            "run_id": null,
+            "step_id": null,
+            "attempt_id": null,
+            "worker_type": null,
+            "elapsed_ms": null,
+            "details": {
+              "input_chars": 741
+            }
+          },
+          {
+            "seq": 2,
+            "timestamp": "2026-06-03T20:19:10.154917+00:00",
+            "component": "decompressor_runtime",
+            "stage": "decompress_request",
+            "event": "run_completed",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": null,
+            "run_id": null,
+            "step_id": null,
+            "attempt_id": null,
+            "worker_type": null,
+            "elapsed_ms": 17396.408,
+            "details": {
+              "model_calls": 1,
+              "confidence": 0.92,
+              "ambiguity_count": 5
+            }
+          },
+          {
+            "seq": 3,
+            "timestamp": "2026-06-03T20:19:10.155130+00:00",
+            "component": "planner_runtime",
+            "stage": "draft_plan",
+            "event": "run_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": null,
+            "run_id": null,
+            "step_id": null,
+            "attempt_id": null,
+            "worker_type": null,
+            "elapsed_ms": null,
+            "details": {
+              "input_type": "greenfield_calculator_api_bootstrap",
+              "complexity_hint": "medium"
+            }
+          },
+          {
+            "seq": 4,
+            "timestamp": "2026-06-03T20:19:57.153125+00:00",
+            "component": "planner_runtime",
+            "stage": "draft_plan",
+            "event": "run_completed",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": null,
+            "step_id": null,
+            "attempt_id": null,
+            "worker_type": null,
+            "elapsed_ms": null,
+            "details": {
+              "planner": "phase_aware_execution_planner",
+              "step_count": 6,
+              "mode": "llm_prompt_chain"
+            }
+          },
+          {
+            "seq": 5,
+            "timestamp": "2026-06-03T20:19:57.153491+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "plan_execution",
+            "event": "run_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": null,
+            "attempt_id": null,
+            "worker_type": null,
+            "elapsed_ms": null,
+            "details": {
+              "planner": "phase_aware_execution_planner",
+              "step_count": 6,
+              "replan_depth": 0
+            }
+          },
+          {
+            "seq": 6,
+            "timestamp": "2026-06-03T20:19:57.153502+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "plan_execution",
+            "event": "plan_normalized",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": null,
+            "attempt_id": null,
+            "worker_type": null,
+            "elapsed_ms": null,
+            "details": {
+              "adjustments": [
+                {
+                  "field": "budget.max_retries",
+                  "from": 1,
+                  "to": 2,
+                  "reason": "worker runtime retries are capped per stage, with two instance retries per stage"
+                },
+                {
+                  "step_id": "discover_repo_context",
+                  "worker_type": "repo_worker",
+                  "field": "max_model_calls",
+                  "from": 1,
+                  "to": 5,
+                  "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+                },
+                {
+                  "step_id": "analyze_runtime_and_dependencies",
+                  "worker_type": "infra_worker",
+                  "field": "max_model_calls",
+                  "from": 1,
+                  "to": 2,
+                  "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+                },
+                {
+                  "step_id": "design_scoped_implementation",
+                  "worker_type": "research_worker",
+                  "field": "max_model_calls",
+                  "from": 1,
+                  "to": 2,
+                  "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+                },
+                {
+                  "step_id": "mutate_implement_calculator_api",
+                  "worker_type": "code_worker",
+                  "field": "max_model_calls",
+                  "from": 1,
+                  "to": 2,
+                  "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+                },
+                {
+                  "step_id": "verify_changes_and_tests",
+                  "worker_type": "verify_worker",
+                  "field": "max_model_calls",
+                  "from": 1,
+                  "to": 2,
+                  "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+                },
+                {
+                  "field": "budget.max_tool_calls",
+                  "from": 23,
+                  "to": 161,
+                  "reason": "budget must cover kernel-owned per-stage retry tool-call envelope"
+                },
+                {
+                  "field": "budget.max_model_calls",
+                  "from": 6,
+                  "to": 98,
+                  "reason": "budget must cover kernel-owned per-stage retry model-call envelope"
+                }
+              ]
+            }
+          },
+          {
+            "seq": 7,
+            "timestamp": "2026-06-03T20:19:57.153790+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "plan_execution",
+            "event": "preflight_completed",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": null,
+            "attempt_id": null,
+            "worker_type": null,
+            "elapsed_ms": null,
+            "details": {
+              "budget": {
+                "max_tool_calls": 161,
+                "max_model_calls": 98,
+                "max_workers": 6,
+                "max_retries": 2
+              }
+            }
+          },
+          {
+            "seq": 8,
+            "timestamp": "2026-06-03T20:19:57.153871+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "DISCOVER",
+            "event": "step_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_context",
+            "attempt_id": null,
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "mode": "observe_only",
+              "input_artifacts": [],
+              "output_artifacts": [
+                "repo_inventory",
+                "candidate_paths",
+                "current_state_evidence"
+              ]
+            }
+          },
+          {
+            "seq": 9,
+            "timestamp": "2026-06-03T20:19:57.153979+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "DISCOVER",
+            "event": "task_compiled",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_context",
+            "attempt_id": null,
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "input_count": 0,
+              "expected_outputs": [
+                "repo_inventory",
+                "candidate_paths",
+                "current_state_evidence"
+              ]
+            }
+          },
+          {
+            "seq": 10,
+            "timestamp": "2026-06-03T20:19:57.154034+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "DISCOVER",
+            "event": "attempt_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_context",
+            "attempt_id": "discover_repo_context_attempt_1",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "attempt_number": 1
+            }
+          },
+          {
+            "seq": 11,
+            "timestamp": "2026-06-03T20:19:57.154273+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_group_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_context",
+            "attempt_id": "discover_repo_context_attempt_1",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": null,
+              "template_count": 3
+            }
+          },
+          {
+            "seq": 12,
+            "timestamp": "2026-06-03T20:19:57.154294+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_instance_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_context",
+            "attempt_id": "discover_repo_context_attempt_1",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_locator",
+              "role": "Locate target files, tests, and repo clues with cheap readonly discovery tools."
+            }
+          },
+          {
+            "seq": 13,
+            "timestamp": "2026-06-03T20:19:57.154310+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_model_call_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_context",
+            "attempt_id": "discover_repo_context_attempt_1",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_locator",
+              "round": 1,
+              "model_calls_used_including_this_turn": 1,
+              "remaining_tool_calls": 3
+            }
+          },
+          {
+            "seq": 14,
+            "timestamp": "2026-06-03T20:20:04.904570+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_model_call_completed",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_context",
+            "attempt_id": "discover_repo_context_attempt_1",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_locator",
+              "round": 1,
+              "tool_call_count": 1,
+              "has_final_result": false,
+              "final_status": null
+            }
+          },
+          {
+            "seq": 15,
+            "timestamp": "2026-06-03T20:20:04.904626+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_tool_call_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_context",
+            "attempt_id": "discover_repo_context_attempt_1",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_locator",
+              "tool_name": "repo_snapshot",
+              "tool_index": 1,
+              "reason": null
+            }
+          },
+          {
+            "seq": 16,
+            "timestamp": "2026-06-03T20:20:04.954274+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_tool_call_completed",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_context",
+            "attempt_id": "discover_repo_context_attempt_1",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_locator",
+              "tool_name": "repo_snapshot",
+              "tool_index": 1,
+              "observation_keys": [
+                "config_files",
+                "directories",
+                "files",
+                "git_status",
+                "is_empty",
+                "path",
+                "test_candidates"
+              ],
+              "returncode": null
+            }
+          },
+          {
+            "seq": 17,
+            "timestamp": "2026-06-03T20:20:04.954396+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_model_call_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_context",
+            "attempt_id": "discover_repo_context_attempt_1",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_locator",
+              "round": 2,
+              "model_calls_used_including_this_turn": 2,
+              "remaining_tool_calls": 2
+            }
+          },
+          {
+            "seq": 18,
+            "timestamp": "2026-06-03T20:20:26.879904+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_model_call_completed",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_context",
+            "attempt_id": "discover_repo_context_attempt_1",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_locator",
+              "round": 2,
+              "tool_call_count": 0,
+              "has_final_result": true,
+              "final_status": "completed"
+            }
+          },
+          {
+            "seq": 19,
+            "timestamp": "2026-06-03T20:20:26.880014+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_instance_completed",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_context",
+            "attempt_id": "discover_repo_context_attempt_1",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_locator",
+              "artifact_count": 3,
+              "tool_calls_used": 1,
+              "model_calls_used": 2
+            }
+          },
+          {
+            "seq": 20,
+            "timestamp": "2026-06-03T20:20:26.880039+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_instance_skipped",
+            "status": "skipped",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_context",
+            "attempt_id": "discover_repo_context_attempt_1",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_reader",
+              "reason": "expected_outputs_already_produced"
+            }
+          },
+          {
+            "seq": 21,
+            "timestamp": "2026-06-03T20:20:26.880052+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_instance_skipped",
+            "status": "skipped",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_context",
+            "attempt_id": "discover_repo_context_attempt_1",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "repo_summarizer",
+              "reason": "expected_outputs_already_produced"
+            }
+          },
+          {
+            "seq": 22,
+            "timestamp": "2026-06-03T20:20:26.880063+00:00",
+            "component": "worker_agentic_group",
+            "stage": "DISCOVER",
+            "event": "worker_group_completed",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_context",
+            "attempt_id": "discover_repo_context_attempt_1",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": null,
+              "artifact_count": 4,
+              "skipped_worker_instances": [
+                "repo_reader",
+                "repo_summarizer"
+              ]
+            }
+          },
+          {
+            "seq": 23,
+            "timestamp": "2026-06-03T20:20:26.880202+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "DISCOVER",
+            "event": "attempt_completed",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_context",
+            "attempt_id": "discover_repo_context_attempt_1",
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "artifact_count": 4,
+              "tool_calls": 1,
+              "model_calls": 2
+            }
+          },
+          {
+            "seq": 24,
+            "timestamp": "2026-06-03T20:20:26.880295+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "DISCOVER",
+            "event": "step_completed",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "discover_repo_context",
+            "attempt_id": null,
+            "worker_type": "repo_worker",
+            "elapsed_ms": null,
+            "details": {
+              "artifact_ids": [
+                "discover_repo_context_repo_locator_tool_1",
+                "repo_inventory",
+                "candidate_paths",
+                "current_state_evidence"
+              ]
+            }
+          },
+          {
+            "seq": 25,
+            "timestamp": "2026-06-03T20:20:26.880314+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "ANALYZE",
+            "event": "step_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": null,
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "mode": "observe_only",
+              "input_artifacts": [
+                "repo_inventory",
+                "candidate_paths",
+                "current_state_evidence"
+              ],
+              "output_artifacts": [
+                "runtime_capabilities",
+                "dependency_artifacts",
+                "analysis_evidence"
+              ]
+            }
+          },
+          {
+            "seq": 26,
+            "timestamp": "2026-06-03T20:20:26.880385+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "ANALYZE",
+            "event": "task_compiled",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": null,
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "input_count": 3,
+              "expected_outputs": [
+                "runtime_capabilities",
+                "dependency_artifacts",
+                "analysis_evidence"
+              ]
+            }
+          },
+          {
+            "seq": 27,
+            "timestamp": "2026-06-03T20:20:26.880413+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "ANALYZE",
+            "event": "attempt_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_1",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "attempt_number": 1
+            }
+          },
+          {
+            "seq": 28,
+            "timestamp": "2026-06-03T20:20:26.880791+00:00",
+            "component": "worker_agentic_group",
+            "stage": "ANALYZE",
+            "event": "worker_group_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_1",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": null,
+              "template_count": 1
+            }
+          },
+          {
+            "seq": 29,
+            "timestamp": "2026-06-03T20:20:26.880828+00:00",
+            "component": "worker_agentic_group",
+            "stage": "ANALYZE",
+            "event": "worker_instance_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_1",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "infra_diagnoser",
+              "role": "Diagnose infrastructure, configuration, and operational issues using readonly evidence."
+            }
+          },
+          {
+            "seq": 30,
+            "timestamp": "2026-06-03T20:20:26.880839+00:00",
+            "component": "worker_agentic_group",
+            "stage": "ANALYZE",
+            "event": "worker_model_call_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_1",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "infra_diagnoser",
+              "round": 1,
+              "model_calls_used_including_this_turn": 1,
+              "remaining_tool_calls": 4
+            }
+          },
+          {
+            "seq": 31,
+            "timestamp": "2026-06-03T20:20:45.977807+00:00",
+            "component": "worker_agentic_group",
+            "stage": "ANALYZE",
+            "event": "worker_model_call_completed",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_1",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "infra_diagnoser",
+              "round": 1,
+              "tool_call_count": 1,
+              "has_final_result": false,
+              "final_status": null
+            }
+          },
+          {
+            "seq": 32,
+            "timestamp": "2026-06-03T20:20:45.977846+00:00",
+            "component": "worker_agentic_group",
+            "stage": "ANALYZE",
+            "event": "worker_tool_call_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_1",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "infra_diagnoser",
+              "tool_name": "run_readonly_command",
+              "tool_index": 1,
+              "reason": null
+            }
+          },
+          {
+            "seq": 33,
+            "timestamp": "2026-06-03T20:20:45.978143+00:00",
+            "component": "worker_agentic_group",
+            "stage": "ANALYZE",
+            "event": "worker_tool_call_failed",
+            "status": "failed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_1",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "infra_diagnoser",
+              "tool_name": "run_readonly_command",
+              "error": "command is not in the readonly allowlist: python3 --version; python3 -m pip --version; python3 -m pytest --version; node --version; npm --version; go version; docker --version; git --version",
+              "code": "tool_permission_denied"
+            }
+          },
+          {
+            "seq": 34,
+            "timestamp": "2026-06-03T20:20:45.978253+00:00",
+            "component": "worker_agentic_group",
+            "stage": "ANALYZE",
+            "event": "worker_instance_completed",
+            "status": "failed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_1",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "infra_diagnoser",
+              "artifact_count": 0,
+              "tool_calls_used": 1,
+              "model_calls_used": 1
+            }
+          },
+          {
+            "seq": 35,
+            "timestamp": "2026-06-03T20:20:45.978332+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "ANALYZE",
+            "event": "attempt_completed",
+            "status": "failed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_1",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "artifact_count": 3,
+              "tool_calls": 1,
+              "model_calls": 1
+            }
+          },
+          {
+            "seq": 36,
+            "timestamp": "2026-06-03T20:20:45.978401+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "ANALYZE",
+            "event": "attempt_retry_scheduled",
+            "status": "retrying",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_1",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "reason": "worker_runtime_failure",
+              "task_recompiled": true,
+              "adjustments": [
+                {
+                  "field": "max_tool_calls",
+                  "from": 4,
+                  "to": 8,
+                  "reason": "local retry after worker/tool budget or tool-call failure"
+                }
+              ]
+            }
+          },
+          {
+            "seq": 37,
+            "timestamp": "2026-06-03T20:20:45.978433+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "ANALYZE",
+            "event": "attempt_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_2",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "attempt_number": 2
+            }
+          },
+          {
+            "seq": 38,
+            "timestamp": "2026-06-03T20:20:45.978524+00:00",
+            "component": "worker_agentic_group",
+            "stage": "ANALYZE",
+            "event": "worker_group_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_2",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": null,
+              "template_count": 1
+            }
+          },
+          {
+            "seq": 39,
+            "timestamp": "2026-06-03T20:20:45.978532+00:00",
+            "component": "worker_agentic_group",
+            "stage": "ANALYZE",
+            "event": "worker_instance_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_2",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "infra_diagnoser",
+              "role": "Diagnose infrastructure, configuration, and operational issues using readonly evidence."
+            }
+          },
+          {
+            "seq": 40,
+            "timestamp": "2026-06-03T20:20:45.978540+00:00",
+            "component": "worker_agentic_group",
+            "stage": "ANALYZE",
+            "event": "worker_model_call_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_2",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "infra_diagnoser",
+              "round": 1,
+              "model_calls_used_including_this_turn": 1,
+              "remaining_tool_calls": 8
+            }
+          },
+          {
+            "seq": 41,
+            "timestamp": "2026-06-03T20:20:57.551148+00:00",
+            "component": "worker_agentic_group",
+            "stage": "ANALYZE",
+            "event": "worker_model_call_completed",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_2",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "infra_diagnoser",
+              "round": 1,
+              "tool_call_count": 1,
+              "has_final_result": false,
+              "final_status": null
+            }
+          },
+          {
+            "seq": 42,
+            "timestamp": "2026-06-03T20:20:57.551200+00:00",
+            "component": "worker_agentic_group",
+            "stage": "ANALYZE",
+            "event": "worker_tool_call_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_2",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "infra_diagnoser",
+              "tool_name": "run_readonly_command",
+              "tool_index": 1,
+              "reason": null
+            }
+          },
+          {
+            "seq": 43,
+            "timestamp": "2026-06-03T20:20:57.551622+00:00",
+            "component": "worker_agentic_group",
+            "stage": "ANALYZE",
+            "event": "worker_tool_call_failed",
+            "status": "failed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_2",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "infra_diagnoser",
+              "tool_name": "run_readonly_command",
+              "error": "command is not in the readonly allowlist: python3 --version || true; pip3 --version || true; pytest --version || true; node --version || true; npm --version || true; go version || true; docker --version || true; git --version || true",
+              "code": "tool_permission_denied"
+            }
+          },
+          {
+            "seq": 44,
+            "timestamp": "2026-06-03T20:20:57.551743+00:00",
+            "component": "worker_agentic_group",
+            "stage": "ANALYZE",
+            "event": "worker_instance_completed",
+            "status": "failed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_2",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "infra_diagnoser",
+              "artifact_count": 0,
+              "tool_calls_used": 1,
+              "model_calls_used": 1
+            }
+          },
+          {
+            "seq": 45,
+            "timestamp": "2026-06-03T20:20:57.551860+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "ANALYZE",
+            "event": "attempt_completed",
+            "status": "failed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_2",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "artifact_count": 3,
+              "tool_calls": 1,
+              "model_calls": 1
+            }
+          },
+          {
+            "seq": 46,
+            "timestamp": "2026-06-03T20:20:57.551942+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "ANALYZE",
+            "event": "attempt_retry_scheduled",
+            "status": "retrying",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_2",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "reason": "worker_runtime_failure",
+              "task_recompiled": true,
+              "adjustments": [
+                {
+                  "field": "max_tool_calls",
+                  "from": 8,
+                  "to": 16,
+                  "reason": "local retry after worker/tool budget or tool-call failure"
+                }
+              ]
+            }
+          },
+          {
+            "seq": 47,
+            "timestamp": "2026-06-03T20:20:57.551988+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "ANALYZE",
+            "event": "attempt_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_3",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "attempt_number": 3
+            }
+          },
+          {
+            "seq": 48,
+            "timestamp": "2026-06-03T20:20:57.552125+00:00",
+            "component": "worker_agentic_group",
+            "stage": "ANALYZE",
+            "event": "worker_group_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_3",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": null,
+              "template_count": 1
+            }
+          },
+          {
+            "seq": 49,
+            "timestamp": "2026-06-03T20:20:57.552137+00:00",
+            "component": "worker_agentic_group",
+            "stage": "ANALYZE",
+            "event": "worker_instance_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_3",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "infra_diagnoser",
+              "role": "Diagnose infrastructure, configuration, and operational issues using readonly evidence."
+            }
+          },
+          {
+            "seq": 50,
+            "timestamp": "2026-06-03T20:20:57.552149+00:00",
+            "component": "worker_agentic_group",
+            "stage": "ANALYZE",
+            "event": "worker_model_call_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_3",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "infra_diagnoser",
+              "round": 1,
+              "model_calls_used_including_this_turn": 1,
+              "remaining_tool_calls": 16
+            }
+          },
+          {
+            "seq": 51,
+            "timestamp": "2026-06-03T20:21:14.184389+00:00",
+            "component": "worker_agentic_group",
+            "stage": "ANALYZE",
+            "event": "worker_model_call_completed",
+            "status": "completed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_3",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "infra_diagnoser",
+              "round": 1,
+              "tool_call_count": 1,
+              "has_final_result": false,
+              "final_status": null
+            }
+          },
+          {
+            "seq": 52,
+            "timestamp": "2026-06-03T20:21:14.184465+00:00",
+            "component": "worker_agentic_group",
+            "stage": "ANALYZE",
+            "event": "worker_tool_call_started",
+            "status": "started",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_3",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "infra_diagnoser",
+              "tool_name": "run_readonly_command",
+              "tool_index": 1,
+              "reason": null
+            }
+          },
+          {
+            "seq": 53,
+            "timestamp": "2026-06-03T20:21:14.184730+00:00",
+            "component": "worker_agentic_group",
+            "stage": "ANALYZE",
+            "event": "worker_tool_call_failed",
+            "status": "failed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_3",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "infra_diagnoser",
+              "tool_name": "run_readonly_command",
+              "error": "command is not in the readonly allowlist: python3 --version; pip3 --version; pytest --version; node --version; npm --version; go version; docker --version; ruby --version",
+              "code": "tool_permission_denied"
+            }
+          },
+          {
+            "seq": 54,
+            "timestamp": "2026-06-03T20:21:14.184844+00:00",
+            "component": "worker_agentic_group",
+            "stage": "ANALYZE",
+            "event": "worker_instance_completed",
+            "status": "failed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_3",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "worker_instance": "infra_diagnoser",
+              "artifact_count": 0,
+              "tool_calls_used": 1,
+              "model_calls_used": 1
+            }
+          },
+          {
+            "seq": 55,
+            "timestamp": "2026-06-03T20:21:14.184965+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "ANALYZE",
+            "event": "attempt_completed",
+            "status": "failed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": "analyze_runtime_and_dependencies_attempt_3",
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "artifact_count": 3,
+              "tool_calls": 1,
+              "model_calls": 1
+            }
+          },
+          {
+            "seq": 56,
+            "timestamp": "2026-06-03T20:21:14.185027+00:00",
+            "component": "worker_kernel_runtime",
+            "stage": "ANALYZE",
+            "event": "step_terminal",
+            "status": "failed",
+            "request_id": "req_001",
+            "plan_id": "plan_req_001_calculator_api_bootstrap",
+            "run_id": "run_plan_req_001_calculator_api_bootstrap",
+            "step_id": "analyze_runtime_and_dependencies",
+            "attempt_id": null,
+            "worker_type": "infra_worker",
+            "elapsed_ms": null,
+            "details": {
+              "summary": "command is not in the readonly allowlist: python3 --version; pip3 --version; pytest --version; node --version; npm --version; go version; docker --version; ruby --version"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "after_pytest": {
+    "label": "after",
+    "returncode": 5,
+    "stdout": "\nno tests ran in 0.01s\n",
+    "stderr": ""
+  },
+  "git_status": {
+    "command": [
+      "git",
+      "status",
+      "--short"
+    ],
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "git_diff": {
+    "command": [
+      "git",
+      "diff"
+    ],
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "final_files": {}
+}

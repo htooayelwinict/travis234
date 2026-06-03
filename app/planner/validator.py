@@ -64,7 +64,7 @@ PHASE_MODES: dict[str, set[str]] = {
 class PlannerPlanValidator:
     """Validates generated plans before worker-kernel execution."""
 
-    _WRITE_CAPABLE_WORKERS = {"code_worker"}
+    _WRITE_CAPABLE_WORKERS = {"code_worker", "filesystem_worker"}
 
     def validate(self, envelope: Envelope, plan: Plan) -> Plan:
         errors: list[str] = []

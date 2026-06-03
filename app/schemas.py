@@ -128,13 +128,19 @@ class ArtifactPayload(BaseModel):
 
 
 class MutationScope(BaseModel):
-    """Structured write scope produced by DESIGN and enforced before MUTATE."""
+    """Kernel-resolved write scope enforced before MUTATE.
+
+    Worker DESIGN steps may emit flexible proposal shapes. Runtime code should
+    call resolve_mutation_scope_proposal(...) at the kernel boundary and pass the
+    resulting strict scope to write-capable workers.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     target_paths: list[str]
     test_paths: list[str] = Field(default_factory=list)
     forbidden_paths: list[str] = Field(default_factory=list)
+    forbidden_globs: list[str] = Field(default_factory=list)
     reason: str = "derived from mutation scope artifact"
     max_files: int = 5
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -161,17 +167,18 @@ class MutationScope(BaseModel):
             fallback=True,
         )
         test_paths = _collect_scope_paths(data, keys=("test_paths", "tests", "test_files", "test_path"))
-        forbidden_paths = _collect_scope_paths(
+        forbidden_paths, forbidden_globs = _collect_forbidden_scope_paths(
             data,
-            keys=("forbidden_paths", "forbidden", "forbidden_files", "excluded_paths"),
+            keys=("forbidden_paths", "forbidden", "forbidden_files", "excluded_paths", "forbidden_globs"),
         )
 
         return {
             "target_paths": target_paths,
             "test_paths": test_paths,
             "forbidden_paths": forbidden_paths,
+            "forbidden_globs": forbidden_globs,
             "reason": str(data.get("reason") or data.get("notes") or data.get("rationale") or "derived from mutation scope artifact"),
-            "max_files": data.get("max_files", 5),
+            "max_files": data.get("max_files", max(1, len(target_paths))),
             "metadata": data.get("metadata") or {},
         }
 
@@ -180,6 +187,7 @@ class MutationScope(BaseModel):
         self.target_paths = _dedupe_paths(self.target_paths)
         self.test_paths = _dedupe_paths(self.test_paths)
         self.forbidden_paths = _dedupe_paths(self.forbidden_paths)
+        self.forbidden_globs = _dedupe_globs(self.forbidden_globs)
         if not self.target_paths:
             raise ValueError("mutation_scope.target_paths must be non-empty")
         if self.max_files < 1:
@@ -193,6 +201,19 @@ class MutationScope(BaseModel):
     @property
     def write_scope_paths(self) -> list[str]:
         return _dedupe_paths(self.target_paths)
+
+
+def resolve_mutation_scope_proposal(value: Any, *, source_artifact_id: str | None = None) -> MutationScope:
+    """Resolve a flexible worker proposal into the strict write-scope contract."""
+
+    scope = MutationScope.model_validate(value)
+    metadata = {
+        **scope.metadata,
+        "resolver": "mutation_scope_proposal_v1",
+    }
+    if source_artifact_id:
+        metadata["source_artifact_id"] = source_artifact_id
+    return scope.model_copy(update={"metadata": metadata})
 
 
 class WorkerIssue(BaseModel):
@@ -369,6 +390,22 @@ _KNOWN_FILE_SUFFIXES = {
     ".yml",
 }
 _KNOWN_FILE_NAMES = {
+    ".babelrc",
+    ".coveragerc",
+    ".dockerignore",
+    ".editorconfig",
+    ".env.example",
+    ".eslintignore",
+    ".eslintrc",
+    ".flake8",
+    ".gitignore",
+    ".node-version",
+    ".npmrc",
+    ".nvmrc",
+    ".prettierignore",
+    ".prettierrc",
+    ".python-version",
+    ".stylelintrc",
     "Dockerfile",
     "Makefile",
     "Pipfile",
@@ -409,22 +446,65 @@ def _collect_scope_paths(
     *,
     keys: tuple[str, ...],
     fallback: bool = False,
+    field_name: str = "target_paths",
 ) -> list[str]:
     paths: list[str] = []
     for key in keys:
         if key in data:
             paths.extend(_strict_scope_path_values(data[key], field_name=key))
     if fallback and not paths:
-        paths.extend(
-            extract_repo_path_candidates(
-                {
-                    key: value
-                    for key, value in data.items()
-                    if key not in {"test_paths", "tests", "test_files", "forbidden_paths", "forbidden"}
-                }
-            )
-        )
+        paths.extend(_collect_legacy_scope_paths(data, field_name=field_name))
     return _dedupe_paths(paths)
+
+
+def _collect_forbidden_scope_paths(data: dict[str, Any], *, keys: tuple[str, ...]) -> tuple[list[str], list[str]]:
+    paths: list[str] = []
+    globs: list[str] = []
+    for key in keys:
+        if key not in data:
+            continue
+        value_paths, value_globs = _forbidden_scope_values(data[key], field_name=key)
+        paths.extend(value_paths)
+        globs.extend(value_globs)
+    return _dedupe_paths(paths), _dedupe_globs(globs)
+
+
+def _forbidden_scope_values(value: Any, *, field_name: str) -> tuple[list[str], list[str]]:
+    if isinstance(value, str):
+        if _has_glob_meta(value):
+            normalized = _normalize_repo_glob(value)
+            if normalized is None:
+                raise ValueError(f"mutation_scope.{field_name} contains invalid repo-relative glob: {value}")
+            return [], [normalized]
+        return _strict_scope_path_values(value, field_name=field_name), []
+    if isinstance(value, list):
+        paths: list[str] = []
+        globs: list[str] = []
+        for item in value:
+            item_paths, item_globs = _forbidden_scope_values(item, field_name=field_name)
+            paths.extend(item_paths)
+            globs.extend(item_globs)
+        return _dedupe_paths(paths), _dedupe_globs(globs)
+    if isinstance(value, dict):
+        paths: list[str] = []
+        globs: list[str] = []
+        path_keys = (
+            "forbidden_paths",
+            "forbidden",
+            "forbidden_files",
+            "excluded_paths",
+            "path",
+            "file",
+        )
+        glob_keys = ("forbidden_globs", "excluded_globs", "glob", "pattern")
+        for key in path_keys + glob_keys:
+            if key not in value:
+                continue
+            item_paths, item_globs = _forbidden_scope_values(value[key], field_name=key)
+            paths.extend(item_paths)
+            globs.extend(item_globs)
+        return _dedupe_paths(paths), _dedupe_globs(globs)
+    return [], []
 
 
 def _strict_scope_path_values(value: Any, *, field_name: str) -> list[str]:
@@ -441,6 +521,8 @@ def _strict_scope_path_values(value: Any, *, field_name: str) -> list[str]:
         return _dedupe_paths(paths)
     if isinstance(value, dict):
         paths: list[str] = []
+        if "moves" in value:
+            paths.extend(_collect_move_paths(value["moves"]))
         path_keys = (
             "target_paths",
             "test_paths",
@@ -450,13 +532,112 @@ def _strict_scope_path_values(value: Any, *, field_name: str) -> list[str]:
             "candidate_paths",
             "path",
             "file",
+            "manifest_target",
+            "source",
+            "destination",
         )
         selected_values = [value[key] for key in path_keys if key in value]
-        for item in selected_values or value.values():
-            if selected_values or isinstance(item, (list, dict)):
-                paths.extend(_strict_scope_path_values(item, field_name=field_name))
+        for item in selected_values:
+            paths.extend(_strict_scope_path_values(item, field_name=field_name))
         return _dedupe_paths(paths)
     return []
+
+
+def _collect_legacy_scope_paths(data: Any, *, field_name: str) -> list[str]:
+    if isinstance(data, str):
+        return _extract_legacy_scope_paths(data)
+    if isinstance(data, list):
+        paths: list[str] = []
+        for item in data:
+            paths.extend(_extract_legacy_scope_paths(item))
+        return paths
+    if not isinstance(data, dict):
+        return []
+
+    paths: list[str] = []
+    legacy_keys = (
+        "evidence",
+        "moves",
+        "operations",
+        "manifest_target",
+        "source",
+        "destination",
+        "path",
+        "file",
+        "target_paths",
+        "paths",
+        "files",
+        "allowed_paths",
+        "candidate_paths",
+    )
+    for key in legacy_keys:
+        if key in data:
+            value = data[key]
+            if key == "moves":
+                paths.extend(_collect_move_paths(value))
+            else:
+                paths.extend(_extract_legacy_scope_paths(value))
+    return paths
+
+
+def _extract_legacy_scope_paths(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return extract_repo_path_candidates(value)
+    if isinstance(value, list):
+        paths: list[str] = []
+        for item in value:
+            paths.extend(_extract_legacy_scope_paths(item))
+        return _dedupe_paths(paths)
+    if isinstance(value, dict):
+        paths: list[str] = []
+        path_keys = (
+            "target_paths",
+            "paths",
+            "files",
+            "allowed_paths",
+            "candidate_paths",
+            "path",
+            "file",
+            "manifest_target",
+            "source",
+            "destination",
+            "moves",
+            "operations",
+        )
+        for key in path_keys:
+            if key in value:
+                paths.extend(_extract_legacy_scope_paths(value[key]))
+        return _dedupe_paths(paths)
+    return []
+
+
+def _collect_move_paths(value: Any) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, dict):
+        value = [value]
+    if not isinstance(value, list):
+        return _extract_legacy_scope_paths(value)
+
+    paths: list[str] = []
+    for move in value:
+        if isinstance(move, dict):
+            if "destination" in move:
+                paths.extend(_extract_legacy_scope_paths(move["destination"]))
+            elif "target" in move:
+                paths.extend(_extract_legacy_scope_paths(move["target"]))
+            elif "path" in move:
+                paths.extend(_extract_legacy_scope_paths(move["path"]))
+            elif "file" in move:
+                paths.extend(_extract_legacy_scope_paths(move["file"]))
+            elif "source" in move:
+                paths.extend(_extract_legacy_scope_paths(move["source"]))
+            else:
+                for sub_value in move.values():
+                    paths.extend(_extract_legacy_scope_paths(sub_value))
+        elif isinstance(move, str):
+            paths.extend(_extract_legacy_scope_paths(move))
+    return _dedupe_paths(paths)
 
 
 def _paths_from_text(value: str) -> list[str]:
@@ -478,10 +659,12 @@ def _paths_from_text(value: str) -> list[str]:
 
 
 def _normalize_repo_relative_path(value: str, *, allow_bare_filename: bool) -> str | None:
-    raw = value.strip().strip("`'\".,;)]}")
+    raw = _strip_path_token(value)
     if raw.startswith("./"):
         raw = raw[2:]
     if not raw or any(char.isspace() for char in raw):
+        return None
+    if _has_glob_meta(raw):
         return None
     if raw.startswith(("-", "~")) or "://" in raw or "\\" in raw:
         return None
@@ -496,11 +679,50 @@ def _normalize_repo_relative_path(value: str, *, allow_bare_filename: bool) -> s
     return path.as_posix()
 
 
+def _normalize_repo_glob(value: str) -> str | None:
+    raw = _strip_path_token(value)
+    if raw.startswith("./"):
+        raw = raw[2:]
+    if not raw or any(char.isspace() for char in raw):
+        return None
+    if not _has_glob_meta(raw):
+        return None
+    if raw.startswith(("-", "~")) or "://" in raw or "\\" in raw:
+        return None
+    path = PurePosixPath(raw)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        return None
+    return path.as_posix()
+
+
+def _has_glob_meta(value: str) -> bool:
+    return any(char in value for char in "*?[]")
+
+
+def _strip_path_token(value: str) -> str:
+    raw = value.strip().strip("`'\",;)]}")
+    if raw.endswith(".") and raw != ".":
+        raw = raw[:-1]
+    return raw
+
+
 def _dedupe_paths(paths: list[str]) -> list[str]:
     deduped: list[str] = []
     seen: set[str] = set()
     for raw_path in paths:
         normalized = normalize_repo_relative_path(str(raw_path))
+        if normalized is None or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
+    return deduped
+
+
+def _dedupe_globs(globs: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for raw_glob in globs:
+        normalized = _normalize_repo_glob(str(raw_glob))
         if normalized is None or normalized in seen:
             continue
         seen.add(normalized)

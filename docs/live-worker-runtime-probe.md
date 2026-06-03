@@ -132,6 +132,30 @@ This scenario expects:
 - `docs/workspace_manifest.json` to summarize what changed,
 - a final test run that validates resulting repository layout.
 
+## Greenfield Calculator API Scenario
+
+Run the empty-repo creation scenario to validate discovery, runtime capability
+detection, scoped batch writes, verification, and final summary quality:
+
+```bash
+uv run python scripts/live_worker_runtime_probe.py \
+  --worker-model qwen/qwen3.7-max \
+  --scenario greenfield_calculator_api \
+  --repo live_worker_greenfield_calculator_api_$(date +%Y%m%d-%H%M%S) \
+  --matrix-poll-interval 1 \
+  --out-dir plan
+```
+
+This scenario intentionally starts with an empty git repo. The script refuses
+to reuse a non-empty target directory; pass a fresh `--repo` name for repeat
+runs. Expected successful behavior:
+
+- `repo_snapshot.is_empty=true` appears in worker evidence,
+- the planner selects a write-capable mutation worker for scaffolding,
+- the mutating worker uses scoped write tools, ideally `write_many_files`,
+- after-run tests execute from the generated project,
+- final JSON contains created source, tests, README, and deploy metadata.
+
 ## Web Research Scenario
 
 The webhook scenario may produce a `web_research_worker` step. Configure a web
@@ -204,6 +228,7 @@ Use precise prompts. Include:
   payment_retry
   webhook_fulfillment
   file_workspace_cleanup
+  greenfield_calculator_api
 
 --repo
   Override the scenario repo directory.
