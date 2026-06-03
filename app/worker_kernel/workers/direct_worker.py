@@ -3,6 +3,25 @@
 from __future__ import annotations
 
 from app.schemas import Result, Task
+from app.worker_kernel.workers.templates import WorkerInstanceTemplate
+
+
+DIRECT_WORKER_SYSTEM_PROMPT = """You are the direct guidance worker.
+Answer only from the scoped task context, input artifacts, and envelope summary.
+Do not invent missing facts. If the task cannot be answered from context, return a
+needs_replan final_result with a plan_failure issue that names the missing context.
+Produce artifacts whose ids exactly match expected_outputs when possible."""
+
+
+def agentic_templates() -> list[WorkerInstanceTemplate]:
+    return [
+        WorkerInstanceTemplate(
+            name="direct_responder",
+            role="Produce a direct user-facing answer from scoped context without tools.",
+            system_prompt=DIRECT_WORKER_SYSTEM_PROMPT,
+            allowed_tools=(),
+        )
+    ]
 
 
 class DirectWorker:

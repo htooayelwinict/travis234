@@ -1,0 +1,1106 @@
+{
+  "generated_at": "2026-06-03T13:14:23.506296+00:00",
+  "prompt": "In the repo rooted at live_worker_mock_repo, inspect the payment retry bug. Read the code and tests, fix the issue so retries for the same order reuse the same idempotency key, keep the change minimal, and verify with the repo tests. Summarize what changed and any remaining risk.",
+  "repo_path": "/Users/htooayelwin/Documents/VScode/allthebest/live_worker_mock_repo",
+  "worker_env": {
+    "WORKER_LLM_ENABLED": "true",
+    "WORKER_LLM_MODEL": "qwen/qwen3.7-max",
+    "WORKER_LLM_PROVIDER_SORT": "latency",
+    "WORKER_LLM_TIMEOUT_SECONDS": "90",
+    "WORKER_LLM_MAX_TOKENS": "2400",
+    "WORKER_MAX_PARALLEL_INSTANCES": "2",
+    "WORKER_TOOL_TIMEOUT_SECONDS": "20"
+  },
+  "baseline_pytest": {
+    "label": "before",
+    "returncode": 1,
+    "stdout": ".F                                                                       [100%]\n=================================== FAILURES ===================================\n___________________ test_retries_reuse_same_idempotency_key ____________________\n\n    def test_retries_reuse_same_idempotency_key() -> None:\n        first = build_charge_headers(\"order-123\", 0)\n        retry = build_charge_headers(\"order-123\", 1)\n    \n>       assert retry[\"Idempotency-Key\"] == first[\"Idempotency-Key\"]\nE       AssertionError: assert 'charge:order-123:retry:1' == 'charge:order-123:retry:0'\nE         \nE         - charge:order-123:retry:0\nE         ?                        ^\nE         + charge:order-123:retry:1\nE         ?                        ^\n\ntests/test_checkout.py:13: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_checkout.py::test_retries_reuse_same_idempotency_key - Asse...\n1 failed, 1 passed in 0.06s\n",
+    "stderr": ""
+  },
+  "envelope": {
+    "request_id": "req_001",
+    "raw_input": "In the repo rooted at live_worker_mock_repo, inspect the payment retry bug. Read the code and tests, fix the issue so retries for the same order reuse the same idempotency key, keep the change minimal, and verify with the repo tests. Summarize what changed and any remaining risk.",
+    "normalized_input": "Analyze the codebase in live_worker_mock_repo to identify and fix a payment-retry bug so retries for the same order reuse one idempotency key, make a minimal code change, run repository tests to verify, and report changes plus residual risk.",
+    "user_goal": "Resolve a payment retry defect by ensuring same-order retries reuse the same idempotency key, with minimal edits validated by tests, and provide a concise change/risk summary.",
+    "input_type": "repo_payment_retry_idempotency_bugfix",
+    "intents": [
+      "code.inspect",
+      "code.fix",
+      "tests.read",
+      "tests.run",
+      "bug.reproduce",
+      "bug.validate",
+      "change.summarize",
+      "risk.assess"
+    ],
+    "domains": [
+      "code",
+      "testing",
+      "payments",
+      "reliability"
+    ],
+    "risks": [
+      "mutation_requested",
+      "file_mutation",
+      "needs_verification",
+      "ambiguous_scope",
+      "regression_risk",
+      "test_coverage_limits"
+    ],
+    "artifacts": [
+      {
+        "name": "live_worker_mock_repo",
+        "type": "repository"
+      },
+      {
+        "name": "payment retry bug",
+        "type": "defect"
+      },
+      {
+        "name": "code",
+        "type": "source"
+      },
+      {
+        "name": "tests",
+        "type": "test_suite"
+      },
+      {
+        "name": "order",
+        "type": "domain_entity"
+      },
+      {
+        "name": "idempotency key",
+        "type": "payments_identifier"
+      },
+      {
+        "name": "repo tests",
+        "type": "validation_suite"
+      }
+    ],
+    "context_needed": [
+      "repository tree and relevant payment modules",
+      "current retry flow for payment operations",
+      "where idempotency keys are generated/stored/reused",
+      "existing tests covering payment retries and idempotency behavior",
+      "test execution command and environment requirements",
+      "current failing behavior or failing test evidence"
+    ],
+    "constraints": [
+      "target_locations_must_be_identified_before_mutation",
+      "changes_should_be_minimal_and_scoped_to_bug",
+      "same_order_retries_must_reuse_the_same_idempotency_key",
+      "mutation_requires_verification_via_repo_tests",
+      "do_not_invent_missing_repo_facts_or_api_shapes",
+      "summary_must_include_changes_and_remaining_risk"
+    ],
+    "complexity_hint": "medium",
+    "confidence": 0.93,
+    "ambiguity": [
+      "programming language and framework are not specified.",
+      "exact files/functions responsible for retry and idempotency are not specified.",
+      "specific failing test names or error outputs are not provided.",
+      "definition of 'minimal change' threshold is not quantified."
+    ],
+    "assumptions": [
+      "the repository contains runnable tests.",
+      "the bug is reproducible from existing code/tests without external undisclosed systems.",
+      "idempotency key behavior is implemented within the repository codebase.",
+      "no schema-breaking API contract changes are required for the fix."
+    ],
+    "metadata": {
+      "decompressor_mode": "llm_prompt_chain",
+      "llm_prompt_chain": {
+        "mode": "completed",
+        "stages": [
+          "decompress_request",
+          "validate_envelope"
+        ],
+        "fallback": null,
+        "redacted_prompt_input": false,
+        "model_calls": 1
+      },
+      "decompressor_runtime": {
+        "elapsed_ms": 20428.035,
+        "failure_rate": 0.0,
+        "repair_rate": 0.0,
+        "latency_ms_p50": 20428.035,
+        "latency_ms_p95": 20428.035
+      }
+    }
+  },
+  "plan": {
+    "plan_id": "plan_req_001_payment_retry_idempotency_fix",
+    "request_id": "req_001",
+    "planner": "phase_aware_execution_planner",
+    "objective": "Inspect the repository, fix the payment-retry idempotency defect so same-order retries reuse one idempotency key with minimal scoped edits, verify via repo tests, and summarize changes and residual risk.",
+    "strategy": "discovery_first_evidence_driven_minimal_mutation",
+    "execution_pattern": "discover_analyze_design_mutate_verify_finalize",
+    "steps": [
+      {
+        "step_id": "discover_repo_context",
+        "worker_type": "repo_worker",
+        "phase": "DISCOVER",
+        "mode": "observe_only",
+        "task_id": "payment_retry_idempotency_fix",
+        "instruction": "Known facts: User requests a repo bugfix for payment retries and idempotency-key reuse with minimal changes plus test verification. Unknowns: Exact language/framework, concrete file locations, and failing test evidence are not yet known. Do now: Inspect repository structure and payment/test areas to identify candidate retry/idempotency code paths, current test coverage, and executable test command/environment hints. Do not do: Do not modify files, do not infer API shapes without code evidence, and do not claim root cause yet. Output: repo_inventory, payment_retry_locations, idempotency_flow_map, existing_test_targets, test_execution_plan.",
+        "input_artifacts": [],
+        "output_artifacts": [
+          "repo_inventory",
+          "payment_retry_locations",
+          "idempotency_flow_map",
+          "existing_test_targets",
+          "test_execution_plan"
+        ],
+        "max_tool_calls": 4,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": true,
+          "write_files": false,
+          "run_commands": true,
+          "web_research": false,
+          "write_paths": [],
+          "write_paths_from_artifacts": []
+        }
+      },
+      {
+        "step_id": "analyze_root_cause",
+        "worker_type": "research_worker",
+        "phase": "ANALYZE",
+        "mode": "observe_only",
+        "task_id": "payment_retry_idempotency_fix",
+        "instruction": "Known facts: repo_inventory, payment_retry_locations, idempotency_flow_map, existing_test_targets, and test_execution_plan are available from discovery. Unknowns: Precise defect mechanism and dependency constraints for safe minimal fix remain unresolved. Do now: Analyze retry/idempotency logic and related tests to produce root-cause evidence, expected correct behavior for same-order retries, and dependency/context artifacts needed before mutation. Do not do: Do not mutate code or invent behavior not supported by inspected code/tests. Output: root_cause_evidence, analysis_evidence, dependency_artifacts.",
+        "input_artifacts": [
+          "repo_inventory",
+          "payment_retry_locations",
+          "idempotency_flow_map",
+          "existing_test_targets",
+          "test_execution_plan"
+        ],
+        "output_artifacts": [
+          "root_cause_evidence",
+          "analysis_evidence",
+          "dependency_artifacts"
+        ],
+        "max_tool_calls": 3,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": true,
+          "write_files": false,
+          "run_commands": false,
+          "web_research": false,
+          "write_paths": [],
+          "write_paths_from_artifacts": []
+        }
+      },
+      {
+        "step_id": "design_minimal_patch",
+        "worker_type": "code_worker",
+        "phase": "DESIGN",
+        "mode": "plan_only",
+        "task_id": "payment_retry_idempotency_fix",
+        "instruction": "Known facts: root_cause_evidence, analysis_evidence, dependency_artifacts, discovered locations, and test targets are available. Unknowns: None material after evidence synthesis. Do now: Produce a minimal, path-scoped fix design that maps diagnosis to exact writable targets, defines rollback, and specifies verification checks for idempotency-key reuse on same-order retries. Do not do: Do not edit files, do not broaden scope beyond bug-related paths, and do not omit rollback or verification planning. Output: mutation_scope, allowed_write_paths, rollback_plan, verification_plan, fix_design.",
+        "input_artifacts": [
+          "root_cause_evidence",
+          "analysis_evidence",
+          "dependency_artifacts",
+          "payment_retry_locations",
+          "existing_test_targets",
+          "test_execution_plan"
+        ],
+        "output_artifacts": [
+          "mutation_scope",
+          "allowed_write_paths",
+          "rollback_plan",
+          "verification_plan",
+          "fix_design"
+        ],
+        "max_tool_calls": 2,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": true,
+          "write_files": false,
+          "run_commands": false,
+          "web_research": false,
+          "write_paths": [],
+          "write_paths_from_artifacts": []
+        }
+      },
+      {
+        "step_id": "apply_scoped_fix",
+        "worker_type": "code_worker",
+        "phase": "MUTATE",
+        "mode": "bounded_mutation",
+        "task_id": "payment_retry_idempotency_fix",
+        "instruction": "Known facts: mutation_scope, rollback_plan, fix_design, root_cause_evidence, analysis_evidence, and dependency_artifacts are available. Unknowns: None; implement only the planned minimal fix. Do now: Apply the scoped code change so retries for the same order reuse the same idempotency key, staying strictly within mutation_scope and aligned to fix_design. Do not do: Do not write outside scoped paths, do not introduce unrelated refactors, and do not claim verification success in this step. Output: change_summary, rollback_patch.",
+        "input_artifacts": [
+          "mutation_scope",
+          "rollback_plan",
+          "fix_design",
+          "root_cause_evidence",
+          "analysis_evidence",
+          "dependency_artifacts"
+        ],
+        "output_artifacts": [
+          "change_summary",
+          "rollback_patch"
+        ],
+        "max_tool_calls": 6,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": true,
+          "write_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_paths": [],
+          "write_paths_from_artifacts": [
+            "mutation_scope"
+          ]
+        }
+      },
+      {
+        "step_id": "verify_patch_with_tests",
+        "worker_type": "verify_worker",
+        "phase": "VERIFY",
+        "mode": "verify_only",
+        "task_id": "payment_retry_idempotency_fix",
+        "instruction": "Known facts: change_summary and rollback_patch exist; mutation_scope, root_cause_evidence, and verification_plan define expected behavior and scope boundaries. Unknowns: Whether all relevant tests pass and whether fix fully matches root cause without scope drift. Do now: Execute planned repository tests/checks, validate same-order retry idempotency behavior, confirm scope containment to mutation_scope, and record rollback readiness. Do not do: Do not mutate files or expand test claims beyond executed evidence. Output: verification_results, test_results, scope_validation.",
+        "input_artifacts": [
+          "change_summary",
+          "mutation_scope",
+          "root_cause_evidence",
+          "verification_plan",
+          "rollback_plan",
+          "rollback_patch"
+        ],
+        "output_artifacts": [
+          "verification_results",
+          "test_results",
+          "scope_validation"
+        ],
+        "max_tool_calls": 4,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": true,
+          "write_files": false,
+          "run_commands": true,
+          "web_research": false,
+          "write_paths": [],
+          "write_paths_from_artifacts": []
+        }
+      },
+      {
+        "step_id": "finalize_report",
+        "worker_type": "research_worker",
+        "phase": "FINALIZE",
+        "mode": "summarize_only",
+        "task_id": "payment_retry_idempotency_fix",
+        "instruction": "Known facts: change_summary, verification_results, test_results, scope_validation, and rollback_patch are available. Unknowns: Residual risk must be explicitly stated from evidence limits only. Do now: Prepare a concise final report summarizing what changed, verification outcome, rollback availability, and remaining risk/coverage gaps. Do not do: Do not add unsupported claims or omit material verification limitations. Output: final_report.",
+        "input_artifacts": [
+          "change_summary",
+          "verification_results",
+          "test_results",
+          "scope_validation",
+          "rollback_patch"
+        ],
+        "output_artifacts": [
+          "final_report"
+        ],
+        "max_tool_calls": 0,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": false,
+          "write_files": false,
+          "run_commands": false,
+          "web_research": false,
+          "write_paths": [],
+          "write_paths_from_artifacts": []
+        }
+      }
+    ],
+    "budget": {
+      "max_tool_calls": 19,
+      "max_model_calls": 6,
+      "max_workers": 6,
+      "max_retries": 1
+    },
+    "global_invariants": [
+      "discovery_and_evidence_before_mutation",
+      "design_must_define_mutation_scope_and_rollback_before_write",
+      "writes_restricted_to_design_produced_scope_only",
+      "no_invented_repo_facts_or_api_shapes",
+      "verify_after_write_with_tests_and_scope_checks",
+      "final_summary_must_include_changes_and_residual_risk"
+    ],
+    "success_criteria": [
+      "Root cause is evidenced from repository code/tests.",
+      "A minimal scoped patch enforces same-order retry reuse of one idempotency key.",
+      "All executed verification checks and repo tests are reported with outcomes.",
+      "Report includes concrete changes, rollback artifact, and residual risk/coverage limits."
+    ],
+    "metadata": {
+      "archetype": "repo_bugfix_mutation",
+      "complexity": "medium",
+      "domains": [
+        "code",
+        "testing",
+        "payments",
+        "reliability"
+      ],
+      "llm_planner": {
+        "mode": "completed",
+        "stages": [
+          "draft_plan",
+          "validate_plan"
+        ],
+        "model_calls": 1,
+        "repair_attempted": false,
+        "validation_errors": [],
+        "resolved_validation_errors": [],
+        "budget_auto_aligned": true,
+        "envelope_input_type": "repo_payment_retry_idempotency_bugfix",
+        "envelope_complexity_hint": "medium"
+      },
+      "planner_runtime": {
+        "mode": "llm_prompt_chain",
+        "fallback_reason": null
+      }
+    }
+  },
+  "result": {
+    "run_id": "run_plan_req_001_payment_retry_idempotency_fix",
+    "producer": "worker_kernel",
+    "status": "failed",
+    "summary": "Execution stopped at step discover_repo_context: 5 validation errors for WorkerLLMDecision\nfinal_result.artifacts.0\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='repo_inventory', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.1\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='payment_retry_locations', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.2\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='idempotency_flow_map', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.3\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='existing_test_targets', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.4\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='test_execution_plan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type",
+    "artifacts": [],
+    "usage": {},
+    "errors": [
+      "5 validation errors for WorkerLLMDecision\nfinal_result.artifacts.0\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='repo_inventory', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.1\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='payment_retry_locations', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.2\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='idempotency_flow_map', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.3\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='existing_test_targets', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.4\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='test_execution_plan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type"
+    ],
+    "warnings": [],
+    "metadata": {
+      "worker_results": [
+        {
+          "run_id": "run_plan_req_001_payment_retry_idempotency_fix",
+          "producer": "repo_worker",
+          "status": "failed",
+          "summary": "5 validation errors for WorkerLLMDecision\nfinal_result.artifacts.0\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='repo_inventory', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.1\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='payment_retry_locations', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.2\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='idempotency_flow_map', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.3\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='existing_test_targets', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.4\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='test_execution_plan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type",
+          "artifacts": [
+            {
+              "id": "discover_repo_context_repo_locator_tool_1",
+              "content": {
+                "instance": "repo_locator",
+                "tool_name": "list_dir",
+                "arguments": {
+                  "path": "."
+                },
+                "observation": {
+                  "path": ".",
+                  "entries": [
+                    {
+                      "name": "README.md",
+                      "type": "file"
+                    },
+                    {
+                      "name": "src",
+                      "type": "dir"
+                    },
+                    {
+                      "name": "tests",
+                      "type": "dir"
+                    }
+                  ]
+                }
+              },
+              "kind": "tool_observation",
+              "producer": "repo_worker",
+              "step_id": "discover_repo_context",
+              "attempt_id": null,
+              "trust_level": "worker_reported",
+              "metadata": {
+                "tool_name": "list_dir",
+                "tool_index": 1
+              }
+            },
+            {
+              "id": "discover_repo_context_repo_locator_tool_2",
+              "content": {
+                "instance": "repo_locator",
+                "tool_name": "text_search",
+                "arguments": {
+                  "path": ".",
+                  "pattern": "idempotency"
+                },
+                "observation": {
+                  "command": [
+                    "rg",
+                    "-n",
+                    "idempotency",
+                    "."
+                  ],
+                  "stdout": "./src/checkout.py:9:    Current behavior is intentionally wrong for retries: the idempotency key\n./README.md:3:This mock repo simulates a payment retry idempotency bug.\n./tests/test_checkout.py:9:def test_retries_reuse_same_idempotency_key() -> None:\n",
+                  "stderr": "",
+                  "returncode": 0
+                }
+              },
+              "kind": "tool_observation",
+              "producer": "repo_worker",
+              "step_id": "discover_repo_context",
+              "attempt_id": null,
+              "trust_level": "worker_reported",
+              "metadata": {
+                "tool_name": "text_search",
+                "tool_index": 2
+              }
+            },
+            {
+              "id": "discover_repo_context_repo_locator_tool_3",
+              "content": {
+                "instance": "repo_locator",
+                "tool_name": "file_search",
+                "arguments": {
+                  "path": ".",
+                  "pattern": "**/test*"
+                },
+                "observation": {
+                  "pattern": "**/test*",
+                  "matches": [
+                    "tests",
+                    "tests/test_checkout.py"
+                  ]
+                }
+              },
+              "kind": "tool_observation",
+              "producer": "repo_worker",
+              "step_id": "discover_repo_context",
+              "attempt_id": null,
+              "trust_level": "worker_reported",
+              "metadata": {
+                "tool_name": "file_search",
+                "tool_index": 3
+              }
+            }
+          ],
+          "usage": {
+            "tool_calls": 3,
+            "model_calls": 2
+          },
+          "errors": [
+            "5 validation errors for WorkerLLMDecision\nfinal_result.artifacts.0\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='repo_inventory', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.1\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='payment_retry_locations', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.2\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='idempotency_flow_map', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.3\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='existing_test_targets', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.4\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='test_execution_plan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type"
+          ],
+          "warnings": [],
+          "metadata": {
+            "issues": [
+              {
+                "issue_type": "instance_failure",
+                "code": "worker_llm_error",
+                "message": "5 validation errors for WorkerLLMDecision\nfinal_result.artifacts.0\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='repo_inventory', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.1\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='payment_retry_locations', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.2\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='idempotency_flow_map', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.3\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='existing_test_targets', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.4\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='test_execution_plan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type",
+                "step_id": "discover_repo_context",
+                "worker_type": "repo_worker",
+                "attempt_id": null,
+                "retryable": true,
+                "metadata": {
+                  "worker_instance": "repo_locator"
+                }
+              }
+            ],
+            "issue_type": "instance_failure",
+            "issue_code": "worker_llm_error",
+            "retryable": true,
+            "worker_type": "repo_worker",
+            "worker_instance": "repo_locator",
+            "worker_group_results": [
+              {
+                "run_id": "run_plan_req_001_payment_retry_idempotency_fix",
+                "producer": "repo_worker",
+                "status": "failed",
+                "summary": "5 validation errors for WorkerLLMDecision\nfinal_result.artifacts.0\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='repo_inventory', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.1\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='payment_retry_locations', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.2\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='idempotency_flow_map', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.3\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='existing_test_targets', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.4\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='test_execution_plan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type",
+                "artifacts": [],
+                "usage": {
+                  "tool_calls": 3,
+                  "model_calls": 2
+                },
+                "errors": [
+                  "5 validation errors for WorkerLLMDecision\nfinal_result.artifacts.0\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='repo_inventory', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.1\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='payment_retry_locations', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.2\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='idempotency_flow_map', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.3\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='existing_test_targets', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.4\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='test_execution_plan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type"
+                ],
+                "warnings": [],
+                "metadata": {
+                  "issues": [
+                    {
+                      "issue_type": "instance_failure",
+                      "code": "worker_llm_error",
+                      "message": "5 validation errors for WorkerLLMDecision\nfinal_result.artifacts.0\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='repo_inventory', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.1\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='payment_retry_locations', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.2\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='idempotency_flow_map', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.3\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='existing_test_targets', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.4\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='test_execution_plan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type",
+                      "step_id": "discover_repo_context",
+                      "worker_type": "repo_worker",
+                      "attempt_id": null,
+                      "retryable": true,
+                      "metadata": {
+                        "worker_instance": "repo_locator"
+                      }
+                    }
+                  ],
+                  "issue_type": "instance_failure",
+                  "issue_code": "worker_llm_error",
+                  "retryable": true,
+                  "worker_type": "repo_worker",
+                  "worker_instance": "repo_locator"
+                }
+              }
+            ],
+            "attempt_id": "discover_repo_context_attempt_1"
+          }
+        },
+        {
+          "run_id": "run_plan_req_001_payment_retry_idempotency_fix",
+          "producer": "repo_worker",
+          "status": "failed",
+          "summary": "5 validation errors for WorkerLLMDecision\nfinal_result.artifacts.0\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='repo_inventory', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.1\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='payment_retry_locations', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.2\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='idempotency_flow_map', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.3\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='existing_test_targets', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.4\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='test_execution_plan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type",
+          "artifacts": [
+            {
+              "id": "discover_repo_context_repo_locator_tool_1",
+              "content": {
+                "instance": "repo_locator",
+                "tool_name": "list_dir",
+                "arguments": {
+                  "path": "."
+                },
+                "observation": {
+                  "path": ".",
+                  "entries": [
+                    {
+                      "name": "README.md",
+                      "type": "file"
+                    },
+                    {
+                      "name": "src",
+                      "type": "dir"
+                    },
+                    {
+                      "name": "tests",
+                      "type": "dir"
+                    }
+                  ]
+                }
+              },
+              "kind": "tool_observation",
+              "producer": "repo_worker",
+              "step_id": "discover_repo_context",
+              "attempt_id": null,
+              "trust_level": "worker_reported",
+              "metadata": {
+                "tool_name": "list_dir",
+                "tool_index": 1
+              }
+            },
+            {
+              "id": "discover_repo_context_repo_locator_tool_2",
+              "content": {
+                "instance": "repo_locator",
+                "tool_name": "file_search",
+                "arguments": {
+                  "path": ".",
+                  "pattern": "**/*test*"
+                },
+                "observation": {
+                  "pattern": "**/*test*",
+                  "matches": [
+                    "tests",
+                    "tests/test_checkout.py"
+                  ]
+                }
+              },
+              "kind": "tool_observation",
+              "producer": "repo_worker",
+              "step_id": "discover_repo_context",
+              "attempt_id": null,
+              "trust_level": "worker_reported",
+              "metadata": {
+                "tool_name": "file_search",
+                "tool_index": 2
+              }
+            },
+            {
+              "id": "discover_repo_context_repo_locator_tool_3",
+              "content": {
+                "instance": "repo_locator",
+                "tool_name": "text_search",
+                "arguments": {
+                  "path": ".",
+                  "pattern": "idempotency"
+                },
+                "observation": {
+                  "command": [
+                    "rg",
+                    "-n",
+                    "idempotency",
+                    "."
+                  ],
+                  "stdout": "./tests/test_checkout.py:9:def test_retries_reuse_same_idempotency_key() -> None:\n./src/checkout.py:9:    Current behavior is intentionally wrong for retries: the idempotency key\n./README.md:3:This mock repo simulates a payment retry idempotency bug.\n",
+                  "stderr": "",
+                  "returncode": 0
+                }
+              },
+              "kind": "tool_observation",
+              "producer": "repo_worker",
+              "step_id": "discover_repo_context",
+              "attempt_id": null,
+              "trust_level": "worker_reported",
+              "metadata": {
+                "tool_name": "text_search",
+                "tool_index": 3
+              }
+            },
+            {
+              "id": "discover_repo_context_repo_locator_tool_4",
+              "content": {
+                "instance": "repo_locator",
+                "tool_name": "text_search",
+                "arguments": {
+                  "path": ".",
+                  "pattern": "retry"
+                },
+                "observation": {
+                  "command": [
+                    "rg",
+                    "-n",
+                    "retry",
+                    "."
+                  ],
+                  "stdout": "./src/checkout.py:1:\"\"\"Simple payment retry helpers for worker-runtime live testing.\"\"\"\n./src/checkout.py:6:def build_charge_headers(order_id: str, retry_count: int) -> dict[str, str]:\n./src/checkout.py:10:    changes when `retry_count` changes, which makes retries look like fresh\n./src/checkout.py:15:        \"Idempotency-Key\": f\"charge:{order_id}:retry:{retry_count}\",\n./src/checkout.py:16:        \"X-Retry-Count\": str(retry_count),\n./README.md:3:This mock repo simulates a payment retry idempotency bug.\n./tests/test_checkout.py:4:def test_first_attempt_keeps_retry_count_header() -> None:\n./tests/test_checkout.py:11:    retry = build_charge_headers(\"order-123\", 1)\n./tests/test_checkout.py:13:    assert retry[\"Idempotency-Key\"] == first[\"Idempotency-Key\"]\n",
+                  "stderr": "",
+                  "returncode": 0
+                }
+              },
+              "kind": "tool_observation",
+              "producer": "repo_worker",
+              "step_id": "discover_repo_context",
+              "attempt_id": null,
+              "trust_level": "worker_reported",
+              "metadata": {
+                "tool_name": "text_search",
+                "tool_index": 4
+              }
+            }
+          ],
+          "usage": {
+            "tool_calls": 4,
+            "model_calls": 2
+          },
+          "errors": [
+            "5 validation errors for WorkerLLMDecision\nfinal_result.artifacts.0\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='repo_inventory', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.1\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='payment_retry_locations', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.2\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='idempotency_flow_map', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.3\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='existing_test_targets', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.4\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='test_execution_plan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type"
+          ],
+          "warnings": [],
+          "metadata": {
+            "issues": [
+              {
+                "issue_type": "instance_failure",
+                "code": "worker_llm_error",
+                "message": "5 validation errors for WorkerLLMDecision\nfinal_result.artifacts.0\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='repo_inventory', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.1\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='payment_retry_locations', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.2\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='idempotency_flow_map', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.3\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='existing_test_targets', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.4\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='test_execution_plan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type",
+                "step_id": "discover_repo_context",
+                "worker_type": "repo_worker",
+                "attempt_id": null,
+                "retryable": true,
+                "metadata": {
+                  "worker_instance": "repo_locator"
+                }
+              }
+            ],
+            "issue_type": "instance_failure",
+            "issue_code": "worker_llm_error",
+            "retryable": true,
+            "worker_type": "repo_worker",
+            "worker_instance": "repo_locator",
+            "worker_group_results": [
+              {
+                "run_id": "run_plan_req_001_payment_retry_idempotency_fix",
+                "producer": "repo_worker",
+                "status": "failed",
+                "summary": "5 validation errors for WorkerLLMDecision\nfinal_result.artifacts.0\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='repo_inventory', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.1\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='payment_retry_locations', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.2\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='idempotency_flow_map', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.3\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='existing_test_targets', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.4\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='test_execution_plan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type",
+                "artifacts": [],
+                "usage": {
+                  "tool_calls": 4,
+                  "model_calls": 2
+                },
+                "errors": [
+                  "5 validation errors for WorkerLLMDecision\nfinal_result.artifacts.0\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='repo_inventory', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.1\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='payment_retry_locations', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.2\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='idempotency_flow_map', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.3\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='existing_test_targets', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.4\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='test_execution_plan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type"
+                ],
+                "warnings": [],
+                "metadata": {
+                  "issues": [
+                    {
+                      "issue_type": "instance_failure",
+                      "code": "worker_llm_error",
+                      "message": "5 validation errors for WorkerLLMDecision\nfinal_result.artifacts.0\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='repo_inventory', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.1\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='payment_retry_locations', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.2\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='idempotency_flow_map', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.3\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='existing_test_targets', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.4\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='test_execution_plan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type",
+                      "step_id": "discover_repo_context",
+                      "worker_type": "repo_worker",
+                      "attempt_id": null,
+                      "retryable": true,
+                      "metadata": {
+                        "worker_instance": "repo_locator"
+                      }
+                    }
+                  ],
+                  "issue_type": "instance_failure",
+                  "issue_code": "worker_llm_error",
+                  "retryable": true,
+                  "worker_type": "repo_worker",
+                  "worker_instance": "repo_locator"
+                }
+              }
+            ],
+            "attempt_id": "discover_repo_context_attempt_2"
+          }
+        }
+      ],
+      "issues": [
+        {
+          "issue_type": "instance_failure",
+          "code": "worker_llm_error",
+          "message": "5 validation errors for WorkerLLMDecision\nfinal_result.artifacts.0\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='repo_inventory', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.1\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='payment_retry_locations', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.2\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='idempotency_flow_map', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.3\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='existing_test_targets', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.4\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='test_execution_plan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type",
+          "step_id": "discover_repo_context",
+          "worker_type": "repo_worker",
+          "attempt_id": null,
+          "retryable": true,
+          "metadata": {
+            "worker_instance": "repo_locator"
+          }
+        }
+      ],
+      "partial_artifacts": [],
+      "failed_step_artifacts": [
+        {
+          "id": "discover_repo_context_repo_locator_tool_1",
+          "content": {
+            "instance": "repo_locator",
+            "tool_name": "list_dir",
+            "arguments": {
+              "path": "."
+            },
+            "observation": {
+              "path": ".",
+              "entries": [
+                {
+                  "name": "README.md",
+                  "type": "file"
+                },
+                {
+                  "name": "src",
+                  "type": "dir"
+                },
+                {
+                  "name": "tests",
+                  "type": "dir"
+                }
+              ]
+            }
+          },
+          "kind": "tool_observation",
+          "producer": "repo_worker",
+          "step_id": "discover_repo_context",
+          "attempt_id": "discover_repo_context_attempt_1",
+          "trust_level": "worker_reported",
+          "metadata": {
+            "tool_name": "list_dir",
+            "tool_index": 1
+          }
+        },
+        {
+          "id": "discover_repo_context_repo_locator_tool_2",
+          "content": {
+            "instance": "repo_locator",
+            "tool_name": "text_search",
+            "arguments": {
+              "path": ".",
+              "pattern": "idempotency"
+            },
+            "observation": {
+              "command": [
+                "rg",
+                "-n",
+                "idempotency",
+                "."
+              ],
+              "stdout": "./src/checkout.py:9:    Current behavior is intentionally wrong for retries: the idempotency key\n./README.md:3:This mock repo simulates a payment retry idempotency bug.\n./tests/test_checkout.py:9:def test_retries_reuse_same_idempotency_key() -> None:\n",
+              "stderr": "",
+              "returncode": 0
+            }
+          },
+          "kind": "tool_observation",
+          "producer": "repo_worker",
+          "step_id": "discover_repo_context",
+          "attempt_id": "discover_repo_context_attempt_1",
+          "trust_level": "worker_reported",
+          "metadata": {
+            "tool_name": "text_search",
+            "tool_index": 2
+          }
+        },
+        {
+          "id": "discover_repo_context_repo_locator_tool_3",
+          "content": {
+            "instance": "repo_locator",
+            "tool_name": "file_search",
+            "arguments": {
+              "path": ".",
+              "pattern": "**/test*"
+            },
+            "observation": {
+              "pattern": "**/test*",
+              "matches": [
+                "tests",
+                "tests/test_checkout.py"
+              ]
+            }
+          },
+          "kind": "tool_observation",
+          "producer": "repo_worker",
+          "step_id": "discover_repo_context",
+          "attempt_id": "discover_repo_context_attempt_1",
+          "trust_level": "worker_reported",
+          "metadata": {
+            "tool_name": "file_search",
+            "tool_index": 3
+          }
+        },
+        {
+          "id": "discover_repo_context_repo_locator_tool_1",
+          "content": {
+            "instance": "repo_locator",
+            "tool_name": "list_dir",
+            "arguments": {
+              "path": "."
+            },
+            "observation": {
+              "path": ".",
+              "entries": [
+                {
+                  "name": "README.md",
+                  "type": "file"
+                },
+                {
+                  "name": "src",
+                  "type": "dir"
+                },
+                {
+                  "name": "tests",
+                  "type": "dir"
+                }
+              ]
+            }
+          },
+          "kind": "tool_observation",
+          "producer": "repo_worker",
+          "step_id": "discover_repo_context",
+          "attempt_id": "discover_repo_context_attempt_2",
+          "trust_level": "worker_reported",
+          "metadata": {
+            "tool_name": "list_dir",
+            "tool_index": 1
+          }
+        },
+        {
+          "id": "discover_repo_context_repo_locator_tool_2",
+          "content": {
+            "instance": "repo_locator",
+            "tool_name": "file_search",
+            "arguments": {
+              "path": ".",
+              "pattern": "**/*test*"
+            },
+            "observation": {
+              "pattern": "**/*test*",
+              "matches": [
+                "tests",
+                "tests/test_checkout.py"
+              ]
+            }
+          },
+          "kind": "tool_observation",
+          "producer": "repo_worker",
+          "step_id": "discover_repo_context",
+          "attempt_id": "discover_repo_context_attempt_2",
+          "trust_level": "worker_reported",
+          "metadata": {
+            "tool_name": "file_search",
+            "tool_index": 2
+          }
+        },
+        {
+          "id": "discover_repo_context_repo_locator_tool_3",
+          "content": {
+            "instance": "repo_locator",
+            "tool_name": "text_search",
+            "arguments": {
+              "path": ".",
+              "pattern": "idempotency"
+            },
+            "observation": {
+              "command": [
+                "rg",
+                "-n",
+                "idempotency",
+                "."
+              ],
+              "stdout": "./tests/test_checkout.py:9:def test_retries_reuse_same_idempotency_key() -> None:\n./src/checkout.py:9:    Current behavior is intentionally wrong for retries: the idempotency key\n./README.md:3:This mock repo simulates a payment retry idempotency bug.\n",
+              "stderr": "",
+              "returncode": 0
+            }
+          },
+          "kind": "tool_observation",
+          "producer": "repo_worker",
+          "step_id": "discover_repo_context",
+          "attempt_id": "discover_repo_context_attempt_2",
+          "trust_level": "worker_reported",
+          "metadata": {
+            "tool_name": "text_search",
+            "tool_index": 3
+          }
+        },
+        {
+          "id": "discover_repo_context_repo_locator_tool_4",
+          "content": {
+            "instance": "repo_locator",
+            "tool_name": "text_search",
+            "arguments": {
+              "path": ".",
+              "pattern": "retry"
+            },
+            "observation": {
+              "command": [
+                "rg",
+                "-n",
+                "retry",
+                "."
+              ],
+              "stdout": "./src/checkout.py:1:\"\"\"Simple payment retry helpers for worker-runtime live testing.\"\"\"\n./src/checkout.py:6:def build_charge_headers(order_id: str, retry_count: int) -> dict[str, str]:\n./src/checkout.py:10:    changes when `retry_count` changes, which makes retries look like fresh\n./src/checkout.py:15:        \"Idempotency-Key\": f\"charge:{order_id}:retry:{retry_count}\",\n./src/checkout.py:16:        \"X-Retry-Count\": str(retry_count),\n./README.md:3:This mock repo simulates a payment retry idempotency bug.\n./tests/test_checkout.py:4:def test_first_attempt_keeps_retry_count_header() -> None:\n./tests/test_checkout.py:11:    retry = build_charge_headers(\"order-123\", 1)\n./tests/test_checkout.py:13:    assert retry[\"Idempotency-Key\"] == first[\"Idempotency-Key\"]\n",
+              "stderr": "",
+              "returncode": 0
+            }
+          },
+          "kind": "tool_observation",
+          "producer": "repo_worker",
+          "step_id": "discover_repo_context",
+          "attempt_id": "discover_repo_context_attempt_2",
+          "trust_level": "worker_reported",
+          "metadata": {
+            "tool_name": "text_search",
+            "tool_index": 4
+          }
+        }
+      ],
+      "retry_count": 1,
+      "instance_attempts_used": 2,
+      "issue_type": "instance_failure",
+      "issue_code": "worker_llm_error",
+      "retryable": true,
+      "worker_type": "repo_worker",
+      "worker_instance": "repo_locator",
+      "worker_group_results": [
+        {
+          "run_id": "run_plan_req_001_payment_retry_idempotency_fix",
+          "producer": "repo_worker",
+          "status": "failed",
+          "summary": "5 validation errors for WorkerLLMDecision\nfinal_result.artifacts.0\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='repo_inventory', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.1\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='payment_retry_locations', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.2\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='idempotency_flow_map', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.3\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='existing_test_targets', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.4\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='test_execution_plan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type",
+          "artifacts": [],
+          "usage": {
+            "tool_calls": 4,
+            "model_calls": 2
+          },
+          "errors": [
+            "5 validation errors for WorkerLLMDecision\nfinal_result.artifacts.0\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='repo_inventory', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.1\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='payment_retry_locations', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.2\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='idempotency_flow_map', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.3\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='existing_test_targets', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.4\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='test_execution_plan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type"
+          ],
+          "warnings": [],
+          "metadata": {
+            "issues": [
+              {
+                "issue_type": "instance_failure",
+                "code": "worker_llm_error",
+                "message": "5 validation errors for WorkerLLMDecision\nfinal_result.artifacts.0\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='repo_inventory', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.1\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='payment_retry_locations', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.2\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='idempotency_flow_map', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.3\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='existing_test_targets', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type\nfinal_result.artifacts.4\n  Input should be a valid dictionary or instance of ArtifactPayload [type=model_type, input_value='test_execution_plan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/model_type",
+                "step_id": "discover_repo_context",
+                "worker_type": "repo_worker",
+                "attempt_id": null,
+                "retryable": true,
+                "metadata": {
+                  "worker_instance": "repo_locator"
+                }
+              }
+            ],
+            "issue_type": "instance_failure",
+            "issue_code": "worker_llm_error",
+            "retryable": true,
+            "worker_type": "repo_worker",
+            "worker_instance": "repo_locator"
+          }
+        }
+      ],
+      "attempt_id": "discover_repo_context_attempt_2",
+      "control_plane_adjustments": [
+        {
+          "step_id": "discover_repo_context",
+          "worker_type": "repo_worker",
+          "field": "max_model_calls",
+          "from": 1,
+          "to": 2,
+          "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+        },
+        {
+          "step_id": "analyze_root_cause",
+          "worker_type": "research_worker",
+          "field": "max_model_calls",
+          "from": 1,
+          "to": 2,
+          "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+        },
+        {
+          "step_id": "design_minimal_patch",
+          "worker_type": "code_worker",
+          "field": "max_model_calls",
+          "from": 1,
+          "to": 2,
+          "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+        },
+        {
+          "step_id": "apply_scoped_fix",
+          "worker_type": "code_worker",
+          "field": "max_model_calls",
+          "from": 1,
+          "to": 2,
+          "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+        },
+        {
+          "step_id": "verify_patch_with_tests",
+          "worker_type": "verify_worker",
+          "field": "max_model_calls",
+          "from": 1,
+          "to": 2,
+          "reason": "agentic tool workers need a model action turn and a post-observation final-result turn"
+        },
+        {
+          "field": "budget.max_model_calls",
+          "from": 6,
+          "to": 11,
+          "reason": "budget must cover kernel-normalized worker model-call ceilings"
+        }
+      ]
+    }
+  },
+  "after_pytest": {
+    "label": "after",
+    "returncode": 1,
+    "stdout": ".F                                                                       [100%]\n=================================== FAILURES ===================================\n___________________ test_retries_reuse_same_idempotency_key ____________________\n\n    def test_retries_reuse_same_idempotency_key() -> None:\n        first = build_charge_headers(\"order-123\", 0)\n        retry = build_charge_headers(\"order-123\", 1)\n    \n>       assert retry[\"Idempotency-Key\"] == first[\"Idempotency-Key\"]\nE       AssertionError: assert 'charge:order-123:retry:1' == 'charge:order-123:retry:0'\nE         \nE         - charge:order-123:retry:0\nE         ?                        ^\nE         + charge:order-123:retry:1\nE         ?                        ^\n\ntests/test_checkout.py:13: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_checkout.py::test_retries_reuse_same_idempotency_key - Asse...\n1 failed, 1 passed in 0.05s\n",
+    "stderr": ""
+  },
+  "git_status": {
+    "command": [
+      "git",
+      "status",
+      "--short"
+    ],
+    "returncode": 0,
+    "stdout": "A  README.md\nA  src/__init__.py\nA  src/checkout.py\nA  tests/test_checkout.py\n?? src/__pycache__/\n?? tests/__pycache__/\n",
+    "stderr": ""
+  },
+  "final_files": {
+    "src/checkout.py": "\"\"\"Simple payment retry helpers for worker-runtime live testing.\"\"\"\n\nfrom __future__ import annotations\n\n\ndef build_charge_headers(order_id: str, retry_count: int) -> dict[str, str]:\n    \"\"\"Return headers for a payment charge request.\n\n    Current behavior is intentionally wrong for retries: the idempotency key\n    changes when `retry_count` changes, which makes retries look like fresh\n    charges to an upstream processor.\n    \"\"\"\n\n    return {\n        \"Idempotency-Key\": f\"charge:{order_id}:retry:{retry_count}\",\n        \"X-Retry-Count\": str(retry_count),\n    }\n",
+    "tests/test_checkout.py": "from src.checkout import build_charge_headers\n\n\ndef test_first_attempt_keeps_retry_count_header() -> None:\n    headers = build_charge_headers(\"order-123\", 0)\n    assert headers[\"X-Retry-Count\"] == \"0\"\n\n\ndef test_retries_reuse_same_idempotency_key() -> None:\n    first = build_charge_headers(\"order-123\", 0)\n    retry = build_charge_headers(\"order-123\", 1)\n\n    assert retry[\"Idempotency-Key\"] == first[\"Idempotency-Key\"]\n"
+  }
+}

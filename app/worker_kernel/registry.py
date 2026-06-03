@@ -11,19 +11,23 @@ from app.worker_kernel.workers import (
     VerifyWorker,
     WebResearchWorker,
 )
+from app.worker_kernel.group import SingleInstanceWorkerGroupRunner, WorkerGroupRunner
 from app.worker_kernel.workers.base import BaseWorker
 
 
 class WorkerRegistry:
     def __init__(self) -> None:
-        self._workers: dict[str, BaseWorker] = {}
+        self._groups: dict[str, WorkerGroupRunner] = {}
 
     def register(self, worker: BaseWorker) -> None:
-        self._workers[worker.worker_type] = worker
+        self.register_group(SingleInstanceWorkerGroupRunner(worker))
 
-    def get(self, worker_type: str) -> BaseWorker:
+    def register_group(self, group: WorkerGroupRunner) -> None:
+        self._groups[group.worker_type] = group
+
+    def get(self, worker_type: str) -> WorkerGroupRunner:
         try:
-            return self._workers[worker_type]
+            return self._groups[worker_type]
         except KeyError as exc:
             raise ValueError(f"Unknown worker_type: {worker_type}") from exc
 

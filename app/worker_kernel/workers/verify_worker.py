@@ -3,6 +3,27 @@
 from __future__ import annotations
 
 from app.schemas import Result, Task
+from app.worker_kernel.workers.templates import WorkerInstanceTemplate
+
+
+VERIFY_WORKER_SYSTEM_PROMPT = """You are the verification worker.
+Use readonly tools and allowed verification commands to prove whether the worker
+outputs satisfy success criteria. Record exact commands, return codes, and relevant
+stdout/stderr. Do not edit files. If checks fail, report failed or needs_replan based
+on whether the cause is implementation failure or planner-level mismatch."""
+
+
+def agentic_templates() -> list[WorkerInstanceTemplate]:
+    repo_tools = ("list_dir", "read_file", "file_search", "text_search", "json_query", "git_status", "git_diff")
+    command_tools = repo_tools + ("run_readonly_command",)
+    return [
+        WorkerInstanceTemplate(
+            name="verification_runner",
+            role="Run scoped verification and produce evidence-backed verification artifacts.",
+            system_prompt=VERIFY_WORKER_SYSTEM_PROMPT,
+            allowed_tools=command_tools,
+        )
+    ]
 
 
 class VerifyWorker:

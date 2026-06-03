@@ -1,6 +1,7 @@
 import pytest
 
 from app.schemas import Envelope, Plan, PlanStep, ReplanRequest, Result, Task
+from app.worker_kernel.group import SequentialWorkerGroupRunner
 from app.worker_kernel.registry import WorkerRegistry, build_default_registry
 from app.worker_kernel.runtime import WorkerKernelRuntime
 
@@ -21,6 +22,24 @@ def _envelope() -> Envelope:
         complexity_hint="high",
         confidence=0.8,
     )
+
+
+def _permissions(
+    *,
+    read_files: bool = False,
+    write_files: bool = False,
+    run_commands: bool = False,
+    web_research: bool = False,
+    **extra,
+) -> dict:
+    permissions = {
+        "read_files": read_files,
+        "write_files": write_files,
+        "run_commands": run_commands,
+        "web_research": web_research,
+    }
+    permissions.update(extra)
+    return permissions
 
 
 def test_worker_kernel_direct_plan_executes() -> None:
@@ -343,6 +362,7 @@ def test_worker_kernel_replans_with_fixed_new_plan() -> None:
                 output_artifacts=["repo_inventory"],
                 max_tool_calls=2,
                 max_model_calls=1,
+                permissions=_permissions(read_files=True),
             ),
             PlanStep(
                 step_id="research_step",
@@ -352,6 +372,7 @@ def test_worker_kernel_replans_with_fixed_new_plan() -> None:
                 output_artifacts=["guidance_control_matrix"],
                 max_tool_calls=2,
                 max_model_calls=1,
+                permissions=_permissions(web_research=True),
             ),
             PlanStep(
                 step_id="design_step",
@@ -361,6 +382,7 @@ def test_worker_kernel_replans_with_fixed_new_plan() -> None:
                 output_artifacts=["fix_design", "mutation_scope", "verification_plan"],
                 max_tool_calls=1,
                 max_model_calls=1,
+                permissions=_permissions(),
             ),
             PlanStep(
                 step_id="mutate_step",
@@ -370,6 +392,7 @@ def test_worker_kernel_replans_with_fixed_new_plan() -> None:
                 output_artifacts=["change_summary"],
                 max_tool_calls=2,
                 max_model_calls=0,
+                permissions=_permissions(read_files=True),
             ),
         ],
         budget={"max_tool_calls": 7, "max_model_calls": 3, "max_workers": 4, "max_retries": 0},
@@ -394,6 +417,14 @@ def test_worker_kernel_replans_with_fixed_new_plan() -> None:
     assert any(
         a.get("id") == "mutation_scope"
         for a in FakePlannerRuntime.last_replan_request.completed_artifacts
+    )
+    assert not any(
+        a.get("id") == "planner_issue_snapshot"
+        for a in FakePlannerRuntime.last_replan_request.completed_artifacts
+    )
+    assert any(
+        a.get("id") == "planner_issue_snapshot"
+        for a in FakePlannerRuntime.last_replan_request.failed_step_artifacts
     )
     assert result.metadata["replan"]["replacement_plan"]["plan_id"] == "plan_req_replan_fixed"
     assert result.artifacts[0]["id"] == "final_report"
@@ -587,8 +618,9 @@ def test_invalid_plan_handling() -> None:
         budget={"max_tool_calls": 3, "max_model_calls": 1, "max_workers": 1, "max_retries": 0},
     )
 
-    with pytest.raises(ValueError, match="at least one"):
-        WorkerKernelRuntime().run(empty_plan)
+    empty_result = WorkerKernelRuntime().run(empty_plan)
+    assert empty_result.status == "kernel_error"
+    assert empty_result.metadata["issues"][0]["code"] == "invalid_plan"
 
     malformed_budget_plan = Plan(
         plan_id="plan_req_invalid_2",
@@ -608,8 +640,9 @@ def test_invalid_plan_handling() -> None:
         budget={"max_tool_calls": 1, "max_model_calls": 0, "max_workers": 1, "max_retries": 0},
     )
 
-    with pytest.raises(ValueError, match="max_tool_calls"):
-        WorkerKernelRuntime().run(malformed_budget_plan)
+    malformed_result = WorkerKernelRuntime().run(malformed_budget_plan)
+    assert malformed_result.status == "kernel_error"
+    assert "max_tool_calls" in malformed_result.errors[0]
 
 
 def test_unknown_worker_handling() -> None:
@@ -631,8 +664,60 @@ def test_unknown_worker_handling() -> None:
         budget={"max_tool_calls": 2, "max_model_calls": 1, "max_workers": 1, "max_retries": 0},
     )
 
-    with pytest.raises(ValueError, match="Unknown worker_type"):
-        WorkerKernelRuntime(registry=build_default_registry()).run(plan)
+    result = WorkerKernelRuntime(registry=build_default_registry()).run(plan)
+    assert result.status == "kernel_error"
+    assert result.metadata["issues"][0]["code"] == "unknown_worker_group"
+
+
+def test_worker_kernel_normalizes_agentic_tool_model_budget_before_dispatch() -> None:
+    class AgenticLikeGroup:
+        worker_type = "agentic_group"
+
+        def minimum_model_calls(self, step: PlanStep) -> int:
+            return 2
+
+        def run(self, task: Task) -> Result:
+            assert task.max_model_calls == 2
+            return Result(
+                run_id=task.run_id,
+                producer=self.worker_type,
+                status="completed",
+                summary="agent loop completed",
+                artifacts=[{"id": "agent_output", "content": "done"}],
+                usage={"tool_calls": 1, "model_calls": 2},
+            )
+
+    registry = WorkerRegistry()
+    registry.register_group(AgenticLikeGroup())
+    plan = Plan(
+        plan_id="plan_agentic_budget",
+        request_id="req_agentic_budget",
+        planner="llm_planner",
+        objective="use tools then answer",
+        strategy="agentic",
+        steps=[
+            PlanStep(
+                step_id="agent_step",
+                worker_type="agentic_group",
+                instruction="inspect and produce output",
+                output_artifacts=["agent_output"],
+                max_tool_calls=1,
+                max_model_calls=1,
+                permissions=_permissions(read_files=True),
+            )
+        ],
+        budget={"max_tool_calls": 1, "max_model_calls": 1, "max_workers": 1, "max_retries": 0},
+    )
+
+    result = WorkerKernelRuntime(registry=registry).run(plan)
+
+    assert result.status == "completed"
+    adjustments = result.metadata["control_plane_adjustments"]
+    assert adjustments[0]["step_id"] == "agent_step"
+    assert adjustments[0]["field"] == "max_model_calls"
+    assert adjustments[0]["from"] == 1
+    assert adjustments[0]["to"] == 2
+    assert adjustments[1]["field"] == "budget.max_model_calls"
 
 
 def test_task_compiler_propagates_phase_mode_task_id_metadata() -> None:
@@ -682,8 +767,352 @@ def test_task_compiler_propagates_phase_mode_task_id_metadata() -> None:
     result = WorkerKernelRuntime(registry=registry).run(plan)
 
     assert result.status == "completed"
-    assert MetadataCaptureWorker.last_metadata == {
-        "phase": "DISCOVER",
-        "mode": "observe_only",
-        "task_id": "task_a",
-    }
+    assert MetadataCaptureWorker.last_metadata is not None
+    assert MetadataCaptureWorker.last_metadata["phase"] == "DISCOVER"
+    assert MetadataCaptureWorker.last_metadata["mode"] == "observe_only"
+    assert MetadataCaptureWorker.last_metadata["task_id"] == "task_a"
+    assert MetadataCaptureWorker.last_metadata["objective"] == "Capture phase metadata"
+    assert MetadataCaptureWorker.last_metadata["strategy"] == "phase_metadata"
+    assert MetadataCaptureWorker.last_metadata["attempt_id"] == "discover_scope_attempt_1"
+
+
+def test_kernel_preflight_validation_rejects_invalid_planner_plan_before_dispatch() -> None:
+    class CountingWorker:
+        worker_type = "repo_worker"
+        runs = 0
+
+        def run(self, task: Task) -> Result:  # pragma: no cover - should not dispatch
+            type(self).runs += 1
+            return Result(
+                run_id=task.run_id,
+                producer=self.worker_type,
+                status="completed",
+                summary="unexpected",
+            )
+
+    registry = WorkerRegistry()
+    registry.register(CountingWorker())
+    plan = Plan(
+        plan_id="plan_req_replan",
+        request_id="req_replan",
+        planner="llm_planner",
+        objective="Invalid phase-aware plan",
+        strategy="invalid",
+        execution_pattern="discover",
+        global_invariants=["observe_before_mutate"],
+        steps=[
+            PlanStep(
+                step_id="discover_scope",
+                worker_type="repo_worker",
+                phase="DISCOVER",
+                mode="observe_only",
+                task_id="main",
+                instruction="collect scope",
+                output_artifacts=["repo_inventory"],
+                max_tool_calls=1,
+                max_model_calls=0,
+                permissions={"read_files": True},
+            )
+        ],
+        budget={"max_tool_calls": 1, "max_model_calls": 0, "max_workers": 1, "max_retries": 0},
+    )
+
+    result = WorkerKernelRuntime(registry=registry).run(plan, envelope=_envelope())
+
+    assert result.status == "kernel_error"
+    assert CountingWorker.runs == 0
+    assert "permissions must explicitly include" in result.errors[0]
+
+
+def test_missing_runtime_artifact_blocks_without_replan_runtime() -> None:
+    class EmptyProducer:
+        worker_type = "repo_worker"
+
+        def run(self, task: Task) -> Result:
+            return Result(
+                run_id=task.run_id,
+                producer=self.worker_type,
+                status="completed",
+                summary="claimed output but produced no artifacts",
+                usage={"tool_calls": 0, "model_calls": 0},
+            )
+
+    registry = WorkerRegistry()
+    registry.register(EmptyProducer())
+    registry.register(EmptyProducer())
+    plan = Plan(
+        plan_id="plan_req_missing",
+        request_id="req_missing",
+        planner="llm_planner",
+        objective="Consume runtime artifact",
+        strategy="missing_artifact",
+        steps=[
+            PlanStep(
+                step_id="produce",
+                worker_type="repo_worker",
+                instruction="produce artifact",
+                output_artifacts=["repo_inventory"],
+                max_tool_calls=0,
+                max_model_calls=0,
+                permissions=_permissions(),
+            ),
+            PlanStep(
+                step_id="consume",
+                worker_type="repo_worker",
+                instruction="consume artifact",
+                input_artifacts=["repo_inventory"],
+                output_artifacts=["analysis"],
+                max_tool_calls=0,
+                max_model_calls=0,
+                permissions=_permissions(),
+            ),
+        ],
+        budget={"max_tool_calls": 0, "max_model_calls": 0, "max_workers": 2, "max_retries": 0},
+    )
+
+    result = WorkerKernelRuntime(registry=registry).run(plan)
+
+    assert result.status == "blocked"
+    assert result.metadata["missing_artifacts"] == ["repo_inventory"]
+    assert result.metadata["issues"][0]["issue_type"] == "plan_failure"
+
+
+def test_missing_runtime_artifact_requests_internal_replan_when_available() -> None:
+    class EmptyProducer:
+        worker_type = "repo_worker"
+
+        def run(self, task: Task) -> Result:
+            return Result(
+                run_id=task.run_id,
+                producer=self.worker_type,
+                status="completed",
+                summary="claimed output but produced no artifacts",
+                usage={"tool_calls": 0, "model_calls": 0},
+            )
+
+    class FinalWorker:
+        worker_type = "direct_worker"
+
+        def run(self, task: Task) -> Result:
+            return Result(
+                run_id=task.run_id,
+                producer=self.worker_type,
+                status="completed",
+                summary="replacement completed",
+                artifacts=[{"id": "final_report", "content": "ok"}],
+                usage={"tool_calls": 0, "model_calls": 0},
+            )
+
+    class FakePlannerRuntime:
+        last_replan_request: ReplanRequest | None = None
+
+        def replan(self, envelope: Envelope, current_plan: Plan, replan_request: ReplanRequest) -> Plan:
+            type(self).last_replan_request = replan_request
+            return Plan(
+                plan_id="plan_req_replan_missing_fixed",
+                request_id=envelope.request_id,
+                planner="llm_planner_replan",
+                objective=current_plan.objective,
+                strategy="finalize",
+                steps=[
+                    PlanStep(
+                        step_id="finalize",
+                        worker_type="direct_worker",
+                        instruction="finalize replacement",
+                        output_artifacts=["final_report"],
+                        max_tool_calls=0,
+                        max_model_calls=0,
+                        permissions=_permissions(),
+                    )
+                ],
+                budget={"max_tool_calls": 0, "max_model_calls": 0, "max_workers": 1, "max_retries": 0},
+            )
+
+    registry = WorkerRegistry()
+    registry.register(EmptyProducer())
+    registry.register(FinalWorker())
+    plan = Plan(
+        plan_id="plan_req_replan",
+        request_id="req_replan",
+        planner="llm_planner",
+        objective="Consume runtime artifact",
+        strategy="missing_artifact",
+        steps=[
+            PlanStep(
+                step_id="produce",
+                worker_type="repo_worker",
+                instruction="produce artifact",
+                output_artifacts=["repo_inventory"],
+                max_tool_calls=0,
+                max_model_calls=0,
+                permissions=_permissions(),
+            ),
+            PlanStep(
+                step_id="consume",
+                worker_type="repo_worker",
+                instruction="consume artifact",
+                input_artifacts=["repo_inventory"],
+                output_artifacts=["analysis"],
+                max_tool_calls=0,
+                max_model_calls=0,
+                permissions=_permissions(),
+            ),
+        ],
+        budget={"max_tool_calls": 0, "max_model_calls": 0, "max_workers": 2, "max_retries": 0},
+    )
+
+    result = WorkerKernelRuntime(
+        registry=registry,
+        planner_runtime=FakePlannerRuntime(),
+    ).run(plan, envelope=_envelope())
+
+    assert result.status == "completed"
+    assert FakePlannerRuntime.last_replan_request is not None
+    assert FakePlannerRuntime.last_replan_request.issues[0].code == "missing_input_artifacts"
+    assert FakePlannerRuntime.last_replan_request.issues[0].metadata["missing_artifacts"] == ["repo_inventory"]
+
+
+def test_worker_exception_retries_and_records_attempts() -> None:
+    class FlakyWorker:
+        worker_type = "direct_worker"
+        runs = 0
+
+        def run(self, task: Task) -> Result:
+            type(self).runs += 1
+            if type(self).runs == 1:
+                raise RuntimeError("temporary model outage")
+            return Result(
+                run_id=task.run_id,
+                producer=self.worker_type,
+                status="completed",
+                summary="recovered",
+                artifacts=[{"id": "direct_answer", "content": "ok"}],
+                usage={"tool_calls": 0, "model_calls": 0},
+            )
+
+    registry = WorkerRegistry()
+    registry.register(FlakyWorker())
+    plan = Plan(
+        plan_id="plan_req_retry",
+        request_id="req_retry",
+        planner="direct",
+        objective="Retry",
+        strategy="retry",
+        steps=[
+            PlanStep(
+                step_id="flaky",
+                worker_type="direct_worker",
+                instruction="run flaky",
+                output_artifacts=["direct_answer"],
+                max_tool_calls=0,
+                max_model_calls=0,
+            )
+        ],
+        budget={"max_tool_calls": 0, "max_model_calls": 0, "max_workers": 1, "max_retries": 1},
+    )
+
+    result = WorkerKernelRuntime(registry=registry).run(plan)
+
+    assert result.status == "completed"
+    assert result.metadata["retry_count"] == 1
+    assert result.metadata["instance_attempts_used"] == 2
+    assert result.metadata["issues"][0]["issue_type"] == "instance_failure"
+
+
+def test_worker_exception_exhausts_retry_budget() -> None:
+    class ExplodingWorker:
+        worker_type = "direct_worker"
+
+        def run(self, task: Task) -> Result:
+            raise RuntimeError("tool crashed")
+
+    registry = WorkerRegistry()
+    registry.register(ExplodingWorker())
+    plan = Plan(
+        plan_id="plan_req_retry_exhausted",
+        request_id="req_retry_exhausted",
+        planner="direct",
+        objective="Retry exhausted",
+        strategy="retry",
+        steps=[
+            PlanStep(
+                step_id="explode",
+                worker_type="direct_worker",
+                instruction="run exploding",
+                output_artifacts=["direct_answer"],
+                max_tool_calls=0,
+                max_model_calls=0,
+            )
+        ],
+        budget={"max_tool_calls": 0, "max_model_calls": 0, "max_workers": 1, "max_retries": 1},
+    )
+
+    result = WorkerKernelRuntime(registry=registry).run(plan)
+
+    assert result.status == "failed"
+    assert result.metadata["retry_count"] == 1
+    assert result.metadata["instance_attempts_used"] == 2
+    assert len(result.metadata["issues"]) == 2
+
+
+def test_sequential_worker_group_produces_one_step_result() -> None:
+    class SourceWorker:
+        worker_type = "source_worker"
+
+        def run(self, task: Task) -> Result:
+            return Result(
+                run_id=task.run_id,
+                producer=self.worker_type,
+                status="completed",
+                summary="sources found",
+                artifacts=[{"id": "source_links", "content": ["https://example.test/a"]}],
+                usage={"tool_calls": 1, "model_calls": 0},
+            )
+
+    class CitationWorker:
+        worker_type = "citation_worker"
+
+        def run(self, task: Task) -> Result:
+            return Result(
+                run_id=task.run_id,
+                producer=self.worker_type,
+                status="completed",
+                summary="citations formatted",
+                artifacts=[{"id": "web_research_notes", "content": "formatted"}],
+                usage={"tool_calls": 0, "model_calls": 1},
+            )
+
+    registry = WorkerRegistry()
+    registry.register_group(
+        SequentialWorkerGroupRunner(
+            worker_type="web_research_worker",
+            workers=[SourceWorker(), CitationWorker()],
+        )
+    )
+    plan = Plan(
+        plan_id="plan_req_group",
+        request_id="req_group",
+        planner="research",
+        objective="Run group",
+        strategy="group",
+        steps=[
+            PlanStep(
+                step_id="research",
+                worker_type="web_research_worker",
+                instruction="research",
+                output_artifacts=["web_research_notes"],
+                max_tool_calls=1,
+                max_model_calls=1,
+                permissions=_permissions(web_research=True),
+            )
+        ],
+        budget={"max_tool_calls": 1, "max_model_calls": 1, "max_workers": 1, "max_retries": 0},
+    )
+
+    result = WorkerKernelRuntime(registry=registry).run(plan)
+
+    assert result.status == "completed"
+    artifact_ids = {artifact.get("id") for artifact in result.artifacts}
+    assert {"source_links", "web_research_notes"} <= artifact_ids
+    assert result.metadata["worker_results"][0]["producer"] == "web_research_worker"
+    assert len(result.metadata["worker_results"][0]["metadata"]["worker_group_results"]) == 2

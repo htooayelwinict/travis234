@@ -3,6 +3,27 @@
 from __future__ import annotations
 
 from app.schemas import Result, Task
+from app.worker_kernel.workers.templates import WorkerInstanceTemplate
+
+
+INFRA_WORKER_SYSTEM_PROMPT = """You are the infrastructure diagnosis worker.
+Inspect configs, logs, scripts, environment examples, and readonly command evidence.
+Do not mutate infrastructure or secrets. Separate confirmed findings from operational
+recommendations. If required infra artifacts or permissions are missing, return
+needs_replan or blocked with a structured issue."""
+
+
+def agentic_templates() -> list[WorkerInstanceTemplate]:
+    repo_tools = ("list_dir", "read_file", "file_search", "text_search", "json_query", "git_status", "git_diff")
+    command_tools = repo_tools + ("run_readonly_command",)
+    return [
+        WorkerInstanceTemplate(
+            name="infra_diagnoser",
+            role="Diagnose infrastructure, configuration, and operational issues using readonly evidence.",
+            system_prompt=INFRA_WORKER_SYSTEM_PROMPT,
+            allowed_tools=command_tools,
+        )
+    ]
 
 
 class InfraWorker:

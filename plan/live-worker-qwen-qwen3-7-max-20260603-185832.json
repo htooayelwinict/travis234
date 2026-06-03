@@ -1,0 +1,1962 @@
+{
+  "generated_at": "2026-06-03T12:30:31.437455+00:00",
+  "prompt": "In the repo rooted at live_worker_mock_repo, inspect the payment retry bug. Read the code and tests, fix the issue so retries for the same order reuse the same idempotency key, keep the change minimal, and verify with the repo tests. Summarize what changed and any remaining risk.",
+  "repo_path": "/Users/htooayelwin/Documents/VScode/allthebest/live_worker_mock_repo",
+  "worker_env": {
+    "WORKER_LLM_ENABLED": "true",
+    "WORKER_LLM_MODEL": "qwen/qwen3.7-max",
+    "WORKER_LLM_PROVIDER_SORT": "latency",
+    "WORKER_LLM_TIMEOUT_SECONDS": "90",
+    "WORKER_LLM_MAX_TOKENS": "2400",
+    "WORKER_MAX_PARALLEL_INSTANCES": "2",
+    "WORKER_TOOL_TIMEOUT_SECONDS": "20"
+  },
+  "baseline_pytest": {
+    "label": "before",
+    "returncode": 1,
+    "stdout": ".F                                                                       [100%]\n=================================== FAILURES ===================================\n___________________ test_retries_reuse_same_idempotency_key ____________________\n\n    def test_retries_reuse_same_idempotency_key() -> None:\n        first = build_charge_headers(\"order-123\", 0)\n        retry = build_charge_headers(\"order-123\", 1)\n    \n>       assert retry[\"Idempotency-Key\"] == first[\"Idempotency-Key\"]\nE       AssertionError: assert 'charge:order-123:retry:1' == 'charge:order-123:retry:0'\nE         \nE         - charge:order-123:retry:0\nE         ?                        ^\nE         + charge:order-123:retry:1\nE         ?                        ^\n\ntests/test_checkout.py:13: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_checkout.py::test_retries_reuse_same_idempotency_key - Asse...\n1 failed, 1 passed in 0.04s\n",
+    "stderr": ""
+  },
+  "envelope": {
+    "request_id": "req_001",
+    "raw_input": "In the repo rooted at live_worker_mock_repo, inspect the payment retry bug. Read the code and tests, fix the issue so retries for the same order reuse the same idempotency key, keep the change minimal, and verify with the repo tests. Summarize what changed and any remaining risk.",
+    "normalized_input": "In repository live_worker_mock_repo, investigate and fix a payment-retry defect so that retries for the same order reuse one idempotency key, make the smallest possible code change, validate using repository tests, and report changes plus residual risk.",
+    "user_goal": "Correct the payment retry behavior to preserve idempotency per order across retries, with minimal code impact and test-backed verification.",
+    "input_type": "repo_payment_retry_idempotency_bugfix",
+    "intents": [
+      "code.inspect",
+      "code.fix",
+      "tests.validate",
+      "change.summarize",
+      "risk.assess"
+    ],
+    "domains": [
+      "code",
+      "testing",
+      "payments"
+    ],
+    "risks": [
+      "mutation_requested",
+      "file_mutation",
+      "needs_verification",
+      "ambiguous_scope",
+      "regression_risk"
+    ],
+    "artifacts": [
+      {
+        "name": "live_worker_mock_repo",
+        "type": "repository"
+      },
+      {
+        "name": "payment retry bug",
+        "type": "defect"
+      },
+      {
+        "name": "order",
+        "type": "domain_entity"
+      },
+      {
+        "name": "idempotency key",
+        "type": "payment_mechanism"
+      },
+      {
+        "name": "code",
+        "type": "source"
+      },
+      {
+        "name": "tests",
+        "type": "test_suite"
+      }
+    ],
+    "context_needed": [
+      "repo_tree",
+      "target_files_for_retry_logic",
+      "current_idempotency_key_generation_path",
+      "existing_tests_covering_retry_behavior",
+      "test_execution_command",
+      "failing_or_expected_test_baseline"
+    ],
+    "constraints": [
+      "target_locations_must_be_identified_before_mutation",
+      "change_scope_should_remain_minimal",
+      "same_order_retries_must_reuse_same_idempotency_key",
+      "mutation_requires_verification",
+      "verification_should_use_repo_tests",
+      "do_not_invent_root_causes_without_code_evidence"
+    ],
+    "complexity_hint": "medium",
+    "confidence": 0.93,
+    "ambiguity": [
+      "Exact language/framework and file paths are not specified.",
+      "Whether to run full test suite or a subset is not explicitly defined.",
+      "Current failing test evidence is not provided in the prompt."
+    ],
+    "assumptions": [
+      "The repository is accessible at the provided root path.",
+      "A retry path exists in code where idempotency key behavior can be adjusted.",
+      "Repository tests are runnable in the current environment."
+    ],
+    "metadata": {
+      "decompressor_mode": "llm_prompt_chain",
+      "llm_prompt_chain": {
+        "mode": "completed",
+        "stages": [
+          "decompress_request",
+          "validate_envelope"
+        ],
+        "fallback": null,
+        "redacted_prompt_input": false,
+        "model_calls": 1
+      },
+      "decompressor_runtime": {
+        "elapsed_ms": 14321.903,
+        "failure_rate": 0.0,
+        "repair_rate": 0.0,
+        "latency_ms_p50": 14321.903,
+        "latency_ms_p95": 14321.903
+      }
+    }
+  },
+  "plan": {
+    "plan_id": "plan_req_001_payment_retry_idempotency_fix",
+    "request_id": "req_001",
+    "planner": "phase_aware_mutation_planner",
+    "objective": "Inspect repository retry logic, implement the smallest safe fix so same-order payment retries reuse one idempotency key, verify with repository tests, and report residual risk.",
+    "strategy": "discover_analyze_design_mutate_verify_finalize_minimal_scope",
+    "execution_pattern": "discover_analyze_design_mutate_verify_finalize",
+    "steps": [
+      {
+        "step_id": "discover_retry_targets",
+        "worker_type": "repo_worker",
+        "phase": "DISCOVER",
+        "mode": "observe_only",
+        "task_id": "payment_retry_idempotency_fix",
+        "instruction": "Known facts: Request requires a minimal code fix in repo for retry idempotency behavior and test-backed verification. Unknowns: Exact files, retry entrypoints, idempotency generation path, and runnable test command. Do now: Inspect repository tree and locate candidate source files and tests related to payment retry, order retry flow, and idempotency key creation/reuse; identify likely test execution commands. Do not do: Do not modify files, run mutations, or assert root cause without code evidence. Output: repo_tree, candidate_retry_locations, candidate_test_locations, test_command_candidates.",
+        "input_artifacts": [],
+        "output_artifacts": [
+          "repo_tree",
+          "candidate_retry_locations",
+          "candidate_test_locations",
+          "test_command_candidates"
+        ],
+        "max_tool_calls": 4,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": true,
+          "write_files": false,
+          "run_commands": false,
+          "web_research": false,
+          "write_paths": [],
+          "write_paths_from_artifacts": []
+        }
+      },
+      {
+        "step_id": "analyze_root_cause_and_coverage",
+        "worker_type": "research_worker",
+        "phase": "ANALYZE",
+        "mode": "observe_only",
+        "task_id": "payment_retry_idempotency_fix",
+        "instruction": "Known facts: repo_tree, candidate_retry_locations, candidate_test_locations, and test_command_candidates are available from discovery. Unknowns: Confirmed defect mechanism, exact dependency points, and whether existing tests already cover same-order retry key reuse. Do now: Read candidate code/tests to establish root-cause evidence for idempotency key regeneration on retry, map dependency touchpoints, and assess current retry test coverage/baseline expectations. Do not do: Do not edit files, do not invent failure evidence, and do not broaden scope beyond retry/idempotency behavior. Output: root_cause_evidence, evidence_artifacts, dependency_artifacts, retry_test_coverage_assessment, baseline_expectations.",
+        "input_artifacts": [
+          "repo_tree",
+          "candidate_retry_locations",
+          "candidate_test_locations",
+          "test_command_candidates"
+        ],
+        "output_artifacts": [
+          "root_cause_evidence",
+          "evidence_artifacts",
+          "dependency_artifacts",
+          "retry_test_coverage_assessment",
+          "baseline_expectations"
+        ],
+        "max_tool_calls": 4,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": true,
+          "write_files": false,
+          "run_commands": false,
+          "web_research": false,
+          "write_paths": [],
+          "write_paths_from_artifacts": []
+        }
+      },
+      {
+        "step_id": "design_minimal_patch_scope",
+        "worker_type": "code_worker",
+        "phase": "DESIGN",
+        "mode": "plan_only",
+        "task_id": "payment_retry_idempotency_fix",
+        "instruction": "Known facts: root_cause_evidence, evidence_artifacts, dependency_artifacts, retry_test_coverage_assessment, and baseline_expectations are available. Unknowns: None material if evidence supports a narrow fix; otherwise scope uncertainty remains. Do now: Produce a minimal fix design that reuses one idempotency key for retries of the same order, define a narrow mutation_scope, define allowed_write_paths, create rollback_plan, and define verification_plan using repository tests. Do not do: Do not mutate files, do not include unrelated refactors, and do not define write scope outside evidence-backed targets. Output: fix_design, mutation_scope, allowed_write_paths, rollback_plan, verification_plan.",
+        "input_artifacts": [
+          "root_cause_evidence",
+          "evidence_artifacts",
+          "dependency_artifacts",
+          "retry_test_coverage_assessment",
+          "baseline_expectations"
+        ],
+        "output_artifacts": [
+          "fix_design",
+          "mutation_scope",
+          "allowed_write_paths",
+          "rollback_plan",
+          "verification_plan"
+        ],
+        "max_tool_calls": 2,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": true,
+          "write_files": false,
+          "run_commands": false,
+          "web_research": false,
+          "write_paths": [],
+          "write_paths_from_artifacts": []
+        }
+      },
+      {
+        "step_id": "apply_scoped_fix",
+        "worker_type": "code_worker",
+        "phase": "MUTATE",
+        "mode": "bounded_mutation",
+        "task_id": "payment_retry_idempotency_fix",
+        "instruction": "Known facts: fix_design, mutation_scope, allowed_write_paths, rollback_plan, and root_cause_evidence define the approved change boundary and rationale. Unknowns: None unless design artifacts conflict with code reality, in which case report evidence_gap. Do now: Implement only the scoped code change so same-order retries reuse the same idempotency key, staying strictly within mutation_scope and preserving minimal diff; prepare rollback artifact. Do not do: Do not write outside scoped paths, do not alter unrelated behavior, and do not claim verification success. Output: change_summary, rollback_patch.",
+        "input_artifacts": [
+          "fix_design",
+          "mutation_scope",
+          "allowed_write_paths",
+          "rollback_plan",
+          "root_cause_evidence"
+        ],
+        "output_artifacts": [
+          "change_summary",
+          "rollback_patch"
+        ],
+        "max_tool_calls": 3,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": true,
+          "write_files": true,
+          "run_commands": false,
+          "web_research": false,
+          "write_paths": [],
+          "write_paths_from_artifacts": [
+            "mutation_scope",
+            "allowed_write_paths"
+          ]
+        }
+      },
+      {
+        "step_id": "verify_with_repo_tests",
+        "worker_type": "verify_worker",
+        "phase": "VERIFY",
+        "mode": "verify_only",
+        "task_id": "payment_retry_idempotency_fix",
+        "instruction": "Known facts: change_summary and rollback_patch exist, with mutation_scope and root_cause_evidence available for context and containment checks; verification_plan defines test approach. Unknowns: Actual pass/fail outcomes and any regressions. Do now: Run planned repository tests (focused retry/idempotency tests and broader sanity subset as defined), validate behavior matches root cause resolution, confirm edits stayed within mutation_scope, and confirm rollback_patch applicability. Do not do: Do not modify files during verification and do not overclaim confidence beyond observed results. Output: test_results, verification_results, scope_containment_report.",
+        "input_artifacts": [
+          "change_summary",
+          "rollback_patch",
+          "mutation_scope",
+          "root_cause_evidence",
+          "verification_plan"
+        ],
+        "output_artifacts": [
+          "test_results",
+          "verification_results",
+          "scope_containment_report"
+        ],
+        "max_tool_calls": 6,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": true,
+          "write_files": false,
+          "run_commands": true,
+          "web_research": false,
+          "write_paths": [],
+          "write_paths_from_artifacts": []
+        }
+      },
+      {
+        "step_id": "finalize_report",
+        "worker_type": "research_worker",
+        "phase": "FINALIZE",
+        "mode": "summarize_only",
+        "task_id": "payment_retry_idempotency_fix",
+        "instruction": "Known facts: change_summary, test_results, verification_results, scope_containment_report, and rollback_patch are available. Unknowns: None beyond residual risk interpretation from observed evidence. Do now: Summarize what changed, why it fixes retry idempotency per order, what verification proved, and remaining risks/limitations with clear next checks if needed. Do not do: Do not invent additional test outcomes or unobserved root causes. Output: final_report.",
+        "input_artifacts": [
+          "change_summary",
+          "test_results",
+          "verification_results",
+          "scope_containment_report",
+          "rollback_patch"
+        ],
+        "output_artifacts": [
+          "final_report"
+        ],
+        "max_tool_calls": 0,
+        "max_model_calls": 1,
+        "permissions": {
+          "read_files": false,
+          "write_files": false,
+          "run_commands": false,
+          "web_research": false,
+          "write_paths": [],
+          "write_paths_from_artifacts": []
+        }
+      }
+    ],
+    "budget": {
+      "max_tool_calls": 19,
+      "max_model_calls": 6,
+      "max_workers": 6,
+      "max_retries": 1
+    },
+    "global_invariants": [
+      "target_locations_must_be_identified_before_mutation",
+      "design_must_define_mutation_scope_and_rollback_before_write",
+      "writes_must_be_scoped_via_design_artifacts_only",
+      "same_order_retries_must_reuse_same_idempotency_key",
+      "no_invented_root_cause_without_code_evidence",
+      "verification_must_run_repo_tests_after_mutation",
+      "finalize_must_report_residual_risk_from_observed_evidence"
+    ],
+    "success_criteria": [
+      "Root-cause evidence identifies why retry idempotency key was not reused for same order.",
+      "A minimal scoped patch is applied only within DESIGN-defined write scope.",
+      "Repository tests in verification_plan run and demonstrate expected retry idempotency behavior.",
+      "Scope containment and rollback readiness are documented.",
+      "Final report summarizes change, verification evidence, and residual risk."
+    ],
+    "metadata": {
+      "archetype": "phase_aware_repo_mutation",
+      "complexity": "medium",
+      "domains": [
+        "code",
+        "testing",
+        "payments"
+      ],
+      "llm_planner": {
+        "mode": "completed",
+        "stages": [
+          "draft_plan",
+          "validate_plan"
+        ],
+        "model_calls": 1,
+        "repair_attempted": false,
+        "validation_errors": [],
+        "resolved_validation_errors": [],
+        "budget_auto_aligned": true,
+        "envelope_input_type": "repo_payment_retry_idempotency_bugfix",
+        "envelope_complexity_hint": "medium"
+      },
+      "planner_runtime": {
+        "mode": "llm_prompt_chain",
+        "fallback_reason": null
+      }
+    }
+  },
+  "result": {
+    "run_id": "run_plan_req_001_payment_retry_idempotency_fix",
+    "producer": "worker_kernel",
+    "status": "failed",
+    "summary": "Execution stopped at step analyze_root_cause_and_coverage: 3 validation errors for WorkerLLMDecision\nstatus\n  Extra inputs are not permitted [type=extra_forbidden, input_value='needs_replan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nreason\n  Extra inputs are not permitted [type=extra_forbidden, input_value='The previous discovery s...nalysis cannot proceed.', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nmissing_artifacts\n  Extra inputs are not permitted [type=extra_forbidden, input_value=['target_files_for_retry_...overing_retry_behavior'], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden",
+    "artifacts": [
+      {
+        "id": "discover_retry_targets_repo_locator_tool_1",
+        "content": {
+          "instance": "repo_locator",
+          "tool_name": "list_dir",
+          "arguments": {
+            "path": "."
+          },
+          "observation": {
+            "path": ".",
+            "entries": [
+              {
+                "name": ".git",
+                "type": "dir"
+              },
+              {
+                "name": "README.md",
+                "type": "file"
+              },
+              {
+                "name": "src",
+                "type": "dir"
+              },
+              {
+                "name": "tests",
+                "type": "dir"
+              }
+            ]
+          }
+        },
+        "kind": "tool_observation",
+        "producer": "repo_worker",
+        "step_id": "discover_retry_targets",
+        "attempt_id": "discover_retry_targets_attempt_1",
+        "trust_level": "worker_reported",
+        "metadata": {
+          "tool_name": "list_dir",
+          "tool_index": 1
+        }
+      },
+      {
+        "id": "repo_tree",
+        "content": {
+          "observations": [
+            {
+              "instance": "repo_locator",
+              "tool_name": "list_dir",
+              "arguments": {
+                "path": "."
+              },
+              "observation": {
+                "path": ".",
+                "entries": [
+                  {
+                    "name": ".git",
+                    "type": "dir"
+                  },
+                  {
+                    "name": "README.md",
+                    "type": "file"
+                  },
+                  {
+                    "name": "src",
+                    "type": "dir"
+                  },
+                  {
+                    "name": "tests",
+                    "type": "dir"
+                  }
+                ]
+              }
+            }
+          ],
+          "fallback_reason": "model_budget_exhausted"
+        },
+        "kind": "tool_observation_summary",
+        "producer": "repo_worker",
+        "step_id": "discover_retry_targets",
+        "attempt_id": "discover_retry_targets_attempt_1",
+        "trust_level": "worker_reported",
+        "metadata": {
+          "worker_instance": "repo_locator"
+        }
+      },
+      {
+        "id": "candidate_retry_locations",
+        "content": {
+          "observations": [
+            {
+              "instance": "repo_locator",
+              "tool_name": "list_dir",
+              "arguments": {
+                "path": "."
+              },
+              "observation": {
+                "path": ".",
+                "entries": [
+                  {
+                    "name": ".git",
+                    "type": "dir"
+                  },
+                  {
+                    "name": "README.md",
+                    "type": "file"
+                  },
+                  {
+                    "name": "src",
+                    "type": "dir"
+                  },
+                  {
+                    "name": "tests",
+                    "type": "dir"
+                  }
+                ]
+              }
+            }
+          ],
+          "fallback_reason": "model_budget_exhausted"
+        },
+        "kind": "tool_observation_summary",
+        "producer": "repo_worker",
+        "step_id": "discover_retry_targets",
+        "attempt_id": "discover_retry_targets_attempt_1",
+        "trust_level": "worker_reported",
+        "metadata": {
+          "worker_instance": "repo_locator"
+        }
+      },
+      {
+        "id": "candidate_test_locations",
+        "content": {
+          "observations": [
+            {
+              "instance": "repo_locator",
+              "tool_name": "list_dir",
+              "arguments": {
+                "path": "."
+              },
+              "observation": {
+                "path": ".",
+                "entries": [
+                  {
+                    "name": ".git",
+                    "type": "dir"
+                  },
+                  {
+                    "name": "README.md",
+                    "type": "file"
+                  },
+                  {
+                    "name": "src",
+                    "type": "dir"
+                  },
+                  {
+                    "name": "tests",
+                    "type": "dir"
+                  }
+                ]
+              }
+            }
+          ],
+          "fallback_reason": "model_budget_exhausted"
+        },
+        "kind": "tool_observation_summary",
+        "producer": "repo_worker",
+        "step_id": "discover_retry_targets",
+        "attempt_id": "discover_retry_targets_attempt_1",
+        "trust_level": "worker_reported",
+        "metadata": {
+          "worker_instance": "repo_locator"
+        }
+      },
+      {
+        "id": "test_command_candidates",
+        "content": {
+          "observations": [
+            {
+              "instance": "repo_locator",
+              "tool_name": "list_dir",
+              "arguments": {
+                "path": "."
+              },
+              "observation": {
+                "path": ".",
+                "entries": [
+                  {
+                    "name": ".git",
+                    "type": "dir"
+                  },
+                  {
+                    "name": "README.md",
+                    "type": "file"
+                  },
+                  {
+                    "name": "src",
+                    "type": "dir"
+                  },
+                  {
+                    "name": "tests",
+                    "type": "dir"
+                  }
+                ]
+              }
+            }
+          ],
+          "fallback_reason": "model_budget_exhausted"
+        },
+        "kind": "tool_observation_summary",
+        "producer": "repo_worker",
+        "step_id": "discover_retry_targets",
+        "attempt_id": "discover_retry_targets_attempt_1",
+        "trust_level": "worker_reported",
+        "metadata": {
+          "worker_instance": "repo_locator"
+        }
+      }
+    ],
+    "usage": {},
+    "errors": [
+      "3 validation errors for WorkerLLMDecision\nstatus\n  Extra inputs are not permitted [type=extra_forbidden, input_value='needs_replan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nreason\n  Extra inputs are not permitted [type=extra_forbidden, input_value='The previous discovery s...nalysis cannot proceed.', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nmissing_artifacts\n  Extra inputs are not permitted [type=extra_forbidden, input_value=['target_files_for_retry_...overing_retry_behavior'], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden"
+    ],
+    "warnings": [],
+    "metadata": {
+      "worker_results": [
+        {
+          "run_id": "run_plan_req_001_payment_retry_idempotency_fix",
+          "producer": "repo_worker",
+          "status": "completed",
+          "summary": "Worker completed from collected tool observations after model budget was exhausted.",
+          "artifacts": [
+            {
+              "id": "discover_retry_targets_repo_locator_tool_1",
+              "content": {
+                "instance": "repo_locator",
+                "tool_name": "list_dir",
+                "arguments": {
+                  "path": "."
+                },
+                "observation": {
+                  "path": ".",
+                  "entries": [
+                    {
+                      "name": ".git",
+                      "type": "dir"
+                    },
+                    {
+                      "name": "README.md",
+                      "type": "file"
+                    },
+                    {
+                      "name": "src",
+                      "type": "dir"
+                    },
+                    {
+                      "name": "tests",
+                      "type": "dir"
+                    }
+                  ]
+                }
+              },
+              "kind": "tool_observation",
+              "producer": "repo_worker",
+              "step_id": "discover_retry_targets",
+              "attempt_id": null,
+              "trust_level": "worker_reported",
+              "metadata": {
+                "tool_name": "list_dir",
+                "tool_index": 1
+              }
+            },
+            {
+              "id": "repo_tree",
+              "content": {
+                "observations": [
+                  {
+                    "instance": "repo_locator",
+                    "tool_name": "list_dir",
+                    "arguments": {
+                      "path": "."
+                    },
+                    "observation": {
+                      "path": ".",
+                      "entries": [
+                        {
+                          "name": ".git",
+                          "type": "dir"
+                        },
+                        {
+                          "name": "README.md",
+                          "type": "file"
+                        },
+                        {
+                          "name": "src",
+                          "type": "dir"
+                        },
+                        {
+                          "name": "tests",
+                          "type": "dir"
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "fallback_reason": "model_budget_exhausted"
+              },
+              "kind": "tool_observation_summary",
+              "producer": "repo_worker",
+              "step_id": "discover_retry_targets",
+              "attempt_id": null,
+              "trust_level": "worker_reported",
+              "metadata": {
+                "worker_instance": "repo_locator"
+              }
+            },
+            {
+              "id": "candidate_retry_locations",
+              "content": {
+                "observations": [
+                  {
+                    "instance": "repo_locator",
+                    "tool_name": "list_dir",
+                    "arguments": {
+                      "path": "."
+                    },
+                    "observation": {
+                      "path": ".",
+                      "entries": [
+                        {
+                          "name": ".git",
+                          "type": "dir"
+                        },
+                        {
+                          "name": "README.md",
+                          "type": "file"
+                        },
+                        {
+                          "name": "src",
+                          "type": "dir"
+                        },
+                        {
+                          "name": "tests",
+                          "type": "dir"
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "fallback_reason": "model_budget_exhausted"
+              },
+              "kind": "tool_observation_summary",
+              "producer": "repo_worker",
+              "step_id": "discover_retry_targets",
+              "attempt_id": null,
+              "trust_level": "worker_reported",
+              "metadata": {
+                "worker_instance": "repo_locator"
+              }
+            },
+            {
+              "id": "candidate_test_locations",
+              "content": {
+                "observations": [
+                  {
+                    "instance": "repo_locator",
+                    "tool_name": "list_dir",
+                    "arguments": {
+                      "path": "."
+                    },
+                    "observation": {
+                      "path": ".",
+                      "entries": [
+                        {
+                          "name": ".git",
+                          "type": "dir"
+                        },
+                        {
+                          "name": "README.md",
+                          "type": "file"
+                        },
+                        {
+                          "name": "src",
+                          "type": "dir"
+                        },
+                        {
+                          "name": "tests",
+                          "type": "dir"
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "fallback_reason": "model_budget_exhausted"
+              },
+              "kind": "tool_observation_summary",
+              "producer": "repo_worker",
+              "step_id": "discover_retry_targets",
+              "attempt_id": null,
+              "trust_level": "worker_reported",
+              "metadata": {
+                "worker_instance": "repo_locator"
+              }
+            },
+            {
+              "id": "test_command_candidates",
+              "content": {
+                "observations": [
+                  {
+                    "instance": "repo_locator",
+                    "tool_name": "list_dir",
+                    "arguments": {
+                      "path": "."
+                    },
+                    "observation": {
+                      "path": ".",
+                      "entries": [
+                        {
+                          "name": ".git",
+                          "type": "dir"
+                        },
+                        {
+                          "name": "README.md",
+                          "type": "file"
+                        },
+                        {
+                          "name": "src",
+                          "type": "dir"
+                        },
+                        {
+                          "name": "tests",
+                          "type": "dir"
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "fallback_reason": "model_budget_exhausted"
+              },
+              "kind": "tool_observation_summary",
+              "producer": "repo_worker",
+              "step_id": "discover_retry_targets",
+              "attempt_id": null,
+              "trust_level": "worker_reported",
+              "metadata": {
+                "worker_instance": "repo_locator"
+              }
+            }
+          ],
+          "usage": {
+            "tool_calls": 1,
+            "model_calls": 1
+          },
+          "errors": [],
+          "warnings": [],
+          "metadata": {
+            "worker_group_results": [
+              {
+                "run_id": "run_plan_req_001_payment_retry_idempotency_fix",
+                "producer": "repo_worker",
+                "status": "completed",
+                "summary": "Worker completed from collected tool observations after model budget was exhausted.",
+                "artifacts": [
+                  {
+                    "id": "repo_tree",
+                    "content": {
+                      "observations": [
+                        {
+                          "instance": "repo_locator",
+                          "tool_name": "list_dir",
+                          "arguments": {
+                            "path": "."
+                          },
+                          "observation": {
+                            "path": ".",
+                            "entries": [
+                              {
+                                "name": ".git",
+                                "type": "dir"
+                              },
+                              {
+                                "name": "README.md",
+                                "type": "file"
+                              },
+                              {
+                                "name": "src",
+                                "type": "dir"
+                              },
+                              {
+                                "name": "tests",
+                                "type": "dir"
+                              }
+                            ]
+                          }
+                        }
+                      ],
+                      "fallback_reason": "model_budget_exhausted"
+                    },
+                    "kind": "tool_observation_summary",
+                    "producer": "repo_worker",
+                    "step_id": "discover_retry_targets",
+                    "attempt_id": null,
+                    "trust_level": "worker_reported",
+                    "metadata": {
+                      "worker_instance": "repo_locator"
+                    }
+                  },
+                  {
+                    "id": "candidate_retry_locations",
+                    "content": {
+                      "observations": [
+                        {
+                          "instance": "repo_locator",
+                          "tool_name": "list_dir",
+                          "arguments": {
+                            "path": "."
+                          },
+                          "observation": {
+                            "path": ".",
+                            "entries": [
+                              {
+                                "name": ".git",
+                                "type": "dir"
+                              },
+                              {
+                                "name": "README.md",
+                                "type": "file"
+                              },
+                              {
+                                "name": "src",
+                                "type": "dir"
+                              },
+                              {
+                                "name": "tests",
+                                "type": "dir"
+                              }
+                            ]
+                          }
+                        }
+                      ],
+                      "fallback_reason": "model_budget_exhausted"
+                    },
+                    "kind": "tool_observation_summary",
+                    "producer": "repo_worker",
+                    "step_id": "discover_retry_targets",
+                    "attempt_id": null,
+                    "trust_level": "worker_reported",
+                    "metadata": {
+                      "worker_instance": "repo_locator"
+                    }
+                  },
+                  {
+                    "id": "candidate_test_locations",
+                    "content": {
+                      "observations": [
+                        {
+                          "instance": "repo_locator",
+                          "tool_name": "list_dir",
+                          "arguments": {
+                            "path": "."
+                          },
+                          "observation": {
+                            "path": ".",
+                            "entries": [
+                              {
+                                "name": ".git",
+                                "type": "dir"
+                              },
+                              {
+                                "name": "README.md",
+                                "type": "file"
+                              },
+                              {
+                                "name": "src",
+                                "type": "dir"
+                              },
+                              {
+                                "name": "tests",
+                                "type": "dir"
+                              }
+                            ]
+                          }
+                        }
+                      ],
+                      "fallback_reason": "model_budget_exhausted"
+                    },
+                    "kind": "tool_observation_summary",
+                    "producer": "repo_worker",
+                    "step_id": "discover_retry_targets",
+                    "attempt_id": null,
+                    "trust_level": "worker_reported",
+                    "metadata": {
+                      "worker_instance": "repo_locator"
+                    }
+                  },
+                  {
+                    "id": "test_command_candidates",
+                    "content": {
+                      "observations": [
+                        {
+                          "instance": "repo_locator",
+                          "tool_name": "list_dir",
+                          "arguments": {
+                            "path": "."
+                          },
+                          "observation": {
+                            "path": ".",
+                            "entries": [
+                              {
+                                "name": ".git",
+                                "type": "dir"
+                              },
+                              {
+                                "name": "README.md",
+                                "type": "file"
+                              },
+                              {
+                                "name": "src",
+                                "type": "dir"
+                              },
+                              {
+                                "name": "tests",
+                                "type": "dir"
+                              }
+                            ]
+                          }
+                        }
+                      ],
+                      "fallback_reason": "model_budget_exhausted"
+                    },
+                    "kind": "tool_observation_summary",
+                    "producer": "repo_worker",
+                    "step_id": "discover_retry_targets",
+                    "attempt_id": null,
+                    "trust_level": "worker_reported",
+                    "metadata": {
+                      "worker_instance": "repo_locator"
+                    }
+                  }
+                ],
+                "usage": {
+                  "tool_calls": 1,
+                  "model_calls": 1
+                },
+                "errors": [],
+                "warnings": [
+                  "model budget exhausted; final artifact was assembled from tool observations"
+                ],
+                "metadata": {
+                  "worker_type": "repo_worker",
+                  "worker_instance": "repo_locator",
+                  "fallback": "tool_observation_summary"
+                }
+              }
+            ],
+            "worker_type": "repo_worker",
+            "attempt_id": "discover_retry_targets_attempt_1"
+          }
+        },
+        {
+          "run_id": "run_plan_req_001_payment_retry_idempotency_fix",
+          "producer": "research_worker",
+          "status": "failed",
+          "summary": "3 validation errors for WorkerLLMDecision\nstatus\n  Extra inputs are not permitted [type=extra_forbidden, input_value='needs_replan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nreason\n  Extra inputs are not permitted [type=extra_forbidden, input_value='The discovery phase fail...ths and code structure.', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nmissing_artifacts\n  Extra inputs are not permitted [type=extra_forbidden, input_value=['target_files_for_retry_...test_execution_command'], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden",
+          "artifacts": [
+            {
+              "id": "repo_tree",
+              "content": {
+                "observations": [
+                  {
+                    "instance": "repo_locator",
+                    "tool_name": "list_dir",
+                    "arguments": {
+                      "path": "."
+                    },
+                    "observation": {
+                      "path": ".",
+                      "entries": [
+                        {
+                          "name": ".git",
+                          "type": "dir"
+                        },
+                        {
+                          "name": "README.md",
+                          "type": "file"
+                        },
+                        {
+                          "name": "src",
+                          "type": "dir"
+                        },
+                        {
+                          "name": "tests",
+                          "type": "dir"
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "fallback_reason": "model_budget_exhausted"
+              },
+              "kind": "tool_observation_summary",
+              "producer": "repo_worker",
+              "step_id": "discover_retry_targets",
+              "attempt_id": "discover_retry_targets_attempt_1",
+              "trust_level": "worker_reported",
+              "metadata": {
+                "worker_instance": "repo_locator"
+              }
+            },
+            {
+              "id": "candidate_retry_locations",
+              "content": {
+                "observations": [
+                  {
+                    "instance": "repo_locator",
+                    "tool_name": "list_dir",
+                    "arguments": {
+                      "path": "."
+                    },
+                    "observation": {
+                      "path": ".",
+                      "entries": [
+                        {
+                          "name": ".git",
+                          "type": "dir"
+                        },
+                        {
+                          "name": "README.md",
+                          "type": "file"
+                        },
+                        {
+                          "name": "src",
+                          "type": "dir"
+                        },
+                        {
+                          "name": "tests",
+                          "type": "dir"
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "fallback_reason": "model_budget_exhausted"
+              },
+              "kind": "tool_observation_summary",
+              "producer": "repo_worker",
+              "step_id": "discover_retry_targets",
+              "attempt_id": "discover_retry_targets_attempt_1",
+              "trust_level": "worker_reported",
+              "metadata": {
+                "worker_instance": "repo_locator"
+              }
+            },
+            {
+              "id": "candidate_test_locations",
+              "content": {
+                "observations": [
+                  {
+                    "instance": "repo_locator",
+                    "tool_name": "list_dir",
+                    "arguments": {
+                      "path": "."
+                    },
+                    "observation": {
+                      "path": ".",
+                      "entries": [
+                        {
+                          "name": ".git",
+                          "type": "dir"
+                        },
+                        {
+                          "name": "README.md",
+                          "type": "file"
+                        },
+                        {
+                          "name": "src",
+                          "type": "dir"
+                        },
+                        {
+                          "name": "tests",
+                          "type": "dir"
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "fallback_reason": "model_budget_exhausted"
+              },
+              "kind": "tool_observation_summary",
+              "producer": "repo_worker",
+              "step_id": "discover_retry_targets",
+              "attempt_id": "discover_retry_targets_attempt_1",
+              "trust_level": "worker_reported",
+              "metadata": {
+                "worker_instance": "repo_locator"
+              }
+            },
+            {
+              "id": "test_command_candidates",
+              "content": {
+                "observations": [
+                  {
+                    "instance": "repo_locator",
+                    "tool_name": "list_dir",
+                    "arguments": {
+                      "path": "."
+                    },
+                    "observation": {
+                      "path": ".",
+                      "entries": [
+                        {
+                          "name": ".git",
+                          "type": "dir"
+                        },
+                        {
+                          "name": "README.md",
+                          "type": "file"
+                        },
+                        {
+                          "name": "src",
+                          "type": "dir"
+                        },
+                        {
+                          "name": "tests",
+                          "type": "dir"
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "fallback_reason": "model_budget_exhausted"
+              },
+              "kind": "tool_observation_summary",
+              "producer": "repo_worker",
+              "step_id": "discover_retry_targets",
+              "attempt_id": "discover_retry_targets_attempt_1",
+              "trust_level": "worker_reported",
+              "metadata": {
+                "worker_instance": "repo_locator"
+              }
+            }
+          ],
+          "usage": {
+            "tool_calls": 0,
+            "model_calls": 1
+          },
+          "errors": [
+            "3 validation errors for WorkerLLMDecision\nstatus\n  Extra inputs are not permitted [type=extra_forbidden, input_value='needs_replan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nreason\n  Extra inputs are not permitted [type=extra_forbidden, input_value='The discovery phase fail...ths and code structure.', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nmissing_artifacts\n  Extra inputs are not permitted [type=extra_forbidden, input_value=['target_files_for_retry_...test_execution_command'], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden"
+          ],
+          "warnings": [],
+          "metadata": {
+            "issues": [
+              {
+                "issue_type": "instance_failure",
+                "code": "worker_llm_error",
+                "message": "3 validation errors for WorkerLLMDecision\nstatus\n  Extra inputs are not permitted [type=extra_forbidden, input_value='needs_replan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nreason\n  Extra inputs are not permitted [type=extra_forbidden, input_value='The discovery phase fail...ths and code structure.', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nmissing_artifacts\n  Extra inputs are not permitted [type=extra_forbidden, input_value=['target_files_for_retry_...test_execution_command'], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden",
+                "step_id": "analyze_root_cause_and_coverage",
+                "worker_type": "research_worker",
+                "attempt_id": null,
+                "retryable": true,
+                "metadata": {
+                  "worker_instance": "context_synthesizer"
+                }
+              }
+            ],
+            "issue_type": "instance_failure",
+            "issue_code": "worker_llm_error",
+            "retryable": true,
+            "worker_type": "research_worker",
+            "worker_instance": "context_synthesizer",
+            "worker_group_results": [
+              {
+                "run_id": "run_plan_req_001_payment_retry_idempotency_fix",
+                "producer": "research_worker",
+                "status": "failed",
+                "summary": "3 validation errors for WorkerLLMDecision\nstatus\n  Extra inputs are not permitted [type=extra_forbidden, input_value='needs_replan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nreason\n  Extra inputs are not permitted [type=extra_forbidden, input_value='The discovery phase fail...ths and code structure.', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nmissing_artifacts\n  Extra inputs are not permitted [type=extra_forbidden, input_value=['target_files_for_retry_...test_execution_command'], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden",
+                "artifacts": [],
+                "usage": {
+                  "tool_calls": 0,
+                  "model_calls": 1
+                },
+                "errors": [
+                  "3 validation errors for WorkerLLMDecision\nstatus\n  Extra inputs are not permitted [type=extra_forbidden, input_value='needs_replan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nreason\n  Extra inputs are not permitted [type=extra_forbidden, input_value='The discovery phase fail...ths and code structure.', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nmissing_artifacts\n  Extra inputs are not permitted [type=extra_forbidden, input_value=['target_files_for_retry_...test_execution_command'], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden"
+                ],
+                "warnings": [],
+                "metadata": {
+                  "issues": [
+                    {
+                      "issue_type": "instance_failure",
+                      "code": "worker_llm_error",
+                      "message": "3 validation errors for WorkerLLMDecision\nstatus\n  Extra inputs are not permitted [type=extra_forbidden, input_value='needs_replan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nreason\n  Extra inputs are not permitted [type=extra_forbidden, input_value='The discovery phase fail...ths and code structure.', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nmissing_artifacts\n  Extra inputs are not permitted [type=extra_forbidden, input_value=['target_files_for_retry_...test_execution_command'], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden",
+                      "step_id": "analyze_root_cause_and_coverage",
+                      "worker_type": "research_worker",
+                      "attempt_id": null,
+                      "retryable": true,
+                      "metadata": {
+                        "worker_instance": "context_synthesizer"
+                      }
+                    }
+                  ],
+                  "issue_type": "instance_failure",
+                  "issue_code": "worker_llm_error",
+                  "retryable": true,
+                  "worker_type": "research_worker",
+                  "worker_instance": "context_synthesizer"
+                }
+              }
+            ],
+            "attempt_id": "analyze_root_cause_and_coverage_attempt_1"
+          }
+        },
+        {
+          "run_id": "run_plan_req_001_payment_retry_idempotency_fix",
+          "producer": "research_worker",
+          "status": "failed",
+          "summary": "3 validation errors for WorkerLLMDecision\nstatus\n  Extra inputs are not permitted [type=extra_forbidden, input_value='needs_replan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nreason\n  Extra inputs are not permitted [type=extra_forbidden, input_value='The previous discovery s...nalysis cannot proceed.', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nmissing_artifacts\n  Extra inputs are not permitted [type=extra_forbidden, input_value=['target_files_for_retry_...overing_retry_behavior'], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden",
+          "artifacts": [
+            {
+              "id": "repo_tree",
+              "content": {
+                "observations": [
+                  {
+                    "instance": "repo_locator",
+                    "tool_name": "list_dir",
+                    "arguments": {
+                      "path": "."
+                    },
+                    "observation": {
+                      "path": ".",
+                      "entries": [
+                        {
+                          "name": ".git",
+                          "type": "dir"
+                        },
+                        {
+                          "name": "README.md",
+                          "type": "file"
+                        },
+                        {
+                          "name": "src",
+                          "type": "dir"
+                        },
+                        {
+                          "name": "tests",
+                          "type": "dir"
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "fallback_reason": "model_budget_exhausted"
+              },
+              "kind": "tool_observation_summary",
+              "producer": "repo_worker",
+              "step_id": "discover_retry_targets",
+              "attempt_id": "discover_retry_targets_attempt_1",
+              "trust_level": "worker_reported",
+              "metadata": {
+                "worker_instance": "repo_locator"
+              }
+            },
+            {
+              "id": "candidate_retry_locations",
+              "content": {
+                "observations": [
+                  {
+                    "instance": "repo_locator",
+                    "tool_name": "list_dir",
+                    "arguments": {
+                      "path": "."
+                    },
+                    "observation": {
+                      "path": ".",
+                      "entries": [
+                        {
+                          "name": ".git",
+                          "type": "dir"
+                        },
+                        {
+                          "name": "README.md",
+                          "type": "file"
+                        },
+                        {
+                          "name": "src",
+                          "type": "dir"
+                        },
+                        {
+                          "name": "tests",
+                          "type": "dir"
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "fallback_reason": "model_budget_exhausted"
+              },
+              "kind": "tool_observation_summary",
+              "producer": "repo_worker",
+              "step_id": "discover_retry_targets",
+              "attempt_id": "discover_retry_targets_attempt_1",
+              "trust_level": "worker_reported",
+              "metadata": {
+                "worker_instance": "repo_locator"
+              }
+            },
+            {
+              "id": "candidate_test_locations",
+              "content": {
+                "observations": [
+                  {
+                    "instance": "repo_locator",
+                    "tool_name": "list_dir",
+                    "arguments": {
+                      "path": "."
+                    },
+                    "observation": {
+                      "path": ".",
+                      "entries": [
+                        {
+                          "name": ".git",
+                          "type": "dir"
+                        },
+                        {
+                          "name": "README.md",
+                          "type": "file"
+                        },
+                        {
+                          "name": "src",
+                          "type": "dir"
+                        },
+                        {
+                          "name": "tests",
+                          "type": "dir"
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "fallback_reason": "model_budget_exhausted"
+              },
+              "kind": "tool_observation_summary",
+              "producer": "repo_worker",
+              "step_id": "discover_retry_targets",
+              "attempt_id": "discover_retry_targets_attempt_1",
+              "trust_level": "worker_reported",
+              "metadata": {
+                "worker_instance": "repo_locator"
+              }
+            },
+            {
+              "id": "test_command_candidates",
+              "content": {
+                "observations": [
+                  {
+                    "instance": "repo_locator",
+                    "tool_name": "list_dir",
+                    "arguments": {
+                      "path": "."
+                    },
+                    "observation": {
+                      "path": ".",
+                      "entries": [
+                        {
+                          "name": ".git",
+                          "type": "dir"
+                        },
+                        {
+                          "name": "README.md",
+                          "type": "file"
+                        },
+                        {
+                          "name": "src",
+                          "type": "dir"
+                        },
+                        {
+                          "name": "tests",
+                          "type": "dir"
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "fallback_reason": "model_budget_exhausted"
+              },
+              "kind": "tool_observation_summary",
+              "producer": "repo_worker",
+              "step_id": "discover_retry_targets",
+              "attempt_id": "discover_retry_targets_attempt_1",
+              "trust_level": "worker_reported",
+              "metadata": {
+                "worker_instance": "repo_locator"
+              }
+            }
+          ],
+          "usage": {
+            "tool_calls": 0,
+            "model_calls": 1
+          },
+          "errors": [
+            "3 validation errors for WorkerLLMDecision\nstatus\n  Extra inputs are not permitted [type=extra_forbidden, input_value='needs_replan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nreason\n  Extra inputs are not permitted [type=extra_forbidden, input_value='The previous discovery s...nalysis cannot proceed.', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nmissing_artifacts\n  Extra inputs are not permitted [type=extra_forbidden, input_value=['target_files_for_retry_...overing_retry_behavior'], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden"
+          ],
+          "warnings": [],
+          "metadata": {
+            "issues": [
+              {
+                "issue_type": "instance_failure",
+                "code": "worker_llm_error",
+                "message": "3 validation errors for WorkerLLMDecision\nstatus\n  Extra inputs are not permitted [type=extra_forbidden, input_value='needs_replan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nreason\n  Extra inputs are not permitted [type=extra_forbidden, input_value='The previous discovery s...nalysis cannot proceed.', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nmissing_artifacts\n  Extra inputs are not permitted [type=extra_forbidden, input_value=['target_files_for_retry_...overing_retry_behavior'], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden",
+                "step_id": "analyze_root_cause_and_coverage",
+                "worker_type": "research_worker",
+                "attempt_id": null,
+                "retryable": true,
+                "metadata": {
+                  "worker_instance": "context_synthesizer"
+                }
+              }
+            ],
+            "issue_type": "instance_failure",
+            "issue_code": "worker_llm_error",
+            "retryable": true,
+            "worker_type": "research_worker",
+            "worker_instance": "context_synthesizer",
+            "worker_group_results": [
+              {
+                "run_id": "run_plan_req_001_payment_retry_idempotency_fix",
+                "producer": "research_worker",
+                "status": "failed",
+                "summary": "3 validation errors for WorkerLLMDecision\nstatus\n  Extra inputs are not permitted [type=extra_forbidden, input_value='needs_replan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nreason\n  Extra inputs are not permitted [type=extra_forbidden, input_value='The previous discovery s...nalysis cannot proceed.', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nmissing_artifacts\n  Extra inputs are not permitted [type=extra_forbidden, input_value=['target_files_for_retry_...overing_retry_behavior'], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden",
+                "artifacts": [],
+                "usage": {
+                  "tool_calls": 0,
+                  "model_calls": 1
+                },
+                "errors": [
+                  "3 validation errors for WorkerLLMDecision\nstatus\n  Extra inputs are not permitted [type=extra_forbidden, input_value='needs_replan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nreason\n  Extra inputs are not permitted [type=extra_forbidden, input_value='The previous discovery s...nalysis cannot proceed.', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nmissing_artifacts\n  Extra inputs are not permitted [type=extra_forbidden, input_value=['target_files_for_retry_...overing_retry_behavior'], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden"
+                ],
+                "warnings": [],
+                "metadata": {
+                  "issues": [
+                    {
+                      "issue_type": "instance_failure",
+                      "code": "worker_llm_error",
+                      "message": "3 validation errors for WorkerLLMDecision\nstatus\n  Extra inputs are not permitted [type=extra_forbidden, input_value='needs_replan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nreason\n  Extra inputs are not permitted [type=extra_forbidden, input_value='The previous discovery s...nalysis cannot proceed.', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nmissing_artifacts\n  Extra inputs are not permitted [type=extra_forbidden, input_value=['target_files_for_retry_...overing_retry_behavior'], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden",
+                      "step_id": "analyze_root_cause_and_coverage",
+                      "worker_type": "research_worker",
+                      "attempt_id": null,
+                      "retryable": true,
+                      "metadata": {
+                        "worker_instance": "context_synthesizer"
+                      }
+                    }
+                  ],
+                  "issue_type": "instance_failure",
+                  "issue_code": "worker_llm_error",
+                  "retryable": true,
+                  "worker_type": "research_worker",
+                  "worker_instance": "context_synthesizer"
+                }
+              }
+            ],
+            "attempt_id": "analyze_root_cause_and_coverage_attempt_2"
+          }
+        }
+      ],
+      "issues": [
+        {
+          "issue_type": "instance_failure",
+          "code": "worker_llm_error",
+          "message": "3 validation errors for WorkerLLMDecision\nstatus\n  Extra inputs are not permitted [type=extra_forbidden, input_value='needs_replan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nreason\n  Extra inputs are not permitted [type=extra_forbidden, input_value='The previous discovery s...nalysis cannot proceed.', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nmissing_artifacts\n  Extra inputs are not permitted [type=extra_forbidden, input_value=['target_files_for_retry_...overing_retry_behavior'], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden",
+          "step_id": "analyze_root_cause_and_coverage",
+          "worker_type": "research_worker",
+          "attempt_id": null,
+          "retryable": true,
+          "metadata": {
+            "worker_instance": "context_synthesizer"
+          }
+        }
+      ],
+      "partial_artifacts": [],
+      "failed_step_artifacts": [
+        {
+          "id": "repo_tree",
+          "content": {
+            "observations": [
+              {
+                "instance": "repo_locator",
+                "tool_name": "list_dir",
+                "arguments": {
+                  "path": "."
+                },
+                "observation": {
+                  "path": ".",
+                  "entries": [
+                    {
+                      "name": ".git",
+                      "type": "dir"
+                    },
+                    {
+                      "name": "README.md",
+                      "type": "file"
+                    },
+                    {
+                      "name": "src",
+                      "type": "dir"
+                    },
+                    {
+                      "name": "tests",
+                      "type": "dir"
+                    }
+                  ]
+                }
+              }
+            ],
+            "fallback_reason": "model_budget_exhausted"
+          },
+          "kind": "tool_observation_summary",
+          "producer": "repo_worker",
+          "step_id": "discover_retry_targets",
+          "attempt_id": "discover_retry_targets_attempt_1",
+          "trust_level": "worker_reported",
+          "metadata": {
+            "worker_instance": "repo_locator"
+          }
+        },
+        {
+          "id": "candidate_retry_locations",
+          "content": {
+            "observations": [
+              {
+                "instance": "repo_locator",
+                "tool_name": "list_dir",
+                "arguments": {
+                  "path": "."
+                },
+                "observation": {
+                  "path": ".",
+                  "entries": [
+                    {
+                      "name": ".git",
+                      "type": "dir"
+                    },
+                    {
+                      "name": "README.md",
+                      "type": "file"
+                    },
+                    {
+                      "name": "src",
+                      "type": "dir"
+                    },
+                    {
+                      "name": "tests",
+                      "type": "dir"
+                    }
+                  ]
+                }
+              }
+            ],
+            "fallback_reason": "model_budget_exhausted"
+          },
+          "kind": "tool_observation_summary",
+          "producer": "repo_worker",
+          "step_id": "discover_retry_targets",
+          "attempt_id": "discover_retry_targets_attempt_1",
+          "trust_level": "worker_reported",
+          "metadata": {
+            "worker_instance": "repo_locator"
+          }
+        },
+        {
+          "id": "candidate_test_locations",
+          "content": {
+            "observations": [
+              {
+                "instance": "repo_locator",
+                "tool_name": "list_dir",
+                "arguments": {
+                  "path": "."
+                },
+                "observation": {
+                  "path": ".",
+                  "entries": [
+                    {
+                      "name": ".git",
+                      "type": "dir"
+                    },
+                    {
+                      "name": "README.md",
+                      "type": "file"
+                    },
+                    {
+                      "name": "src",
+                      "type": "dir"
+                    },
+                    {
+                      "name": "tests",
+                      "type": "dir"
+                    }
+                  ]
+                }
+              }
+            ],
+            "fallback_reason": "model_budget_exhausted"
+          },
+          "kind": "tool_observation_summary",
+          "producer": "repo_worker",
+          "step_id": "discover_retry_targets",
+          "attempt_id": "discover_retry_targets_attempt_1",
+          "trust_level": "worker_reported",
+          "metadata": {
+            "worker_instance": "repo_locator"
+          }
+        },
+        {
+          "id": "test_command_candidates",
+          "content": {
+            "observations": [
+              {
+                "instance": "repo_locator",
+                "tool_name": "list_dir",
+                "arguments": {
+                  "path": "."
+                },
+                "observation": {
+                  "path": ".",
+                  "entries": [
+                    {
+                      "name": ".git",
+                      "type": "dir"
+                    },
+                    {
+                      "name": "README.md",
+                      "type": "file"
+                    },
+                    {
+                      "name": "src",
+                      "type": "dir"
+                    },
+                    {
+                      "name": "tests",
+                      "type": "dir"
+                    }
+                  ]
+                }
+              }
+            ],
+            "fallback_reason": "model_budget_exhausted"
+          },
+          "kind": "tool_observation_summary",
+          "producer": "repo_worker",
+          "step_id": "discover_retry_targets",
+          "attempt_id": "discover_retry_targets_attempt_1",
+          "trust_level": "worker_reported",
+          "metadata": {
+            "worker_instance": "repo_locator"
+          }
+        },
+        {
+          "id": "repo_tree",
+          "content": {
+            "observations": [
+              {
+                "instance": "repo_locator",
+                "tool_name": "list_dir",
+                "arguments": {
+                  "path": "."
+                },
+                "observation": {
+                  "path": ".",
+                  "entries": [
+                    {
+                      "name": ".git",
+                      "type": "dir"
+                    },
+                    {
+                      "name": "README.md",
+                      "type": "file"
+                    },
+                    {
+                      "name": "src",
+                      "type": "dir"
+                    },
+                    {
+                      "name": "tests",
+                      "type": "dir"
+                    }
+                  ]
+                }
+              }
+            ],
+            "fallback_reason": "model_budget_exhausted"
+          },
+          "kind": "tool_observation_summary",
+          "producer": "repo_worker",
+          "step_id": "discover_retry_targets",
+          "attempt_id": "discover_retry_targets_attempt_1",
+          "trust_level": "worker_reported",
+          "metadata": {
+            "worker_instance": "repo_locator"
+          }
+        },
+        {
+          "id": "candidate_retry_locations",
+          "content": {
+            "observations": [
+              {
+                "instance": "repo_locator",
+                "tool_name": "list_dir",
+                "arguments": {
+                  "path": "."
+                },
+                "observation": {
+                  "path": ".",
+                  "entries": [
+                    {
+                      "name": ".git",
+                      "type": "dir"
+                    },
+                    {
+                      "name": "README.md",
+                      "type": "file"
+                    },
+                    {
+                      "name": "src",
+                      "type": "dir"
+                    },
+                    {
+                      "name": "tests",
+                      "type": "dir"
+                    }
+                  ]
+                }
+              }
+            ],
+            "fallback_reason": "model_budget_exhausted"
+          },
+          "kind": "tool_observation_summary",
+          "producer": "repo_worker",
+          "step_id": "discover_retry_targets",
+          "attempt_id": "discover_retry_targets_attempt_1",
+          "trust_level": "worker_reported",
+          "metadata": {
+            "worker_instance": "repo_locator"
+          }
+        },
+        {
+          "id": "candidate_test_locations",
+          "content": {
+            "observations": [
+              {
+                "instance": "repo_locator",
+                "tool_name": "list_dir",
+                "arguments": {
+                  "path": "."
+                },
+                "observation": {
+                  "path": ".",
+                  "entries": [
+                    {
+                      "name": ".git",
+                      "type": "dir"
+                    },
+                    {
+                      "name": "README.md",
+                      "type": "file"
+                    },
+                    {
+                      "name": "src",
+                      "type": "dir"
+                    },
+                    {
+                      "name": "tests",
+                      "type": "dir"
+                    }
+                  ]
+                }
+              }
+            ],
+            "fallback_reason": "model_budget_exhausted"
+          },
+          "kind": "tool_observation_summary",
+          "producer": "repo_worker",
+          "step_id": "discover_retry_targets",
+          "attempt_id": "discover_retry_targets_attempt_1",
+          "trust_level": "worker_reported",
+          "metadata": {
+            "worker_instance": "repo_locator"
+          }
+        },
+        {
+          "id": "test_command_candidates",
+          "content": {
+            "observations": [
+              {
+                "instance": "repo_locator",
+                "tool_name": "list_dir",
+                "arguments": {
+                  "path": "."
+                },
+                "observation": {
+                  "path": ".",
+                  "entries": [
+                    {
+                      "name": ".git",
+                      "type": "dir"
+                    },
+                    {
+                      "name": "README.md",
+                      "type": "file"
+                    },
+                    {
+                      "name": "src",
+                      "type": "dir"
+                    },
+                    {
+                      "name": "tests",
+                      "type": "dir"
+                    }
+                  ]
+                }
+              }
+            ],
+            "fallback_reason": "model_budget_exhausted"
+          },
+          "kind": "tool_observation_summary",
+          "producer": "repo_worker",
+          "step_id": "discover_retry_targets",
+          "attempt_id": "discover_retry_targets_attempt_1",
+          "trust_level": "worker_reported",
+          "metadata": {
+            "worker_instance": "repo_locator"
+          }
+        }
+      ],
+      "retry_count": 1,
+      "instance_attempts_used": 3,
+      "issue_type": "instance_failure",
+      "issue_code": "worker_llm_error",
+      "retryable": true,
+      "worker_type": "research_worker",
+      "worker_instance": "context_synthesizer",
+      "worker_group_results": [
+        {
+          "run_id": "run_plan_req_001_payment_retry_idempotency_fix",
+          "producer": "research_worker",
+          "status": "failed",
+          "summary": "3 validation errors for WorkerLLMDecision\nstatus\n  Extra inputs are not permitted [type=extra_forbidden, input_value='needs_replan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nreason\n  Extra inputs are not permitted [type=extra_forbidden, input_value='The previous discovery s...nalysis cannot proceed.', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nmissing_artifacts\n  Extra inputs are not permitted [type=extra_forbidden, input_value=['target_files_for_retry_...overing_retry_behavior'], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden",
+          "artifacts": [],
+          "usage": {
+            "tool_calls": 0,
+            "model_calls": 1
+          },
+          "errors": [
+            "3 validation errors for WorkerLLMDecision\nstatus\n  Extra inputs are not permitted [type=extra_forbidden, input_value='needs_replan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nreason\n  Extra inputs are not permitted [type=extra_forbidden, input_value='The previous discovery s...nalysis cannot proceed.', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nmissing_artifacts\n  Extra inputs are not permitted [type=extra_forbidden, input_value=['target_files_for_retry_...overing_retry_behavior'], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden"
+          ],
+          "warnings": [],
+          "metadata": {
+            "issues": [
+              {
+                "issue_type": "instance_failure",
+                "code": "worker_llm_error",
+                "message": "3 validation errors for WorkerLLMDecision\nstatus\n  Extra inputs are not permitted [type=extra_forbidden, input_value='needs_replan', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nreason\n  Extra inputs are not permitted [type=extra_forbidden, input_value='The previous discovery s...nalysis cannot proceed.', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden\nmissing_artifacts\n  Extra inputs are not permitted [type=extra_forbidden, input_value=['target_files_for_retry_...overing_retry_behavior'], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden",
+                "step_id": "analyze_root_cause_and_coverage",
+                "worker_type": "research_worker",
+                "attempt_id": null,
+                "retryable": true,
+                "metadata": {
+                  "worker_instance": "context_synthesizer"
+                }
+              }
+            ],
+            "issue_type": "instance_failure",
+            "issue_code": "worker_llm_error",
+            "retryable": true,
+            "worker_type": "research_worker",
+            "worker_instance": "context_synthesizer"
+          }
+        }
+      ],
+      "attempt_id": "analyze_root_cause_and_coverage_attempt_2"
+    }
+  },
+  "after_pytest": {
+    "label": "after",
+    "returncode": 1,
+    "stdout": ".F                                                                       [100%]\n=================================== FAILURES ===================================\n___________________ test_retries_reuse_same_idempotency_key ____________________\n\n    def test_retries_reuse_same_idempotency_key() -> None:\n        first = build_charge_headers(\"order-123\", 0)\n        retry = build_charge_headers(\"order-123\", 1)\n    \n>       assert retry[\"Idempotency-Key\"] == first[\"Idempotency-Key\"]\nE       AssertionError: assert 'charge:order-123:retry:1' == 'charge:order-123:retry:0'\nE         \nE         - charge:order-123:retry:0\nE         ?                        ^\nE         + charge:order-123:retry:1\nE         ?                        ^\n\ntests/test_checkout.py:13: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_checkout.py::test_retries_reuse_same_idempotency_key - Asse...\n1 failed, 1 passed in 0.04s\n",
+    "stderr": ""
+  },
+  "git_status": {
+    "command": [
+      "git",
+      "status",
+      "--short"
+    ],
+    "returncode": 0,
+    "stdout": "A  README.md\nA  src/__init__.py\nAM src/__pycache__/__init__.cpython-313.pyc\nAM src/__pycache__/checkout.cpython-313.pyc\nA  src/checkout.py\nAM tests/__pycache__/test_checkout.cpython-313-pytest-9.0.3.pyc\nA  tests/test_checkout.py\n",
+    "stderr": ""
+  },
+  "final_files": {
+    "src/checkout.py": "\"\"\"Simple payment retry helpers for worker-runtime live testing.\"\"\"\n\nfrom __future__ import annotations\n\n\ndef build_charge_headers(order_id: str, retry_count: int) -> dict[str, str]:\n    \"\"\"Return headers for a payment charge request.\n\n    Current behavior is intentionally wrong for retries: the idempotency key\n    changes when `retry_count` changes, which makes retries look like fresh\n    charges to an upstream processor.\n    \"\"\"\n\n    return {\n        \"Idempotency-Key\": f\"charge:{order_id}:retry:{retry_count}\",\n        \"X-Retry-Count\": str(retry_count),\n    }\n",
+    "tests/test_checkout.py": "from src.checkout import build_charge_headers\n\n\ndef test_first_attempt_keeps_retry_count_header() -> None:\n    headers = build_charge_headers(\"order-123\", 0)\n    assert headers[\"X-Retry-Count\"] == \"0\"\n\n\ndef test_retries_reuse_same_idempotency_key() -> None:\n    first = build_charge_headers(\"order-123\", 0)\n    retry = build_charge_headers(\"order-123\", 1)\n\n    assert retry[\"Idempotency-Key\"] == first[\"Idempotency-Key\"]\n"
+  }
+}

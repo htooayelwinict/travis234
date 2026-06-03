@@ -14,8 +14,10 @@ def build_graph(
     *,
     decompressor_runtime=None,
     planner_runtime=None,
+    worker_kernel_runtime=None,
     client_factory=None,
     planner_client_factory=None,
+    worker_client_factory=None,
 ):
     if decompressor_runtime is None:
         client_options = {"client_factory": client_factory} if client_factory is not None else {}
@@ -25,7 +27,12 @@ def build_graph(
             {"client_factory": planner_client_factory} if planner_client_factory is not None else {}
         )
         planner_runtime = PlannerRuntime.from_env(**planner_options)
-    worker_kernel_runtime = WorkerKernelRuntime(planner_runtime=planner_runtime)
+    if worker_kernel_runtime is None:
+        worker_options = {"client_factory": worker_client_factory} if worker_client_factory is not None else {}
+        worker_kernel_runtime = WorkerKernelRuntime.from_env(
+            planner_runtime=planner_runtime,
+            **worker_options,
+        )
 
     def decompressor_node(state: RuntimeState) -> RuntimeState:
         user_input = state.get("user_input", "")

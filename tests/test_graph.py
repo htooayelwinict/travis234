@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Any
 
 from app.graph import build_graph
@@ -34,10 +35,12 @@ class FakeConfiguredPlannerClient:
         self.config = config
 
     def complete_json(self, *, stage: str, prompt: str, schema: dict[str, Any]) -> str:
+        matches = re.findall(r'"request_id":\s*"([^"]+)"', prompt)
+        request_id = matches[-1] if matches else "req_001"
         responses = {
             "draft_plan": {
-                "plan_id": "plan_req_001_direct_support",
-                "request_id": "req_001",
+                "plan_id": f"plan_{request_id}_direct_support",
+                "request_id": request_id,
                 "planner": "direct_support_planner",
                 "objective": "Answer the user's question directly.",
                 "strategy": "phase_aware_direct_support",
@@ -78,6 +81,7 @@ def test_compiled_graph_invocation(monkeypatch) -> None:
     monkeypatch.setenv("PLANNER_LLM_ENABLED", "true")
     monkeypatch.setenv("PLANNER_LLM_API_KEY", "test-key")
     monkeypatch.setenv("PLANNER_LLM_MODEL", "test-model")
+    monkeypatch.setenv("WORKER_LLM_ENABLED", "false")
     graph = build_graph(client_factory=FakeConfiguredClient, planner_client_factory=FakeConfiguredPlannerClient)
 
     state = graph.invoke({"user_input": "what is docker", "errors": []})
@@ -89,7 +93,9 @@ def test_compiled_graph_invocation(monkeypatch) -> None:
     assert state["envelope"]["metadata"]["decompressor_mode"] == "llm_prompt_chain"
 
 
-def test_graph_registers_required_node_keys_when_exposed() -> None:
+def test_graph_registers_required_node_keys_when_exposed(monkeypatch) -> None:
+    monkeypatch.setenv("PLANNER_LLM_ENABLED", "false")
+    monkeypatch.setenv("WORKER_LLM_ENABLED", "false")
     graph = build_graph(decompressor_runtime=object())
 
     nodes = getattr(graph, "nodes", None)
@@ -97,3 +103,41 @@ def test_graph_registers_required_node_keys_when_exposed() -> None:
         assert "decompressor_node" in nodes
         assert "planner_node" in nodes
         assert "worker_kernel_node" in nodes
+
+
+def test_compiled_graph_can_use_worker_llm_runtime(monkeypatch) -> None:
+    class FakeWorkerClient:
+        def __init__(self, **config: Any) -> None:
+            self.config = config
+
+        def complete_json(self, *, stage: str, prompt: str, schema: dict[str, Any]) -> str:
+            return json.dumps(
+                {
+                    "final_result": {
+                        "status": "completed",
+                        "summary": "worker answered",
+                        "artifacts": [{"id": "direct_guidance", "content": "Docker packages apps."}],
+                    }
+                }
+            )
+
+    monkeypatch.setenv("DECOMPRESSOR_LLM_ENABLED", "true")
+    monkeypatch.setenv("DECOMPRESSOR_LLM_API_KEY", "test-key")
+    monkeypatch.setenv("DECOMPRESSOR_LLM_MODEL", "test-model")
+    monkeypatch.setenv("PLANNER_LLM_ENABLED", "true")
+    monkeypatch.setenv("PLANNER_LLM_API_KEY", "test-key")
+    monkeypatch.setenv("PLANNER_LLM_MODEL", "test-model")
+    monkeypatch.setenv("WORKER_LLM_ENABLED", "true")
+    monkeypatch.setenv("WORKER_LLM_API_KEY", "test-key")
+    monkeypatch.setenv("WORKER_LLM_MODEL", "test-model")
+
+    graph = build_graph(
+        client_factory=FakeConfiguredClient,
+        planner_client_factory=FakeConfiguredPlannerClient,
+        worker_client_factory=FakeWorkerClient,
+    )
+
+    state = graph.invoke({"user_input": "what is docker", "errors": []})
+
+    assert state["result"]["status"] == "completed"
+    assert state["result"]["metadata"]["worker_results"][0]["metadata"]["worker_type"] == "direct_worker"
