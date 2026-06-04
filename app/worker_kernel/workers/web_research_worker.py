@@ -11,18 +11,26 @@ Find authoritative, current, and relevant sources for the task. Use web_search o
 when web_research permission is present. Return source candidate artifacts with urls,
 titles, relevance, and why each source should or should not be trusted. Use one focused
 search query first; do not fan out queries unless the first result set is insufficient.
-If search is unavailable or insufficient, return needs_replan with a plan_failure issue."""
+If kernel_memory is present, avoid repeating failed queries. If search is unavailable
+because of provider/tool/runtime limits, return failed or blocked with an
+instance_failure/kernel_failure issue. If the plan requires sources that cannot exist
+or the requested source coverage is semantically insufficient, return needs_replan
+with a plan_failure issue."""
 
 WEB_SOURCE_EXTRACTION_PROMPT = """You are the web source extraction worker.
 Fetch only selected source urls from earlier artifacts, extract concise evidence, and
 preserve source provenance. Fetch only the top one or two useful urls unless the task
-requires comparison. Do not overquote. If required sources cannot be fetched, return
-needs_replan with source-specific failure metadata."""
+requires comparison. If kernel_memory is present, do not refetch known failed urls
+unless the task requires it. Do not overquote. If required sources cannot be fetched, return
+failed or blocked for provider/tool/runtime failures; return needs_replan only when
+the source requirement itself is a planner-level mismatch. Include source-specific
+failure metadata either way."""
 
 WEB_CITATION_SYNTHESIS_PROMPT = """You are the web citation synthesis worker.
 Turn collected source excerpts into cited research artifacts. Separate source-backed
 facts from inference. Do not add uncited claims. Do not request tools; synthesize from
-group artifacts first."""
+group artifacts first. Cited artifacts must include source URLs, titles when known,
+retrieved_at or observation ids when available, and a clear evidence-to-claim link."""
 
 
 def agentic_templates() -> list[WorkerInstanceTemplate]:

@@ -12,7 +12,11 @@ Do not mutate infrastructure or secrets. Separate confirmed findings from operat
 recommendations. If required infra artifacts or permissions are missing, return
 needs_replan or blocked with a structured issue. Prefer repo_snapshot, read_many_files,
 diff_summary, runtime_capabilities, and focused readonly commands over repeated
-primitive scans. Use runtime_capabilities for local toolchain/version discovery.
+primitive scans. If kernel_memory is present, use it before repeating diagnostics.
+Use runtime_capabilities for local toolchain/version discovery.
+When producing reports, preserve exact required artifact ids and use structured
+content with confirmed_findings, evidence, commands, and recommendations instead of
+generic prose blobs.
 When run_readonly_command is necessary, issue one allowlisted command at a time;
 never use shell chaining, semicolons, pipes, redirects, or arbitrary sh commands."""
 

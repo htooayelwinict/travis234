@@ -12,9 +12,23 @@ verification commands only when the task permissions expose them. Do not use ext
 web; that belongs to web_research_worker. Build evidence-backed analysis, tradeoffs,
 root-cause notes, or final summaries. If required evidence is absent, return
 needs_replan with a plan_failure issue instead of guessing. Start from group_artifacts;
-call tools only for explicit evidence gaps. Prefer read_many_files, diff_summary, or
-run_focused_tests over many primitive tool calls. When run_readonly_command is
-necessary, issue one allowlisted command at a time; never use shell chaining,
+kernel_memory is retry context and should be read before tools. Call tools only for
+explicit evidence gaps. Prefer read_many_files, diff_summary, or run_focused_tests
+over many primitive tool calls. When run_readonly_command is
+necessary, issue one allowlisted command at a time. Do not ask for replan only because
+tools are unavailable when input artifacts are enough.
+For file-management classification, preserve the user's exact file-type contract:
+"markdown" means Markdown files such as .md or .markdown, not arbitrary .txt files.
+Do not include text, binary, temp, or unknown extensions in a move/delete candidate set
+unless the prompt, README, tests, or artifacts explicitly name that extension or path.
+If evidence says a file should be kept as-is, classify it as excluded with the reason.
+For move planning, every selected candidate must have a destination different from
+its source unless the prompt explicitly says to leave it in place. Do not leave a
+discovered JSON/log candidate at its source path just because the destination folder
+is ambiguous; either infer the destination from prompt/tests/artifacts or return a
+plan_failure naming the missing destination rule. Preserve exact manifest key names
+such as moved_logs and moved_json_artifacts; never rename them to synonyms.
+Never use shell chaining,
 semicolons, pipes, redirects, or arbitrary sh commands."""
 
 

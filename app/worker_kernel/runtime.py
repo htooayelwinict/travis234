@@ -3,16 +3,30 @@
 from __future__ import annotations
 
 import inspect
+from dataclasses import dataclass
 from typing import Any
 
 from app.planner.contracts import PlannerValidationError
 from app.planner.validator import PlannerPlanValidator
 from app.runtime_matrix import RuntimeMatrixLogger, attach_runtime_matrix, coerce_runtime_matrix
 from app.schemas import ArtifactPayload, Envelope, Plan, ReplanRequest, Result, Task, WorkerIssue
+from app.worker_kernel.artifact_store import build_artifact_store, promotable_completed_artifacts
 from app.worker_kernel.budget import BudgetExceeded, BudgetGate
 from app.worker_kernel.compiler import InvalidWriteScope, MissingInputArtifacts, TaskCompiler
+from app.worker_kernel.control import LoopDecision, WorkerLoopController, WorkerRetryAdvisor
 from app.worker_kernel.dispatcher import WorkerDispatcher
+from app.worker_kernel.memory import WorkerMemoryController
+from app.repair_policy import (
+    VERIFICATION_FEEDBACK_REPAIR_ATTEMPTS,
+    WORKER_STAGE_REPAIR_ATTEMPTS,
+)
 from app.worker_kernel.registry import WorkerRegistry, build_default_registry
+
+
+@dataclass(frozen=True)
+class VerificationRepairOutcome:
+    repaired: bool
+    instance_attempts_used: int
 
 
 class WorkerKernelRuntime:
@@ -21,12 +35,14 @@ class WorkerKernelRuntime:
         registry: WorkerRegistry | None = None,
         compiler: TaskCompiler | None = None,
         validator: PlannerPlanValidator | None = None,
+        controller: WorkerLoopController | None = None,
         planner_runtime: Any | None = None,
         allow_replan: bool = True,
     ) -> None:
         self._registry = registry or build_default_registry()
         self._compiler = compiler or TaskCompiler()
         self._validator = validator or PlannerPlanValidator()
+        self._controller = controller or WorkerLoopController()
         self._dispatcher = WorkerDispatcher(self._registry)
         self._planner_runtime = planner_runtime
         self._allow_replan = allow_replan
@@ -58,8 +74,12 @@ class WorkerKernelRuntime:
                 config=config,
                 root_path=root_path,
             )
+        controller = None
+        if config.retry_advisor_enabled and model_client is not None:
+            controller = WorkerLoopController(retry_advisor=WorkerRetryAdvisor(model_client))
         return cls(
             registry=registry,
+            controller=controller,
             planner_runtime=planner_runtime,
             allow_replan=allow_replan,
         )
@@ -166,8 +186,12 @@ class WorkerKernelRuntime:
         worker_results: list[Result] = []
         completed_step_ids: list[str] = list(initial_completed_step_ids)
         completed_mutation_step_ids: list[str] = list(initial_completed_mutation_step_ids)
+        completed_mutation_contexts: list[dict[str, Any]] = []
+        verification_repair_counts: dict[str, int] = {}
         issues: list[WorkerIssue] = []
         instance_attempts_used = 0
+        loop_decisions: list[dict[str, Any]] = []
+        memory_controller = WorkerMemoryController()
 
         for step in plan.steps:
             self._trace(
@@ -210,6 +234,22 @@ class WorkerKernelRuntime:
                     },
                 )
             except MissingInputArtifacts as exc:
+                decision = self._controller.decide_after_missing_input(
+                    step=step,
+                    missing_artifacts=exc.missing_artifacts,
+                    can_replan=self._can_replan(envelope, _replan_depth),
+                )
+                self._record_loop_decision(
+                    trace,
+                    loop_decisions=loop_decisions,
+                    decision=decision,
+                    request_id=plan.request_id,
+                    plan_id=plan.plan_id,
+                    run_id=run_id,
+                    step_id=step.step_id,
+                    worker_type=step.worker_type,
+                    stage=step.phase or "EXECUTE",
+                )
                 issue = WorkerIssue(
                     issue_type="plan_failure",
                     code="missing_input_artifacts",
@@ -223,7 +263,7 @@ class WorkerKernelRuntime:
                 result = Result(
                     run_id=run_id,
                     producer="worker_kernel",
-                    status="needs_replan" if self._can_replan(envelope, _replan_depth) else "blocked",
+                    status=decision.terminal_status or "blocked",
                     summary=str(exc),
                     errors=[str(exc)],
                     metadata={
@@ -260,6 +300,7 @@ class WorkerKernelRuntime:
                         issues=issues,
                         instance_attempts_used=instance_attempts_used,
                         replan_depth=_replan_depth,
+                        loop_decisions=loop_decisions,
                         trace=trace,
                     )
                 finalized = result.model_copy(
@@ -272,12 +313,29 @@ class WorkerKernelRuntime:
                             failed_step_artifacts=failed_step_artifacts,
                             budget_gate=budget_gate,
                             instance_attempts_used=instance_attempts_used,
+                            loop_decisions=loop_decisions,
                             extra={**result.metadata, **self._control_plane_metadata(control_plane_adjustments)},
                         ),
                     }
                 )
                 return self._finalize_result(finalized, trace)
             except InvalidWriteScope as exc:
+                decision = self._controller.decide_after_invalid_write_scope(
+                    step=step,
+                    message=str(exc),
+                    metadata=dict(exc.metadata),
+                )
+                self._record_loop_decision(
+                    trace,
+                    loop_decisions=loop_decisions,
+                    decision=decision,
+                    request_id=plan.request_id,
+                    plan_id=plan.plan_id,
+                    run_id=run_id,
+                    step_id=step.step_id,
+                    worker_type=step.worker_type,
+                    stage=step.phase or "EXECUTE",
+                )
                 issue = WorkerIssue(
                     issue_type="kernel_failure",
                     code="invalid_write_scope",
@@ -314,6 +372,7 @@ class WorkerKernelRuntime:
                         failed_step_artifacts=failed_step_artifacts,
                         budget_gate=budget_gate,
                         instance_attempts_used=instance_attempts_used,
+                        loop_decisions=loop_decisions,
                         extra=self._control_plane_metadata(control_plane_adjustments),
                     ),
                 )
@@ -345,6 +404,7 @@ class WorkerKernelRuntime:
                         partial_artifacts=partial_artifacts,
                         failed_step_artifacts=failed_step_artifacts,
                         instance_attempts_used=instance_attempts_used,
+                        loop_decisions=loop_decisions,
                     ),
                     trace,
                 )
@@ -409,13 +469,31 @@ class WorkerKernelRuntime:
                             partial_artifacts=partial_artifacts,
                             failed_step_artifacts=failed_step_artifacts,
                             instance_attempts_used=instance_attempts_used,
+                            loop_decisions=loop_decisions,
                         ),
                         trace,
                     )
                 except Exception as exc:
-                    if isinstance(exc, ValueError) and "Unknown worker_type" in str(exc):
+                    decision = self._controller.decide_after_exception(
+                        step=step,
+                        exc=exc,
+                        retry_available=budget_gate.can_retry(step_retries_used=attempt_number - 1),
+                    )
+                    self._record_loop_decision(
+                        trace,
+                        loop_decisions=loop_decisions,
+                        decision=decision,
+                        request_id=plan.request_id,
+                        plan_id=plan.plan_id,
+                        run_id=run_id,
+                        step_id=step.step_id,
+                        attempt_id=attempt_id,
+                        worker_type=step.worker_type,
+                        stage=step.phase or "EXECUTE",
+                    )
+                    if decision.action == "kernel_error":
                         issue = self._kernel_issue(
-                            code="unknown_worker_group",
+                            code=decision.reason_code,
                             message=str(exc),
                             step_id=step.step_id,
                             worker_type=step.worker_type,
@@ -439,23 +517,56 @@ class WorkerKernelRuntime:
                                 run_id=run_id,
                                 summary="Worker kernel could not resolve worker group.",
                                 issue=issue,
+                                loop_decisions=loop_decisions,
                             ),
                             trace,
                         )
                     issue = WorkerIssue(
                         issue_type="instance_failure",
-                        code="worker_exception",
+                        code=decision.reason_code,
                         message=str(exc),
                         step_id=step.step_id,
                         worker_type=step.worker_type,
                         attempt_id=attempt_id,
-                        retryable=True,
+                        retryable=decision.retryable,
                     )
                     issues.append(issue)
-                    will_retry = self._retry_instance_failure(
-                        budget_gate,
-                        step_retries_used=attempt_number - 1,
+                    memory_controller.record_exception(
+                        step=step,
+                        attempt_id=attempt_id,
+                        exc=exc,
+                        issue=issue,
                     )
+                    will_retry = False
+                    if decision.action == "retry_step":
+                        will_retry = self._retry_instance_failure(
+                            budget_gate,
+                            step_retries_used=attempt_number - 1,
+                        )
+                        if will_retry and decision.retry_instruction is not None:
+                            metadata = dict(task.metadata)
+                            metadata["runtime_retry_instruction"] = decision.retry_instruction.as_prompt_text()
+                            metadata["runtime_retry_reason_code"] = decision.reason_code
+                            task = task.model_copy(update={"metadata": metadata})
+                        if will_retry:
+                            task, injected_memory = memory_controller.inject_retry_memory(task=task, step=step)
+                            if injected_memory is not None:
+                                self._trace(
+                                    trace,
+                                    stage=step.phase or "EXECUTE",
+                                    event="worker_memory_injected",
+                                    status="completed",
+                                    request_id=plan.request_id,
+                                    plan_id=plan.plan_id,
+                                    run_id=run_id,
+                                    step_id=step.step_id,
+                                    attempt_id=attempt_id,
+                                    worker_type=step.worker_type,
+                                    details={
+                                        "attempt_count": injected_memory.get("attempt_count"),
+                                        "successful_write_count": injected_memory.get("successful_write_count"),
+                                    },
+                                )
                     self._trace(
                         trace,
                         stage=step.phase or "EXECUTE",
@@ -483,6 +594,7 @@ class WorkerKernelRuntime:
                             partial_artifacts=partial_artifacts,
                             failed_step_artifacts=failed_step_artifacts,
                             instance_attempts_used=instance_attempts_used,
+                            loop_decisions=loop_decisions,
                         ),
                         trace,
                     )
@@ -494,14 +606,47 @@ class WorkerKernelRuntime:
                     attempt_id=attempt_id,
                 )
                 issues.extend(result_issues)
-                retryable_instance_failure = any(
-                    issue.issue_type == "instance_failure" and issue.retryable
-                    for issue in result_issues
+                step_memory_attempt = memory_controller.record_attempt(
+                    step=step,
+                    attempt_id=attempt_id,
+                    result=result,
+                    issues=result_issues,
                 )
-                worker_runtime_failure = self._is_worker_runtime_owned_failure(
+                self._trace(
+                    trace,
+                    stage=step.phase or "EXECUTE",
+                    event="worker_memory_updated",
+                    status="completed",
+                    request_id=plan.request_id,
+                    plan_id=plan.plan_id,
+                    run_id=run_id,
+                    step_id=step.step_id,
+                    attempt_id=attempt_id,
+                    worker_type=step.worker_type,
+                    details={
+                        "successful_write_count": step_memory_attempt.get("successful_write_count"),
+                        "already_done_count": step_memory_attempt.get("already_done_count"),
+                        "issue_codes": step_memory_attempt.get("issue_codes"),
+                    },
+                )
+                decision = self._controller.decide_after_attempt(
                     result=result,
                     issues=result_issues,
                     step=step,
+                    retry_available=budget_gate.can_retry(step_retries_used=attempt_number - 1),
+                    mutation_already_completed=bool(completed_mutation_step_ids),
+                )
+                self._record_loop_decision(
+                    trace,
+                    loop_decisions=loop_decisions,
+                    decision=decision,
+                    request_id=plan.request_id,
+                    plan_id=plan.plan_id,
+                    run_id=run_id,
+                    step_id=step.step_id,
+                    attempt_id=attempt_id,
+                    worker_type=result.producer,
+                    stage=step.phase or "EXECUTE",
                 )
                 self._trace(
                     trace,
@@ -520,20 +665,50 @@ class WorkerKernelRuntime:
                         "model_calls": result.usage.get("model_calls"),
                     },
                 )
-                if (
-                    result.status in {"failed", "needs_replan", "budget_exceeded", "blocked"}
-                    and (retryable_instance_failure or worker_runtime_failure)
+                verification_repair_result = self._maybe_run_verification_feedback_repair(
+                    plan=plan,
+                    run_id=run_id,
+                    verify_step=step,
+                    verify_result=result,
+                    verify_attempt_id=attempt_id,
+                    decision=decision,
+                    completed_mutation_contexts=completed_mutation_contexts,
+                    verification_repair_counts=verification_repair_counts,
+                    completed_artifacts=completed_artifacts,
+                    completed_step_ids=completed_step_ids,
+                    completed_mutation_step_ids=completed_mutation_step_ids,
+                    worker_results=worker_results,
+                    issues=issues,
+                    failed_step_artifacts=failed_step_artifacts,
+                    budget_gate=budget_gate,
+                    memory_controller=memory_controller,
+                    trace=trace,
+                    loop_decisions=loop_decisions,
+                    instance_attempts_used=instance_attempts_used,
+                    partial_artifacts=partial_artifacts,
+                )
+                if isinstance(verification_repair_result, VerificationRepairOutcome):
+                    instance_attempts_used += verification_repair_result.instance_attempts_used
+                    if verification_repair_result.repaired:
+                        continue
+                if isinstance(verification_repair_result, Result):
+                    return self._finalize_result(verification_repair_result, trace)
+                should_retry_attempt = (
+                    decision.action == "retry_step"
                     and self._retry_instance_failure(
                         budget_gate,
                         step_retries_used=attempt_number - 1,
                     )
-                ):
+                )
+                if should_retry_attempt:
                     previous_task = task
-                    task, retry_adjustments = self._adjust_task_for_local_retry(
+                    task, retry_adjustments = self._controller.build_retry_task(
                         task=task,
                         result=result,
                         issues=result_issues,
+                        decision=decision,
                     )
+                    task, injected_memory = memory_controller.inject_retry_memory(task=task, step=step)
                     self._trace(
                         trace,
                         stage=step.phase or "EXECUTE",
@@ -547,10 +722,16 @@ class WorkerKernelRuntime:
                         worker_type=step.worker_type,
                         details={
                             "reason": "worker_runtime_failure"
-                            if worker_runtime_failure
+                            if decision.metadata.get("worker_runtime_failure")
                             else "retryable_instance_failure",
+                            "reason_code": decision.reason_code,
+                            "ownership": decision.ownership,
                             "task_recompiled": task != previous_task,
                             "adjustments": retry_adjustments,
+                            "memory_injected": injected_memory is not None,
+                            "memory_successful_write_count": (
+                                injected_memory.get("successful_write_count") if injected_memory else 0
+                            ),
                         },
                     )
                     failed_step_artifacts.extend(
@@ -587,6 +768,7 @@ class WorkerKernelRuntime:
                             step_id=step.step_id,
                             worker_type=step.worker_type,
                         ),
+                        loop_decisions=loop_decisions,
                     ),
                     trace,
                 )
@@ -598,12 +780,67 @@ class WorkerKernelRuntime:
                 attempt_id=str(result.metadata.get("attempt_id") or f"{step.step_id}_attempt_{attempt_number}"),
             )
 
+            if result.status == "completed" and decision.action in {
+                "fail",
+                "block",
+                "budget_exceeded",
+                "kernel_error",
+            }:
+                failed_step_artifacts.extend(annotated_artifacts)
+                terminal_status = decision.terminal_status or result.status
+                self._trace(
+                    trace,
+                    stage=step.phase or "EXECUTE",
+                    event="step_terminal",
+                    status=terminal_status,
+                    request_id=plan.request_id,
+                    plan_id=plan.plan_id,
+                    run_id=run_id,
+                    step_id=step.step_id,
+                    worker_type=step.worker_type,
+                    details={"summary": result.summary, "reason_code": decision.reason_code},
+                )
+                terminal_result = Result(
+                    run_id=run_id,
+                    producer="worker_kernel",
+                    status=terminal_status,
+                    summary=f"Execution stopped at step {step.step_id}: {result.summary}",
+                    artifacts=list(completed_artifacts.values()),
+                    errors=result.errors,
+                    warnings=result.warnings,
+                    metadata=self._metadata(
+                        worker_results=worker_results,
+                        issues=issues,
+                        partial_artifacts=partial_artifacts,
+                        failed_step_artifacts=failed_step_artifacts,
+                        budget_gate=budget_gate,
+                        instance_attempts_used=instance_attempts_used,
+                        loop_decisions=loop_decisions,
+                        extra={
+                            **result.metadata,
+                            **self._control_plane_metadata(control_plane_adjustments),
+                            "worker_memory": memory_controller.snapshot(),
+                        },
+                    ),
+                )
+                return self._finalize_result(terminal_result, trace)
+
             if result.status == "completed":
-                for artifact in annotated_artifacts:
+                promoted_artifacts = self._promotable_completed_artifacts(annotated_artifacts)
+                for artifact in promoted_artifacts:
                     completed_artifacts[artifact.id] = artifact
                 completed_step_ids.append(step.step_id)
                 if self._is_mutation_step(step):
                     completed_mutation_step_ids.append(step.step_id)
+                    completed_mutation_contexts.append(
+                        {
+                            "step": step,
+                            "task": task,
+                            "attempt_id": str(
+                                result.metadata.get("attempt_id") or f"{step.step_id}_attempt_{attempt_number}"
+                            ),
+                        }
+                    )
                 self._trace(
                     trace,
                     stage=step.phase or "EXECUTE",
@@ -614,11 +851,11 @@ class WorkerKernelRuntime:
                     run_id=run_id,
                     step_id=step.step_id,
                     worker_type=step.worker_type,
-                    details={"artifact_ids": [artifact.id for artifact in annotated_artifacts]},
+                    details={"artifact_ids": [artifact.id for artifact in promoted_artifacts]},
                 )
                 continue
 
-            if result.status == "needs_replan":
+            if decision.action == "request_replan":
                 partial_artifacts.extend(annotated_artifacts)
                 failed_step_artifacts.extend(annotated_artifacts)
                 return self._handle_replan(
@@ -636,18 +873,19 @@ class WorkerKernelRuntime:
                     issues=issues,
                     instance_attempts_used=instance_attempts_used,
                     replan_depth=_replan_depth,
+                    loop_decisions=loop_decisions,
                     trace=trace,
                 )
 
-            if result.status in ["failed", "blocked", "budget_exceeded", "kernel_error"]:
+            if decision.action in {"fail", "block", "budget_exceeded", "kernel_error"} or result.status in [
+                "failed",
+                "blocked",
+                "budget_exceeded",
+                "kernel_error",
+                "needs_replan",
+            ]:
                 failed_step_artifacts.extend(annotated_artifacts)
-                terminal_status = result.status
-                if (
-                    result.status == "failed"
-                    and self._is_verification_step(step)
-                    and completed_mutation_step_ids
-                ):
-                    terminal_status = "completed_with_failed_verification"
+                terminal_status = decision.terminal_status or result.status
                 self._trace(
                     trace,
                     stage=step.phase or "EXECUTE",
@@ -675,7 +913,12 @@ class WorkerKernelRuntime:
                         failed_step_artifacts=failed_step_artifacts,
                         budget_gate=budget_gate,
                         instance_attempts_used=instance_attempts_used,
-                        extra={**result.metadata, **self._control_plane_metadata(control_plane_adjustments)},
+                        loop_decisions=loop_decisions,
+                        extra={
+                            **result.metadata,
+                            **self._control_plane_metadata(control_plane_adjustments),
+                            "worker_memory": memory_controller.snapshot(),
+                        },
                     ),
                 )
                 return self._finalize_result(terminal_result, trace)
@@ -712,302 +955,333 @@ class WorkerKernelRuntime:
                 failed_step_artifacts=failed_step_artifacts,
                 budget_gate=budget_gate,
                 instance_attempts_used=instance_attempts_used,
-                extra=self._control_plane_metadata(control_plane_adjustments),
+                loop_decisions=loop_decisions,
+                extra={
+                    **self._control_plane_metadata(control_plane_adjustments),
+                    "worker_memory": memory_controller.snapshot(),
+                },
             ),
         )
         return self._finalize_result(completed_result, trace)
 
+    def _maybe_run_verification_feedback_repair(
+        self,
+        *,
+        plan: Plan,
+        run_id: str,
+        verify_step: Any,
+        verify_result: Result,
+        verify_attempt_id: str,
+        decision: LoopDecision,
+        completed_mutation_contexts: list[dict[str, Any]],
+        verification_repair_counts: dict[str, int],
+        completed_artifacts: dict[str, ArtifactPayload],
+        completed_step_ids: list[str],
+        completed_mutation_step_ids: list[str],
+        worker_results: list[Result],
+        issues: list[WorkerIssue],
+        failed_step_artifacts: list[ArtifactPayload],
+        budget_gate: BudgetGate,
+        memory_controller: WorkerMemoryController,
+        trace: RuntimeMatrixLogger,
+        loop_decisions: list[dict[str, Any]],
+        instance_attempts_used: int,
+        partial_artifacts: list[ArtifactPayload],
+    ) -> VerificationRepairOutcome | Result | None:
+        if not self._controller.is_verification_step(verify_step):
+            return None
+        if not completed_mutation_contexts:
+            return None
+        if not self._verification_feedback_is_implementation_repair(
+            verify_step=verify_step,
+            verify_result=verify_result,
+            decision=decision,
+        ):
+            return None
+
+        feedback = self._verification_feedback_payload(
+            verify_step=verify_step,
+            verify_result=verify_result,
+            verify_attempt_id=verify_attempt_id,
+        )
+        mutation_context = completed_mutation_contexts[-1]
+        mutation_step = mutation_context["step"]
+        base_repair_task = mutation_context["task"]
+        repair_attempts_used = 0
+        retry_instruction = (
+            "This is a targeted mutation repair after verification failed. "
+            "Use verification_feedback as the primary failure evidence, keep the "
+            "same write policy, change only what is needed, then return all expected artifacts."
+        )
+        retry_reason_code = "verification_feedback_repair"
+
+        while True:
+            repair_count = verification_repair_counts.get(verify_step.step_id, 0)
+            if repair_count >= VERIFICATION_FEEDBACK_REPAIR_ATTEMPTS:
+                return None
+            if not self._retry_instance_failure(budget_gate, step_retries_used=repair_count):
+                return None
+
+            repair_number = repair_count + 1
+            verification_repair_counts[verify_step.step_id] = repair_number
+            repair_attempts_used += 1
+            repair_attempt_id = f"{mutation_step.step_id}_verification_repair_{repair_number}"
+            metadata = dict(base_repair_task.metadata)
+            metadata["verification_feedback"] = feedback
+            metadata["runtime_retry_instruction"] = retry_instruction
+            metadata["runtime_retry_reason_code"] = retry_reason_code
+            repair_task = base_repair_task.model_copy(
+                update={
+                    "metadata": metadata,
+                    "max_tool_calls": max(base_repair_task.max_tool_calls, 2),
+                    "max_model_calls": max(base_repair_task.max_model_calls, 2),
+                }
+            )
+            repair_task, injected_memory = memory_controller.inject_retry_memory(
+                task=repair_task,
+                step=mutation_step,
+            )
+            repair_task = self._with_attempt_metadata(repair_task, attempt_id=repair_attempt_id)
+
+            self._trace(
+                trace,
+                stage=mutation_step.phase or "MUTATE",
+                event="verification_feedback_repair_started",
+                status="started",
+                request_id=plan.request_id,
+                plan_id=plan.plan_id,
+                run_id=run_id,
+                step_id=mutation_step.step_id,
+                attempt_id=repair_attempt_id,
+                worker_type=mutation_step.worker_type,
+                details={
+                    "verify_step_id": verify_step.step_id,
+                    "verify_attempt_id": verify_attempt_id,
+                    "repair_attempt": repair_number,
+                    "max_repair_attempts": VERIFICATION_FEEDBACK_REPAIR_ATTEMPTS,
+                    "memory_injected": injected_memory is not None,
+                },
+            )
+            try:
+                repair_result = self._dispatcher.dispatch(repair_task, trace=trace)
+                repair_result = self._with_attempt_metadata_on_result(repair_result, attempt_id=repair_attempt_id)
+                budget_gate.after_result(repair_result)
+            except BudgetExceeded as exc:
+                return self._budget_result(
+                    run_id=run_id,
+                    exc=exc,
+                    artifacts=list(completed_artifacts.values()),
+                    worker_results=worker_results,
+                    issues=issues,
+                    budget_gate=budget_gate,
+                    partial_artifacts=partial_artifacts,
+                    failed_step_artifacts=failed_step_artifacts,
+                    instance_attempts_used=instance_attempts_used + repair_attempts_used,
+                    loop_decisions=loop_decisions,
+                )
+            except Exception as exc:
+                issue = WorkerIssue(
+                    issue_type="instance_failure",
+                    code="verification_feedback_repair_exception",
+                    message=str(exc),
+                    step_id=mutation_step.step_id,
+                    worker_type=mutation_step.worker_type,
+                    attempt_id=repair_attempt_id,
+                    retryable=False,
+                )
+                issues.append(issue)
+                return self._failed_instance_result(
+                    run_id=run_id,
+                    step_id=mutation_step.step_id,
+                    summary=f"Verification feedback mutation repair failed: {exc}",
+                    artifacts=list(completed_artifacts.values()),
+                    worker_results=worker_results,
+                    issues=issues,
+                    budget_gate=budget_gate,
+                    partial_artifacts=partial_artifacts,
+                    failed_step_artifacts=failed_step_artifacts,
+                    instance_attempts_used=instance_attempts_used + repair_attempts_used,
+                    loop_decisions=loop_decisions,
+                )
+
+            worker_results.append(repair_result)
+            repair_issues = self._issues_from_result(
+                repair_result,
+                step_id=mutation_step.step_id,
+                attempt_id=repair_attempt_id,
+            )
+            issues.extend(repair_issues)
+            memory_controller.record_attempt(
+                step=mutation_step,
+                attempt_id=repair_attempt_id,
+                result=repair_result,
+                issues=repair_issues,
+            )
+            annotated_artifacts = self._annotate_artifacts(
+                repair_result.artifacts,
+                result=repair_result,
+                step_id=mutation_step.step_id,
+                attempt_id=repair_attempt_id,
+            )
+            if repair_result.status == "completed":
+                for artifact in self._promotable_completed_artifacts(annotated_artifacts):
+                    completed_artifacts[artifact.id] = artifact
+                if mutation_step.step_id not in completed_step_ids:
+                    completed_step_ids.append(mutation_step.step_id)
+                if mutation_step.step_id not in completed_mutation_step_ids:
+                    completed_mutation_step_ids.append(mutation_step.step_id)
+                self._trace(
+                    trace,
+                    stage=mutation_step.phase or "MUTATE",
+                    event="verification_feedback_repair_completed",
+                    status="completed",
+                    request_id=plan.request_id,
+                    plan_id=plan.plan_id,
+                    run_id=run_id,
+                    step_id=mutation_step.step_id,
+                    attempt_id=repair_attempt_id,
+                    worker_type=mutation_step.worker_type,
+                    details={
+                        "verify_step_id": verify_step.step_id,
+                        "artifact_ids": [artifact.id for artifact in annotated_artifacts],
+                    },
+                )
+                return VerificationRepairOutcome(repaired=True, instance_attempts_used=repair_attempts_used)
+
+            failed_step_artifacts.extend(annotated_artifacts)
+            repair_decision = self._controller.decide_after_attempt(
+                result=repair_result,
+                issues=repair_issues,
+                step=mutation_step,
+                retry_available=(
+                    repair_number < VERIFICATION_FEEDBACK_REPAIR_ATTEMPTS
+                    and budget_gate.can_retry(step_retries_used=repair_number)
+                ),
+                mutation_already_completed=bool(completed_mutation_step_ids),
+            )
+            self._record_loop_decision(
+                trace,
+                loop_decisions=loop_decisions,
+                decision=repair_decision,
+                request_id=plan.request_id,
+                plan_id=plan.plan_id,
+                run_id=run_id,
+                step_id=mutation_step.step_id,
+                attempt_id=repair_attempt_id,
+                worker_type=mutation_step.worker_type,
+                stage=mutation_step.phase or "MUTATE",
+            )
+            retrying = repair_decision.action == "retry_step" and repair_decision.ownership != "plan"
+            self._trace(
+                trace,
+                stage=mutation_step.phase or "MUTATE",
+                event="verification_feedback_repair_failed",
+                status=repair_result.status,
+                request_id=plan.request_id,
+                plan_id=plan.plan_id,
+                run_id=run_id,
+                step_id=mutation_step.step_id,
+                attempt_id=repair_attempt_id,
+                worker_type=mutation_step.worker_type,
+                details={
+                    "summary": repair_result.summary,
+                    "retrying": retrying,
+                    "next_repair_attempt": repair_number + 1 if retrying else None,
+                },
+            )
+            if retrying:
+                if repair_decision.retry_instruction is not None:
+                    retry_instruction = repair_decision.retry_instruction.as_prompt_text()
+                    retry_reason_code = repair_decision.reason_code
+                continue
+
+            return Result(
+                run_id=run_id,
+                producer="worker_kernel",
+                status=repair_result.status,
+                summary=(
+                    f"Verification feedback repair failed at step {mutation_step.step_id}: "
+                    f"{repair_result.summary}"
+                ),
+                artifacts=list(completed_artifacts.values()),
+                errors=repair_result.errors,
+                warnings=repair_result.warnings,
+                metadata=self._metadata(
+                    worker_results=worker_results,
+                    issues=issues,
+                    partial_artifacts=partial_artifacts,
+                    failed_step_artifacts=failed_step_artifacts,
+                    budget_gate=budget_gate,
+                    instance_attempts_used=instance_attempts_used + repair_attempts_used,
+                    loop_decisions=loop_decisions,
+                    extra={
+                        **repair_result.metadata,
+                        "verification_feedback_repair_failed": True,
+                        "worker_memory": memory_controller.snapshot(),
+                    },
+                ),
+            )
+
+    def _verification_feedback_is_implementation_repair(
+        self,
+        *,
+        verify_step: Any,
+        verify_result: Result,
+        decision: LoopDecision,
+    ) -> bool:
+        if verify_result.status == "needs_replan" or decision.action == "request_replan":
+            return False
+        if decision.ownership == "plan":
+            return False
+        if verify_result.status == "completed":
+            return self._controller.has_failed_verification_payload(verify_result)
+        if verify_result.status == "failed":
+            return self._controller.has_verification_command_evidence(verify_result)
+        return False
+
+    def _verification_feedback_payload(
+        self,
+        *,
+        verify_step: Any,
+        verify_result: Result,
+        verify_attempt_id: str,
+    ) -> dict[str, Any]:
+        return {
+            "verify_step_id": verify_step.step_id,
+            "verify_attempt_id": verify_attempt_id,
+            "status": verify_result.status,
+            "summary": verify_result.summary,
+            "errors": list(verify_result.errors),
+            "warnings": list(verify_result.warnings),
+            "failure_observation": self._failure_observation(verify_result),
+            "artifact_ids": [artifact.id for artifact in verify_result.artifacts],
+            "instruction": (
+                "Repair the implementation-level cause of this verification failure. "
+                "Do not ask for replan unless the evidence proves user intent or plan ordering is wrong."
+            ),
+        }
+
     def _is_mutation_step(self, step: Any) -> bool:
         return step.phase == "MUTATE" or bool(step.permissions.write_files)
 
-    def _is_verification_step(self, step: Any) -> bool:
-        return step.phase == "VERIFY" or step.worker_type == "verify_worker"
-
-    def _is_worker_runtime_owned_failure(
-        self,
-        *,
-        result: Result,
-        issues: list[WorkerIssue],
-        step: Any | None = None,
-    ) -> bool:
-        if step is not None and self._verification_failed_before_command(step=step, result=result, issues=issues):
-            return True
-        if result.status == "budget_exceeded":
-            return True
-        if any(issue.issue_type == "instance_failure" and issue.retryable for issue in issues):
-            return True
-        issue_codes = {issue.code for issue in issues}
-        non_retryable_kernel_codes = {
-            "invalid_write_scope",
-            "tool_unavailable",
-            "unknown_worker_group",
-        }
-        if issue_codes & non_retryable_kernel_codes:
-            return False
-        runtime_codes = {
-            "budget_exceeded",
-            "empty_worker_decision",
-            "model_budget_exceeded",
-            "model_budget_exhausted_before_final_result",
-            "tool_budget_exceeded",
-            "tool_call_contract_error",
-            "tool_execution_error",
-            "tool_not_allowed_for_instance",
-            "tool_permission_denied",
-            "tool_unavailable",
-            "worker_output_contract_miss",
-            "worker_artifact_content_empty",
-            "worker_llm_error",
-            "worker_exception",
-        }
-        if issue_codes & runtime_codes:
-            return True
-
-        text = " ".join(
-            [
-                result.summary or "",
-                " ".join(result.errors or []),
-                str(result.metadata.get("issue_code") or ""),
-                str(result.metadata.get("recommended_action") or ""),
-            ]
-        ).lower()
-        runtime_fragments = (
-            "remaining_tool_calls",
-            "remaining_model_calls",
-            "tool budget",
-            "model budget",
-            "budget exhausted",
-            "tool observations",
-            "tool call",
-            "worker model call budget",
-            "validation errors for workerllmdecision",
-            "worker output contract",
-        )
-        return any(fragment in text for fragment in runtime_fragments)
-
-    def _verification_failed_before_command(
-        self,
-        *,
-        step: Any,
-        result: Result,
-        issues: list[WorkerIssue],
-    ) -> bool:
-        if not self._is_verification_step(step):
-            return False
-        if result.status not in {"failed", "blocked", "budget_exceeded"}:
-            return False
-        if self._has_verification_command_evidence(result):
-            return False
-
-        text = self._result_issue_text(result=result, issues=issues)
-        no_command_fragments = (
-            "before test execution",
-            "before verification",
-            "could not execute verification",
-            "could not be completed",
-            "did not execute",
-            "no verification command",
-            "not executed",
-            "test execution",
-            "verification command",
-            "verification could not",
-        )
-        budget_fragments = (
-            "budget exhaustion",
-            "budget exhausted",
-            "instance budget",
-            "model budget",
-            "remaining_model_calls",
-            "worker model call budget",
-        )
-        if any(fragment in text for fragment in no_command_fragments):
-            return True
-        if any(fragment in text for fragment in budget_fragments) and not self._has_verification_result_payload(result):
-            return True
-        return False
-
-    def _has_verification_command_evidence(self, result: Result) -> bool:
-        command_tools = {"run_readonly_command", "run_focused_tests", "run_project_tests"}
-        for artifact in result.artifacts:
-            tool_name = artifact.metadata.get("tool_name")
-            if tool_name in command_tools:
-                return True
-            content = artifact.content
-            if isinstance(content, dict):
-                if content.get("tool_name") in command_tools:
-                    return True
-                observation = content.get("observation")
-                if isinstance(observation, dict) and content.get("tool_name") in command_tools:
-                    return True
-                observations = content.get("observations")
-                if isinstance(observations, list):
-                    for item in observations:
-                        if isinstance(item, dict) and item.get("tool_name") in command_tools:
-                            return True
-                commands = content.get("commands")
-                if isinstance(commands, list) and commands:
-                    return True
-        for group_result in result.metadata.get("worker_group_results") or []:
-            if not isinstance(group_result, dict):
-                continue
-            try:
-                nested = Result.model_validate(group_result)
-            except Exception:
-                continue
-            if self._has_verification_command_evidence(nested):
-                return True
-        return False
-
-    def _has_verification_result_payload(self, result: Result) -> bool:
-        for artifact in result.artifacts:
-            content = artifact.content
-            if not isinstance(content, dict):
-                continue
-            if content.get("commands"):
-                return True
-            if content.get("returncode") is not None:
-                return True
-            if content.get("failed_commands"):
-                return True
-        return False
-
-    def _result_issue_text(self, *, result: Result, issues: list[WorkerIssue]) -> str:
-        parts = [
-            result.summary or "",
-            " ".join(result.errors or []),
-            str(result.metadata.get("issue_code") or ""),
-            str(result.metadata.get("recommended_action") or ""),
-        ]
-        for issue in issues:
-            parts.extend([issue.code, issue.message, str(issue.metadata)])
-        for artifact in result.artifacts:
-            if artifact.id in {"test_results", "verification_results", "verification_result"}:
-                parts.append(str(artifact.content))
-        return " ".join(parts).lower()
-
-    def _adjust_task_for_local_retry(
-        self,
-        *,
-        task: Task,
-        result: Result,
-        issues: list[WorkerIssue],
-    ) -> tuple[Task, list[dict[str, Any]]]:
-        adjustments: list[dict[str, Any]] = []
-        usage = result.usage or {}
-        text = " ".join(
-            [
-                result.summary or "",
-                " ".join(result.errors or []),
-                " ".join(issue.code for issue in issues),
-            ]
-        ).lower()
-        verification_retry = (
-            task.worker_type == "verify_worker"
-            or str(task.metadata.get("phase") or "").upper() == "VERIFY"
-        ) and not self._has_verification_command_evidence(result)
-
-        max_tool_calls = task.max_tool_calls
-        if (
-            "tool" in text
-            or "remaining_tool_calls" in text
-            or verification_retry
-            or int(usage.get("tool_calls", 0) or 0) >= task.max_tool_calls
-        ):
-            max_tool_calls = max(task.max_tool_calls + 2, task.max_tool_calls * 2, 2)
-            adjustments.append(
-                {
-                    "field": "max_tool_calls",
-                    "from": task.max_tool_calls,
-                    "to": max_tool_calls,
-                    "reason": "local retry after worker/tool budget or tool-call failure",
-                }
-            )
-
-        max_model_calls = task.max_model_calls
-        if (
-            "model" in text
-            or "final" in text
-            or "budget" in text
-            or "worker_artifact_content_empty" in text
-            or "worker_output_contract_miss" in text
-            or "workerllmdecision" in text
-            or verification_retry
-            or int(usage.get("model_calls", 0) or 0) >= task.max_model_calls
-        ):
-            max_model_calls = max(task.max_model_calls + 1, task.max_model_calls * 2, 2)
-            adjustments.append(
-                {
-                    "field": "max_model_calls",
-                    "from": task.max_model_calls,
-                    "to": max_model_calls,
-                    "reason": "local retry after worker/model/finalization failure",
-                }
-            )
-
-        if not adjustments:
-            metadata = dict(task.metadata)
-            retries = list(metadata.get("local_retry_adjustments") or [])
-            retries.append({"reason": "local retry without budget adjustment"})
-            metadata["local_retry_adjustments"] = retries
-            return task.model_copy(update={"metadata": metadata}), []
-
-        metadata = dict(task.metadata)
-        if verification_retry:
-            metadata["force_verification_command_first"] = True
-            metadata["verification_retry_reason"] = "verification_failed_before_command"
-            metadata["runtime_retry_instruction"] = (
-                "This is a replacement VERIFY instance. Run run_project_tests or an "
-                "explicit verification_plan command before final_result; do not spend "
-                "turns on capability discovery unless command selection is impossible."
-            )
-        elif (
-            "worker_output_contract_miss" in text
-            or "worker_artifact_content_empty" in text
-            or "missing expected artifacts" in text
-            or "empty expected artifacts" in text
-        ):
-            metadata["force_final_result_artifacts"] = True
-            metadata["runtime_retry_instruction"] = (
-                "This is a replacement worker instance after an output artifact quality failure. "
-                "Do not call tools unless essential. Return final_result with every "
-                "expected artifact id exactly once. Each artifact content must be "
-                "non-null and non-empty, using the expected_output_contract schemas "
-                "and concrete content from input artifacts and observations."
-            )
-        elif "tool_call_contract_error" in text or "tool_not_allowed_for_instance" in text:
-            metadata["force_strict_tool_call_shape"] = True
-            metadata["runtime_retry_instruction"] = (
-                "This is a replacement worker instance after a malformed or disallowed "
-                "tool-call envelope. Use only exact names from available_tools. If you "
-                "need a tool, return JSON exactly as {'tool_calls':[{'tool_name':'name',"
-                "'arguments':{...}}]}; otherwise return final_result."
-            )
-        retries = list(metadata.get("local_retry_adjustments") or [])
-        retries.extend(adjustments)
-        metadata["local_retry_adjustments"] = retries
-        return task.model_copy(
-            update={
-                "max_tool_calls": max_tool_calls,
-                "max_model_calls": max_model_calls,
-                "metadata": metadata,
-            }
-        ), adjustments
+    def _promotable_completed_artifacts(self, artifacts: list[ArtifactPayload]) -> list[ArtifactPayload]:
+        return promotable_completed_artifacts(artifacts)
 
     def _normalize_execution_plan(self, plan: Plan) -> tuple[Plan, list[dict[str, Any]]]:
         adjustments: list[dict[str, Any]] = []
         normalized_steps = []
         budget = dict(plan.budget)
         current_retry_budget = int(budget.get("max_retries", 0) or 0)
-        if current_retry_budget < 2:
+        if current_retry_budget < WORKER_STAGE_REPAIR_ATTEMPTS:
             adjustments.append(
                 {
                     "field": "budget.max_retries",
                     "from": current_retry_budget,
-                    "to": 2,
-                    "reason": "worker runtime retries are capped per stage, with two instance retries per stage",
+                    "to": WORKER_STAGE_REPAIR_ATTEMPTS,
+                    "reason": "worker runtime retries are capped per stage, with three repair attempts per stage",
                 }
             )
-            budget["max_retries"] = 2
+            budget["max_retries"] = WORKER_STAGE_REPAIR_ATTEMPTS
         for step in plan.steps:
             minimum_model_calls = self._minimum_model_calls_for_step(step)
             if step.max_model_calls < minimum_model_calls:
@@ -1122,6 +1396,7 @@ class WorkerKernelRuntime:
         issues: list[WorkerIssue],
         instance_attempts_used: int,
         replan_depth: int,
+        loop_decisions: list[dict[str, Any]],
         trace: RuntimeMatrixLogger,
     ) -> Result:
         self._trace(
@@ -1171,6 +1446,7 @@ class WorkerKernelRuntime:
                     failed_step_artifacts=failed_step_artifacts,
                     budget_gate=budget_gate,
                     instance_attempts_used=instance_attempts_used,
+                    loop_decisions=loop_decisions,
                     extra={"replan_request": replan_request.model_dump(mode="json")},
                 ),
             )
@@ -1215,6 +1491,7 @@ class WorkerKernelRuntime:
             "failed_step_artifacts": [
                 artifact.model_dump(mode="json") for artifact in failed_step_artifacts
             ],
+            "original_loop_decisions": list(loop_decisions),
             "depth": replan_depth + 1,
         }
         self._trace(
@@ -1277,11 +1554,7 @@ class WorkerKernelRuntime:
         )
 
     def _artifact_store(self, artifacts: list[ArtifactPayload]) -> dict[str, ArtifactPayload]:
-        store: dict[str, ArtifactPayload] = {}
-        for artifact in artifacts:
-            normalized = ArtifactPayload.model_validate(artifact)
-            store[normalized.id] = normalized
-        return store
+        return build_artifact_store(artifacts)
 
     def _completed_mutation_step_ids(self, *, plan: Plan, completed_step_ids: list[str]) -> list[str]:
         completed = set(completed_step_ids)
@@ -1449,6 +1722,7 @@ class WorkerKernelRuntime:
         failed_step_artifacts: list[ArtifactPayload],
         budget_gate: BudgetGate,
         instance_attempts_used: int,
+        loop_decisions: list[dict[str, Any]] | None = None,
         extra: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         metadata = {
@@ -1460,6 +1734,7 @@ class WorkerKernelRuntime:
             ],
             "retry_count": budget_gate.retries_used,
             "instance_attempts_used": instance_attempts_used,
+            "loop_decisions": list(loop_decisions or []),
             "artifact_quality": self._aggregate_artifact_quality(worker_results),
         }
         if extra:
@@ -1471,9 +1746,11 @@ class WorkerKernelRuntime:
             "expected_count": 0,
             "missing_count": 0,
             "empty_count": 0,
+            "invalid_count": 0,
             "synthesized_count": 0,
             "missing_artifacts": [],
             "empty_artifacts": [],
+            "invalid_artifacts": [],
             "synthesized_artifacts": [],
             "steps": [],
         }
@@ -1484,11 +1761,12 @@ class WorkerKernelRuntime:
             aggregate["expected_count"] += int(quality.get("expected_count", 0) or 0)
             aggregate["missing_count"] += int(quality.get("missing_count", 0) or 0)
             aggregate["empty_count"] += int(quality.get("empty_count", 0) or 0)
+            aggregate["invalid_count"] += int(quality.get("invalid_count", 0) or 0)
             aggregate["synthesized_count"] += int(quality.get("synthesized_count", 0) or 0)
-            for key in ("missing_artifacts", "empty_artifacts", "synthesized_artifacts"):
+            for key in ("missing_artifacts", "empty_artifacts", "invalid_artifacts", "synthesized_artifacts"):
                 values = quality.get(key)
                 if isinstance(values, list):
-                    aggregate[key].extend(str(value) for value in values)
+                    aggregate[key].extend(value if isinstance(value, dict) else str(value) for value in values)
             aggregate["steps"].append(
                 {
                     "producer": result.producer,
@@ -1514,6 +1792,36 @@ class WorkerKernelRuntime:
         if signature is not None and "trace" in signature.parameters:
             return replan_method(envelope, current_plan, replan_request, trace=trace)
         return replan_method(envelope, current_plan, replan_request)
+
+    def _record_loop_decision(
+        self,
+        trace: RuntimeMatrixLogger,
+        *,
+        loop_decisions: list[dict[str, Any]],
+        decision: LoopDecision,
+        request_id: str | None = None,
+        plan_id: str | None = None,
+        run_id: str | None = None,
+        step_id: str | None = None,
+        attempt_id: str | None = None,
+        worker_type: str | None = None,
+        stage: str | None = "plan_execution",
+    ) -> None:
+        payload = decision.model_dump(mode="json", exclude_none=True)
+        loop_decisions.append(payload)
+        self._trace(
+            trace,
+            stage=stage,
+            event="loop_decision",
+            status=decision.action,
+            request_id=request_id,
+            plan_id=plan_id,
+            run_id=run_id,
+            step_id=step_id,
+            attempt_id=attempt_id,
+            worker_type=worker_type,
+            details=payload,
+        )
 
     def _trace(
         self,
@@ -1562,6 +1870,7 @@ class WorkerKernelRuntime:
         partial_artifacts: list[ArtifactPayload] | None = None,
         failed_step_artifacts: list[ArtifactPayload] | None = None,
         instance_attempts_used: int = 0,
+        loop_decisions: list[dict[str, Any]] | None = None,
     ) -> Result:
         metadata: dict[str, Any] = {}
         if budget_gate is not None:
@@ -1572,6 +1881,7 @@ class WorkerKernelRuntime:
                 failed_step_artifacts=failed_step_artifacts or [],
                 budget_gate=budget_gate,
                 instance_attempts_used=instance_attempts_used,
+                loop_decisions=loop_decisions,
             )
         return Result(
             run_id=run_id,
@@ -1583,14 +1893,24 @@ class WorkerKernelRuntime:
             metadata=metadata,
         )
 
-    def _kernel_error_result(self, *, run_id: str, summary: str, issue: WorkerIssue) -> Result:
+    def _kernel_error_result(
+        self,
+        *,
+        run_id: str,
+        summary: str,
+        issue: WorkerIssue,
+        loop_decisions: list[dict[str, Any]] | None = None,
+    ) -> Result:
+        metadata = {"issues": [issue.model_dump(mode="json")]}
+        if loop_decisions is not None:
+            metadata["loop_decisions"] = list(loop_decisions)
         return Result(
             run_id=run_id,
             producer="worker_kernel",
             status="kernel_error",
             summary=summary,
             errors=[issue.message],
-            metadata={"issues": [issue.model_dump(mode="json")]},
+            metadata=metadata,
         )
 
     def _kernel_issue(
@@ -1623,6 +1943,7 @@ class WorkerKernelRuntime:
         partial_artifacts: list[ArtifactPayload],
         failed_step_artifacts: list[ArtifactPayload],
         instance_attempts_used: int,
+        loop_decisions: list[dict[str, Any]] | None = None,
     ) -> Result:
         return Result(
             run_id=run_id,
@@ -1638,6 +1959,7 @@ class WorkerKernelRuntime:
                 failed_step_artifacts=failed_step_artifacts,
                 budget_gate=budget_gate,
                 instance_attempts_used=instance_attempts_used,
+                loop_decisions=loop_decisions,
                 extra={"failed_step_id": step_id},
             ),
         )

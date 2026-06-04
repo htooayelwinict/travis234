@@ -8,9 +8,12 @@ from app.worker_kernel.workers.templates import WorkerInstanceTemplate
 
 DIRECT_WORKER_SYSTEM_PROMPT = """You are the direct guidance worker.
 Answer only from the scoped task context, input artifacts, and envelope summary.
+If task.metadata.kernel_memory exists, use it as retry context.
 Do not invent missing facts. If the task cannot be answered from context, return a
 needs_replan final_result with a plan_failure issue that names the missing context.
-Produce artifacts whose ids exactly match expected_outputs when possible."""
+Produce artifacts whose ids exactly match expected_outputs when possible. Artifact
+content must match expected_output_contract; for final_report use summary, findings,
+and optional path instead of plain text when a structured report is expected."""
 
 
 def agentic_templates() -> list[WorkerInstanceTemplate]:

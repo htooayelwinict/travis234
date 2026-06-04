@@ -18,6 +18,9 @@ from app.schemas import (
     extract_repo_path_candidates,
     resolve_mutation_scope_proposal,
 )
+from app.repair_policy import WRITE_OPERATION_REPAIR_ATTEMPTS
+
+BOUNDED_MUTATION_SCOPE_ARTIFACT_IDS = {"mutation_scope", "allowed_write_paths", "writable_targets", "patch_scope"}
 
 
 class MissingInputArtifacts(Exception):
@@ -145,8 +148,9 @@ class TaskCompiler:
         scopes: list[MutationScope] = []
         advisory_paths: list[str] = list(explicit_paths)
         validation_warnings: list[dict[str, Any]] = []
+        scope_artifact_ids = _bounded_mutation_scope_artifact_ids(step, input_artifacts)
 
-        for artifact_id in step.permissions.write_paths_from_artifacts:
+        for artifact_id in scope_artifact_ids:
             artifact = artifact_lookup.get(artifact_id)
             if artifact is None:
                 continue
@@ -163,6 +167,11 @@ class TaskCompiler:
                 )
                 advisory_paths.extend(extract_repo_path_candidates(artifact.content))
                 continue
+            for warning in scope.metadata.get("validation_warnings") or []:
+                if isinstance(warning, dict):
+                    validation_warnings.append({"artifact_id": artifact_id, **warning})
+                else:
+                    validation_warnings.append({"artifact_id": artifact_id, "message": str(warning)})
             scopes.append(scope)
             source_artifact_ids.append(artifact_id)
             advisory_paths.extend(scope.write_scope_paths)
@@ -208,11 +217,12 @@ class TaskCompiler:
                 "forbidden_globs": forbidden_globs,
                 "batch_max_files": 6,
                 "step_max_files": 25,
-                "repair_attempts": 1,
+                "repair_attempts": WRITE_OPERATION_REPAIR_ATTEMPTS,
                 "validation_warnings": validation_warnings,
                 "metadata": {
                     "source_artifact_ids": source_artifact_ids,
-                    "write_paths_from_artifacts": list(step.permissions.write_paths_from_artifacts),
+                    "planner_write_paths_from_artifacts": list(step.permissions.write_paths_from_artifacts),
+                    "write_paths_from_artifacts": scope_artifact_ids,
                 },
             }
         )
@@ -336,6 +346,16 @@ class TaskCompiler:
 
 def _is_bounded_mutation(step: PlanStep) -> bool:
     return step.mode == "bounded_mutation" or step.phase == "MUTATE"
+
+
+def _bounded_mutation_scope_artifact_ids(step: PlanStep, input_artifacts: list[ArtifactPayload]) -> list[str]:
+    artifact_ids = list(step.permissions.write_paths_from_artifacts)
+    seen = set(artifact_ids)
+    for artifact in input_artifacts:
+        if artifact.id in BOUNDED_MUTATION_SCOPE_ARTIFACT_IDS and artifact.id not in seen:
+            artifact_ids.append(artifact.id)
+            seen.add(artifact.id)
+    return artifact_ids
 
 
 def _json_safe_validation_errors(exc: ValidationError) -> list[dict[str, object]]:

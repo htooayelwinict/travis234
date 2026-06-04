@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.schemas import Plan, Result, Task
+from app.repair_policy import WORKER_STAGE_REPAIR_ATTEMPTS
 
 
 class BudgetExceeded(Exception):
@@ -15,7 +16,10 @@ class BudgetGate:
         self.max_tool_calls = int(budget.get("max_tool_calls", 8))
         self.max_model_calls = int(budget.get("max_model_calls", 2))
         self.max_workers = int(budget.get("max_workers", 2))
-        self.max_retries = max(2, int(budget.get("max_retries", 2)))
+        self.max_retries = max(
+            WORKER_STAGE_REPAIR_ATTEMPTS,
+            int(budget.get("max_retries", WORKER_STAGE_REPAIR_ATTEMPTS)),
+        )
 
         if (
             self.max_tool_calls < 0

@@ -9,6 +9,8 @@ from typing import Any, Literal, TypedDict
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
+from app.repair_policy import WRITE_OPERATION_REPAIR_ATTEMPTS
+
 
 ResultStatus = Literal[
     "completed",
@@ -295,9 +297,24 @@ class MutationScope(BaseModel):
         if self.max_files < 1:
             raise ValueError("mutation_scope.max_files must be positive")
         if len(self.target_paths) > self.max_files:
-            raise ValueError(
-                f"mutation_scope contains {len(self.target_paths)} target paths, exceeding max_files={self.max_files}"
-            )
+            declared_max_files = self.max_files
+            self.max_files = len(self.target_paths)
+            self.metadata = {
+                **self.metadata,
+                "declared_max_files": declared_max_files,
+                "max_files_widened": True,
+                "validation_warnings": [
+                    *list(self.metadata.get("validation_warnings") or []),
+                    {
+                        "code": "max_files_widened",
+                        "message": (
+                            f"mutation_scope contains {len(self.target_paths)} target paths, "
+                            f"exceeding max_files={declared_max_files}; max_files was widened "
+                            "and concrete writes remain tool-gated"
+                        ),
+                    },
+                ],
+            }
         return self
 
     @property
@@ -340,7 +357,7 @@ class WritePolicy(BaseModel):
     forbidden_globs: list[str] = Field(default_factory=list)
     batch_max_files: int = 6
     step_max_files: int = 25
-    repair_attempts: int = 1
+    repair_attempts: int = WRITE_OPERATION_REPAIR_ATTEMPTS
     validation_warnings: list[dict[str, Any]] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -591,7 +608,7 @@ _KNOWN_FILE_NAMES = {
     "requirements.txt",
 }
 _LABELED_PATH_RE = re.compile(
-    r"(?:^|[\s,;([{])(?:file|path|target|source|test file|test path)s?:\s*`?([A-Za-z0-9_./@+\-]+)`?",
+    r"(?:^|[\s,;([{])(?:file|path|target|source|test file|test path)s?:\s*`?([^`\n,;]+)`?",
     re.IGNORECASE,
 )
 _GENERIC_PATH_RE = re.compile(r"`?((?:[A-Za-z0-9_.@+\-]+/)+[A-Za-z0-9_.@+\-]+|[A-Za-z0-9_.@+\-]+\.[A-Za-z0-9_]+)`?")
@@ -881,11 +898,11 @@ def _normalize_repo_relative_path(value: str, *, allow_bare_filename: bool) -> s
     raw = _strip_path_token(value)
     if raw.startswith("./"):
         raw = raw[2:]
-    if not raw or any(char.isspace() for char in raw):
+    if not raw:
         return None
     if _has_glob_meta(raw):
         return None
-    if raw.startswith(("-", "~")) or "://" in raw or "\\" in raw:
+    if raw.startswith(("-", "~")) or ":" in raw or "://" in raw or "\\" in raw:
         return None
     path = PurePosixPath(raw)
     if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
@@ -902,11 +919,11 @@ def _normalize_write_policy_path(value: str) -> str | None:
     raw = _strip_path_token(value)
     if raw.startswith("./"):
         raw = raw[2:]
-    if not raw or any(char.isspace() for char in raw):
+    if not raw:
         return None
     if _has_glob_meta(raw):
         return None
-    if raw.startswith(("-", "~")) or "://" in raw or "\\" in raw:
+    if raw.startswith(("-", "~")) or ":" in raw or "://" in raw or "\\" in raw:
         return None
     path = PurePosixPath(raw)
     if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
@@ -918,11 +935,11 @@ def _normalize_repo_glob(value: str) -> str | None:
     raw = _strip_path_token(value)
     if raw.startswith("./"):
         raw = raw[2:]
-    if not raw or any(char.isspace() for char in raw):
+    if not raw:
         return None
     if not _has_glob_meta(raw):
         return None
-    if raw.startswith(("-", "~")) or "://" in raw or "\\" in raw:
+    if raw.startswith(("-", "~")) or ":" in raw or "://" in raw or "\\" in raw:
         return None
     path = PurePosixPath(raw)
     if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):

@@ -118,6 +118,7 @@ class WorkerToolbox:
                 [
                     _tool_spec("write_file", "Write a full file inside approved write policy.", "write_files", {"path": "string", "content": "string"}),
                     _tool_spec("write_many_files", "Write multiple full files inside approved write policy in one atomic preflighted batch.", "write_files", {"files": "file_write_array"}),
+                    _tool_spec("apply_file_operations", "Preflight and apply a compact batch of move/write/replace/delete/create_directory operations with an idempotent operation ledger.", "write_files", {"operations": "file_operation_array"}),
                     _tool_spec("replace_in_file", "Replace one exact text occurrence inside approved write policy.", "write_files", {"path": "string", "old": "string", "new": "string"}),
                     _tool_spec("move_file", "Move one file when both source and destination are inside approved write policy.", "write_files", {"source": "string", "destination": "string", "overwrite": "boolean"}),
                     _tool_spec("delete_file", "Delete one file inside approved write policy.", "write_files", {"path": "string"}),
@@ -199,6 +200,9 @@ class WorkerToolbox:
         if tool_name == "write_many_files":
             self._require(task.permissions.write_files, "write_files", tool_name)
             return self._write_many_files(task, arguments)
+        if tool_name == "apply_file_operations":
+            self._require(task.permissions.write_files, "write_files", tool_name)
+            return self._apply_file_operations(task, arguments)
         if tool_name == "replace_in_file":
             self._require(task.permissions.write_files, "write_files", tool_name)
             return self._replace_in_file(task, arguments)
@@ -234,8 +238,10 @@ class WorkerToolbox:
 
     def _list_dir(self, arguments: dict[str, Any]) -> dict[str, Any]:
         path = self._resolve_read_path(str(arguments.get("path") or "."))
+        if not path.exists():
+            return {"path": self._display_path(path), "exists": False, "entries": [], "error": "not_found"}
         if not path.is_dir():
-            raise ToolExecutionError(f"path is not a directory: {self._display_path(path)}")
+            return {"path": self._display_path(path), "exists": True, "entries": [], "error": "not_directory"}
         entries = []
         for child in sorted(path.iterdir(), key=lambda item: item.name):
             if self._is_ignored_path(child):
@@ -243,12 +249,34 @@ class WorkerToolbox:
             entries.append({"name": child.name, "type": "dir" if child.is_dir() else "file"})
             if len(entries) >= 200:
                 break
-        return {"path": self._display_path(path), "entries": entries}
+        return {"path": self._display_path(path), "exists": True, "entries": entries}
 
     def _repo_snapshot(self, arguments: dict[str, Any]) -> dict[str, Any]:
         start = self._resolve_read_path(str(arguments.get("path") or "."))
         if not start.exists():
-            raise ToolExecutionError(f"path does not exist: {self._display_path(start)}")
+            return {
+                "path": self._display_path(start),
+                "exists": False,
+                "directories": [],
+                "files": [],
+                "is_empty": True,
+                "test_candidates": [],
+                "config_files": [],
+                "git_status": {},
+                "error": "not_found",
+            }
+        if not start.is_dir():
+            return {
+                "path": self._display_path(start),
+                "exists": True,
+                "directories": [],
+                "files": [self._display_path(start)],
+                "is_empty": False,
+                "test_candidates": [self._display_path(start)] if _looks_like_test_path(self._display_path(start)) else [],
+                "config_files": [],
+                "git_status": {},
+                "error": "not_directory",
+            }
 
         files: list[str] = []
         dirs: set[str] = set()
@@ -276,6 +304,7 @@ class WorkerToolbox:
 
         return {
             "path": self._display_path(start),
+            "exists": True,
             "directories": sorted(dirs)[:100],
             "files": files[:300],
             "is_empty": not files and not dirs,
@@ -286,10 +315,29 @@ class WorkerToolbox:
 
     def _read_file(self, arguments: dict[str, Any]) -> dict[str, Any]:
         path = self._resolve_read_path(str(arguments.get("path") or ""))
+        if not path.exists():
+            return {
+                "path": self._display_path(path),
+                "exists": False,
+                "content": "",
+                "truncated": False,
+                "error": "not_found",
+            }
         if not path.is_file():
-            raise ToolExecutionError(f"path is not a file: {self._display_path(path)}")
+            return {
+                "path": self._display_path(path),
+                "exists": True,
+                "content": "",
+                "truncated": False,
+                "error": "not_file",
+            }
         content = path.read_text(encoding="utf-8", errors="replace")[: self._config.max_file_bytes]
-        return {"path": self._display_path(path), "content": content, "truncated": path.stat().st_size > len(content)}
+        return {
+            "path": self._display_path(path),
+            "exists": True,
+            "content": content,
+            "truncated": path.stat().st_size > len(content),
+        }
 
     def _read_many_files(self, arguments: dict[str, Any]) -> dict[str, Any]:
         paths = _string_or_list(arguments.get("paths"))
@@ -396,6 +444,90 @@ class WorkerToolbox:
             written.append({"path": self._display_path(path), "bytes_written": len(content.encode("utf-8"))})
         return {"files_written": written, "count": len(written)}
 
+    def _apply_file_operations(self, task: Task, arguments: dict[str, Any]) -> dict[str, Any]:
+        raw_operations = arguments.get("operations")
+        if not isinstance(raw_operations, list) or not raw_operations:
+            raise ToolExecutionError("apply_file_operations requires a non-empty operations array")
+        if len(raw_operations) > 50:
+            raise ToolExecutionError("apply_file_operations supports at most 50 operations per call")
+
+        operations: list[dict[str, Any]] = []
+        raw_paths: list[str] = []
+        for index, raw_operation in enumerate(raw_operations, start=1):
+            if not isinstance(raw_operation, dict):
+                raise ToolExecutionError(f"apply_file_operations item {index} must be an object")
+            action = str(raw_operation.get("action") or raw_operation.get("op") or "").strip().lower()
+            if action in {"mkdir", "create_dir"}:
+                action = "create_directory"
+            if action not in {"move", "write", "replace", "delete", "create_directory"}:
+                raise ToolExecutionError(f"apply_file_operations item {index} has unsupported action: {action}")
+            operation = {"index": index, "action": action, "raw": raw_operation}
+            if action == "move":
+                operation["source"] = str(raw_operation.get("source") or raw_operation.get("from") or "")
+                operation["destination"] = str(
+                    raw_operation.get("destination") or raw_operation.get("to") or raw_operation.get("target") or ""
+                )
+                operation["overwrite"] = bool(raw_operation.get("overwrite", False))
+                raw_paths.extend([operation["source"], operation["destination"]])
+            elif action == "write":
+                operation["path"] = str(raw_operation.get("path") or raw_operation.get("file") or "")
+                operation["content"] = str(raw_operation.get("content") or "")
+                operation["overwrite"] = bool(raw_operation.get("overwrite", True))
+                raw_paths.append(operation["path"])
+            elif action == "replace":
+                operation["path"] = str(raw_operation.get("path") or raw_operation.get("file") or "")
+                operation["old"] = str(raw_operation.get("old") or "")
+                operation["new"] = str(raw_operation.get("new") or "")
+                raw_paths.append(operation["path"])
+            elif action == "delete":
+                operation["path"] = str(raw_operation.get("path") or raw_operation.get("file") or "")
+                raw_paths.append(operation["path"])
+            else:
+                operation["path"] = str(raw_operation.get("path") or raw_operation.get("directory") or "")
+                raw_paths.append(operation["path"])
+            operations.append(operation)
+
+        resolved_paths = self._preflight_write_operation(
+            task,
+            tool_name="apply_file_operations",
+            raw_paths=raw_paths,
+        )
+        path_index = 0
+        for operation in operations:
+            if operation["action"] == "move":
+                operation["source_path"] = resolved_paths[path_index]
+                operation["destination_path"] = resolved_paths[path_index + 1]
+                path_index += 2
+            else:
+                operation["resolved_path"] = resolved_paths[path_index]
+                path_index += 1
+
+        denial = self._preflight_file_operations(task, operations)
+        if denial is not None:
+            raise denial
+
+        ledger: list[dict[str, Any]] = []
+        for operation in operations:
+            ledger.append(self._apply_one_file_operation(operation))
+        applied = [item for item in ledger if item["status"] == "applied"]
+        already_done = [item for item in ledger if item["status"] == "already_done"]
+        skipped = [item for item in ledger if item["status"] == "skipped"]
+        return {
+            "operation_count": len(ledger),
+            "applied_count": len(applied),
+            "already_done_count": len(already_done),
+            "skipped_count": len(skipped),
+            "changed_paths": sorted(
+                {
+                    path
+                    for item in applied
+                    for path in item.get("paths", [])
+                    if path
+                }
+            ),
+            "operations": ledger,
+        }
+
     def _replace_in_file(self, task: Task, arguments: dict[str, Any]) -> dict[str, Any]:
         path = self._preflight_write_operation(
             task,
@@ -448,6 +580,15 @@ class WorkerToolbox:
                 "reason": "source_equals_destination",
             }
         if not source.is_file():
+            if destination.is_file():
+                return {
+                    "source": self._display_path(source),
+                    "destination": self._display_path(destination),
+                    "overwritten": False,
+                    "already_done": True,
+                    "skipped": True,
+                    "reason": "source_missing_destination_exists",
+                }
             self._raise_repairable_write_denial(
                 task=task,
                 tool_name="move_file",
@@ -492,6 +633,158 @@ class WorkerToolbox:
             )
         path.unlink()
         return {"path": self._display_path(path), "deleted": True}
+
+    def _preflight_file_operations(
+        self,
+        task: Task,
+        operations: list[dict[str, Any]],
+    ) -> MutationOperationDeniedError | None:
+        rejected_paths: list[str] = []
+        messages: list[str] = []
+        for operation in operations:
+            action = operation["action"]
+            if action == "move":
+                source = operation["source_path"]
+                destination = operation["destination_path"]
+                if source == destination:
+                    continue
+                if not source.is_file() and not destination.is_file():
+                    rejected_paths.append(self._display_path(source))
+                    messages.append(f"move source is not a file: {self._display_path(source)}")
+                if source.is_file() and destination.exists() and not operation["overwrite"]:
+                    rejected_paths.append(self._display_path(destination))
+                    messages.append(
+                        f"move destination exists: {self._display_path(destination)}; set overwrite=true or skip"
+                    )
+            elif action == "write":
+                path = operation["resolved_path"]
+                if path.exists() and not path.is_file():
+                    rejected_paths.append(self._display_path(path))
+                    messages.append(f"write target is not a file: {self._display_path(path)}")
+                if path.exists() and not operation["overwrite"]:
+                    rejected_paths.append(self._display_path(path))
+                    messages.append(
+                        f"write target exists: {self._display_path(path)}; set overwrite=true or skip"
+                    )
+            elif action == "replace":
+                path = operation["resolved_path"]
+                if not operation["old"]:
+                    rejected_paths.append(self._display_path(path))
+                    messages.append("replace operation requires a non-empty old value")
+                elif not path.is_file():
+                    rejected_paths.append(self._display_path(path))
+                    messages.append(f"replace target is not a file: {self._display_path(path)}")
+                elif operation["old"] not in path.read_text(encoding="utf-8"):
+                    rejected_paths.append(self._display_path(path))
+                    messages.append(f"replace old value was not found: {self._display_path(path)}")
+            elif action == "delete":
+                path = operation["resolved_path"]
+                if path.exists() and not path.is_file():
+                    rejected_paths.append(self._display_path(path))
+                    messages.append(f"delete target is not a file: {self._display_path(path)}")
+            elif action == "create_directory":
+                path = operation["resolved_path"]
+                if path.exists() and not path.is_dir():
+                    rejected_paths.append(self._display_path(path))
+                    messages.append(f"create_directory target is not a directory: {self._display_path(path)}")
+        if not rejected_paths:
+            return None
+        touched_paths = sorted(
+            {
+                path
+                for operation in operations
+                for path in _operation_display_paths(operation, self)
+            }
+        )
+        return self._operation_denial(
+            task=task,
+            policy=self._write_policy(task),
+            tool_name="apply_file_operations",
+            code="file_operation_batch_denied",
+            message="; ".join(messages),
+            touched_paths=touched_paths,
+            rejected_paths=sorted(set(rejected_paths)),
+        )
+
+    def _apply_one_file_operation(self, operation: dict[str, Any]) -> dict[str, Any]:
+        action = operation["action"]
+        if action == "move":
+            source = operation["source_path"]
+            destination = operation["destination_path"]
+            paths = [self._display_path(source), self._display_path(destination)]
+            if source == destination:
+                return {
+                    "index": operation["index"],
+                    "action": action,
+                    "status": "skipped",
+                    "paths": paths,
+                    "summary": "source equals destination",
+                }
+            if not source.is_file() and destination.is_file():
+                return {
+                    "index": operation["index"],
+                    "action": action,
+                    "status": "already_done",
+                    "paths": paths,
+                    "summary": "source missing and destination already exists",
+                }
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            source.replace(destination)
+            return {
+                "index": operation["index"],
+                "action": action,
+                "status": "applied",
+                "paths": paths,
+                "summary": "file moved",
+            }
+        path = operation["resolved_path"]
+        display_path = self._display_path(path)
+        if action == "write":
+            path.parent.mkdir(parents=True, exist_ok=True)
+            content = str(operation.get("content") or "")
+            path.write_text(content, encoding="utf-8")
+            return {
+                "index": operation["index"],
+                "action": action,
+                "status": "applied",
+                "paths": [display_path],
+                "summary": f"wrote {len(content.encode('utf-8'))} bytes",
+            }
+        if action == "replace":
+            content = path.read_text(encoding="utf-8")
+            path.write_text(content.replace(operation["old"], operation["new"], 1), encoding="utf-8")
+            return {
+                "index": operation["index"],
+                "action": action,
+                "status": "applied",
+                "paths": [display_path],
+                "summary": "replaced one occurrence",
+            }
+        if action == "delete":
+            if not path.exists():
+                return {
+                    "index": operation["index"],
+                    "action": action,
+                    "status": "already_done",
+                    "paths": [display_path],
+                    "summary": "file already absent",
+                }
+            path.unlink()
+            return {
+                "index": operation["index"],
+                "action": action,
+                "status": "applied",
+                "paths": [display_path],
+                "summary": "file deleted",
+            }
+        path.mkdir(parents=True, exist_ok=True)
+        return {
+            "index": operation["index"],
+            "action": action,
+            "status": "applied",
+            "paths": [display_path],
+            "summary": "directory created or already existed",
+        }
 
     def _runtime_capabilities(self) -> dict[str, Any]:
         checks = {
@@ -965,7 +1258,7 @@ class WorkerToolbox:
                 tool_name=tool_name,
                 code="write_batch_too_broad",
                 message=(
-                    f"write_many_files touches {len(unique_paths)} paths, "
+                    f"{tool_name} touches {len(unique_paths)} paths, "
                     f"exceeding batch_max_files={policy.batch_max_files}"
                 ),
                 touched_paths=unique_paths,
@@ -1251,6 +1544,34 @@ def _parameter_schema(value: str) -> dict[str, Any]:
                 "additionalProperties": False,
             },
         }
+    if value == "file_operation_array":
+        return {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["move", "write", "replace", "delete", "create_directory"],
+                    },
+                    "path": {"type": "string"},
+                    "file": {"type": "string"},
+                    "source": {"type": "string"},
+                    "from": {"type": "string"},
+                    "destination": {"type": "string"},
+                    "to": {"type": "string"},
+                    "target": {"type": "string"},
+                    "directory": {"type": "string"},
+                    "content": {"type": "string"},
+                    "old": {"type": "string"},
+                    "new": {"type": "string"},
+                    "op": {"type": "string"},
+                    "overwrite": {"type": "boolean"},
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            },
+        }
     return {"type": "string"}
 
 
@@ -1279,9 +1600,7 @@ def _looks_like_repo_path(value: str) -> bool:
     value = value.strip()
     if not value or "\n" in value:
         return False
-    if any(char.isspace() for char in value):
-        return False
-    if value.startswith(("-", "git ", "pytest ", "python ")):
+    if value.startswith(("-", "git ", "pytest ", "python ")) or ":" in value:
         return False
     return "/" in value or "." in Path(value).name
 
@@ -1294,11 +1613,11 @@ def _normalize_repo_glob(value: str) -> str | None:
     raw = value.strip().strip("`'\".,;)]}")
     if raw.startswith("./"):
         raw = raw[2:]
-    if not raw or any(char.isspace() for char in raw):
+    if not raw:
         return None
     if not _has_glob_meta(raw):
         return None
-    if raw.startswith(("-", "~", "/")) or "://" in raw or "\\" in raw:
+    if raw.startswith(("-", "~", "/")) or ":" in raw or "://" in raw or "\\" in raw:
         return None
     if any(part in {"", ".", ".."} for part in raw.split("/")):
         return None
@@ -1310,6 +1629,17 @@ def _matches_repo_glob(path: str, pattern: str) -> bool:
     if normalized is None:
         return False
     return fnmatch.fnmatchcase(path, normalized) or fnmatch.fnmatchcase(Path(path).name, normalized)
+
+
+def _operation_display_paths(operation: dict[str, Any], toolbox: WorkerToolbox) -> list[str]:
+    if operation.get("action") == "move":
+        return [
+            toolbox._display_path(path)
+            for path in (operation.get("source_path"), operation.get("destination_path"))
+            if isinstance(path, Path)
+        ]
+    path = operation.get("resolved_path")
+    return [toolbox._display_path(path)] if isinstance(path, Path) else []
 
 
 def _parse_git_status_path(line: str) -> str | None:

@@ -27,6 +27,10 @@ CONFIG_KEYS = (
     "WORKER_WEB_SEARCH_PROVIDER",
     "WORKER_WEB_SEARCH_API_KEY",
     "WORKER_WEB_SEARCH_MAX_RESULTS",
+    "WORKER_RETRY_ADVISOR_ENABLED",
+    "WORKER_RETRY_ADVISOR_MODEL",
+    "WORKER_RETRY_ADVISOR_MAX_TOKENS",
+    "WORKER_RETRY_ADVISOR_TIMEOUT_SECONDS",
     "BRAVE_SEARCH_API_KEY",
     "OPENROUTER_API_KEY",
     "OPENROUTER_MODEL",
@@ -54,6 +58,10 @@ class WorkerRuntimeConfig:
     web_search_provider: str = "brave"
     web_search_api_key: str | None = None
     web_search_max_results: int = 5
+    retry_advisor_enabled: bool = False
+    retry_advisor_model: str | None = None
+    retry_advisor_max_tokens: int = 500
+    retry_advisor_timeout_seconds: float = 20.0
 
 
 def load_dotenv_values(path: str | Path = ".env") -> dict[str, str]:
@@ -102,6 +110,10 @@ def load_worker_runtime_config(dotenv_path: str | Path = ".env") -> WorkerRuntim
         web_search_provider=(config.get("WORKER_WEB_SEARCH_PROVIDER") or "brave").strip().lower(),
         web_search_api_key=config.get("WORKER_WEB_SEARCH_API_KEY") or config.get("BRAVE_SEARCH_API_KEY"),
         web_search_max_results=_positive_int(config.get("WORKER_WEB_SEARCH_MAX_RESULTS"), default=5),
+        retry_advisor_enabled=config.get("WORKER_RETRY_ADVISOR_ENABLED", "").lower() in TRUE_VALUES,
+        retry_advisor_model=config.get("WORKER_RETRY_ADVISOR_MODEL") or None,
+        retry_advisor_max_tokens=_positive_int(config.get("WORKER_RETRY_ADVISOR_MAX_TOKENS"), default=500),
+        retry_advisor_timeout_seconds=float(config.get("WORKER_RETRY_ADVISOR_TIMEOUT_SECONDS", "20")),
     )
 
 

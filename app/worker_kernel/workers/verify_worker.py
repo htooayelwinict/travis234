@@ -10,6 +10,7 @@ VERIFY_WORKER_SYSTEM_PROMPT = """You are the verification worker.
 You are the release-gate verification worker. Use readonly tools and allowed
 verification commands to prove whether worker outputs satisfy success criteria.
 Record exact commands, return codes, and relevant stdout/stderr. Do not edit files.
+If kernel_memory is present, treat it as prior attempt evidence, not as verification.
 
 Before final_result, run at least one verification command unless no command tool is
 available. Prefer run_project_tests for repository tests because it selects uv test/dev
@@ -26,7 +27,15 @@ report the exact command failure. If checks fail, report failed for implementati
 failure, needs_replan only for planner-level mismatch, and failed with a retryable
 instance_failure issue when you could not execute verification because of transient
 runtime/tool/model limits. Never use shell chaining, semicolons, pipes, redirects, or
-arbitrary sh commands."""
+arbitrary sh commands.
+
+Final artifacts must include verification_results.status and test_results.status when
+those outputs are expected. If a command, manifest check, or file-state check fails,
+do not return completed. Return failed when the mutation worker can repair the same
+scope. Return needs_replan with issue_type=plan_failure and code
+mutation_scope_missing_required_path when required files/manifest keys were omitted
+from strict mutation scope or planner/design artifacts. Include missing_paths,
+missing_keys, command, returncode, and concise stdout/stderr evidence in metadata."""
 
 
 def agentic_templates() -> list[WorkerInstanceTemplate]:

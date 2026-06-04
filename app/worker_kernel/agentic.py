@@ -13,7 +13,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.runtime_matrix import RuntimeMatrixLogger
 from app.schemas import ArtifactPayload, PermissionSet, PlanStep, Result, Task, WorkerIssue
+from app.worker_kernel.agent_loop import AgentRunLoop
+from app.worker_kernel.artifact_contracts import artifact_content_empty, artifact_contract, evaluate_artifact_quality
 from app.worker_kernel.env_config import WorkerRuntimeConfig
+from app.worker_kernel.model_adapter import JSONDecisionAdapter
+from app.worker_kernel.observations import denial_observation, success_observation
+from app.repair_policy import WRITE_OPERATION_REPAIR_ATTEMPTS
 from app.worker_kernel.registry import WorkerRegistry
 from app.worker_kernel.tools import (
     MutationOperationDeniedError,
@@ -28,7 +33,14 @@ from app.worker_kernel.workers.templates import WorkerInstanceTemplate
 
 
 MUTATING_WORKER_TYPES = {"code_worker", "filesystem_worker"}
-WRITE_TOOL_NAMES = {"write_file", "write_many_files", "replace_in_file", "move_file", "delete_file"}
+WRITE_TOOL_NAMES = {
+    "apply_file_operations",
+    "delete_file",
+    "move_file",
+    "replace_in_file",
+    "write_file",
+    "write_many_files",
+}
 REPO_READER_REQUIRED_OUTPUT_IDS = {
     "api_surface_map",
     "candidate_paths",
@@ -80,21 +92,34 @@ class WorkerLLMController:
     def __init__(self, model_client: Any) -> None:
         self._model_client = model_client
         self.schema = WorkerLLMDecision.model_json_schema()
+        self._adapter = JSONDecisionAdapter(
+            model_client=model_client,
+            schema=self.schema,
+            normalizer=_normalize_worker_decision,
+            validator=WorkerLLMDecision.model_validate,
+        )
 
     def decide(self, *, stage: str, prompt: str) -> WorkerLLMDecision:
-        response = self._model_client.complete_json(
-            stage=stage,
-            prompt=prompt,
-            schema=self.schema,
-        )
-        return WorkerLLMDecision.model_validate(_normalize_worker_decision(json.loads(response)))
+        return self._adapter.decide(stage=stage, prompt=prompt)
 
 
 def _normalize_worker_decision(value: Any) -> Any:
+    value = _parse_jsonish(value)
     if not isinstance(value, dict):
         return value
 
     data = dict(value)
+    for noisy_key in ("analysis", "commentary", "explanation", "reasoning", "thought", "thoughts"):
+        data.pop(noisy_key, None)
+    if "final_result" in data:
+        data["final_result"] = _parse_jsonish(data["final_result"])
+    if "tool_calls" in data:
+        data["tool_calls"] = _parse_jsonish(data["tool_calls"])
+    if "function_call" in data:
+        data["function_call"] = _parse_jsonish(data["function_call"])
+    if "tool_call" in data:
+        data["tool_call"] = _parse_jsonish(data["tool_call"])
+
     if "final_result" in data and isinstance(data["final_result"], dict):
         data["final_result"] = _normalize_final_result(data["final_result"])
     elif _looks_like_final_result(data):
@@ -112,6 +137,7 @@ def _normalize_worker_decision(value: Any) -> Any:
     if isinstance(tool_calls, list):
         normalized_calls = []
         for raw_call in tool_calls:
+            raw_call = _parse_jsonish(raw_call)
             if not isinstance(raw_call, dict):
                 normalized_calls.append(raw_call)
                 continue
@@ -154,6 +180,19 @@ def _normalize_tool_call(raw_call: dict[str, Any]) -> dict[str, Any]:
 
 def _looks_like_final_result(data: dict[str, Any]) -> bool:
     return any(key in data for key in ("status", "summary", "reason", "message", "missing_artifacts", "artifacts"))
+
+
+def _kernel_memory_has_successful_writes(task: Task) -> bool:
+    memory = task.metadata.get("kernel_memory")
+    if not isinstance(memory, dict):
+        return False
+    if int(memory.get("successful_write_count") or 0) > 0:
+        return True
+    operations = memory.get("successful_write_operations")
+    return isinstance(operations, list) and any(
+        isinstance(operation, dict) and operation.get("status") == "applied"
+        for operation in operations
+    )
 
 
 def _normalize_final_result(raw_final: dict[str, Any]) -> dict[str, Any]:
@@ -340,6 +379,21 @@ def _parse_arguments(value: str) -> dict[str, Any]:
     return {"value": parsed}
 
 
+def _parse_jsonish(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    raw = value.strip()
+    if not raw or raw[0] not in {"{", "["}:
+        return value
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        try:
+            return ast.literal_eval(raw)
+        except (SyntaxError, ValueError):
+            return value
+
+
 _TOOL_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 
 
@@ -427,6 +481,7 @@ class AgenticWorkerGroupRunner:
         self._controller = controller
         self._toolbox = toolbox
         self._max_rounds_per_instance = max_rounds_per_instance
+        self._agent_loop = AgentRunLoop(max_rounds=max_rounds_per_instance)
 
     def run(self, task: Task, trace: RuntimeMatrixLogger | None = None) -> Result:
         preflight_result = self._preflight_write_scope(task)
@@ -521,9 +576,11 @@ class AgenticWorkerGroupRunner:
                 "expected_count": quality["expected_count"],
                 "missing_count": quality["missing_count"],
                 "empty_count": quality["empty_count"],
+                "invalid_count": quality["invalid_count"],
                 "synthesized_count": quality["synthesized_count"],
                 "missing_artifacts": quality["missing_artifacts"],
                 "empty_artifacts": quality["empty_artifacts"],
+                "invalid_artifacts": quality["invalid_artifacts"],
                 "synthesized_artifacts": quality["synthesized_artifacts"],
             },
         )
@@ -674,106 +731,81 @@ class AgenticWorkerGroupRunner:
         usage: dict[str, int],
         trace: RuntimeMatrixLogger | None = None,
     ) -> Result:
-        rounds = 0
-        while rounds < self._max_rounds_per_instance:
-            if usage["model_calls"] >= task.max_model_calls:
-                return self._fallback_from_observations(task=task, template=template, state=state, usage=usage)
-
-            rounds += 1
-            usage["model_calls"] += 1
-            self._trace(
-                trace,
+        def issue_result(
+            status: Literal["failed", "blocked", "budget_exceeded", "needs_replan"],
+            issue_type: str,
+            code: str,
+            message: str,
+            retryable: bool,
+        ) -> Result:
+            return self._issue_result(
                 task=task,
                 template=template,
-                event="worker_model_call_started",
-                status="started",
-                details={
-                    "round": rounds,
-                    "model_calls_used_including_this_turn": usage["model_calls"],
-                    "remaining_tool_calls": max(0, task.max_tool_calls - usage["tool_calls"]),
-                },
+                usage=usage,
+                status=status,
+                issue_type=issue_type,
+                code=code,
+                message=message,
+                retryable=retryable,
             )
-            try:
-                decision = self._controller.decide(
-                    stage=f"{self.worker_type}_{template.name}",
-                    prompt=self._prompt(task=task, template=template, state=state, usage=usage),
-                )
-            except Exception as exc:
-                self._trace(
-                    trace,
-                    task=task,
-                    template=template,
-                    event="worker_model_call_failed",
-                    status="failed",
-                    details={"error": str(exc), "round": rounds},
-                )
-                return self._issue_result(
-                    task=task,
-                    template=template,
-                    usage=usage,
-                    status="failed",
-                    issue_type="instance_failure",
-                    code="worker_llm_error",
-                    message=str(exc),
-                    retryable=True,
-                )
 
-            self._trace(
-                trace,
-                task=task,
-                template=template,
-                event="worker_model_call_completed",
-                status="completed",
-                details={
-                    "round": rounds,
-                    "tool_call_count": len(decision.tool_calls),
-                    "has_final_result": decision.final_result is not None,
-                    "final_status": decision.final_result.status if decision.final_result else None,
-                },
-            )
-            if decision.tool_calls:
-                tool_result = self._execute_tool_calls(
-                    task=task,
-                    template=template,
-                    state=state,
-                    usage=usage,
-                    tool_calls=decision.tool_calls,
-                    trace=trace,
-                )
-                if tool_result is not None:
-                    return tool_result
-                continue
+        return self._agent_loop.run(
+            worker_type=self.worker_type,
+            task=task,
+            template=template,
+            state=state,
+            usage=usage,
+            controller=self._controller,
+            prompt_builder=self._prompt,
+            execute_tool_calls=self._execute_tool_calls,
+            handle_final_result=self._handle_final_decision,
+            fallback_from_observations=self._fallback_from_observations,
+            issue_result=issue_result,
+            trace_event=self._trace,
+            trace=trace,
+        ).result
 
-            if decision.final_result is not None:
-                if self._completed_mutation_without_write(
-                    task=task,
-                    final=decision.final_result,
-                    state=state,
-                ):
-                    return self._issue_result(
-                        task=task,
-                        template=template,
-                        usage=usage,
-                        status="failed",
-                        issue_type="instance_failure",
-                        code="mutation_completed_without_write",
-                        message="bounded mutation returned completed without any successful write tool observation",
-                        retryable=True,
-                    )
-                return self._final_result(task=task, template=template, usage=usage, final=decision.final_result)
-
+    def _handle_final_decision(
+        self,
+        *,
+        task: Task,
+        template: WorkerInstanceTemplate,
+        state: WorkerGroupState,
+        usage: dict[str, int],
+        final: WorkerFinalResult,
+    ) -> Result:
+        if self._completed_mutation_without_write(
+            task=task,
+            final=final,
+            state=state,
+        ):
             return self._issue_result(
                 task=task,
                 template=template,
                 usage=usage,
                 status="failed",
                 issue_type="instance_failure",
-                code="empty_worker_decision",
-                message="worker model returned neither tool_calls nor final_result",
+                code="mutation_completed_without_write",
+                message="bounded mutation returned completed without any successful write tool observation",
                 retryable=True,
             )
-
-        return self._fallback_from_observations(task=task, template=template, state=state, usage=usage)
+        missing_required_writes = self._missing_required_write_paths(task=task, state=state)
+        if final.status == "completed" and missing_required_writes:
+            return self._issue_result(
+                task=task,
+                template=template,
+                usage=usage,
+                status="failed",
+                issue_type="instance_failure",
+                code="mutation_completed_missing_required_writes",
+                message=(
+                    "bounded mutation returned completed without touching required write paths: "
+                    + ", ".join(missing_required_writes)
+                ),
+                retryable=True,
+                issue_metadata={"missing_required_write_paths": missing_required_writes},
+            )
+        return self._final_result(task=task, template=template, usage=usage, final=final)
 
     def minimum_model_calls(self, step: PlanStep) -> int:
         total = 0
@@ -878,9 +910,9 @@ class AgenticWorkerGroupRunner:
                 denial = exc.denial
                 denial_count = state.operation_denials.get(template.name, 0) + 1
                 state.operation_denials[template.name] = denial_count
-                repair_attempts = denial.policy.get("repair_attempts", 1)
+                repair_attempts = denial.policy.get("repair_attempts", WRITE_OPERATION_REPAIR_ATTEMPTS)
                 if not isinstance(repair_attempts, int):
-                    repair_attempts = 1
+                    repair_attempts = WRITE_OPERATION_REPAIR_ATTEMPTS
                 self._trace(
                     trace,
                     task=task,
@@ -925,6 +957,10 @@ class AgenticWorkerGroupRunner:
                         "denial": denial.model_dump(mode="json"),
                         "instruction": "Revise the tool call to satisfy write_policy and continue this same task.",
                     },
+                    "tool_observation": denial_observation(
+                        tool_name=tool_call.tool_name,
+                        denial=denial,
+                    ).model_dump(mode="json"),
                 }
                 state.observations.append(record)
                 state.artifacts.append(
@@ -1015,6 +1051,10 @@ class AgenticWorkerGroupRunner:
                 "tool_name": tool_call.tool_name,
                 "arguments": tool_call.arguments,
                 "observation": observation,
+                "tool_observation": success_observation(
+                    tool_name=tool_call.tool_name,
+                    data=observation,
+                ).model_dump(mode="json"),
             }
             state.observations.append(record)
             state.artifacts.append(
@@ -1255,7 +1295,52 @@ class AgenticWorkerGroupRunner:
             return False
         if final.status != "completed":
             return False
+        if _kernel_memory_has_successful_writes(task):
+            return False
         return not self._write_observations(state)
+
+    def _missing_required_write_paths(self, *, task: Task, state: WorkerGroupState) -> list[str]:
+        if self.worker_type not in MUTATING_WORKER_TYPES or not task.permissions.write_files:
+            return []
+        required = self._required_write_paths(task)
+        if not required:
+            return []
+        observed = self._observed_write_path_set(task=task, state=state)
+        return sorted(path for path in required if path not in observed)
+
+    def _required_write_paths(self, task: Task) -> set[str]:
+        write_scope = task.metadata.get("write_scope")
+        if not isinstance(write_scope, dict):
+            return set()
+        raw_paths: list[Any] = []
+        for key in ("create_paths", "update_paths", "manifest_paths"):
+            value = write_scope.get(key)
+            if isinstance(value, list):
+                raw_paths.extend(value)
+            elif value:
+                raw_paths.append(value)
+        return {path for path in (self._normalize_observed_path(value) for value in raw_paths) if path}
+
+    def _observed_write_path_set(self, *, task: Task, state: WorkerGroupState) -> set[str]:
+        paths = {
+            self._normalize_observed_path(path)
+            for observation in self._write_observations(state)
+            for path in self._write_observation_paths(observation)
+        }
+        memory = task.metadata.get("kernel_memory")
+        if isinstance(memory, dict):
+            for operation in memory.get("successful_write_operations") or []:
+                if not isinstance(operation, dict):
+                    continue
+                for path in operation.get("paths") or []:
+                    paths.add(self._normalize_observed_path(path))
+        return {path for path in paths if path}
+
+    def _normalize_observed_path(self, value: Any) -> str:
+        path = str(value or "").strip().replace("\\", "/")
+        while path.startswith("./"):
+            path = path[2:]
+        return path
 
     def _write_observations(self, state: WorkerGroupState) -> list[dict[str, Any]]:
         return [
@@ -1276,6 +1361,14 @@ class AgenticWorkerGroupRunner:
                 str(item.get("path"))
                 for item in payload.get("files_written", [])
                 if isinstance(item, dict) and item.get("path")
+            ]
+        if tool_name == "apply_file_operations":
+            return [
+                str(path)
+                for item in payload.get("operations", [])
+                if isinstance(item, dict) and item.get("status") in {"applied", "already_done", "skipped"}
+                for path in item.get("paths", [])
+                if path
             ]
         if tool_name == "move_file":
             return [
@@ -1367,6 +1460,22 @@ class AgenticWorkerGroupRunner:
         write_observations = self._write_observations(state)
         if not write_observations:
             return None
+        missing_required_writes = self._missing_required_write_paths(task=task, state=state)
+        if missing_required_writes:
+            return self._issue_result(
+                task=task,
+                template=template,
+                usage=usage,
+                status="failed",
+                issue_type="instance_failure",
+                code="mutation_completed_missing_required_writes",
+                message=(
+                    "mutation observations are missing required write paths: "
+                    + ", ".join(missing_required_writes)
+                ),
+                retryable=True,
+                issue_metadata={"missing_required_write_paths": missing_required_writes},
+            )
 
         changed_paths = sorted(
             {
@@ -1442,6 +1551,11 @@ class AgenticWorkerGroupRunner:
         if artifact_id == "change_summary":
             return {
                 "changed_paths": changed_paths,
+                "summary": (
+                    "Applied bounded mutation writes for "
+                    f"{len(changed_paths)} changed path{'s' if len(changed_paths) != 1 else ''}."
+                ),
+                "risk_notes": [],
                 "write_tools": [
                     {
                         "tool_name": observation.get("tool_name"),
@@ -1503,14 +1617,29 @@ class AgenticWorkerGroupRunner:
             "A response with tool_calls is an action turn; after observations, return a separate final_result turn.",
             "Use only listed tools.",
             "If available_tools is empty or remaining_tool_calls is 0, return final_result from observations or needs_replan.",
+            "For observe_only, plan_only, verify_only, and summarize_only tasks, synthesize from input/group artifacts when they are sufficient; do not return needs_replan solely because tools or write permissions are unavailable.",
+            "needs_replan is only for semantic planner gaps such as missing required artifacts, wrong worker ordering, or user-intent drift.",
             "Return final_result only when expected artifacts can be produced.",
             "final_result.artifacts must be objects with id and non-null, non-empty content; never return bare artifact-name strings.",
+            "Before final_result, compare each artifact against expected_output_contract.artifact_shape and include its required keys.",
+            "Issue issue_type must be exactly one of instance_failure, plan_failure, or kernel_failure; do not invent issue_type values.",
+            "For file-management, reports, JSON manifests, and inventory outputs, copy exact key names, file categories, and path/basename wording from task instructions, tests, and input artifacts.",
             "For planner-level gaps, return {'final_result': {'status': 'needs_replan', 'summary': '<why>', 'issues': [...]}}.",
             "Use failed with an instance_failure issue for transient model/tool mistakes.",
         ]
         runtime_retry_instruction = task.metadata.get("runtime_retry_instruction")
         if runtime_retry_instruction:
             instructions.insert(0, str(runtime_retry_instruction))
+        if task.metadata.get("kernel_memory"):
+            instructions.insert(
+                0,
+                (
+                    "This task has kernel_memory from previous worker attempts. Use it as "
+                    "authoritative retry context: do not replay successful operations unless "
+                    "current state proves they are missing; finish remaining work and return "
+                    "the expected artifacts."
+                ),
+            )
         payload = {
             "worker_type": self.worker_type,
             "instance": {
@@ -1536,7 +1665,7 @@ class AgenticWorkerGroupRunner:
                     "artifacts": [
                         {
                             "id": artifact_id,
-                            "content": {"evidence": [], "notes": "replace with real scoped content"},
+                            "content": self._artifact_contract(artifact_id)["artifact_shape"]["content"],
                             "kind": "worker_output",
                         }
                         for artifact_id in task.expected_outputs[:3]
@@ -1554,72 +1683,7 @@ class AgenticWorkerGroupRunner:
         return [self._artifact_contract(artifact_id) for artifact_id in task.expected_outputs]
 
     def _artifact_contract(self, artifact_id: str) -> dict[str, Any]:
-        shapes: dict[str, dict[str, Any]] = {
-            "mutation_scope": {
-                "target_paths": ["repo/relative/path"],
-                "create_paths": [],
-                "update_paths": [],
-                "delete_paths": [],
-                "move_pairs": [{"source": "old/path", "destination": "new/path"}],
-                "test_paths": [],
-                "forbidden_paths": [],
-                "forbidden_globs": [],
-                "reason": "why this is the full write boundary",
-                "max_files": 5,
-            },
-            "rollback_plan": {
-                "strategy": "how to reverse or abandon the proposed mutation safely",
-                "preimage_required": True,
-                "affected_paths": [],
-            },
-            "verification_plan": {
-                "checks": [],
-                "commands": [],
-                "expected_outcome": "what proves the work",
-            },
-            "change_design": {
-                "steps": [],
-                "target_behavior": "intended behavior after mutation",
-                "scope_notes": "why this design is bounded",
-            },
-            "fix_design": {
-                "steps": [],
-                "root_cause": "specific behavior to fix",
-                "target_behavior": "intended behavior after mutation",
-            },
-            "change_summary": {
-                "changed_paths": [],
-                "summary": "what changed",
-                "risk_notes": [],
-            },
-            "patch_diff": {
-                "paths": [],
-                "diff": "unified diff or bounded diff summary",
-            },
-            "rollback_patch": {
-                "changed_paths": [],
-                "diff": "reverse patch or rollback instructions",
-            },
-            "verification_results": {
-                "status": "passed|failed",
-                "commands": [],
-                "scope_audit": {},
-            },
-            "test_results": {
-                "status": "passed|failed",
-                "commands": [],
-                "failed_commands": [],
-            },
-        }
-        return {
-            "id": artifact_id,
-            "required": True,
-            "artifact_shape": {
-                "id": artifact_id,
-                "content": shapes.get(artifact_id, "structured evidence or result payload"),
-                "kind": "worker_output",
-            },
-        }
+        return artifact_contract(artifact_id)
 
     def _missing_expected_outputs(self, task: Task, artifacts: list[ArtifactPayload]) -> list[str]:
         produced = {
@@ -1630,40 +1694,13 @@ class AgenticWorkerGroupRunner:
         return [artifact_id for artifact_id in task.expected_outputs if artifact_id not in produced]
 
     def _artifact_quality(self, task: Task, artifacts: list[ArtifactPayload]) -> dict[str, Any]:
-        by_id = {
-            artifact.id: artifact
-            for artifact in artifacts
-            if not artifact.metadata.get("worker_returned_bare_artifact_id")
-        }
-        missing = [artifact_id for artifact_id in task.expected_outputs if artifact_id not in by_id]
-        empty = [
-            artifact_id
-            for artifact_id in task.expected_outputs
-            if artifact_id in by_id and self._artifact_content_empty(by_id[artifact_id].content)
-        ]
-        synthesized = [
-            artifact_id
-            for artifact_id in task.expected_outputs
-            if artifact_id in by_id and by_id[artifact_id].metadata.get("synthesized_after_model_budget_exhaustion")
-        ]
-        return {
-            "expected_count": len(task.expected_outputs),
-            "missing_count": len(missing),
-            "empty_count": len(empty),
-            "synthesized_count": len(synthesized),
-            "missing_artifacts": missing,
-            "empty_artifacts": empty,
-            "synthesized_artifacts": synthesized,
-        }
+        return evaluate_artifact_quality(
+            expected_outputs=list(task.expected_outputs),
+            artifacts=artifacts,
+        )
 
     def _artifact_content_empty(self, content: Any) -> bool:
-        if content is None:
-            return True
-        if isinstance(content, str):
-            return not content.strip()
-        if isinstance(content, (list, tuple, set, dict)):
-            return len(content) == 0
-        return False
+        return artifact_content_empty(content)
 
     def _dedupe_artifacts(self, artifacts: list[ArtifactPayload]) -> list[ArtifactPayload]:
         deduped: dict[str, ArtifactPayload] = {}

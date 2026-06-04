@@ -49,16 +49,26 @@ class OpenAICompatibleJSONClient:
             ],
             "response_format": self._response_format_payload(stage, schema),
             "stream": False,
+            "timeout_ms": int(self._timeout_seconds * 1000),
         }
         if self._max_tokens is not None:
-            kwargs["max_tokens"] = self._max_tokens
+            kwargs["max_completion_tokens"] = self._max_tokens
         if self._provider_sort:
-            kwargs["provider"] = {"sort": self._provider_sort}
+            kwargs["provider"] = {
+                "sort": self._provider_sort,
+                "allow_fallbacks": True,
+            }
+        if self._response_format in {"json_schema", "json_object"}:
+            kwargs["plugins"] = [{"id": "response-healing"}]
 
         try:
             response = self._client.chat.send(**kwargs)
         except Exception as exc:  # pragma: no cover - SDK/network variability
-            raise RuntimeError(f"Model request for stage {stage} failed before receiving a response.") from exc
+            detail = _sdk_error_detail(exc)
+            message = f"Model request for stage {stage} failed before receiving a response."
+            if detail:
+                message = f"{message} {detail}"
+            raise RuntimeError(message) from exc
 
         return self._extract_content(stage, response)
 
@@ -97,3 +107,14 @@ class OpenAICompatibleJSONClient:
             if combined:
                 return combined
         raise RuntimeError(f"Model response for stage {stage} returned non-text content.")
+
+
+def _sdk_error_detail(exc: Exception) -> str:
+    body = getattr(exc, "body", None)
+    if isinstance(body, str) and body.strip():
+        return f"OpenRouter error body: {body.strip()[:500]}"
+    raw_response = getattr(exc, "raw_response", None)
+    text = getattr(raw_response, "text", None)
+    if isinstance(text, str) and text.strip():
+        return f"OpenRouter error body: {text.strip()[:500]}"
+    return ""

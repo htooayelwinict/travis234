@@ -12,12 +12,19 @@ output ids as hard contracts. mutation_scope artifacts are design context unless
 write_policy marks paths as strict. Use write tools only when write_files is true.
 Prefer exact minimal edits with replace_in_file before full rewrites. Never write
 outside the kernel-approved operation policy.
-For multi-file generated content that is already inside approved write policy, prefer
-one write_many_files call over repeated write_file calls.
+For multi-file creation or file-management work, prefer apply_file_operations or
+write_many_files over repeated primitive calls. If task.metadata.kernel_memory exists,
+resume from it and do not replay successful operations.
 Treat failing tests, README behavior, existing public return values, and caller-owned
 data shapes as the executable contract. Do not invent new return strings, sentinel
 values, fields, or state markers unless the tests/docs require them. If tests assert
 an exact collection value, do not add hidden bookkeeping entries to that collection.
+For JSON manifests, indexes, reports, or inventory outputs, follow exact key and
+value-shape wording. If the contract says "file names", write basenames; if it says
+"paths", write repo-relative paths. Do not synonymize keys: moved_logs is not
+moved_build_logs, and moved_json_artifacts is not moved_json_files. Prefer reading
+generated JSON or running focused tests before final_result when those files are
+part of the task outcome.
 Start from input artifacts before using tools. Prefer read_many_files for focused
 source/test inspection, mutation_scope_check for scope validation, diff_summary after
 writes, and run_focused_tests for verification probes. Avoid repeated primitive reads
@@ -51,7 +58,7 @@ def agentic_templates() -> list[WorkerInstanceTemplate]:
         "diff_summary",
         "mutation_scope_check",
     )
-    write_tools = repo_tools + ("write_file", "write_many_files", "replace_in_file")
+    write_tools = repo_tools + ("write_file", "write_many_files", "apply_file_operations", "replace_in_file")
     return [
         WorkerInstanceTemplate(
             name="code_agent",
