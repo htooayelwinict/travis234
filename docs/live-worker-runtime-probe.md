@@ -132,6 +132,32 @@ This scenario expects:
 - `docs/workspace_manifest.json` to summarize what changed,
 - a final test run that validates resulting repository layout.
 
+## Policy Archive File Management Scenario
+
+Run the more complex policy handoff scenario to validate nested file
+classification, protected/held items, JSON/log/export routing, and exact archive
+index schema preservation:
+
+```bash
+uv run python scripts/live_worker_runtime_probe.py \
+  --worker-model qwen/qwen3.7-max \
+  --scenario file_policy_archive_reorg \
+  --repo live_worker_policy_archive_repo_$(date +%Y%m%d-%H%M%S) \
+  --matrix-poll-interval 1 \
+  --out-dir plan
+```
+
+This scenario expects:
+
+- eligible markdown policy/client notes moved into `records/policies/`,
+- JSON evidence moved into `records/evidence/`,
+- logs moved into `records/logs/`,
+- CSV exports moved into `records/exports/`,
+- files marked `hold`, `keep`, or `do_not_move` left in place,
+- `records/archive_index.json` with exact keys `moved_documents`,
+  `moved_evidence`, `moved_logs`, `moved_exports`, `held_items`, and
+  `total_moved`.
+
 ## Greenfield Calculator API Scenario
 
 Run the empty-repo creation scenario to validate discovery, runtime capability
@@ -228,6 +254,7 @@ Use precise prompts. Include:
   payment_retry
   webhook_fulfillment
   file_workspace_cleanup
+  file_policy_archive_reorg
   greenfield_calculator_api
 
 --repo

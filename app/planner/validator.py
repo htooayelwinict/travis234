@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Iterable
 
+from app.artifact_aliases import canonical_artifact_id, canonicalize_plan_artifact_ids
 from app.planner.contracts import ALLOWED_MODES, ALLOWED_WORKER_TYPES, PlannerValidationError, WRITE_SCOPE_ARTIFACTS
 from app.schemas import Envelope, Plan
 
@@ -31,9 +34,15 @@ VERIFY_EVIDENCE_ARTIFACT_SIGNALS = {
     "analysis_evidence",
 }
 MUTATION_CONTEXT_ARTIFACT_SIGNALS = {
+    "classification_report",
+    "dependency_evidence",
     "root_cause",
     "evidence",
     "fix_design",
+    "manifest_plan",
+    "manifest_update_plan",
+    "moved_items_plan",
+    "operation_plan",
     "patch_design",
     "change_design",
     "analysis_evidence",
@@ -42,6 +51,22 @@ DESIGN_VERIFICATION_ARTIFACTS = {
     "verification_plan",
     "test_plan",
 }
+VERIFY_CONTEXT_ARTIFACT_SIGNALS = (
+    VERIFY_EVIDENCE_ARTIFACT_SIGNALS
+    | MUTATION_CONTEXT_ARTIFACT_SIGNALS
+    | DESIGN_VERIFICATION_ARTIFACTS
+    | {
+        "classification",
+        "dependency",
+        "manifest",
+        "moved_items",
+        "repo_inventory",
+        "scope_verification",
+        "source_files",
+        "target_files",
+        "test_command",
+    }
+)
 PHASE_ORDER = (
     "DISCOVER",
     "ANALYZE",
@@ -61,6 +86,7 @@ PHASE_MODES: dict[str, set[str]] = {
     "VERIFY": {"verify_only"},
     "FINALIZE": {"summarize_only"},
 }
+GENERATED_PLACEHOLDER_RE = re.compile(r"\[[A-Z][A-Z0-9_]{1,}\]")
 
 
 class PlannerPlanValidator:
@@ -76,7 +102,12 @@ class PlannerPlanValidator:
         initial_artifact_ids: Iterable[str] | None = None,
     ) -> Plan:
         errors: list[str] = []
-        initial_artifacts = {artifact_id for artifact_id in (initial_artifact_ids or []) if artifact_id}
+        plan, _ = canonicalize_plan_artifact_ids(plan)
+        initial_artifacts = {
+            canonical_artifact_id(artifact_id)
+            for artifact_id in (initial_artifact_ids or [])
+            if artifact_id
+        }
 
         if plan.request_id != envelope.request_id:
             errors.append("plan.request_id must match envelope.request_id")
@@ -255,12 +286,6 @@ class PlannerPlanValidator:
                 for artifact_id in plan.steps[index].input_artifacts
                 if self._artifact_matches(artifact_id, tuple(WRITE_SCOPE_ARTIFACT_SIGNALS))
             }
-            mutation_evidence_artifacts = {
-                artifact_id
-                for index in write_step_indexes
-                for artifact_id in plan.steps[index].input_artifacts
-                if self._artifact_matches(artifact_id, ("evidence", "root_cause"))
-            }
             verify_input_artifacts = {
                 artifact_id for step in post_mutation_verify_steps for artifact_id in step.input_artifacts
             }
@@ -271,11 +296,11 @@ class PlannerPlanValidator:
                 if not (verify_input_artifacts & WRITE_SCOPE_ARTIFACT_SIGNALS):
                     errors.append("verification after mutation must consume a write-scope artifact")
                 if not any(
-                    artifact_id in VERIFY_EVIDENCE_ARTIFACT_SIGNALS
-                    or self._artifact_matches(artifact_id, ("evidence", "root_cause"))
+                    artifact_id in VERIFY_CONTEXT_ARTIFACT_SIGNALS
+                    or self._artifact_matches(artifact_id, tuple(VERIFY_CONTEXT_ARTIFACT_SIGNALS))
                     for artifact_id in verify_input_artifacts
                 ):
-                    errors.append("verification after mutation must consume evidence/root-cause artifacts")
+                    errors.append("verification after mutation must consume evidence/design context artifacts")
 
             if mutation_output_artifacts and not (verify_input_artifacts & mutation_output_artifacts):
                 errors.append("verification after mutation must consume mutation output artifacts")
@@ -291,6 +316,8 @@ class PlannerPlanValidator:
 
         if phase_contract_required:
             self._validate_phase_progression(envelope=envelope, plan=plan, errors=errors)
+
+        self._validate_literal_contract(envelope=envelope, plan=plan, errors=errors)
 
         if errors:
             raise PlannerValidationError(errors)
@@ -359,7 +386,7 @@ class PlannerPlanValidator:
             if self._artifact_matches(artifact_id, tuple(MUTATION_CONTEXT_ARTIFACT_SIGNALS))
         ]
         if not context_inputs:
-            errors.append(f"step {step.step_id} phase MUTATE must consume root-cause, evidence, or fix-design context")
+            errors.append(f"step {step.step_id} phase MUTATE must consume evidence/design context")
 
         write_scope_refs = step.permissions.get("write_paths_from_artifacts")
         if not isinstance(write_scope_refs, list) or not (set(write_scope_refs) & WRITE_SCOPE_ARTIFACT_SIGNALS):
@@ -457,3 +484,68 @@ class PlannerPlanValidator:
 
     def _normalize(self, value: str) -> str:
         return value.lower().replace("-", "_").replace(" ", "_")
+
+    def _validate_literal_contract(self, *, envelope: Envelope, plan: Plan, errors: list[str]) -> None:
+        plan_payload = plan.model_dump(mode="json", exclude={"metadata"})
+        plan_text = json.dumps(plan_payload, sort_keys=True)
+        raw_placeholders = set(GENERATED_PLACEHOLDER_RE.findall(envelope.raw_input or ""))
+        generated_placeholders = sorted(
+            placeholder
+            for placeholder in set(GENERATED_PLACEHOLDER_RE.findall(plan_text))
+            if placeholder not in raw_placeholders and placeholder != "[REDACTED]"
+        )
+        if generated_placeholders:
+            errors.append(
+                "plan must not introduce generated placeholders not present in user input: "
+                + ", ".join(generated_placeholders)
+            )
+
+        json_literals = [
+            literal.value
+            for literal in envelope.literal_contract
+            if literal.kind == "json_key" and literal.value
+        ]
+        if not json_literals or not self._requires_literal_json_key_coverage(envelope=envelope, plan=plan):
+            return
+
+        coverage_text = "\n".join(
+            [
+                plan.objective,
+                plan.strategy,
+                *(plan.global_invariants or []),
+                *(plan.success_criteria or []),
+                *[
+                    " ".join(
+                        [
+                            step.instruction,
+                            *step.input_artifacts,
+                            *step.output_artifacts,
+                        ]
+                    )
+                    for step in plan.steps
+                ],
+            ]
+        )
+        missing = sorted({literal for literal in json_literals if literal not in coverage_text})
+        if missing:
+            errors.append(
+                "plan must preserve exact literal_contract JSON keys in relevant instructions or success criteria: "
+                + ", ".join(missing)
+            )
+
+    def _requires_literal_json_key_coverage(self, *, envelope: Envelope, plan: Plan) -> bool:
+        if not any(step.phase == "MUTATE" or step.permissions.write_files for step in plan.steps):
+            return False
+        text = " ".join(
+            [
+                envelope.raw_input,
+                envelope.normalized_input,
+                envelope.user_goal or "",
+                " ".join(envelope.constraints),
+                " ".join(envelope.context_needed),
+                plan.objective,
+                plan.strategy,
+                " ".join(plan.success_criteria),
+            ]
+        ).lower()
+        return any(signal in text for signal in ("manifest", "json", "report", "inventory", "index", "schema"))

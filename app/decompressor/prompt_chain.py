@@ -16,7 +16,7 @@ from pydantic import ValidationError
 from app.decompressor.canonicalize import canonicalize_envelope
 from app.decompressor.contracts import DecompressedEnvelope, PromptChainModelClient
 from app.decompressor.redaction import redact_secrets
-from app.schemas import Envelope
+from app.schemas import Envelope, extract_literal_contract
 
 
 _DECOMPRESSED_ENVELOPE_SCHEMA = DecompressedEnvelope.model_json_schema()
@@ -39,9 +39,10 @@ REQUIRED FIELDS - populate all of these:
 - confidence: 0.0-1.0 confidence in decomposition
 - ambiguity: uncertainties or missing facts as strings
 - assumptions: safe assumptions only, never assert unverified causes or availability
+- literal_contract: exact user literals such as JSON keys, paths, filenames, and symbols that later stages must preserve
 
 If underspecified or pronoun-only, use ambiguous_* input_type, lower confidence, and explain ambiguity in ambiguity field.
-Preserve concrete names as artifacts. Do not invent repo facts, dependency availability, API shapes, or root causes.
+Preserve concrete names as artifacts. Preserve every exact_literal_contract.value exactly; never replace it with placeholders like [ADDRESS], [FIELD], [PATH], or synonyms. Do not invent repo facts, dependency availability, API shapes, or root causes.
 
 Redacted user input:
 """
@@ -118,7 +119,15 @@ class LLMPromptChainDecompressor:
             return DecompressedEnvelope.model_validate_json(repair_response), True
 
     def _prompt(self, redacted_input: str) -> str:
-        return f"{_PROMPT_PREFIX}{redacted_input}"
+        literal_contract = [
+            literal.model_dump(mode="json")
+            for literal in extract_literal_contract(redacted_input)
+        ]
+        return (
+            f"{_PROMPT_PREFIX}{redacted_input}\n\n"
+            "exact_literal_contract:\n"
+            f"{json.dumps(literal_contract, sort_keys=True)}"
+        )
 
     def _repair_prompt(
         self,

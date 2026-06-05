@@ -6,6 +6,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from app.artifact_aliases import canonical_artifact_id, canonicalize_artifact_ids
 from app.schemas import (
     ArtifactPayload,
     Envelope,
@@ -53,6 +54,8 @@ class TaskCompiler:
         plan: Plan | None = None,
         envelope: Envelope | None = None,
     ) -> Task:
+        step, artifact_aliases = _canonicalize_step_artifact_ids(step)
+        artifact_store = _canonicalize_artifact_store(artifact_store)
         input_artifacts: list[ArtifactPayload] = []
         missing_artifacts: list[str] = []
         for artifact_id in step.input_artifacts:
@@ -68,6 +71,8 @@ class TaskCompiler:
             )
 
         task_metadata: dict[str, object] = {}
+        if artifact_aliases:
+            task_metadata["canonical_artifact_aliases"] = artifact_aliases
         if step.phase is not None:
             task_metadata["phase"] = step.phase
         if step.mode is not None:
@@ -91,6 +96,7 @@ class TaskCompiler:
                 }
             )
         if envelope is not None:
+            literal_contract = [literal.model_dump(mode="json") for literal in envelope.literal_contract]
             task_metadata.update(
                 {
                     "normalized_input": envelope.normalized_input,
@@ -102,6 +108,14 @@ class TaskCompiler:
                     "context_needed": envelope.context_needed,
                     "ambiguity": envelope.ambiguity,
                     "assumptions": envelope.assumptions,
+                    "literal_contract": literal_contract,
+                    "required_json_keys": sorted(
+                        {
+                            literal["value"]
+                            for literal in literal_contract
+                            if literal.get("kind") == "json_key" and literal.get("value")
+                        }
+                    ),
                 }
             )
 
@@ -356,6 +370,52 @@ def _bounded_mutation_scope_artifact_ids(step: PlanStep, input_artifacts: list[A
             artifact_ids.append(artifact.id)
             seen.add(artifact.id)
     return artifact_ids
+
+
+def _canonicalize_step_artifact_ids(step: PlanStep) -> tuple[PlanStep, list[dict[str, Any]]]:
+    input_artifacts, input_changes = canonicalize_artifact_ids(step.input_artifacts)
+    output_artifacts, output_changes = canonicalize_artifact_ids(step.output_artifacts)
+    write_scope_refs, write_scope_changes = canonicalize_artifact_ids(
+        list(step.permissions.write_paths_from_artifacts)
+    )
+    permissions = step.permissions
+    if write_scope_changes:
+        permissions = permissions.model_copy(update={"write_paths_from_artifacts": write_scope_refs})
+
+    changes: list[dict[str, Any]] = []
+    if input_changes:
+        changes.append({"field": "input_artifacts", "changes": input_changes})
+    if output_changes:
+        changes.append({"field": "output_artifacts", "changes": output_changes})
+    if write_scope_changes:
+        changes.append({"field": "permissions.write_paths_from_artifacts", "changes": write_scope_changes})
+
+    return (
+        step.model_copy(
+            update={
+                "input_artifacts": input_artifacts,
+                "output_artifacts": output_artifacts,
+                "permissions": permissions,
+            }
+        ),
+        changes,
+    )
+
+
+def _canonicalize_artifact_store(
+    artifact_store: dict[str, ArtifactPayload],
+) -> dict[str, ArtifactPayload]:
+    canonical_store: dict[str, ArtifactPayload] = {}
+    for artifact_id, artifact in artifact_store.items():
+        canonical_id = canonical_artifact_id(artifact.id or artifact_id)
+        if canonical_id == artifact.id:
+            canonical_store[canonical_id] = artifact
+            continue
+        metadata = dict(artifact.metadata)
+        metadata.setdefault("original_artifact_id", artifact.id)
+        metadata["canonical_artifact_id"] = canonical_id
+        canonical_store[canonical_id] = artifact.model_copy(update={"id": canonical_id, "metadata": metadata})
+    return canonical_store
 
 
 def _json_safe_validation_errors(exc: ValidationError) -> list[dict[str, object]]:

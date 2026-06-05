@@ -12,9 +12,14 @@ output ids as hard contracts. mutation_scope artifacts are design context unless
 write_policy marks paths as strict. Use write tools only when write_files is true.
 Prefer exact minimal edits with replace_in_file before full rewrites. Never write
 outside the kernel-approved operation policy.
-For multi-file creation or file-management work, prefer apply_file_operations or
-write_many_files over repeated primitive calls. If task.metadata.kernel_memory exists,
+For multi-file creation or file-management work, prefer apply_file_operations,
+write_json_manifest, or write_many_files over repeated primitive calls. If task.metadata.kernel_memory exists,
 resume from it and do not replay successful operations.
+For apply_file_operations, use an operations array with entries like
+{"action":"move","source":"old","destination":"new"},
+{"action":"write","path":"file","content":"..."}, or
+{"action":"create_directory","path":"dir"}. Do not invent synonym tool names such
+as file_read, move_files, or create_dirs.
 Treat failing tests, README behavior, existing public return values, and caller-owned
 data shapes as the executable contract. Do not invent new return strings, sentinel
 values, fields, or state markers unless the tests/docs require them. If tests assert
@@ -22,9 +27,16 @@ an exact collection value, do not add hidden bookkeeping entries to that collect
 For JSON manifests, indexes, reports, or inventory outputs, follow exact key and
 value-shape wording. If the contract says "file names", write basenames; if it says
 "paths", write repo-relative paths. Do not synonymize keys: moved_logs is not
-moved_build_logs, and moved_json_artifacts is not moved_json_files. Prefer reading
-generated JSON or running focused tests before final_result when those files are
-part of the task outcome.
+moved_build_logs, moved_evidence is not moved_json_artifacts, and moved_json_artifacts
+is not moved_json_files. Use task.metadata.required_json_keys as exact required
+manifest keys when present. When using write_json_manifest, pass those keys as
+required_keys, choose the exact total_* key as total_key, and count only moved-item
+arrays; exclude held/skipped/ignored/preserved/excluded arrays from totals. Use
+write_json_manifest first for JSON manifest/index/inventory outputs, then read the
+generated JSON or run focused tests before final_result when those files are part of
+the task outcome. Use expected output artifact ids exactly after canonicalization;
+prefer manifest_update_record, moved_items_record, manifest_validation, and
+manifest_file over near-aliases such as manifest_update_result or moved_item_records.
 Start from input artifacts before using tools. Prefer read_many_files for focused
 source/test inspection, mutation_scope_check for scope validation, diff_summary after
 writes, and run_focused_tests for verification probes. Avoid repeated primitive reads
@@ -37,6 +49,8 @@ For MUTATE/bounded_mutation steps, use task.metadata.write_policy as the final
 operation policy. If a write tool returns a denial observation, narrow, split, or
 correct the tool call and continue the same task without restarting analysis. If
 actual writes occur, return change_summary, rollback_patch, and patch_diff artifacts.
+Never return completed final_result for a mutation until completed write-tool
+observations or kernel_memory prove the change happened.
 If target files drift or evidence contradicts the plan, return blocked or
 needs_replan with a specific issue based on whether the failure is kernel/tool scope
 or planner-level.
@@ -58,7 +72,7 @@ def agentic_templates() -> list[WorkerInstanceTemplate]:
         "diff_summary",
         "mutation_scope_check",
     )
-    write_tools = repo_tools + ("write_file", "write_many_files", "apply_file_operations", "replace_in_file")
+    write_tools = repo_tools + ("write_file", "write_many_files", "write_json_manifest", "apply_file_operations", "replace_in_file")
     return [
         WorkerInstanceTemplate(
             name="code_agent",

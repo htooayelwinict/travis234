@@ -27,7 +27,18 @@ its source unless the prompt explicitly says to leave it in place. Do not leave 
 discovered JSON/log candidate at its source path just because the destination folder
 is ambiguous; either infer the destination from prompt/tests/artifacts or return a
 plan_failure naming the missing destination rule. Preserve exact manifest key names
-such as moved_logs and moved_json_artifacts; never rename them to synonyms.
+such as moved_logs, moved_evidence, and moved_json_artifacts; never rename them to
+synonyms. If task.metadata.required_json_keys is present, carry those exact keys into
+moved_items_record, manifest_file, change_design, and verification_plan artifacts so
+mutation workers do not fall back to generic manifest names.
+For ANALYZE/observe_only moved_items_record, satisfy expected_output_contract first:
+include canonical analysis fields moved_documents, moved_logs, moved_json_artifacts,
+and total_artifacts when that shape is requested. If literal manifest keys differ
+such as moved_evidence or total_moved, include them additionally in
+literal_manifest_payload or manifest_requirements, but do not omit the canonical
+fields. Never put held/keep/do_not_move files in moved_* arrays; put them only in
+held_items or excluded evidence. total_artifacts must count moved arrays only and
+must exclude held_items, skipped, ignored, preserved, excluded, source code, and tests.
 Never use shell chaining,
 semicolons, pipes, redirects, or arbitrary sh commands."""
 

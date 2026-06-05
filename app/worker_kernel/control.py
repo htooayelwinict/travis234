@@ -542,6 +542,26 @@ class WorkerLoopController:
                 required_first_action="Inspect write_policy and previous denial metadata before any write tool call.",
                 prohibited_actions=["writing outside strict_allowed_paths", "oversized write_many_files batches"],
             )
+        if reason_code == "mutation_completed_without_write":
+            return RetryInstruction(
+                cause=reason_code,
+                next_instance_instruction=(
+                    "This is a replacement mutation instance after a previous instance returned "
+                    "completed without any successful write-tool evidence. Treat final_result as "
+                    "forbidden until a permitted write tool observation or kernel_memory proves the change."
+                ),
+                required_first_action=(
+                    "Inspect task.metadata.write_policy and current filesystem state, then call a permitted "
+                    "write tool for the required change before final_result."
+                ),
+                prohibited_actions=[
+                    "returning final_result before a successful write observation",
+                    "claiming a file change from reasoning alone",
+                ],
+                output_contract_reminder=(
+                    "Return expected artifacts only after tool evidence proves the mutation happened."
+                ),
+            )
         if reason_code == "mutation_completed_missing_required_writes":
             missing_paths = self._missing_required_write_paths(result=result, issues=issues)
             path_text = ", ".join(missing_paths) if missing_paths else "the missing required write paths"
@@ -675,6 +695,8 @@ class WorkerLoopController:
             "could not execute verification",
             "could not be completed",
             "did not execute",
+            "empty_worker_decision",
+            "neither tool_calls nor final_result",
             "no verification command",
             "not executed",
             "test execution",
@@ -711,6 +733,9 @@ class WorkerLoopController:
             if isinstance(content, dict):
                 if content.get("tool_name") in command_tools:
                     return True
+                tool_observation = content.get("tool_observation")
+                if isinstance(tool_observation, dict) and tool_observation.get("tool_name") in command_tools:
+                    return True
                 observation = content.get("observation")
                 if isinstance(observation, dict) and content.get("tool_name") in command_tools:
                     return True
@@ -719,8 +744,10 @@ class WorkerLoopController:
                     for item in observations:
                         if isinstance(item, dict) and item.get("tool_name") in command_tools:
                             return True
+                if self._command_payload_has_execution_evidence(content):
+                    return True
                 commands = content.get("commands")
-                if isinstance(commands, list) and commands:
+                if isinstance(commands, list) and self._commands_have_execution_evidence(commands):
                     return True
         for group_result in result.metadata.get("worker_group_results") or []:
             if not isinstance(group_result, dict):
@@ -730,6 +757,64 @@ class WorkerLoopController:
             except Exception:
                 continue
             if self.has_verification_command_evidence(nested):
+                return True
+        return False
+
+    def has_failed_verification_command_evidence(self, result: Result) -> bool:
+        command_tools = {"run_readonly_command", "run_focused_tests", "run_project_tests"}
+        for artifact in result.artifacts:
+            tool_name = artifact.metadata.get("tool_name")
+            content = artifact.content
+            if isinstance(content, dict):
+                if tool_name in command_tools and self._payload_reports_failure(content):
+                    return True
+                if content.get("tool_name") in command_tools and self._payload_reports_failure(content):
+                    return True
+                tool_observation = content.get("tool_observation")
+                if (
+                    isinstance(tool_observation, dict)
+                    and tool_observation.get("tool_name") in command_tools
+                    and self._payload_reports_failure(tool_observation)
+                ):
+                    return True
+                observation = content.get("observation")
+                if (
+                    isinstance(observation, dict)
+                    and content.get("tool_name") in command_tools
+                    and self._payload_reports_failure(observation)
+                ):
+                    return True
+                observations = content.get("observations")
+                if isinstance(observations, list):
+                    for item in observations:
+                        if (
+                            isinstance(item, dict)
+                            and item.get("tool_name") in command_tools
+                            and self._payload_reports_failure(item)
+                        ):
+                            return True
+                commands = content.get("commands")
+                if isinstance(commands, list) and self._payload_reports_failure(commands):
+                    return True
+        for group_result in result.metadata.get("worker_group_results") or []:
+            if not isinstance(group_result, dict):
+                continue
+            try:
+                nested = Result.model_validate(group_result)
+            except Exception:
+                continue
+            if self.has_failed_verification_command_evidence(nested):
+                return True
+        return False
+
+    def _command_payload_has_execution_evidence(self, payload: dict[str, Any]) -> bool:
+        if not payload.get("command"):
+            return False
+        return any(key in payload for key in ("returncode", "stdout", "stderr", "status", "passed", "failed"))
+
+    def _commands_have_execution_evidence(self, commands: list[Any]) -> bool:
+        for command in commands:
+            if isinstance(command, dict) and self._command_payload_has_execution_evidence(command):
                 return True
         return False
 

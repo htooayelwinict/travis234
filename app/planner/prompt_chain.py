@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from app.artifact_aliases import canonical_artifact_catalog, canonical_artifact_id, canonicalize_plan_artifact_ids
 from app.planner.contracts import ALLOWED_MODES, PlannerModelClient, PlannerValidationError, WORKER_CATALOG, WRITE_SCOPE_ARTIFACTS
 from app.planner.validator import PlannerPlanValidator
 from app.schemas import Envelope, Plan, ReplanRequest
@@ -311,6 +312,7 @@ class LLMPlanCompiler:
         initial_artifact_ids: list[str] | None = None,
     ) -> tuple[Plan, bool]:
         plan = Plan.model_validate_json(response)
+        plan, _ = canonicalize_plan_artifact_ids(plan)
         normalized_plan, budget_auto_aligned = self._normalize_budget(plan)
         validated = self._validator.validate(
             envelope,
@@ -341,6 +343,9 @@ class LLMPlanCompiler:
                 "If any step has phase/mode/task_id, set top-level plan.global_invariants to a non-empty list of explicit safety invariants.",
                 "Every generated step.instruction must start with a compact instruction context block using exactly these labels in this order: Known facts:, Unknowns:, Do now:, Do not do:, Output:.",
                 "Keep instruction context blocks short but self-contained so a worker can act safely without hidden envelope context.",
+                "Treat envelope.literal_contract as authoritative exact text. Copy exact JSON keys, paths, filenames, symbols, and artifact ids into relevant step instructions and success criteria.",
+                "Use artifact_contract_catalog canonical ids for known runtime artifacts; do not invent near-aliases such as manifest_update_result or moved_item_records in new plans.",
+                "Never introduce generated placeholders like [ADDRESS], [FIELD], or [PATH] unless that exact placeholder appeared in the user's raw input.",
                 "For direct_support instructions, include user-visible facts, missing details, immediate guidance/clarifying action, no-tool/no-file boundaries, and direct_guidance output.",
                 "For mutation-sensitive instructions, include mutation_scope, rollback_plan, evidence/design artifacts, no writes outside scope, and required change/rollback/verification outputs where relevant.",
                 "For greenfield project scaffolding, bulk file creation, file moves, deletes, manifests, README/Dockerfile/config/test creation, or workspace cleanup, prefer filesystem_worker for the MUTATE step.",
@@ -365,7 +370,7 @@ class LLMPlanCompiler:
                 "Any write_files=true step must restrict writes with permissions.write_paths or permissions.write_paths_from_artifacts.",
                 "When using write_paths_from_artifacts, reference only DESIGN-produced write-scope artifacts named mutation_scope, allowed_write_paths, writable_targets, or patch_scope.",
                 "MUTATE must use mode bounded_mutation, set read_files=true and write_files=true, use code_worker or filesystem_worker, consume mutation_scope and rollback_plan, and scope writes with permissions.write_paths_from_artifacts.",
-                "MUTATE must also consume root_cause_evidence, evidence_artifacts, analysis_evidence, fix_design, patch_design, or change_design so the patch is tied to diagnosis/design context.",
+                "MUTATE must also consume evidence/design context such as root_cause_evidence, evidence_artifacts, classification_report, manifest_update_plan, moved_items_plan, analysis_evidence, fix_design, patch_design, or change_design.",
                 "MUTATE must output change_summary and should also output rollback_patch, rollback_artifact, or revert_instructions when a rollback patch is available.",
                 "For phase-aware plans, every step.permissions must explicitly include boolean read_files, write_files, run_commands, and web_research keys.",
                 "For high-complexity mutating plans, split target discovery, risk/evidence collection, and change design into separate pre-mutation steps when those contexts are required by the envelope.",
@@ -374,8 +379,8 @@ class LLMPlanCompiler:
                 "If envelope context/constraints require dependency verification, produce dependency artifacts before mutation and pass them into mutation.",
                 "If dependency verification fails or is inconclusive, stop or replan before mutation.",
                 "If envelope risks/constraints request external research, web comparisons, or source discovery, include a RESEARCH step using web_research_worker with write_files=false and explicit source/evidence output artifacts.",
-                "Verification after mutation must consume change_summary, a write-scope artifact, and evidence/root-cause artifacts.",
-                "Verification after mutation should check root-cause match, scope containment, focused check results, and rollback availability.",
+                "Verification after mutation must consume change_summary, a write-scope artifact, and evidence/design context artifacts such as classification_report, manifest_update_record, moved_items_record, verification_plan, analysis_evidence, or root_cause_evidence.",
+                "Verification after mutation should check intent/design match, scope containment, focused check results, and rollback availability.",
                 "Verification after mutation must output verification/test artifacts.",
                 "FINALIZE steps must output a final_report, final_summary, or equivalent final artifact.",
                 "For phase-aware mutating plans, include FINALIZE after VERIFY.",
@@ -405,7 +410,7 @@ class LLMPlanCompiler:
                 "artifact_names_are_not_paths": "Envelope artifacts are semantic hints unless explicitly resolved into file paths by discovery.",
                 "rollback_before_write": "DESIGN must produce rollback_plan before mutation, and MUTATE must consume it.",
                 "rollback_required": "Write steps must produce change_summary and rollback/revert artifacts when available.",
-                "verification_context": "VERIFY must consume change_summary, write scope, and evidence/root-cause artifacts for mutation plans.",
+                "verification_context": "VERIFY must consume change_summary, write scope, and evidence/design context artifacts for mutation plans.",
                 "low_confidence": "Low confidence or high ambiguity should favor observe-first/discovery-first sequencing.",
                 "single_responsibility_steps": "Avoid overloaded worker steps that mix discovery, analysis, design, mutation, and verification.",
             },
@@ -448,7 +453,9 @@ class LLMPlanCompiler:
                 "FINALIZE": {"default_mode": "summarize_only", "worker_types": ["verify_worker", "direct_worker", "research_worker"]},
             },
             "worker_catalog": WORKER_CATALOG,
+            "artifact_contract_catalog": canonical_artifact_catalog(),
             "envelope": envelope.model_dump(mode="json"),
+            "literal_contract": envelope.model_dump(mode="json").get("literal_contract", []),
             "plan_schema": schema,
         }
         return json.dumps(payload, sort_keys=True)
@@ -476,6 +483,9 @@ class LLMPlanCompiler:
                 "Map phases to modes exactly: DISCOVER/ANALYZE/RESEARCH=observe_only, DESIGN=plan_only, MUTATE=bounded_mutation, VERIFY=verify_only, FINALIZE=summarize_only.",
                 "Repair every missing, weak, or non-leading instruction context block so each step.instruction starts with exactly these labels in order: Known facts:, Unknowns:, Do now:, Do not do:, Output:.",
                 "When repairing instruction context blocks, preserve valid plan shape while adding essential facts, unknowns, action, prohibitions, and expected output artifacts.",
+                "Treat envelope.literal_contract as authoritative exact text. Preserve exact JSON keys, paths, filenames, symbols, and artifact ids in relevant instructions and success criteria.",
+                "Use artifact_contract_catalog canonical ids for known runtime artifacts; repair near-aliases such as manifest_update_result to manifest_update_record and moved_item_records to moved_items_record.",
+                "Remove generated placeholders like [ADDRESS], [FIELD], or [PATH] unless that exact placeholder appeared in the user's raw input.",
                 "For mutation-sensitive repaired instructions, mention mutation_scope, rollback_plan, evidence/design context, no writes outside scope, and change/rollback/verification outputs where relevant.",
                 "For greenfield scaffolding, batch file creation, file moves/deletes, manifests, README/Dockerfile/config/test creation, or workspace cleanup, prefer filesystem_worker for MUTATE.",
                 "For multi-file scaffolding or workspace cleanup, repair toward filesystem_worker with batch tools such as write_many_files rather than repeated primitive writes.",
@@ -498,10 +508,10 @@ class LLMPlanCompiler:
                 "Ensure DESIGN outputs mutation_scope, rollback_plan, and verification_plan or test_plan before mutation, and MUTATE consumes needed design/evidence context.",
                 "Ensure write_paths_from_artifacts references only DESIGN-produced write-scope artifacts, not broad DISCOVER artifacts.",
                 "Ensure MUTATE sets permissions.read_files=true and permissions.write_files=true and uses code_worker or filesystem_worker.",
-                "Ensure MUTATE consumes root_cause_evidence, evidence_artifacts, analysis_evidence, fix_design, patch_design, or change_design.",
+                "Ensure MUTATE consumes evidence/design context such as root_cause_evidence, evidence_artifacts, classification_report, manifest_update_plan, moved_items_plan, analysis_evidence, fix_design, patch_design, or change_design.",
                 "Ensure MUTATE outputs change_summary and rollback_patch, rollback_artifact, or revert_instructions when available.",
-                "Ensure VERIFY consumes change_summary, a write-scope artifact, and evidence/root-cause artifacts.",
-                "Ensure VERIFY checks root-cause match, scope containment, focused check results, and rollback availability.",
+                "Ensure VERIFY consumes change_summary, a write-scope artifact, and evidence/design context artifacts such as classification_report, manifest_update_record, moved_items_record, verification_plan, analysis_evidence, or root_cause_evidence.",
+                "Ensure VERIFY checks intent/design match, scope containment, focused check results, and rollback availability.",
                 "Ensure FINALIZE outputs a final_report, final_summary, or equivalent final artifact.",
                 "For high-complexity mutation plans, split dependency discovery and evidence collection into separate pre-mutation steps.",
                 "Ensure mutation consumes required evidence and dependency artifacts when requested by envelope context/constraints.",
@@ -513,11 +523,13 @@ class LLMPlanCompiler:
             "validation_errors": validation_errors,
             "previous_response": draft_response[:8000],
             "envelope": envelope.model_dump(mode="json"),
+            "literal_contract": envelope.model_dump(mode="json").get("literal_contract", []),
             "allowed_modes": ALLOWED_MODES,
             "write_scope_artifacts": WRITE_SCOPE_ARTIFACTS,
             "direct_support_archetype": "Use direct_support_plan_template exactly.",
             "direct_support_plan_template": _direct_support_plan_template(),
             "worker_catalog": WORKER_CATALOG,
+            "artifact_contract_catalog": canonical_artifact_catalog(),
             "instruction_context_block": _instruction_context_block(repair=True),
             "plan_schema": schema,
         }
@@ -546,6 +558,9 @@ class LLMPlanCompiler:
                 "Use canonical phases: DISCOVER, ANALYZE, RESEARCH, DESIGN, MUTATE, VERIFY, FINALIZE.",
                 "Use allowed_modes exactly: DISCOVER/ANALYZE/RESEARCH=observe_only, DESIGN=plan_only, MUTATE=bounded_mutation, VERIFY=verify_only, FINALIZE=summarize_only.",
                 "Every step.instruction must start with labels in this order: Known facts:, Unknowns:, Do now:, Do not do:, Output:.",
+                "Treat envelope.literal_contract as authoritative exact text. Preserve exact JSON keys, paths, filenames, symbols, and artifact ids in relevant instructions and success criteria.",
+                "Use artifact_contract_catalog canonical ids for known runtime artifacts; do not invent near-aliases such as manifest_update_result or moved_item_records.",
+                "Never introduce generated placeholders like [ADDRESS], [FIELD], or [PATH] unless that exact placeholder appeared in the user's raw input.",
                 "Plan around the failed step and reason; reduce repeated work only if the new plan remains self-contained.",
                 "Treat replan_request.completed_step_ids as authoritative execution history for which previous steps completed successfully.",
                 "Do not include replan_request.failed_step_id in completed work unless it also appears in completed_step_ids.",
@@ -557,11 +572,12 @@ class LLMPlanCompiler:
                 "For any mutation plan, DESIGN must output mutation_scope, rollback_plan, and verification_plan or test_plan before MUTATE.",
                 "MUTATE must use code_worker or filesystem_worker, consume mutation_scope, rollback_plan, and evidence/design context, must scope writes with write_paths_from_artifacts, and must output change_summary plus rollback/revert artifact.",
                 "For multi-file scaffolding or workspace cleanup, prefer filesystem_worker and batch write tools such as write_many_files.",
-                "Any write_files=true step must be followed by VERIFY, and VERIFY must consume change_summary, write scope, and evidence/root-cause context.",
+                "Any write_files=true step must be followed by VERIFY, and VERIFY must consume change_summary, write scope, and evidence/design context.",
                 "Include FINALIZE after VERIFY for mutating phase-aware plans.",
                 "Plan budget must cover all step max_tool_calls/max_model_calls and worker count.",
             ],
             "envelope": envelope.model_dump(mode="json"),
+            "literal_contract": envelope.model_dump(mode="json").get("literal_contract", []),
             "current_plan": current_plan.model_dump(mode="json"),
             "replan_request": replan_request.model_dump(mode="json"),
             "carryover_artifact_ids": self._carryover_artifact_ids(replan_request),
@@ -569,6 +585,7 @@ class LLMPlanCompiler:
             "allowed_modes": ALLOWED_MODES,
             "write_scope_artifacts": WRITE_SCOPE_ARTIFACTS,
             "worker_catalog": WORKER_CATALOG,
+            "artifact_contract_catalog": canonical_artifact_catalog(),
             "instruction_context_block": _instruction_context_block(),
             "plan_schema": schema,
         }
@@ -595,6 +612,8 @@ class LLMPlanCompiler:
                 "Use only worker types in worker_catalog.",
                 "Ensure phase/mode/task_id/execution_pattern/global_invariants are populated for phase-aware plans.",
                 "Ensure every step.permissions includes boolean read_files/write_files/run_commands/web_research.",
+                "Preserve envelope.literal_contract exact JSON keys, paths, filenames, symbols, and artifact ids; remove generated placeholders not present in raw input.",
+                "Use artifact_contract_catalog canonical ids for known runtime artifacts; repair near-aliases such as manifest_update_result to manifest_update_record and moved_item_records to moved_items_record.",
                 "If any step permission read_files, write_files, run_commands, or web_research is true, set that step.max_tool_calls to a positive integer.",
                 "Treat replan_request.completed_step_ids as the authoritative list of previous steps that completed successfully.",
                 "Ensure budget covers step totals and includes max_tool_calls, max_model_calls, max_workers, and max_retries.",
@@ -605,6 +624,7 @@ class LLMPlanCompiler:
             "validation_errors": validation_errors,
             "previous_response": draft_response[:8000],
             "envelope": envelope.model_dump(mode="json"),
+            "literal_contract": envelope.model_dump(mode="json").get("literal_contract", []),
             "current_plan": current_plan.model_dump(mode="json"),
             "replan_request": replan_request.model_dump(mode="json"),
             "carryover_artifact_ids": self._carryover_artifact_ids(replan_request),
@@ -612,13 +632,14 @@ class LLMPlanCompiler:
             "allowed_modes": ALLOWED_MODES,
             "write_scope_artifacts": WRITE_SCOPE_ARTIFACTS,
             "worker_catalog": WORKER_CATALOG,
+            "artifact_contract_catalog": canonical_artifact_catalog(),
             "instruction_context_block": _instruction_context_block(repair=True),
             "plan_schema": schema,
         }
         return json.dumps(payload, sort_keys=True)
 
     def _carryover_artifact_ids(self, replan_request: ReplanRequest) -> list[str]:
-        return sorted({artifact.id for artifact in replan_request.carryover_artifacts})
+        return sorted({canonical_artifact_id(artifact.id) for artifact in replan_request.carryover_artifacts})
 
     def _artifact_cards(self, artifacts: list[Any]) -> list[dict[str, Any]]:
         cards = []
@@ -630,7 +651,7 @@ class LLMPlanCompiler:
                 preview = json.dumps(content, sort_keys=True, default=str)[:500]
             cards.append(
                 {
-                    "id": artifact.id,
+                    "id": canonical_artifact_id(artifact.id),
                     "kind": artifact.kind,
                     "producer": artifact.producer,
                     "step_id": artifact.step_id,

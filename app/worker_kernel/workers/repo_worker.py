@@ -12,7 +12,9 @@ calls possible. Prefer one repo_snapshot call before primitive search. Use file_
 or text_search only when repo_snapshot does not expose enough evidence. Avoid reading
 large files in this instance unless there is no reader instance left. Produce candidate
 path artifacts with evidence from tool observations. Tool paths are relative to the
-already-mounted repository root; use "." for whole-repo inventory. If kernel_memory is
+already-mounted repository root; use "." for whole-repo inventory. Use exact tool names:
+read_file, read_many_files, file_search, text_search, repo_snapshot. Do not invent
+synonyms such as file_read, batch_read, grep, or ls. If kernel_memory is
 present, use it to avoid repeating failed discovery. In ANALYZE/observe_only mode,
 produce expected artifacts from available evidence; do not ask for mutation permission.
 Never mutate files. For file-management tasks, preserve exact user/test categories:
@@ -39,7 +41,9 @@ structured, evidence-backed, and useful to downstream analyze/design workers. If
 observations are insufficient, return needs_replan with precise missing evidence. Do
 not request tools; synthesize from artifacts and kernel_memory first. For file
 management, emit exact source paths, intended destination paths when inferable, and
-manifest/report key names as structured fields."""
+manifest/report key names as structured fields. Do not return generic completed
+summaries; include the concrete files, categories, and evidence that justify each
+expected artifact."""
 
 
 def agentic_templates() -> list[WorkerInstanceTemplate]:

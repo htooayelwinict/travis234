@@ -24,6 +24,8 @@ ResultStatus = Literal[
 WorkerIssueType = Literal["instance_failure", "plan_failure", "kernel_failure"]
 TrustLevel = Literal["unknown", "worker_reported", "verified"]
 WritePolicyMode = Literal["readonly", "advisory", "strict"]
+ExactLiteralKind = Literal["json_key", "path", "filename", "artifact_id", "symbol", "other"]
+ExactLiteralSource = Literal["user_input", "runtime_observation", "model"]
 
 
 class PermissionSet(BaseModel):
@@ -128,6 +130,23 @@ class ArtifactPayload(BaseModel):
         if value is None and key not in type(self).model_fields and key not in (self.__pydantic_extra__ or {}):
             raise KeyError(key)
         return value
+
+
+class ExactLiteral(BaseModel):
+    """Exact user/runtime literals that models must preserve without synonymizing."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    value: str
+    kind: ExactLiteralKind = "other"
+    source: ExactLiteralSource = "user_input"
+
+    @model_validator(mode="after")
+    def validate_literal(self) -> "ExactLiteral":
+        self.value = " ".join(str(self.value or "").strip().split())
+        if not self.value:
+            raise ValueError("exact literal value must be non-empty")
+        return self
 
 
 class MutationMove(BaseModel):
@@ -445,6 +464,7 @@ class Envelope(BaseModel):
 
     ambiguity: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
+    literal_contract: list[ExactLiteral] = Field(default_factory=list)
 
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -612,6 +632,8 @@ _LABELED_PATH_RE = re.compile(
     re.IGNORECASE,
 )
 _GENERIC_PATH_RE = re.compile(r"`?((?:[A-Za-z0-9_.@+\-]+/)+[A-Za-z0-9_.@+\-]+|[A-Za-z0-9_.@+\-]+\.[A-Za-z0-9_]+)`?")
+_SNAKE_LITERAL_RE = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
+_FILENAME_LITERAL_RE = re.compile(r"\b[A-Za-z0-9_.@+\-]+\.[A-Za-z0-9_]+\b")
 
 
 def extract_repo_path_candidates(value: Any) -> list[str]:
@@ -627,6 +649,63 @@ def extract_repo_path_candidates(value: Any) -> list[str]:
         for child in value.values():
             candidates.extend(extract_repo_path_candidates(child))
     return _dedupe_paths(candidates)
+
+
+def extract_literal_contract(value: Any, *, source: ExactLiteralSource = "user_input") -> list[ExactLiteral]:
+    """Extract exact model-preservation literals from user/runtime text.
+
+    This is intentionally syntax-only: it records tokens already present at the
+    boundary so later LLM stages cannot replace them with placeholders or
+    synonyms, but it does not add new semantic facts.
+    """
+
+    if isinstance(value, list):
+        literals: list[ExactLiteral] = []
+        for item in value:
+            literals.extend(extract_literal_contract(item, source=source))
+        return _dedupe_literals(literals)
+    if isinstance(value, dict):
+        literals = []
+        for item in value.values():
+            literals.extend(extract_literal_contract(item, source=source))
+        return _dedupe_literals(literals)
+    if not isinstance(value, str):
+        return []
+
+    text = value
+    literals: list[ExactLiteral] = []
+    path_spans: list[tuple[int, int]] = []
+
+    for match in _GENERIC_PATH_RE.finditer(text):
+        normalized = _normalize_repo_relative_path(match.group(1), allow_bare_filename=True)
+        if normalized is None:
+            continue
+        path_spans.append(match.span(1))
+        kind: ExactLiteralKind = "path" if "/" in normalized else "filename"
+        literals.append(ExactLiteral(value=normalized, kind=kind, source=source))
+
+    for match in _FILENAME_LITERAL_RE.finditer(text):
+        if _span_inside(match.span(), path_spans):
+            continue
+        normalized = _normalize_repo_relative_path(match.group(0), allow_bare_filename=True)
+        if normalized is not None:
+            path_spans.append(match.span())
+            literals.append(ExactLiteral(value=normalized, kind="filename", source=source))
+
+    for match in _SNAKE_LITERAL_RE.finditer(text):
+        if _span_inside(match.span(), path_spans):
+            continue
+        token = match.group(0)
+        if len(token) > 80:
+            continue
+        kind: ExactLiteralKind = (
+            "json_key"
+            if _looks_like_json_key_context(text, match.span()) or _looks_like_manifest_key_token(token)
+            else "symbol"
+        )
+        literals.append(ExactLiteral(value=token, kind=kind, source=source))
+
+    return _dedupe_literals(literals)
 
 
 def normalize_repo_relative_path(value: str) -> str | None:
@@ -992,3 +1071,54 @@ def _dedupe_globs(globs: list[str]) -> list[str]:
         seen.add(normalized)
         deduped.append(normalized)
     return deduped
+
+
+def _span_inside(span: tuple[int, int], containers: list[tuple[int, int]]) -> bool:
+    return any(start <= span[0] and span[1] <= end for start, end in containers)
+
+
+def _dedupe_literals(literals: list[ExactLiteral]) -> list[ExactLiteral]:
+    deduped: list[ExactLiteral] = []
+    seen: set[tuple[str, str]] = set()
+    for literal in literals:
+        key = (literal.kind, literal.value)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(literal)
+    return deduped
+
+
+def _looks_like_json_key_context(text: str, span: tuple[int, int]) -> bool:
+    before = text[max(0, span[0] - 80) : span[0]].lower()
+    after = text[span[1] : span[1] + 80].lower()
+    window = f"{before} {after}"
+    code_signals = ("function", "method", "class", "variable", "symbol", "module", "callable")
+    json_signals = (
+        "json",
+        "manifest",
+        "schema",
+        "payload",
+        "field",
+        "fields",
+        "key",
+        "keys",
+        "report",
+        "inventory",
+        "index",
+    )
+    if any(signal in window for signal in code_signals) and not any(
+        signal in window for signal in ("json", "manifest", "schema", "payload")
+    ):
+        return False
+    return any(signal in window for signal in json_signals)
+
+
+def _looks_like_manifest_key_token(token: str) -> bool:
+    normalized = token.lower()
+    return (
+        normalized.startswith("moved_")
+        or normalized in {"held_items", "skipped_items", "excluded_items", "preserved_items"}
+        or normalized.startswith("total_")
+        or normalized.endswith("_total")
+    )

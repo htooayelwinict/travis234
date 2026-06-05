@@ -15,6 +15,7 @@ WRITE_TOOL_NAMES = {
     "replace_in_file",
     "write_file",
     "write_many_files",
+    "write_json_manifest",
 }
 
 
@@ -107,6 +108,7 @@ class WorkerMemoryController:
         memory = self.memory_for_step(step.step_id)
         if memory is None:
             return task, None
+        memory = self._with_retry_instruction(memory=memory, task=task)
         artifact = ArtifactPayload(
             id=f"kernel_memory_{step.step_id}",
             kind="kernel_memory",
@@ -123,6 +125,20 @@ class WorkerMemoryController:
             "kernel_memory_artifact_id": artifact.id,
         }
         return task.model_copy(update={"input_artifacts": input_artifacts, "metadata": metadata}), memory
+
+    def _with_retry_instruction(self, *, memory: dict[str, Any], task: Task) -> dict[str, Any]:
+        retry_instruction = task.metadata.get("runtime_retry_instruction")
+        if not retry_instruction:
+            return memory
+        enriched = dict(memory)
+        enriched["retry_instruction"] = str(retry_instruction)
+        retry_reason_code = task.metadata.get("runtime_retry_reason_code")
+        if retry_reason_code:
+            enriched["retry_reason_code"] = str(retry_reason_code)
+        guidance = list(enriched.get("retry_guidance") or [])
+        guidance.insert(0, str(retry_instruction))
+        enriched["retry_guidance"] = guidance
+        return enriched
 
     def memory_for_step(self, step_id: str) -> dict[str, Any] | None:
         attempts = self._attempts_by_step.get(step_id) or []
@@ -227,6 +243,16 @@ def _write_operations_from_record(record: dict[str, Any]) -> list[dict[str, Any]
             }
             for item in observation.get("files_written", [])
             if isinstance(item, dict) and item.get("path")
+        ]
+    if tool_name == "write_json_manifest" and observation.get("path"):
+        return [
+            {
+                "tool_name": tool_name,
+                "action": "write_json_manifest",
+                "status": "applied",
+                "paths": [str(observation["path"])],
+                "summary": "JSON manifest written",
+            }
         ]
     if tool_name == "move_file":
         status = "already_done" if observation.get("already_done") else "applied"

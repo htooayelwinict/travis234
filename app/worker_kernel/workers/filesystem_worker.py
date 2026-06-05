@@ -11,7 +11,12 @@ Use repository observations, change_design, mutation_scope, and rollback_plan as
 design context. task.metadata.write_policy, permissions, and expected outputs are
 the hard runtime contracts. You create, update, move, or delete files only through
 approved write tools. Prefer apply_file_operations for file moves, mixed file-management
-batches, and idempotent retries; prefer write_many_files for pure multi-file creation.
+batches, write_json_manifest for JSON manifests/indexes, and write_many_files for pure multi-file creation.
+For apply_file_operations, use an operations array with entries like
+{"action":"move","source":"old","destination":"new"},
+{"action":"write","path":"file","content":"..."}, or
+{"action":"create_directory","path":"dir"}. Do not use invented tool names such
+as file_read, move_files, or create_dirs as tool names.
 If task.metadata.kernel_memory exists, resume from it and finish only remaining work.
 Use repo_snapshot, read_many_files, diff_summary, and mutation_scope_check for evidence. Do not run
 arbitrary shell commands and do not write outside write_policy. If a write tool
@@ -28,10 +33,17 @@ project distribution name, include an explicit wheel package mapping such as:
 For JSON manifests, indexes, reports, or inventory files, treat the user prompt,
 README, and tests as an exact schema contract. If the contract says "file names",
 write basenames such as task_notes.md, not source or destination paths. If it says
-"paths", write repo-relative paths. Preserve exact key names and counts, and after
-writing a manifest prefer read_file or focused tests before final_result. Do not
-synonymize manifest keys: if the contract says moved_logs, do not write
-moved_build_logs; if it says moved_json_artifacts, do not write moved_json_files.
+"paths", write repo-relative paths. Preserve exact key names and counts. When using
+write_json_manifest, pass required_keys from task.metadata.required_json_keys when
+present, choose the exact total_* key as total_key, and set count_keys to moved-item
+arrays only. Exclude held_items, skipped, ignored, preserved, or excluded arrays from
+totals. After writing a manifest use read_file or focused tests before final_result.
+Do not synonymize manifest keys: if the contract says moved_logs, do not write
+moved_build_logs; if it says moved_evidence, do not write moved_json_artifacts; if it
+says moved_json_artifacts, do not write moved_json_files.
+Use expected output artifact ids exactly as provided after canonicalization; prefer
+manifest_update_record, moved_items_record, manifest_validation, and manifest_file
+over near-aliases such as manifest_update_result or moved_item_records.
 For file-management scopes, do not broaden a classification from upstream artifacts.
 Respect exact file-type words from the prompt: "markdown" means .md/.markdown only,
 not .txt. Exclude files that artifacts or file contents say should be kept as-is,
@@ -46,7 +58,11 @@ inside operations without also filling target_paths. DESIGN is read-only: produc
 plan and scope even when write tools are not available; write permission belongs to the
 later MUTATE step. Never return needs_replan solely because write_files=false in a
 DESIGN/plan_only step. When verification feedback names a failing path or manifest
-key, repair that exact path/key first with the smallest allowed operation."""
+key, repair that exact path/key first with the smallest allowed operation.
+For MUTATE/bounded_mutation, never return completed final_result until completed
+write-tool observations or kernel_memory prove the requested file operation happened.
+If a repairable tool failure appears, correct the tool call on the next turn; do not
+summarize success without evidence."""
 
 
 def agentic_templates() -> list[WorkerInstanceTemplate]:
@@ -66,6 +82,7 @@ def agentic_templates() -> list[WorkerInstanceTemplate]:
     write_tools = repo_tools + (
         "write_file",
         "write_many_files",
+        "write_json_manifest",
         "apply_file_operations",
         "replace_in_file",
         "move_file",

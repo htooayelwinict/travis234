@@ -118,6 +118,12 @@ class WorkerToolbox:
                 [
                     _tool_spec("write_file", "Write a full file inside approved write policy.", "write_files", {"path": "string", "content": "string"}),
                     _tool_spec("write_many_files", "Write multiple full files inside approved write policy in one atomic preflighted batch.", "write_files", {"files": "file_write_array"}),
+                    _tool_spec(
+                        "write_json_manifest",
+                        "Primary tool for JSON manifests, indexes, inventories, and reports with exact keys/counts. It writes the file, enforces required keys, and checks total/count reconciliation.",
+                        "write_files",
+                        {"path": "string", "payload": "json_object", "required_keys": "string_array", "total_key": "string", "count_keys": "string_array"},
+                    ),
                     _tool_spec("apply_file_operations", "Preflight and apply a compact batch of move/write/replace/delete/create_directory operations with an idempotent operation ledger.", "write_files", {"operations": "file_operation_array"}),
                     _tool_spec("replace_in_file", "Replace one exact text occurrence inside approved write policy.", "write_files", {"path": "string", "old": "string", "new": "string"}),
                     _tool_spec("move_file", "Move one file when both source and destination are inside approved write policy.", "write_files", {"source": "string", "destination": "string", "overwrite": "boolean"}),
@@ -200,6 +206,9 @@ class WorkerToolbox:
         if tool_name == "write_many_files":
             self._require(task.permissions.write_files, "write_files", tool_name)
             return self._write_many_files(task, arguments)
+        if tool_name == "write_json_manifest":
+            self._require(task.permissions.write_files, "write_files", tool_name)
+            return self._write_json_manifest(task, arguments)
         if tool_name == "apply_file_operations":
             self._require(task.permissions.write_files, "write_files", tool_name)
             return self._apply_file_operations(task, arguments)
@@ -444,8 +453,103 @@ class WorkerToolbox:
             written.append({"path": self._display_path(path), "bytes_written": len(content.encode("utf-8"))})
         return {"files_written": written, "count": len(written)}
 
+    def _write_json_manifest(self, task: Task, arguments: dict[str, Any]) -> dict[str, Any]:
+        path = self._preflight_write_operation(
+            task,
+            tool_name="write_json_manifest",
+            raw_paths=[str(arguments.get("path") or "")],
+        )[0]
+        payload = arguments.get("payload")
+        if not isinstance(payload, dict):
+            raise ToolExecutionError("write_json_manifest requires payload to be an object")
+
+        required_keys = _coerce_string_list(arguments.get("required_keys"))
+        if not required_keys:
+            required_keys = _coerce_string_list(task.metadata.get("required_json_keys"))
+        if not required_keys:
+            required_keys = sorted(str(key) for key in payload)
+        missing_keys = [key for key in required_keys if key not in payload]
+        if missing_keys:
+            self._raise_repairable_manifest_denial(
+                task=task,
+                tool_name="write_json_manifest",
+                code="manifest_missing_required_keys",
+                message="write_json_manifest payload is missing required keys: " + ", ".join(missing_keys),
+                path=path,
+                missing_keys=missing_keys,
+            )
+
+        total_key = str(arguments.get("total_key") or "").strip()
+        if not total_key:
+            total_key = _infer_manifest_total_key(required_keys=required_keys, payload=payload)
+        count_keys = _coerce_string_list(arguments.get("count_keys"))
+        if not count_keys:
+            count_keys = _infer_manifest_count_keys(
+                required_keys=required_keys,
+                payload=payload,
+                total_key=total_key,
+            )
+
+        non_list_count_keys = [key for key in count_keys if not isinstance(payload.get(key), list)]
+        if non_list_count_keys:
+            self._raise_repairable_manifest_denial(
+                task=task,
+                tool_name="write_json_manifest",
+                code="manifest_count_key_not_list",
+                message="manifest count keys must contain list values: " + ", ".join(non_list_count_keys),
+                path=path,
+                missing_keys=[],
+            )
+
+        counted_total = sum(len(payload.get(key) or []) for key in count_keys)
+        counts_match = True
+        if total_key:
+            total_value = payload.get(total_key)
+            if not isinstance(total_value, int):
+                self._raise_repairable_manifest_denial(
+                    task=task,
+                    tool_name="write_json_manifest",
+                    code="manifest_total_not_integer",
+                    message=f"manifest total key {total_key} must be an integer",
+                    path=path,
+                    missing_keys=[],
+                )
+            counts_match = total_value == counted_total
+            if not counts_match:
+                self._raise_repairable_manifest_denial(
+                    task=task,
+                    tool_name="write_json_manifest",
+                    code="manifest_total_mismatch",
+                    message=(
+                        f"manifest {total_key}={total_value} does not match counted "
+                        f"items {counted_total} from keys: {', '.join(count_keys)}"
+                    ),
+                    path=path,
+                    missing_keys=[],
+                )
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        content = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+        path.write_text(content, encoding="utf-8")
+        fields_present = sorted(str(key) for key in payload)
+        return {
+            "path": self._display_path(path),
+            "manifest_path": self._display_path(path),
+            "payload": payload,
+            "required_keys": required_keys,
+            "fields_present": fields_present,
+            "missing_fields": [],
+            "counts_match": counts_match,
+            "total_key": total_key or None,
+            "total_value": payload.get(total_key) if total_key else None,
+            "total_artifacts": payload.get(total_key) if total_key else None,
+            "count_keys": count_keys,
+            "counted_total": counted_total,
+            "bytes_written": len(content.encode("utf-8")),
+        }
+
     def _apply_file_operations(self, task: Task, arguments: dict[str, Any]) -> dict[str, Any]:
-        raw_operations = arguments.get("operations")
+        raw_operations = _coerce_file_operations(arguments)
         if not isinstance(raw_operations, list) or not raw_operations:
             raise ToolExecutionError("apply_file_operations requires a non-empty operations array")
         if len(raw_operations) > 50:
@@ -1365,6 +1469,38 @@ class WorkerToolbox:
             rejected_paths=rejected_paths,
         )
 
+    def _raise_repairable_manifest_denial(
+        self,
+        *,
+        task: Task,
+        tool_name: str,
+        code: str,
+        message: str,
+        path: Path,
+        missing_keys: list[str],
+    ) -> None:
+        if not _is_bounded_mutation_task(task):
+            raise ToolExecutionError(message)
+        policy = self._write_policy(task)
+        raise MutationOperationDeniedError(
+            MutationOperationDenial(
+                code=code,
+                message=message,
+                tool_name=tool_name,
+                touched_paths=[self._display_path(path)],
+                rejected_paths=[self._display_path(path)],
+                repairable=True,
+                policy=policy.model_dump(mode="json"),
+                metadata={
+                    "step_id": task.step_id,
+                    "worker_type": task.worker_type,
+                    "missing_keys": missing_keys,
+                    "required_json_keys": _coerce_string_list(task.metadata.get("required_json_keys")),
+                    "instruction": "Revise the manifest payload to include exact required keys and matching counts.",
+                },
+            )
+        )
+
     def _strict_allowed_write_paths(self, task: Task, policy: WritePolicy | None = None) -> list[Path]:
         policy = policy or self._write_policy(task)
         raw_paths = list(policy.strict_allowed_paths or task.permissions.write_paths)
@@ -1529,6 +1665,10 @@ def _parameter_schema(value: str) -> dict[str, Any]:
                 {"type": "array", "items": {"type": "string"}},
             ]
         }
+    if value == "string_array":
+        return {"type": "array", "items": {"type": "string"}}
+    if value == "json_object":
+        return {"type": "object", "additionalProperties": True}
     if value == "boolean":
         return {"type": "boolean"}
     if value == "file_write_array":
@@ -1573,6 +1713,131 @@ def _parameter_schema(value: str) -> dict[str, Any]:
             },
         }
     return {"type": "string"}
+
+
+def _coerce_file_operations(arguments: dict[str, Any]) -> Any:
+    operations = arguments.get("operations")
+    if isinstance(operations, list) and operations:
+        return operations
+
+    coerced: list[dict[str, Any]] = []
+    for raw_directory in _coerce_string_list(
+        arguments.get("create_dirs")
+        or arguments.get("create_directories")
+        or arguments.get("mkdirs")
+    ):
+        coerced.append({"action": "create_directory", "path": raw_directory})
+
+    for raw_move in _coerce_object_list(arguments.get("move_files") or arguments.get("moves")):
+        source = raw_move.get("source") or raw_move.get("from")
+        destination = raw_move.get("destination") or raw_move.get("to") or raw_move.get("target")
+        coerced.append(
+            {
+                "action": "move",
+                "source": source,
+                "destination": destination,
+                "overwrite": bool(raw_move.get("overwrite", False)),
+            }
+        )
+
+    for raw_write in _coerce_object_list(
+        arguments.get("write_files")
+        or arguments.get("update_files")
+        or arguments.get("writes")
+        or arguments.get("updates")
+    ):
+        coerced.append(
+            {
+                "action": str(raw_write.get("action") or "write"),
+                "path": raw_write.get("path") or raw_write.get("file"),
+                "content": raw_write.get("content") or "",
+                "overwrite": bool(raw_write.get("overwrite", True)),
+            }
+        )
+
+    for raw_replace in _coerce_object_list(arguments.get("replace_files") or arguments.get("replacements")):
+        coerced.append(
+            {
+                "action": "replace",
+                "path": raw_replace.get("path") or raw_replace.get("file"),
+                "old": raw_replace.get("old") or "",
+                "new": raw_replace.get("new") or "",
+            }
+        )
+
+    for raw_delete in _coerce_delete_operations(arguments.get("delete_files") or arguments.get("deletes")):
+        coerced.append(raw_delete)
+
+    return coerced
+
+
+def _coerce_object_list(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, dict):
+        return [value]
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _coerce_delete_operations(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, str):
+        return [{"action": "delete", "path": value}]
+    if not isinstance(value, list):
+        return []
+    operations: list[dict[str, Any]] = []
+    for item in value:
+        if isinstance(item, dict):
+            operations.append({"action": "delete", "path": item.get("path") or item.get("file")})
+        elif str(item).strip():
+            operations.append({"action": "delete", "path": str(item)})
+    return operations
+
+
+def _coerce_string_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _infer_manifest_total_key(*, required_keys: list[str], payload: dict[str, Any]) -> str:
+    for key in required_keys:
+        if _looks_like_total_key(key):
+            return key
+    for key in payload:
+        if _looks_like_total_key(str(key)):
+            return str(key)
+    return "total_artifacts" if "total_artifacts" in payload else ""
+
+
+def _infer_manifest_count_keys(*, required_keys: list[str], payload: dict[str, Any], total_key: str) -> list[str]:
+    keys = required_keys or [str(key) for key in payload]
+    count_keys = [
+        key
+        for key in keys
+        if key != total_key
+        and isinstance(payload.get(key), list)
+        and not _manifest_key_excluded_from_total(key)
+        and (key.startswith("moved_") or not required_keys)
+    ]
+    if count_keys:
+        return count_keys
+    return [
+        str(key)
+        for key, value in payload.items()
+        if key != total_key and isinstance(value, list) and not _manifest_key_excluded_from_total(str(key))
+    ]
+
+
+def _looks_like_total_key(key: str) -> bool:
+    normalized = key.lower()
+    return normalized == "total" or normalized.startswith("total_") or normalized.endswith("_total")
+
+
+def _manifest_key_excluded_from_total(key: str) -> bool:
+    normalized = key.lower()
+    return any(token in normalized for token in ("held", "hold", "exclude", "excluded", "skipped", "ignored", "preserved"))
 
 
 def _extract_path_candidates(value: Any) -> list[str]:
