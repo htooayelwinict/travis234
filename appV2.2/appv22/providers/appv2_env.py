@@ -5,10 +5,13 @@ from __future__ import annotations
 from copy import deepcopy
 from hashlib import sha256
 from importlib import import_module
+import importlib.util
 import json
 from pathlib import Path
+import sys
 from typing import Any, Mapping
 
+from appv22.context.evidence import ContextEvidence
 from appv22.runtime.decisions import KNOWN_DECISION_KINDS, RuntimeDecision
 
 
@@ -27,8 +30,10 @@ class AppV2EnvAppV22ProviderAdapter:
         self.provider_id = f"{delegate_id}-appv22-adapter"
 
     def decide(self, prompt: dict) -> RuntimeDecision:
-        raw_decision = self.delegate.decide(prompt)
-        return normalize_appv22_decision_payload(raw_decision, tool_name_map=self.tool_name_map)
+        delegate_prompt = _appv21_compatible_prompt(prompt)
+        raw_decision = self.delegate.decide(delegate_prompt)
+        decision = normalize_appv22_decision_payload(raw_decision, tool_name_map=self.tool_name_map)
+        return _coerce_appv22_progression(prompt, decision)
 
 
 def create_appv22_provider_from_appv2_env(
@@ -37,6 +42,7 @@ def create_appv22_provider_from_appv2_env(
 ) -> AppV2EnvAppV22ProviderAdapter:
     """Create an AppV2.2 adapter around the AppV2.1 appv2-env provider."""
 
+    _ensure_local_appv21_import_path()
     try:
         appv2_env = import_module("appv21.providers.appv2_env")
     except ImportError as exc:
@@ -47,6 +53,27 @@ def create_appv22_provider_from_appv2_env(
 
     delegate = appv2_env.create_appv21_provider_from_appv2_env(dotenv_path=dotenv_path)
     return AppV2EnvAppV22ProviderAdapter(delegate, tool_name_map=tool_name_map)
+
+
+def _ensure_local_appv21_import_path() -> None:
+    if importlib.util.find_spec("appv21") is not None:
+        return
+
+    appv21_root = _discover_local_appv21_root(Path(__file__))
+    if appv21_root is None:
+        return
+
+    appv21_root_str = str(appv21_root)
+    if appv21_root_str not in sys.path:
+        sys.path.insert(0, appv21_root_str)
+
+
+def _discover_local_appv21_root(anchor: Path) -> Path | None:
+    for parent in anchor.resolve().parents:
+        candidate = parent / "appV2.1"
+        if (candidate / "appv21").is_dir():
+            return candidate
+    return None
 
 
 def normalize_appv22_decision_payload(
@@ -134,3 +161,122 @@ def _normalize_tool_payload(payload: dict[str, Any], *, tool_name_map: Mapping[s
     tool_name = str(tool_name)
     payload["tool_id"] = tool_name_map.get(tool_name, tool_name)
     payload.setdefault("arguments", {})
+
+
+def _appv21_compatible_prompt(prompt: dict) -> dict:
+    adapted = deepcopy(prompt)
+    state = adapted.get("state")
+    if isinstance(state, dict):
+        runtime_plan = state.get("runtime_plan")
+        if isinstance(runtime_plan, dict) and runtime_plan:
+            state.setdefault("plan", {"runtime_plan": deepcopy(runtime_plan)})
+    return adapted
+
+
+def _coerce_appv22_progression(prompt: dict, decision: RuntimeDecision) -> RuntimeDecision:
+    if decision.kind != "plan":
+        return decision
+
+    selected_tools = _selected_tools(prompt)
+    observation_tool = _missing_observation_tool(prompt, selected_tools)
+    if observation_tool is not None:
+        return RuntimeDecision(
+            kind="tool_call",
+            reason="Observe prompt-visible context before planning.",
+            payload={"tool_id": observation_tool, "arguments": {}},
+            evidence_refs=[],
+        )
+
+    state = prompt.get("state") if isinstance(prompt.get("state"), dict) else {}
+    runtime_plan = state.get("runtime_plan") if isinstance(state, dict) else None
+    if not isinstance(runtime_plan, dict) or not runtime_plan:
+        return decision
+
+    if not state.get("mutation_receipts"):
+        mutation_intent = runtime_plan.get("mutation_intent")
+        if isinstance(mutation_intent, dict):
+            return RuntimeDecision(
+                kind="mutation_intent",
+                reason="Plan already exists; advance to mutation intent.",
+                payload=deepcopy(mutation_intent),
+                evidence_refs=["plan://accepted/latest"],
+            )
+
+    if state.get("mutation_receipts") and not state.get("verification_receipts"):
+        return RuntimeDecision(
+            kind="finalize",
+            reason="Mutation receipt exists; advance to verification/finalization.",
+            payload={},
+            evidence_refs=["plan://accepted/latest"],
+        )
+
+    return decision
+
+
+def _world_refs(prompt: dict) -> list[Any]:
+    world = prompt.get("world") if isinstance(prompt.get("world"), dict) else {}
+    refs = world.get("world_refs") if isinstance(world, dict) else None
+    if isinstance(refs, dict):
+        return list(refs.values())
+    if isinstance(refs, list):
+        return refs
+    return []
+
+
+def _missing_observation_tool(prompt: dict, selected_tools: list[str]) -> str | None:
+    if not selected_tools:
+        return None
+
+    contracts = _observation_contracts(prompt)
+    if not contracts:
+        return selected_tools[0] if not _world_refs(prompt) else None
+
+    selected_tool_ids = set(selected_tools)
+    evidence = ContextEvidence.from_prompt(prompt)
+    for contract in contracts:
+        if _contract_satisfied(contract, evidence):
+            continue
+        preferred_tool_id = contract.get("preferred_tool_id")
+        if isinstance(preferred_tool_id, str) and preferred_tool_id in selected_tool_ids:
+            return preferred_tool_id
+        return None
+    return None
+
+
+def _observation_contracts(prompt: dict) -> list[dict[str, Any]]:
+    skills = prompt.get("skills") if isinstance(prompt.get("skills"), list) else []
+    contracts: list[dict[str, Any]] = []
+    for skill in skills:
+        if not isinstance(skill, dict):
+            continue
+        contract = skill.get("observation_contract")
+        if isinstance(contract, dict):
+            contracts.append(contract)
+    return contracts
+
+
+def _contract_satisfied(contract: Mapping[str, Any], evidence: ContextEvidence) -> bool:
+    evidence_refs = _contract_values(contract.get("evidence_refs"))
+    evidence_kinds = _contract_values(contract.get("evidence_kinds"))
+    if not evidence_refs and not evidence_kinds:
+        return True
+    return evidence.has_any_ref(evidence_refs) or evidence.has_any_kind(evidence_kinds)
+
+
+def _contract_values(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, (list, tuple, set)):
+        return tuple(str(item) for item in value if item)
+    return ()
+
+
+def _selected_tools(prompt: dict) -> list[str]:
+    selection = prompt.get("selection") if isinstance(prompt.get("selection"), dict) else {}
+    selected = selection.get("selected_tools") if isinstance(selection, dict) else None
+    if isinstance(selected, list):
+        return [str(tool_id) for tool_id in selected if tool_id]
+    tools = prompt.get("tools")
+    if isinstance(tools, list):
+        return [str(tool_id) for tool_id in tools if tool_id]
+    return []
