@@ -30,6 +30,7 @@ class AppV21AgentRuntime:
         self.context = self.services.context
         self.context_budget = self.services.context_budget
         self.context_selector = self.services.context_selector
+        self.run_memory_builder = self.services.run_memory_builder
         self.artifact_validator = self.services.artifact_validator
         self.decision_validator = self.services.decision_validator
         self.state_machine = self.services.state_machine
@@ -326,6 +327,13 @@ class AppV21AgentRuntime:
         if latest_verification_id is None:
             self._fail(state, "finalize_without_verification")
             return
+        if "run_memory" not in state.world.artifacts:
+            artifact = self.run_memory_builder.build(state, self.store.to_dicts())
+            issues = self.artifact_validator.validate(artifact, state)
+            if issues:
+                self._fail(state, "artifact_validation_failed", {"issues": issues})
+                return
+            self._apply(state, [RuntimeEvent("ArtifactAccepted", artifact.__dict__)])
         if "final_summary" not in state.world.artifacts:
             artifact = Artifact(
                 artifact_id="final_summary",

@@ -632,3 +632,47 @@ def test_prompt_context_prepared_records_budget_and_selection(tmp_path: Path) ->
     assert "model" in prompt_events[-1]["payload"]
     assert "tool_count" in prompt_events[-1]["payload"]
     assert "skill_count" in prompt_events[-1]["payload"]
+
+
+def test_finalize_emits_runtime_verified_run_memory(tmp_path: Path) -> None:
+    class ExplicitNoopFinalizeProvider:
+        provider_id = "explicit-noop-finalize"
+
+        def decide(self, prompt_payload: dict) -> RuntimeDecision:
+            world = prompt_payload.get("world", {})
+            if not any(ref.get("kind") == "repo_snapshot" for ref in world.get("world_refs", [])):
+                return RuntimeDecision(kind="observe", reason="Observe before explicit noop finalize.")
+            return RuntimeDecision(
+                kind="finalize",
+                reason="No mutation is needed.",
+                payload={"explicit_noop": True},
+            )
+
+    result = AppV21AgentRuntime(
+        root_path=tmp_path,
+        services=create_appv21_runtime_services(root_path=tmp_path, provider=ExplicitNoopFinalizeProvider()),
+        max_turns=2,
+    ).run("Summarize without changing files.")
+
+    artifact_events = [event for event in result["events"] if event["event_type"] == "ArtifactAccepted"]
+    artifact_ids = [event["payload"]["artifact_id"] for event in artifact_events]
+
+    assert result["status"] == "completed"
+    assert artifact_ids[:2] == ["run_memory", "final_summary"]
+
+    run_memory = artifact_events[0]["payload"]
+    assert run_memory["kind"] == "context_summary"
+    assert run_memory["producer"] == "appv21_runtime"
+    assert run_memory["trust"] == "runtime_verified"
+    assert run_memory["lifecycle"] == "runtime_verified"
+    assert run_memory["evidence_refs"] == result["verification_receipts"]
+
+    content = run_memory["content"]
+    assert content["goal"] == "Summarize without changing files."
+    assert content["outcome"] == "completed"
+    assert content["mutation_receipts"] == []
+    assert content["verification_receipts"] == result["verification_receipts"]
+    assert content["event_counts"]["VerificationRecorded"] == 1
+    assert content["decision_counts"]["finalize"] == 1
+    assert content["tools_used"] == ["repo_snapshot"]
+    assert content["open_risks"] == []
