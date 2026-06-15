@@ -4,7 +4,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "appV2.1"))
 
 from appv21.runtime.decisions import RuntimeDecision
-from appv21.runtime.state_machine import RuntimeStateMachine
+from appv21.runtime.decisions import KNOWN_DECISION_KINDS
+from appv21.runtime.state_machine import TARGET_MODE_BY_DECISION, RuntimeStateMachine, unmapped_decision_kinds
 
 
 def test_state_machine_allows_open_observe_act_revise_loop() -> None:
@@ -25,6 +26,14 @@ def test_state_machine_rejects_finalize_from_start() -> None:
     assert rejection == "invalid_transition:START->finalize"
 
 
+def test_state_machine_reports_unknown_modes_separately() -> None:
+    machine = RuntimeStateMachine()
+
+    rejection = machine.validate_transition("TYPO", RuntimeDecision(kind="observe", reason="map"))
+
+    assert rejection == "invalid_mode:TYPO"
+
+
 def test_state_machine_detects_repeated_nonproductive_decisions() -> None:
     machine = RuntimeStateMachine(max_repeated_decisions=3)
     decision = RuntimeDecision(kind="observe", reason="again")
@@ -32,3 +41,16 @@ def test_state_machine_detects_repeated_nonproductive_decisions() -> None:
     assert machine.record_progress(decision, changed=False) is None
     assert machine.record_progress(decision, changed=False) is None
     assert machine.record_progress(decision, changed=False) == "repeated_loop:observe"
+
+
+def test_state_machine_counts_only_consecutive_nonproductive_decisions() -> None:
+    machine = RuntimeStateMachine(max_repeated_decisions=3)
+
+    assert machine.record_progress(RuntimeDecision(kind="observe", reason="again"), changed=False) is None
+    assert machine.record_progress(RuntimeDecision(kind="plan", reason="again"), changed=False) is None
+    assert machine.record_progress(RuntimeDecision(kind="observe", reason="again"), changed=False) is None
+
+
+def test_state_machine_target_modes_cover_canonical_decision_kinds() -> None:
+    assert set(TARGET_MODE_BY_DECISION) == KNOWN_DECISION_KINDS
+    assert unmapped_decision_kinds() == set()
