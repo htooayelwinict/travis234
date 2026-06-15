@@ -1,0 +1,279 @@
+{
+  "costs": {
+    "available": true,
+    "cost": 0.0009463200000000001,
+    "model_calls": 4,
+    "source": "provider.delegate.delegate.client.usage_snapshot",
+    "total_tokens": 4418
+  },
+  "decision_matrix": [
+    {
+      "evidence_refs": [],
+      "kind": "tool_call",
+      "reason": "Observe prompt-visible context before planning.",
+      "tool_id": "file_management.repo_snapshot",
+      "turn": 1
+    },
+    {
+      "evidence_refs": [
+        "world://repo_snapshot/latest"
+      ],
+      "kind": "plan",
+      "reason": "The context summary indicates a repo_snapshot has already been taken (evidence_refs includes 'world://repo_snapshot/latest'), and the agent is in OBSERVE mode with no mutation or verification evidence of changes. Per instructions, do not call repo_snapshot again. Instead, hydrate the existing snapshot using file_management.read_file to inspect exact file contents and determine next steps for cleanup.",
+      "tool_id": null,
+      "turn": 2
+    },
+    {
+      "evidence_refs": [],
+      "kind": "plan",
+      "reason": "No repo_snapshot exists in world_refs; need to inspect the repository to understand the current state before proceeding with any plan.",
+      "tool_id": null,
+      "turn": 3
+    },
+    {
+      "evidence_refs": [],
+      "kind": "plan",
+      "reason": "No repo_snapshot exists in world_refs; need to inspect the repository to understand the current state before proceeding with any plan.",
+      "tool_id": null,
+      "turn": 4
+    }
+  ],
+  "event_matrix": [
+    {
+      "decision_kind": null,
+      "event_type": "ContextSummaryUpdated",
+      "index": 1,
+      "reason": null,
+      "summary_evidence_refs": [],
+      "tool_id": null
+    },
+    {
+      "decision_kind": "tool_call",
+      "event_type": "DecisionProposed",
+      "index": 2,
+      "reason": "Observe prompt-visible context before planning.",
+      "summary_evidence_refs": null,
+      "tool_id": null
+    },
+    {
+      "decision_kind": null,
+      "event_type": "ModeChanged",
+      "index": 3,
+      "reason": null,
+      "summary_evidence_refs": null,
+      "tool_id": null
+    },
+    {
+      "decision_kind": null,
+      "event_type": "ToolCallCompleted",
+      "index": 4,
+      "reason": null,
+      "summary_evidence_refs": null,
+      "tool_id": "file_management.repo_snapshot"
+    },
+    {
+      "decision_kind": "file_management.repo_snapshot",
+      "event_type": "WorldRefAdded",
+      "index": 5,
+      "reason": null,
+      "summary_evidence_refs": null,
+      "tool_id": null
+    },
+    {
+      "decision_kind": null,
+      "event_type": "ContextSummaryUpdated",
+      "index": 6,
+      "reason": null,
+      "summary_evidence_refs": [
+        "world://repo_snapshot/latest"
+      ],
+      "tool_id": null
+    },
+    {
+      "decision_kind": "plan",
+      "event_type": "DecisionProposed",
+      "index": 7,
+      "reason": "The context summary indicates a repo_snapshot has already been taken (evidence_refs includes 'world://repo_snapshot/latest'), and the agent is in OBSERVE mode with no mutation or verification evidence of changes. Per instructions, do not call repo_snapshot again. Instead, hydrate the existing snapshot using file_management.read_file to inspect exact file contents and determine next steps for cleanup.",
+      "summary_evidence_refs": null,
+      "tool_id": null
+    },
+    {
+      "decision_kind": null,
+      "event_type": "ModeChanged",
+      "index": 8,
+      "reason": null,
+      "summary_evidence_refs": null,
+      "tool_id": null
+    },
+    {
+      "decision_kind": null,
+      "event_type": "PlanAccepted",
+      "index": 9,
+      "reason": null,
+      "summary_evidence_refs": null,
+      "tool_id": null
+    },
+    {
+      "decision_kind": "plan",
+      "event_type": "DecisionProposed",
+      "index": 10,
+      "reason": "No repo_snapshot exists in world_refs; need to inspect the repository to understand the current state before proceeding with any plan.",
+      "summary_evidence_refs": null,
+      "tool_id": null
+    },
+    {
+      "decision_kind": null,
+      "event_type": "ModeChanged",
+      "index": 11,
+      "reason": null,
+      "summary_evidence_refs": null,
+      "tool_id": null
+    },
+    {
+      "decision_kind": null,
+      "event_type": "PlanAccepted",
+      "index": 12,
+      "reason": null,
+      "summary_evidence_refs": null,
+      "tool_id": null
+    },
+    {
+      "decision_kind": "plan",
+      "event_type": "DecisionProposed",
+      "index": 13,
+      "reason": "No repo_snapshot exists in world_refs; need to inspect the repository to understand the current state before proceeding with any plan.",
+      "summary_evidence_refs": null,
+      "tool_id": null
+    },
+    {
+      "decision_kind": null,
+      "event_type": "ModeChanged",
+      "index": 14,
+      "reason": null,
+      "summary_evidence_refs": null,
+      "tool_id": null
+    },
+    {
+      "decision_kind": null,
+      "event_type": "PlanAccepted",
+      "index": 15,
+      "reason": null,
+      "summary_evidence_refs": null,
+      "tool_id": null
+    },
+    {
+      "decision_kind": null,
+      "event_type": "RunFailed",
+      "index": 16,
+      "reason": "max_turns_exceeded",
+      "summary_evidence_refs": null,
+      "tool_id": null
+    }
+  ],
+  "file_count": 145,
+  "model": null,
+  "parameters": {
+    "max_tokens": "1800",
+    "response_format": "json_schema",
+    "seed": "7",
+    "temperature": "0.0",
+    "top_p": "0.95"
+  },
+  "prompt_matrix": [
+    {
+      "char_size": 4883,
+      "context_summary_visible": true,
+      "message_count": 8,
+      "raw_marker_visible": false,
+      "selected_tools": [
+        "file_management.repo_snapshot",
+        "file_management.read_file"
+      ],
+      "summary_evidence_ref_count": 0,
+      "turn": 1,
+      "world_ref_count": 0
+    },
+    {
+      "char_size": 4969,
+      "context_summary_visible": true,
+      "message_count": 8,
+      "raw_marker_visible": false,
+      "selected_tools": [
+        "file_management.repo_snapshot",
+        "file_management.read_file"
+      ],
+      "summary_evidence_ref_count": 1,
+      "turn": 2,
+      "world_ref_count": 0
+    },
+    {
+      "char_size": 1136,
+      "context_summary_visible": false,
+      "message_count": 3,
+      "raw_marker_visible": false,
+      "selected_tools": [],
+      "summary_evidence_ref_count": 0,
+      "turn": 3,
+      "world_ref_count": 0
+    },
+    {
+      "char_size": 1136,
+      "context_summary_visible": false,
+      "message_count": 3,
+      "raw_marker_visible": false,
+      "selected_tools": [],
+      "summary_evidence_ref_count": 0,
+      "turn": 4,
+      "world_ref_count": 0
+    }
+  ],
+  "proof": {
+    "dual_compaction_carried": true,
+    "initial_observation_attempted": true,
+    "no_reobserve_after_summary_evidence": true,
+    "raw_context_removed_after_first_observation": true,
+    "raw_marker_leaked_after_compaction": false,
+    "summary_carries_evidence": true,
+    "summary_visible_after_compaction": true
+  },
+  "provider": "appv2-env-worker-appv22-adapter-recording",
+  "raw_model_decision_matrix": [
+    {
+      "evidence_refs": [],
+      "kind": "plan",
+      "reason": "The agent is in START mode and needs to inspect the repository. The selected skill is 'file_management.cleanup' and the preferred tool is 'file_management.repo_snapshot'. No repo_snapshot world_ref exists yet, so we must call repo_snapshot to obtain the latest repository state before proceeding.",
+      "tool_id": "file_management.repo_snapshot",
+      "tool_name": null,
+      "turn": 1
+    },
+    {
+      "evidence_refs": [
+        "world://repo_snapshot/latest"
+      ],
+      "kind": "plan",
+      "reason": "The context summary indicates a repo_snapshot has already been taken (evidence_refs includes 'world://repo_snapshot/latest'), and the agent is in OBSERVE mode with no mutation or verification evidence of changes. Per instructions, do not call repo_snapshot again. Instead, hydrate the existing snapshot using file_management.read_file to inspect exact file contents and determine next steps for cleanup.",
+      "tool_id": null,
+      "tool_name": null,
+      "turn": 2
+    },
+    {
+      "evidence_refs": [],
+      "kind": "plan",
+      "reason": "No repo_snapshot exists in world_refs; need to inspect the repository to understand the current state before proceeding with any plan.",
+      "tool_id": null,
+      "tool_name": null,
+      "turn": 3
+    },
+    {
+      "evidence_refs": [],
+      "kind": "plan",
+      "reason": "No repo_snapshot exists in world_refs; need to inspect the repository to understand the current state before proceeding with any plan.",
+      "tool_id": null,
+      "tool_name": null,
+      "turn": 4
+    }
+  ],
+  "reason": "max_turns_exceeded",
+  "status": "failed",
+  "user_prompt": "This workspace has a lot of noisy incoming files. First inspect the repository. If the previous repository observation is compacted into a context summary and you need exact details, use the available tool to rehydrate the repository map before deciding what to do. Do not mutate files in this probe; pause after you have enough evidence."
+}

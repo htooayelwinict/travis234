@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import json
+import signal
 import shutil
 import sys
 from pathlib import Path
+from types import FrameType
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,6 +50,16 @@ EXPECTED_HELD_SOURCES = [
     "projects/beta/spec.md",
     "tmp/session/run.log",
 ]
+APPV2_ENV_FILE_MANAGEMENT_TOOL_NAME_MAP = {
+    "repo_snapshot": "file_management.repo_snapshot",
+    "read_file": "file_management.read_file",
+    "write_file": "file_management.write_file",
+    "move_file": "file_management.move_file",
+    "copy_file": "file_management.copy_file",
+    "delete_file": "file_management.delete_file",
+    "mkdir": "file_management.mkdir",
+    "list_files": "file_management.list_files",
+}
 
 
 def main() -> int:
@@ -55,16 +68,22 @@ def main() -> int:
     parser.add_argument("--dotenv", default=".env")
     parser.add_argument("--prompt", default=DEFAULT_PROMPT)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--run-timeout-seconds", type=int, default=180)
     args = parser.parse_args()
 
     repo = seed_repo(default_repo_path(args.provider))
-    provider = create_provider(args.provider, dotenv_path=args.dotenv)
-    services = create_appv22_services(
-        root_path=repo,
-        provider=provider,
-        extensions=[FileManagementExtension()],
-    )
-    result = AppV22AgentRuntime(root_path=repo, services=services, max_turns=12).run(args.prompt)
+    provider: Any = None
+    try:
+        with bounded_probe_run(args.run_timeout_seconds):
+            provider = create_provider(args.provider, dotenv_path=args.dotenv)
+            services = create_appv22_services(
+                root_path=repo,
+                provider=provider,
+                extensions=[FileManagementExtension()],
+            )
+            result = AppV22AgentRuntime(root_path=repo, services=services, max_turns=12).run(args.prompt)
+    except ProbeTimeoutError as exc:
+        result = {"status": "failed", "reason": "probe_timeout", "events": [], "error": str(exc)}
     report = build_report(repo=repo, result=result, provider=provider, prompt=args.prompt)
 
     output_path = default_report_path(args.provider, output=args.output)
@@ -86,10 +105,37 @@ def main() -> int:
     return 0 if report["status"] == "completed" and not violations else 1
 
 
+class ProbeTimeoutError(TimeoutError):
+    pass
+
+
+@contextmanager
+def bounded_probe_run(timeout_seconds: int):
+    if timeout_seconds <= 0:
+        yield
+        return
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+
+    def _raise_timeout(_signum: int, _frame: FrameType | None) -> None:
+        raise ProbeTimeoutError(f"probe exceeded {timeout_seconds}s timeout")
+
+    signal.signal(signal.SIGALRM, _raise_timeout)
+    signal.alarm(timeout_seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous_handler)
+
+
 def create_provider(provider_name: str, *, dotenv_path: str):
     if provider_name == "deterministic":
         return DeterministicAppV22Provider()
-    return create_appv22_provider_from_appv2_env(dotenv_path=dotenv_path)
+    return create_appv22_provider_from_appv2_env(
+        dotenv_path=dotenv_path,
+        tool_name_map=APPV2_ENV_FILE_MANAGEMENT_TOOL_NAME_MAP,
+    )
 
 
 def default_report_path(provider_name: str, *, output: Path | None = None) -> Path:

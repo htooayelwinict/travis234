@@ -37,6 +37,26 @@ def _content(message: dict[str, Any]) -> str:
     return str(message.get("content", "")).strip()
 
 
+def _append_world_refs(message: dict[str, Any], progress: list[Any], evidence_refs: list[Any]) -> None:
+    if message.get("role") != "system" or message.get("section") != "world":
+        return
+    payload = message.get("payload")
+    if not isinstance(payload, dict):
+        return
+    world_refs = payload.get("world_refs")
+    if not isinstance(world_refs, dict):
+        return
+    for ref_id, ref in world_refs.items():
+        if not isinstance(ref, dict):
+            continue
+        stable_ref_id = ref.get("ref_id") or ref_id
+        if stable_ref_id:
+            _append_unique(evidence_refs, stable_ref_id)
+        summary = ref.get("summary")
+        if summary:
+            _append_unique(progress, str(summary))
+
+
 def structured_summary(messages: list[dict[str, Any]], previous_summary: dict[str, Any]) -> dict[str, list[Any]]:
     previous = deepcopy(previous_summary)
     goals = _summary_list(previous, "goals")
@@ -53,6 +73,8 @@ def structured_summary(messages: list[dict[str, Any]], previous_summary: dict[st
         role = message.get("role")
         content = _content(message)
         lowered = content.lower()
+
+        _append_world_refs(message, progress, evidence_refs)
 
         if role == "assistant" and "decision:" in lowered:
             _append_unique(decisions, content)
