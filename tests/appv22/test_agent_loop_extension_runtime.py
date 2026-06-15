@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import sys
 
@@ -55,9 +56,9 @@ class PromptMutatingGuard:
         guarded = []
         for message in messages:
             copied = dict(message)
-            if copied.get("name") == "provider_bound_prompt":
-                copied["prompt"] = dict(copied["prompt"])
-                copied["prompt"]["guard_marker"] = "actual-provider-context"
+            if copied.get("name") == "provider_context_section" and copied.get("section") == "agent":
+                copied["payload"] = dict(copied["payload"])
+                copied["payload"]["guard_marker"] = "actual-provider-context"
             guarded.append(copied)
         return guarded
 
@@ -67,7 +68,7 @@ class SummaryInjectingCompressor:
         compressed = []
         for message in messages:
             copied = dict(message)
-            if copied.get("name") == "provider_bound_prompt":
+            if copied.get("name") == "provider_context_section":
                 copied["summary"] = {
                     "goals": ["persisted summary"],
                     "decisions": [],
@@ -107,6 +108,36 @@ class OneSkillExtension:
         capabilities.register_mutation_policy("other.policy", PassingPolicy())
         capabilities.register_mutation_executor("other.executor", PassingExecutor())
         capabilities.register_verifier("other.verifier", PassingVerifier())
+
+
+class OversizedPromptExtension:
+    extension_id = "oversized_prompt"
+
+    def __init__(self, raw_marker):
+        self.raw_marker = raw_marker
+
+    def skill_cards(self):
+        return [
+            SkillCard(
+                skill_id="oversized_prompt.active",
+                extension_id=self.extension_id,
+                triggers=("workspace",),
+                modes=("START",),
+                summary=f"oversized prompt material {self.raw_marker}",
+                planner_id="oversized_prompt.planner",
+                mutation_policy_id="oversized_prompt.policy",
+                mutation_executor_id="oversized_prompt.executor",
+                verifier_id="oversized_prompt.verifier",
+                tool_ids=(),
+                artifact_schema_ids=(),
+            )
+        ]
+
+    def register_capabilities(self, capabilities) -> None:
+        capabilities.register_planner("oversized_prompt.planner", InactiveCapabilityPlanner())
+        capabilities.register_mutation_policy("oversized_prompt.policy", PassingPolicy())
+        capabilities.register_mutation_executor("oversized_prompt.executor", PassingExecutor())
+        capabilities.register_verifier("oversized_prompt.verifier", PassingVerifier())
 
 
 class InactiveCapabilityPlanner:
@@ -190,11 +221,35 @@ def test_agent_loop_guards_actual_provider_bound_prompt_and_persists_summary(tmp
         "make this workspace sane and keep a record"
     )
 
-    assert provider.prompts[0]["guard_marker"] == "actual-provider-context"
-    assert provider.prompts[0]["messages"][0]["summary"]["goals"] == ["persisted summary"]
+    assert provider.prompts[0]["agent"]["guard_marker"] == "actual-provider-context"
+    assert any(
+        message.get("summary", {}).get("goals") == ["persisted summary"]
+        for message in provider.prompts[0]["messages"]
+    )
     summary_events = [event for event in result["events"] if event["event_type"] == "ContextSummaryUpdated"]
     assert summary_events
     assert summary_events[0]["payload"]["goals"] == ["persisted summary"]
+
+
+def test_agent_loop_default_context_governance_compacts_oversized_provider_prompt(tmp_path):
+    raw_marker = "RAW_PROVIDER_PROMPT_LEAK_SENTINEL_" + ("x" * 35_000)
+    provider = RecordingProvider(RuntimeDecision("pause", "stop after prompt inspection"))
+    services = create_appv22_services(
+        root_path=tmp_path,
+        provider=provider,
+        extensions=[OversizedPromptExtension(raw_marker)],
+    )
+
+    result = AppV22AgentRuntime(root_path=tmp_path, services=services, max_turns=1).run(
+        "workspace cleanup"
+    )
+
+    provider_payload = json.dumps(provider.prompts[0], sort_keys=True, default=str)
+    assert raw_marker not in provider_payload
+    assert provider.prompts[0]["skills"] == []
+    assert any(message.get("name") == "context_summary" for message in provider.prompts[0]["messages"])
+    summary_events = [event for event in result["events"] if event["event_type"] == "ContextSummaryUpdated"]
+    assert summary_events
 
 
 def test_agent_loop_denies_runtime_plan_capability_outside_active_scope(tmp_path):

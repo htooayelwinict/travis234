@@ -125,3 +125,12 @@ def test_runtime_core_does_not_import_file_management_extensions():
     for path in scanned_files:
         for module in _imported_modules(path):
             assert not _is_file_management_extension_import(module)
+
+
+def test_generic_providers_do_not_reference_file_management_domain():
+    providers_root = Path(__file__).resolve().parents[2] / "appV2.2/appv22/providers"
+    for path in providers_root.rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        assert "appv22.extensions.file_management" not in source
+        assert "extensions.file_management" not in source
+        assert "file_management." not in source

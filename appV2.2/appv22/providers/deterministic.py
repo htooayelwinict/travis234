@@ -8,13 +8,17 @@ class DeterministicAppV22Provider:
 
     def decide(self, prompt: dict) -> RuntimeDecision:
         if not prompt["world"]["world_refs"]:
+            tool_ids = prompt.get("selection", {}).get("selected_tools") or prompt.get("tools", [])
+            if not tool_ids:
+                return RuntimeDecision("pause", "no prompt-visible tool available")
             return RuntimeDecision(
                 "tool_call",
                 "observe first",
-                {"tool_id": "file_management.repo_snapshot", "arguments": {}},
+                {"tool_id": tool_ids[0], "arguments": {}},
             )
         if not prompt["state"]["runtime_plan"]:
-            return RuntimeDecision("plan", "plan from observed snapshot", evidence_refs=["world://repo_snapshot/latest"])
+            evidence_refs = list(prompt["world"]["world_refs"])
+            return RuntimeDecision("plan", "plan from observed context", evidence_refs=evidence_refs)
         if not prompt["state"]["mutation_receipts"]:
             return RuntimeDecision(
                 "mutation_intent",

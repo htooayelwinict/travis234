@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from appv22.runtime.reducer import apply_event
@@ -190,31 +192,80 @@ class AppV22AgentRuntime:
         apply_event(state, event)
 
     def _provider_bound_prompt(self, state, prompt: dict) -> dict:
-        payload = deepcopy(prompt)
-        messages = [
-            {
-                "role": "system",
-                "name": "provider_bound_prompt",
-                "content": "Provider-bound prompt payload follows.",
-                "prompt": payload,
-            },
-            {
-                "role": "user",
-                "content": state.request.user_goal,
-                "metadata": deepcopy(payload.get("agent", {})),
-            },
-        ]
+        messages = self._provider_prompt_messages(state, prompt)
         guarded = self.services.gateway_guard.guard(messages)
         compressed = self.services.compressor.compress(guarded, previous_summary=state.context_summary)
         context_summary = self._summary_from_messages(compressed)
         if context_summary is not None and context_summary != state.context_summary:
             self._apply(state, RuntimeEvent("ContextSummaryUpdated", context_summary))
-        provider_prompt = deepcopy(prompt)
-        for message in compressed:
-            if message.get("name") == "provider_bound_prompt" and isinstance(message.get("prompt"), dict):
-                provider_prompt = deepcopy(message["prompt"])
-                break
+        provider_prompt = self._prompt_from_governed_messages(compressed)
         provider_prompt["messages"] = compressed
+        return provider_prompt
+
+    def _provider_prompt_messages(self, state, prompt: dict) -> list[dict[str, Any]]:
+        messages: list[dict[str, Any]] = [
+            {
+                "role": "system",
+                "name": "provider_identity",
+                "content": prompt.get("system", {}).get("identity", "AppV2.2 provider context"),
+                "payload": deepcopy(prompt.get("system", {})),
+            }
+        ]
+        for section in ("agent", "state", "skills", "tools", "world", "selection"):
+            payload = deepcopy(prompt.get(section, {} if section not in {"skills", "tools"} else []))
+            messages.append(
+                {
+                    "role": "system",
+                    "name": "provider_context_section",
+                    "section": section,
+                    "content": self._section_content(section, payload),
+                    "payload": payload,
+                }
+            )
+        messages.append(
+            {
+                "role": "user",
+                "name": "user_goal",
+                "content": state.request.user_goal,
+            }
+        )
+        return messages
+
+    def _section_content(self, section: str, payload: Any) -> str:
+        return f"{section}: {json.dumps(payload, sort_keys=True, default=str)}"
+
+    def _prompt_from_governed_messages(self, messages: list[dict[str, Any]]) -> dict:
+        provider_prompt: dict[str, Any] = {
+            "system": {},
+            "agent": {},
+            "state": {
+                "mode": None,
+                "runtime_plan": {},
+                "mutation_receipts": {},
+                "verification_receipts": {},
+            },
+            "skills": [],
+            "tools": [],
+            "world": {"world_refs": {}},
+            "selection": {
+                "selected_tools": [],
+                "selected_skills": [],
+                "active_extensions": [],
+                "available_tools": [],
+            },
+        }
+        for message in messages:
+            if message.get("name") == "provider_identity" and isinstance(message.get("payload"), dict):
+                provider_prompt["system"] = deepcopy(message["payload"])
+                continue
+            if message.get("name") != "provider_context_section":
+                continue
+            section = message.get("section")
+            if section not in provider_prompt:
+                continue
+            payload = message.get("payload")
+            if isinstance(payload, dict | list):
+                provider_prompt[section] = deepcopy(payload)
         return provider_prompt
 
     def _summary_from_messages(self, messages: list[dict]) -> dict | None:
