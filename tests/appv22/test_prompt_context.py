@@ -51,6 +51,8 @@ def test_prompt_uses_pre_turn_mode_and_hides_tools_in_plan():
     assert prompt["selection"]["selected_tools"] == []
     assert prompt["selection"]["available_tools"] == []
     assert prompt["tools"] == []
+    assert selected["skills"][0]["tool_ids"] == ()
+    assert prompt["skills"][0]["tool_ids"] == ()
 
 
 def test_observe_mode_exposes_only_tools_from_selected_skill_cards():
@@ -62,6 +64,8 @@ def test_observe_mode_exposes_only_tools_from_selected_skill_cards():
     assert selected["selection"]["available_tools"] == ["demo.inspect"]
     assert selected["tools"] == ["demo.inspect"]
     assert prompt["selection"]["available_tools"] == ["demo.inspect"]
+    assert selected["skills"][0]["tool_ids"] == ("demo.inspect",)
+    assert prompt["skills"][0]["tool_ids"] == ("demo.inspect",)
 
 
 def test_read_mode_tool_order_is_deterministic_and_scoped_to_selected_skill_cards():

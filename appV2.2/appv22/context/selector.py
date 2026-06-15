@@ -24,6 +24,14 @@ class ContextSelector:
             for card in skill_cards
             for tool_id in card.tool_ids
         ] if pre_turn_mode in READ_TOOL_MODES else []
+        prompt_visible_tool_ids = set(selected_tools)
+        serialized_skills = []
+        for card in skill_cards:
+            serialized_card = asdict(card)
+            serialized_card["tool_ids"] = tuple(
+                tool_id for tool_id in card.tool_ids if tool_id in prompt_visible_tool_ids
+            )
+            serialized_skills.append(serialized_card)
         selected_skills = [card.skill_id for card in skill_cards]
 
         return {
@@ -33,7 +41,7 @@ class ContextSelector:
                 "mutation_receipts": deepcopy(state.mutation_receipts),
                 "verification_receipts": deepcopy(state.verification_receipts),
             },
-            "skills": [asdict(card) for card in skill_cards],
+            "skills": serialized_skills,
             "tools": selected_tools,
             "world": {"world_refs": deepcopy(state.world_refs)},
             "selection": {
