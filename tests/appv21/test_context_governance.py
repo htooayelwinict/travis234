@@ -163,3 +163,49 @@ def test_workspace_cleanup_skill_activates_as_card() -> None:
         }
     ]
     assert "prompt_patch" not in cards[0]
+
+
+def test_workspace_cleanup_skill_does_not_activate_for_remove_imports() -> None:
+    state = AgentState(
+        session_id="sess",
+        run_id="run",
+        request=RequestEnvelope(
+            request_id="req",
+            user_goal="remove unused imports",
+            root_path=".",
+        ),
+    )
+
+    assert SkillRouter().active_skills(state) == []
+
+
+def test_workspace_cleanup_skill_cards_are_isolated_from_returned_mutations() -> None:
+    state = AgentState(
+        session_id="sess",
+        run_id="run",
+        request=RequestEnvelope(
+            request_id="req",
+            user_goal="Organize this workspace safely.",
+            root_path=".",
+        ),
+    )
+    router = SkillRouter()
+
+    cards = router.active_skills(state)
+    cards[0]["tool_preferences"].append("mutated")
+    cards[0]["preservation_rules"].clear()
+
+    next_cards = router.active_skills(state)
+
+    assert next_cards[0]["tool_preferences"] == ["repo_snapshot", "read_file"]
+    assert next_cards[0]["preservation_rules"] == [
+        "tests/**",
+        "src/**",
+        "assets/**",
+        "secrets/**",
+        "README.md",
+        "docs/**",
+        "**/keep*",
+        "**/do_not_move*",
+        "**/old_blob*",
+    ]
