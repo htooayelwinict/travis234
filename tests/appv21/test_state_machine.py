@@ -63,6 +63,16 @@ def test_state_machine_counts_only_consecutive_nonproductive_decisions() -> None
     assert machine.record_progress(RuntimeDecision(kind="observe", reason="again"), changed=False) is None
 
 
+def test_state_machine_progress_can_be_reset_between_runs() -> None:
+    machine = RuntimeStateMachine(max_repeated_decisions=2)
+    decision = RuntimeDecision(kind="observe", reason="again")
+
+    assert machine.record_progress(decision, changed=False) is None
+    machine.reset_progress()
+
+    assert machine.record_progress(decision, changed=False) is None
+
+
 def test_state_machine_target_modes_cover_canonical_decision_kinds() -> None:
     assert set(TARGET_MODE_BY_DECISION) == KNOWN_DECISION_KINDS
     assert unmapped_decision_kinds() == set()

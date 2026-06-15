@@ -46,6 +46,10 @@ class RuntimeStateMachine:
     _last_nonproductive_key: str | None = None
     _repeated_count: int = 0
 
+    def reset_progress(self) -> None:
+        self._last_nonproductive_key = None
+        self._repeated_count = 0
+
     def validate_transition(self, current_mode: RuntimeMode | str, decision: RuntimeDecision) -> str | None:
         if current_mode not in TRANSITIONS:
             return f"invalid_mode:{current_mode}"

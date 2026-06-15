@@ -54,6 +54,7 @@ class AppV21AgentRuntime:
                 )
             ],
         )
+        self.state_machine.reset_progress()
         return self._run_loop(state)
 
     def resume(self, pause_id: str, user_input: dict) -> dict:
@@ -140,14 +141,12 @@ class AppV21AgentRuntime:
 
     def _progress_snapshot(self, state: AgentState) -> tuple[Any, ...]:
         return (
-            len(self.store.to_dicts()),
             tuple(state.world.refs),
             repr(state.plan),
             tuple(state.world.mutation_receipts),
             tuple(state.world.verification_receipts),
             tuple(state.world.artifacts),
             state.terminal,
-            state.mode,
             repr(state.result),
         )
 
