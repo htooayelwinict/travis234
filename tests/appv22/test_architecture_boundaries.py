@@ -14,7 +14,9 @@ def _imported_modules(path: Path) -> set[str]:
 
 
 def test_runtime_core_does_not_import_extensions_package():
-    runtime_files = Path("appV2.2/appv22/runtime").rglob("*.py")
+    runtime_files = (Path(__file__).resolve().parents[2] / "appV2.2/appv22/runtime").rglob(
+        "*.py"
+    )
     for path in runtime_files:
         for module in _imported_modules(path):
             assert module != "appv22.extensions"

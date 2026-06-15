@@ -28,15 +28,23 @@ class ExtensionRegistry:
         self._extensions[extension.extension_id] = extension
 
     def resolve_active(self, state: AgentState) -> ResolvedExtensions:
-        cards = sorted(
-            (
-                card
-                for extension in self._extensions.values()
-                for card in extension.skill_cards()
-                if card.activates_for(state)
-            ),
-            key=lambda card: (card.extension_id, card.skill_id),
-        )
+        cards: list[SkillCard] = []
+        seen_skill_cards: set[tuple[str, str]] = set()
+        for extension in self._extensions.values():
+            for card in extension.skill_cards():
+                if not card.activates_for(state):
+                    continue
+                if card.extension_id != extension.extension_id:
+                    raise ValueError(
+                        "skill card extension_id mismatch: "
+                        f"registered extension {extension.extension_id} returned {card.extension_id}"
+                    )
+                skill_key = (card.extension_id, card.skill_id)
+                if skill_key in seen_skill_cards:
+                    raise ValueError(f"duplicate active skill card: {card.extension_id}/{card.skill_id}")
+                seen_skill_cards.add(skill_key)
+                cards.append(card)
+        cards = sorted(cards, key=lambda card: (card.extension_id, card.skill_id))
         return ResolvedExtensions(
             extension_ids=tuple(sorted({card.extension_id for card in cards})),
             skill_cards=tuple(cards),

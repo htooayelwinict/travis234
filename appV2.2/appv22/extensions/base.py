@@ -20,6 +20,10 @@ class SkillCard:
     tool_ids: tuple[str, ...]
     artifact_schema_ids: tuple[str, ...]
 
+    def __post_init__(self) -> None:
+        for field_name in ("triggers", "modes", "tool_ids", "artifact_schema_ids"):
+            object.__setattr__(self, field_name, tuple(getattr(self, field_name)))
+
     def activates_for(self, state: AgentState) -> bool:
         if self.modes and state.mode not in self.modes:
             return False

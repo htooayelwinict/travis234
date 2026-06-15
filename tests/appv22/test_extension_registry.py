@@ -89,6 +89,61 @@ class OtherExtension(RuntimeExtension):
         ]
 
 
+class MismatchedSkillExtension(RuntimeExtension):
+    extension_id = "registered"
+
+    def skill_cards(self):
+        return [
+            SkillCard(
+                "cleanup",
+                "reported",
+                ("clean",),
+                ("START",),
+                "Mismatched",
+                "registered.planner",
+                "registered.policy",
+                "registered.executor",
+                "registered.verifier",
+                (),
+                (),
+            )
+        ]
+
+
+class DuplicateSkillExtension(RuntimeExtension):
+    extension_id = "duplicate"
+
+    def skill_cards(self):
+        return [
+            SkillCard(
+                "cleanup",
+                "duplicate",
+                ("clean",),
+                ("START",),
+                "Duplicate A",
+                "duplicate.planner",
+                "duplicate.policy",
+                "duplicate.executor",
+                "duplicate.verifier",
+                (),
+                (),
+            ),
+            SkillCard(
+                "cleanup",
+                "duplicate",
+                ("clean",),
+                ("START",),
+                "Duplicate B",
+                "duplicate.planner",
+                "duplicate.policy",
+                "duplicate.executor",
+                "duplicate.verifier",
+                (),
+                (),
+            ),
+        ]
+
+
 def test_extension_resolution_links_skill_to_capabilities():
     registry = ExtensionRegistry()
     capabilities = CapabilityRegistry()
@@ -141,6 +196,36 @@ def test_resolved_extensions_are_immutable_tuples():
     assert isinstance(resolved.artifact_schema_ids, tuple)
 
 
+def test_skill_card_normalizes_collection_fields_to_immutable_tuples():
+    triggers = ["clean"]
+    modes = ["START"]
+    tool_ids = ["demo.inspect"]
+    artifact_schema_ids = ["demo.schema"]
+
+    card = SkillCard(
+        "demo.cleanup",
+        "demo",
+        triggers,
+        modes,
+        "Demo",
+        "demo.planner",
+        "demo.policy",
+        "demo.executor",
+        "demo.verifier",
+        tool_ids,
+        artifact_schema_ids,
+    )
+    triggers.append("mutated")
+    modes.append("ACT")
+    tool_ids.append("demo.mutate")
+    artifact_schema_ids.append("demo.changed")
+
+    assert card.triggers == ("clean",)
+    assert card.modes == ("START",)
+    assert card.tool_ids == ("demo.inspect",)
+    assert card.artifact_schema_ids == ("demo.schema",)
+
+
 def test_extension_registry_rejects_duplicate_extension_ids():
     registry = ExtensionRegistry()
     registry.register(DemoExtension())
@@ -162,6 +247,27 @@ def test_skill_cards_resolve_in_deterministic_order():
         ("other", "alpha"),
         ("other", "zeta"),
     ]
+
+
+def test_extension_registry_rejects_mismatched_active_skill_extension_id():
+    registry = ExtensionRegistry()
+    registry.register(MismatchedSkillExtension())
+    state = AgentState("sess", "run", RequestEnvelope("req", "please clean", "."))
+
+    with pytest.raises(
+        ValueError,
+        match="skill card extension_id mismatch: registered extension registered returned reported",
+    ):
+        registry.resolve_active(state)
+
+
+def test_extension_registry_rejects_duplicate_active_skill_cards():
+    registry = ExtensionRegistry()
+    registry.register(DuplicateSkillExtension())
+    state = AgentState("sess", "run", RequestEnvelope("req", "please clean", "."))
+
+    with pytest.raises(ValueError, match="duplicate active skill card: duplicate/cleanup"):
+        registry.resolve_active(state)
 
 
 def test_capability_registry_rejects_duplicate_capability_ids():
