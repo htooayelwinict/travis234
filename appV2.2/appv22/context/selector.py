@@ -41,6 +41,6 @@ class ContextSelector:
                 "selected_tools": list(selected_tools),
                 "selected_skills": selected_skills,
                 "active_extensions": list(resolved.extension_ids),
-                "available_tools": list(resolved.tool_ids),
+                "available_tools": list(selected_tools),
             },
         }

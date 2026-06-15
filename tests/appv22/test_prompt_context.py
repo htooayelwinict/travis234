@@ -49,15 +49,19 @@ def test_prompt_uses_pre_turn_mode_and_hides_tools_in_plan():
 
     assert prompt["agent"]["mode"] == "PLAN"
     assert prompt["selection"]["selected_tools"] == []
+    assert prompt["selection"]["available_tools"] == []
     assert prompt["tools"] == []
 
 
 def test_observe_mode_exposes_only_tools_from_selected_skill_cards():
     state = AgentState("sess", "run", RequestEnvelope("req", "clean this", "."), mode="OBSERVE")
     selected = ContextSelector().select(state, _resolved(), pre_turn_mode="OBSERVE")
+    prompt = PromptBuilder().build(state, selected)
 
     assert selected["selection"]["selected_tools"] == ["demo.inspect"]
+    assert selected["selection"]["available_tools"] == ["demo.inspect"]
     assert selected["tools"] == ["demo.inspect"]
+    assert prompt["selection"]["available_tools"] == ["demo.inspect"]
 
 
 def test_read_mode_tool_order_is_deterministic_and_scoped_to_selected_skill_cards():
@@ -129,4 +133,4 @@ def test_prompt_includes_state_receipts_world_refs_and_metadata_without_mutabili
     assert prompt["state"]["verification_receipts"]["verify_1"]["status"] == "passed"
     assert prompt["world"]["world_refs"]["world://repo_snapshot/latest"]["summary"] == "snapshot"
     assert prompt["selection"]["active_extensions"] == ["demo"]
-    assert prompt["selection"]["available_tools"] == ["demo.inspect", "demo.plan_only"]
+    assert prompt["selection"]["available_tools"] == ["demo.inspect"]
