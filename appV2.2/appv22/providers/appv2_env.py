@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+from hashlib import sha256
 from importlib import import_module
+import json
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -54,7 +57,7 @@ def normalize_appv22_decision_payload(
 
     raw_decision = _raw_decision_dict(raw)
     payload = raw_decision.get("payload") if isinstance(raw_decision.get("payload"), dict) else {}
-    payload = dict(payload)
+    payload = deepcopy(payload)
     _normalize_tool_payload(payload, tool_name_map=dict(tool_name_map or {}))
 
     kind = str(raw_decision.get("kind") or "pause")
@@ -77,7 +80,7 @@ def normalize_appv22_decision_payload(
         reason=str(raw_decision.get("reason") or ""),
         payload=payload,
         evidence_refs=[str(ref) for ref in evidence_refs],
-        decision_id=str(raw_decision.get("decision_id") or ""),
+        decision_id=_normalize_decision_id(raw_decision),
     )
 
 
@@ -97,9 +100,29 @@ def _raw_decision_dict(raw: Any) -> dict[str, Any]:
     }
 
 
+def _normalize_decision_id(raw_decision: Mapping[str, Any]) -> str:
+    decision_id = raw_decision.get("decision_id")
+    if isinstance(decision_id, str) and decision_id:
+        return decision_id
+
+    stable_payload = {
+        "kind": raw_decision.get("kind"),
+        "reason": raw_decision.get("reason"),
+        "payload": raw_decision.get("payload"),
+        "evidence_refs": raw_decision.get("evidence_refs"),
+    }
+    encoded = json.dumps(stable_payload, sort_keys=True, default=str, separators=(",", ":"))
+    return f"appv22-adapter-{sha256(encoded.encode('utf-8')).hexdigest()[:16]}"
+
+
 def _normalize_tool_payload(payload: dict[str, Any], *, tool_name_map: Mapping[str, str]) -> None:
-    if "arguments" not in payload and "params" in payload:
-        payload["arguments"] = payload["params"]
+    if "params" in payload:
+        payload["params"] = deepcopy(payload["params"])
+
+    if "arguments" in payload:
+        payload["arguments"] = deepcopy(payload["arguments"])
+    elif "params" in payload:
+        payload["arguments"] = deepcopy(payload["params"])
 
     if "tool_id" in payload:
         return

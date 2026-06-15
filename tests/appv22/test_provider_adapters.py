@@ -11,6 +11,49 @@ from appv22.providers.appv2_env import (
 from appv22.runtime.decisions import RuntimeDecision
 
 
+def test_normalize_synthesizes_non_empty_decision_id_when_missing():
+    first = normalize_appv22_decision_payload(
+        {
+            "kind": "tool_call",
+            "reason": "legacy provider omitted id",
+            "payload": {"tool_name": "inventory_probe", "params": {"depth": 1}},
+            "evidence_refs": ["world://seed"],
+        }
+    )
+    second = normalize_appv22_decision_payload(
+        {
+            "kind": "tool_call",
+            "reason": "legacy provider omitted id",
+            "payload": {"tool_name": "inventory_probe", "params": {"depth": 1}},
+            "evidence_refs": ["world://seed"],
+        }
+    )
+
+    assert first.decision_id
+    assert first.decision_id == second.decision_id
+    assert first.decision_id != ""
+
+
+def test_normalize_deep_copies_params_into_arguments_without_aliasing():
+    params = {"nested": {"depth": 1}}
+    decision = normalize_appv22_decision_payload(
+        {
+            "decision_id": "dec_params",
+            "kind": "tool_call",
+            "reason": "copy params safely",
+            "payload": {"tool_name": "inventory_probe", "params": params},
+            "evidence_refs": [],
+        }
+    )
+
+    params["nested"]["depth"] = 99
+    decision.payload["params"]["nested"]["depth"] = 2
+
+    assert decision.payload["arguments"] == {"nested": {"depth": 1}}
+    assert decision.payload["arguments"] is not decision.payload["params"]
+    assert decision.payload["arguments"]["nested"] is not decision.payload["params"]["nested"]
+
+
 def test_normalize_preserves_generic_tool_name_as_tool_id_without_mapping():
     decision = normalize_appv22_decision_payload(
         {
@@ -55,13 +98,14 @@ def test_normalize_uses_caller_supplied_tool_name_mapping():
         {
             "kind": "tool_call",
             "reason": "use legacy name",
-            "payload": {"tool_name": "repo_snapshot", "arguments": {}},
+            "payload": {"tool_name": "legacy_probe", "arguments": {"limit": 2}},
             "evidence_refs": [],
         },
-        tool_name_map={"repo_snapshot": "file_management.repo_snapshot"},
+        tool_name_map={"legacy_probe": "extensions.generic_inventory.probe"},
     )
 
-    assert decision.payload["tool_id"] == "file_management.repo_snapshot"
+    assert decision.payload["tool_id"] == "extensions.generic_inventory.probe"
+    assert decision.payload["arguments"] == {"limit": 2}
 
 
 def test_normalize_reconstructs_appv2_env_like_raw_decision():

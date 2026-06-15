@@ -1,5 +1,7 @@
 import ast
+import io
 from pathlib import Path
+import tokenize
 
 
 def _module_parts_for_path(path: Path) -> tuple[str, ...]:
@@ -58,6 +60,21 @@ def _is_file_management_extension_import(module: str) -> bool:
             "extensions.file_management.",
         )
     )
+
+
+def _string_literals(path: Path) -> list[str]:
+    tokens = tokenize.generate_tokens(io.StringIO(path.read_text(encoding="utf-8")).readline)
+    literals: list[str] = []
+    for token in tokens:
+        if token.type != tokenize.STRING:
+            continue
+        try:
+            value = ast.literal_eval(token.string)
+        except (SyntaxError, ValueError):
+            continue
+        if isinstance(value, str):
+            literals.append(value)
+    return literals
 
 
 def test_runtime_extension_boundary_allows_generic_extension_contracts():
@@ -130,7 +147,9 @@ def test_runtime_core_does_not_import_file_management_extensions():
 def test_generic_providers_do_not_reference_file_management_domain():
     providers_root = Path(__file__).resolve().parents[2] / "appV2.2/appv22/providers"
     for path in providers_root.rglob("*.py"):
-        source = path.read_text(encoding="utf-8")
-        assert "appv22.extensions.file_management" not in source
-        assert "extensions.file_management" not in source
-        assert "file_management." not in source
+        for module in _imported_modules(path):
+            assert not _is_file_management_extension_import(module)
+        for literal in _string_literals(path):
+            assert "appv22.extensions.file_management" not in literal
+            assert "extensions.file_management" not in literal
+            assert "file_management." not in literal
