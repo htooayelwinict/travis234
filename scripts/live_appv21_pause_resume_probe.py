@@ -14,6 +14,8 @@ class PauseThenFinalizeProvider:
 
     def __init__(self) -> None:
         self.decisions = [
+            RuntimeDecision(kind="observe", reason="Observe before high-risk mutation intent."),
+            RuntimeDecision(kind="plan", reason="Enter mutation phase.", evidence_refs=["world://repo_snapshot/latest"]),
             RuntimeDecision(
                 kind="mutation_intent",
                 reason="Overwrite high-risk env file.",

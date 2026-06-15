@@ -32,6 +32,14 @@ class QueueProvider:
         return self.decisions.pop(0)
 
 
+def observe_and_plan_first(decisions: list[RuntimeDecision]) -> list[RuntimeDecision]:
+    return [
+        RuntimeDecision(kind="observe", reason="observe before mutation intent"),
+        RuntimeDecision(kind="plan", reason="enter mutation phase", evidence_refs=["world://repo_snapshot/latest"]),
+        *decisions,
+    ]
+
+
 def test_decision_parser_rejects_unknown_kind() -> None:
     parsed = parse_runtime_decision({"kind": "teleport", "reason": "bad", "payload": {}, "evidence_refs": []})
 
@@ -107,16 +115,16 @@ def test_runtime_does_not_record_denied_sensitive_read_as_world_ref(tmp_path: Pa
 
 def test_bad_mutation_intent_is_denied_before_write(tmp_path: Path) -> None:
     provider = QueueProvider(
-        [
+        observe_and_plan_first([
             RuntimeDecision(
                 kind="mutation_intent",
                 reason="unsafe write",
                 payload={"operation_batch_id": "bad", "operations": [{"action": "write", "path": "../escape.txt", "content": "no"}]},
             )
-        ]
+        ])
     )
 
-    result = AppV21AgentRuntime(root_path=tmp_path, services=create_appv21_runtime_services(root_path=tmp_path, provider=provider), max_turns=1).run(
+    result = AppV21AgentRuntime(root_path=tmp_path, services=create_appv21_runtime_services(root_path=tmp_path, provider=provider), max_turns=3).run(
         "Write outside the repo."
     )
 
@@ -179,16 +187,16 @@ def test_durable_pause_resume_rehydrates_from_jsonl(tmp_path: Path) -> None:
 def test_high_risk_mutation_intent_forces_pause_before_write(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("SECRET=keep\n", encoding="utf-8")
     provider = QueueProvider(
-        [
+        observe_and_plan_first([
             RuntimeDecision(
                 kind="mutation_intent",
                 reason="overwrite secrets",
                 payload={"operation_batch_id": "risky", "operations": [{"action": "write", "path": ".env", "content": "SECRET=replace\n"}]},
             )
-        ]
+        ])
     )
 
-    result = AppV21AgentRuntime(root_path=tmp_path, services=create_appv21_runtime_services(root_path=tmp_path, provider=provider), max_turns=1).run(
+    result = AppV21AgentRuntime(root_path=tmp_path, services=create_appv21_runtime_services(root_path=tmp_path, provider=provider), max_turns=3).run(
         "Overwrite secrets."
     )
 
@@ -201,14 +209,14 @@ def test_high_risk_mutation_intent_forces_pause_before_write(tmp_path: Path) -> 
 def test_high_risk_mutation_resume_approval_applies_pending_intent(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("SECRET=keep\n", encoding="utf-8")
     provider = QueueProvider(
-        [
+        observe_and_plan_first([
             RuntimeDecision(
                 kind="mutation_intent",
                 reason="overwrite secrets",
                 payload={"operation_batch_id": "risky", "operations": [{"action": "write", "path": ".env", "content": "SECRET=replace\n"}]},
             ),
             RuntimeDecision(kind="finalize", reason="mutation applied", payload={"explicit_noop": True}),
-        ]
+        ])
     )
     runtime = AppV21AgentRuntime(root_path=tmp_path, services=create_appv21_runtime_services(root_path=tmp_path, provider=provider))
 
@@ -230,13 +238,13 @@ def test_high_risk_mutation_resume_approval_applies_pending_intent(tmp_path: Pat
 def test_high_risk_mutation_resume_requires_typed_batch_approval(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("SECRET=keep\n", encoding="utf-8")
     provider = QueueProvider(
-        [
+        observe_and_plan_first([
             RuntimeDecision(
                 kind="mutation_intent",
                 reason="overwrite secrets",
                 payload={"operation_batch_id": "risky", "operations": [{"action": "write", "path": ".env", "content": "SECRET=replace\n"}]},
             )
-        ]
+        ])
     )
     runtime = AppV21AgentRuntime(root_path=tmp_path, services=create_appv21_runtime_services(root_path=tmp_path, provider=provider))
 
@@ -261,13 +269,13 @@ def test_high_risk_mutation_resume_rejects_legacy_approval_shapes(tmp_path: Path
     repo.mkdir()
     (repo / ".env").write_text("SECRET=keep\n", encoding="utf-8")
     provider = QueueProvider(
-        [
+        observe_and_plan_first([
             RuntimeDecision(
                 kind="mutation_intent",
                 reason="overwrite secrets",
                 payload={"operation_batch_id": "risky", "operations": [{"action": "write", "path": ".env", "content": "SECRET=replace\n"}]},
             )
-        ]
+        ])
     )
     runtime = AppV21AgentRuntime(root_path=repo, services=create_appv21_runtime_services(root_path=repo, provider=provider))
 
@@ -284,13 +292,13 @@ def test_high_risk_mutation_resume_rejects_legacy_approval_shapes(tmp_path: Path
 def test_high_risk_mutation_resume_rejection_fails_without_write(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("SECRET=keep\n", encoding="utf-8")
     provider = QueueProvider(
-        [
+        observe_and_plan_first([
             RuntimeDecision(
                 kind="mutation_intent",
                 reason="overwrite secrets",
                 payload={"operation_batch_id": "risky", "operations": [{"action": "write", "path": ".env", "content": "SECRET=replace\n"}]},
             )
-        ]
+        ])
     )
     runtime = AppV21AgentRuntime(root_path=tmp_path, services=create_appv21_runtime_services(root_path=tmp_path, provider=provider))
 
@@ -308,13 +316,13 @@ def test_durable_high_risk_mutation_resume_approval_applies_pending_intent(tmp_p
     (tmp_path / ".env").write_text("SECRET=keep\n", encoding="utf-8")
     session_path = tmp_path / ".appv21-test" / "session.jsonl"
     first_provider = QueueProvider(
-        [
+        observe_and_plan_first([
             RuntimeDecision(
                 kind="mutation_intent",
                 reason="overwrite secrets",
                 payload={"operation_batch_id": "risky", "operations": [{"action": "write", "path": ".env", "content": "SECRET=replace\n"}]},
             )
-        ]
+        ])
     )
     paused = AppV21AgentRuntime(
         root_path=tmp_path,

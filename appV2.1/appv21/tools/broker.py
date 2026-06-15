@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import json
 import shutil
+from dataclasses import dataclass
+from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from appv21.state.models import MutationLease, MutationReceipt
+from appv21.tools.definitions import ToolCategory, ToolDefinition, ToolResultEnvelope
+from appv21.tools.registry import ToolRegistry
 
 SENSITIVE_PATH_NAMES = {
     ".env",
@@ -24,30 +28,121 @@ SENSITIVE_PATH_NAMES = {
     "credentials.json",
 }
 SENSITIVE_PATH_SUFFIXES = (".key", ".pem", ".p12", ".pfx", ".crt", ".cer")
+READ_TOOL_CATEGORIES = {
+    ToolCategory.OBSERVE,
+    ToolCategory.INSPECT,
+    ToolCategory.SEARCH,
+    ToolCategory.ANALYZE,
+    ToolCategory.PLAN_HELPER,
+    ToolCategory.VERIFY,
+}
+ToolHandler = Callable[[dict[str, Any]], dict[str, Any]]
+ENVELOPE_METADATA_KEYS = {
+    "tool_result_id",
+    "tool_name",
+    "status",
+    "trust",
+    "prompt_summary",
+    "payload_ref",
+    "evidence_refs",
+    "artifacts",
+}
+RISKY_PROMPT_SUMMARY_KEYS = {"content", "preview", "payload", "payload_ref", "evidence_refs", "artifacts"}
+
+
+@dataclass(frozen=True)
+class ToolExecutionResult:
+    envelope: dict[str, Any]
+    raw_payload: dict[str, Any] | None = None
+    payload_ref: str | None = None
+
+
+def default_tool_registry() -> ToolRegistry:
+    registry = ToolRegistry()
+    registry.register(
+        ToolDefinition(
+            name="repo_snapshot",
+            category=ToolCategory.OBSERVE,
+            argument_schema={"type": "object", "properties": {}, "additionalProperties": False},
+            result_schema={
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string"},
+                    "files": {"type": "array"},
+                    "directories": {"type": "array"},
+                },
+            },
+            risk_level="low",
+            trust="runtime_observed",
+            guidance="Use before planning; returns file and directory map only.",
+            cacheable=True,
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="read_file",
+            category=ToolCategory.INSPECT,
+            argument_schema={
+                "type": "object",
+                "required": ["path"],
+                "properties": {"path": {"type": "string"}},
+                "additionalProperties": False,
+            },
+            result_schema={
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string"},
+                    "path": {"type": "string"},
+                    "bytes": {"type": "integer"},
+                    "content": {"type": "string"},
+                },
+            },
+            risk_level="low",
+            trust="runtime_observed",
+            guidance="Use for targeted file evidence; never infer file contents without this.",
+        )
+    )
+    return registry
 
 
 class ToolBroker:
-    def __init__(self, *, root_path: str | Path) -> None:
+    def __init__(self, *, root_path: str | Path, registry: ToolRegistry | None = None) -> None:
         self.root = Path(root_path).resolve()
+        self.registry = registry or default_tool_registry()
+        self._handlers: dict[str, ToolHandler] = {
+            "repo_snapshot": lambda _arguments: self.repo_snapshot(),
+            "read_file": lambda arguments: self.read_file(str(arguments.get("path") or "")),
+        }
         self._issued_leases: dict[str, MutationLease] = {}
 
+    def register_tool(self, definition: ToolDefinition, handler: ToolHandler) -> None:
+        self.registry.register(definition)
+        self._handlers[definition.name] = handler
+
     def tool_specs(self) -> list[dict[str, Any]]:
-        return [
-            {
-                "name": "repo_snapshot",
-                "kind": "observe",
-                "trust": "runtime_observed",
-                "guidance": "Use before planning; returns file and directory map only.",
-            },
-            {
-                "name": "read_file",
-                "kind": "observe",
-                "trust": "runtime_observed",
-                "guidance": "Use for targeted file evidence; never infer file contents without this.",
-            },
-        ]
+        specs: list[dict[str, Any]] = []
+        for definition in self.registry.list():
+            if definition.name not in self._handlers:
+                continue
+            specs.append(
+                {
+                    "name": definition.name,
+                    "category": definition.category.value,
+                    "trust": definition.trust,
+                    "guidance": definition.guidance,
+                    "argument_schema": definition.argument_schema,
+                    "result_schema": definition.result_schema,
+                    "risk_level": definition.risk_level,
+                }
+            )
+        return specs
 
     def validate_tool_call(self, tool_name: str, arguments: dict[str, Any]) -> list[str]:
+        registry_errors = self.registry.validate_call(tool_name, arguments)
+        if registry_errors:
+            return registry_errors
+        if tool_name not in self._handlers:
+            return [f"unavailable_tool:{tool_name}"]
         if tool_name == "repo_snapshot":
             return []
         if tool_name == "read_file":
@@ -60,27 +155,33 @@ class ToolBroker:
             if not safe_path.is_file():
                 return [f"path_not_file:{path}"]
             return []
-        return [f"unknown_tool:{tool_name}"]
+        return []
 
     def execute_tool_call(self, tool_name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.execute_tool_call_result(tool_name, arguments).envelope
+
+    def execute_tool_call_result(self, tool_name: str, arguments: dict[str, Any] | None = None) -> ToolExecutionResult:
         arguments = arguments or {}
         errors = self.validate_tool_call(tool_name, arguments)
         if errors:
-            return self.tool_result_envelope(tool_name=tool_name, status="denied", payload={"errors": errors})
-        if tool_name == "repo_snapshot":
-            result = self.repo_snapshot()
-        elif tool_name == "read_file":
-            result = self.read_file(str(arguments.get("path") or ""))
-        else:
-            result = {"status": "denied", "errors": [f"unknown_tool:{tool_name}"]}
+            envelope = self.tool_result_envelope(tool_name=tool_name, status="denied", payload={"errors": errors})
+            return ToolExecutionResult(envelope=envelope)
+        result = self._handlers[tool_name](arguments)
         status = str(result.get("status") or "completed")
-        payload = {key: value for key, value in result.items() if key not in {"tool_result_id", "tool_name", "status", "trust", "prompt_summary"}}
-        return self.tool_result_envelope(
+        payload = {key: value for key, value in result.items() if key not in ENVELOPE_METADATA_KEYS}
+        prompt_summary = self.compact_prompt_summary(result)
+        envelope = self.tool_result_envelope(
             tool_name=tool_name,
             status=status,
-            payload=payload,
-            prompt_summary=result.get("prompt_summary") or self.compact_tool_result(result),
+            payload=self.compact_payload(tool_name=tool_name, status=status, payload=payload),
+            prompt_summary=prompt_summary,
             evidence_refs=list(result.get("evidence_refs") or []),
+            create_payload_ref=status == "completed",
+        )
+        return ToolExecutionResult(
+            envelope=envelope,
+            raw_payload=deepcopy(payload) if status == "completed" else None,
+            payload_ref=envelope.get("payload_ref") if status == "completed" else None,
         )
 
     def tool_result_envelope(
@@ -91,21 +192,58 @@ class ToolBroker:
         payload: dict[str, Any],
         prompt_summary: dict[str, Any] | None = None,
         evidence_refs: list[str] | None = None,
+        create_payload_ref: bool = False,
     ) -> dict[str, Any]:
-        return {
-            "tool_result_id": f"toolres_{uuid4().hex}",
-            "tool_name": tool_name,
-            "status": status,
-            "trust": "runtime_observed" if tool_name in {"repo_snapshot", "read_file"} else "runtime_owned",
-            "payload": payload,
-            "prompt_summary": prompt_summary or self.compact_tool_result(payload),
-            "evidence_refs": list(evidence_refs or []),
-        }
+        tool_result_id = f"toolres_{uuid4().hex}"
+        payload_ref = f"world://tool_payload/{tool_result_id}" if create_payload_ref else ""
+        envelope = ToolResultEnvelope(
+            tool_result_id=tool_result_id,
+            tool_name=tool_name,
+            status=status,
+            trust=self._trust_for(tool_name),
+            payload_ref=payload_ref,
+            prompt_summary=prompt_summary or self.compact_tool_result(payload),
+            evidence_refs=list(evidence_refs or []),
+            artifacts=[],
+        ).to_dict()
+        envelope["payload"] = deepcopy(payload)
+        return envelope
+
+    def compact_payload(self, *, tool_name: str, status: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if status != "completed":
+            return deepcopy(payload)
+        if tool_name == "read_file":
+            compact = {key: value for key, value in payload.items() if key != "content"}
+            if "bytes" not in compact and "content" in payload:
+                compact["bytes"] = len(str(payload.get("content") or "").encode("utf-8"))
+            return compact
+        if tool_name == "repo_snapshot":
+            return {
+                "file_count": len(payload.get("files") or []),
+                "directory_count": len(payload.get("directories") or []),
+            }
+        compact = {key: value for key, value in payload.items() if key != "content"}
+        if "content" in payload:
+            compact["bytes"] = len(str(payload.get("content") or "").encode("utf-8"))
+        return compact
+
+    def compact_prompt_summary(self, result: dict[str, Any]) -> dict[str, Any]:
+        if "content" in result or "files" in result:
+            return self.compact_tool_result(result)
+        supplied = result.get("prompt_summary")
+        if isinstance(supplied, dict):
+            sanitized = {key: deepcopy(value) for key, value in supplied.items() if key not in RISKY_PROMPT_SUMMARY_KEYS}
+            if sanitized:
+                return sanitized
+        return self.compact_tool_result(result)
 
     def compact_tool_result(self, result: dict[str, Any]) -> dict[str, Any]:
         if "content" in result:
             content = str(result.get("content") or "")
-            return {"bytes": len(content.encode("utf-8")), "preview": content[:500]}
+            summary = {"bytes": len(content.encode("utf-8")), "line_count": len(content.splitlines())}
+            if "path" in result:
+                summary["path"] = result["path"]
+            return summary
         if "files" in result:
             return {"file_count": len(result.get("files") or []), "directory_count": len(result.get("directories") or [])}
         return {"keys": sorted(result)[:20]}
@@ -114,8 +252,18 @@ class ToolBroker:
         return {
             "mutating_tools_require_lease": True,
             "high_risk_mutations_require_human": True,
-            "read_tools": ["repo_snapshot", "read_file"],
+            "read_tools": [
+                definition.name
+                for definition in self.registry.list()
+                if definition.name in self._handlers and definition.category in READ_TOOL_CATEGORIES
+            ],
         }
+
+    def _trust_for(self, tool_name: str) -> str:
+        definition = self.registry.get(tool_name)
+        if definition is None:
+            return "runtime_owned"
+        return definition.trust
 
     def repo_snapshot(self) -> dict[str, Any]:
         files: list[str] = []
@@ -158,7 +306,7 @@ class ToolBroker:
             "path": path,
             "bytes": len(text.encode("utf-8")),
             "content": text,
-            "prompt_summary": {"path": path, "preview": text[:500]},
+            "prompt_summary": {"path": path, "bytes": len(text.encode("utf-8")), "line_count": len(text.splitlines())},
         }
 
     def derive_mutation_lease(self, *, operation_batch_id: str, operations: list[dict[str, Any]]) -> MutationLease:

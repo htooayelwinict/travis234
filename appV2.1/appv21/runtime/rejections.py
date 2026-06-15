@@ -1,0 +1,12 @@
+"""Stable rejection reason constants for AppV2.1."""
+
+MISSING_EVIDENCE = "missing_evidence"
+UNSUPPORTED_DECISION = "unsupported_decision"
+UNSAFE_TOOL = "unsafe_tool"
+INVALID_MUTATION = "invalid_mutation"
+STALE_PLAN = "stale_plan"
+VERIFICATION_FAILED = "verification_failed"
+REPEATED_LOOP = "repeated_loop"
+INVALID_TRANSITION = "invalid_transition"
+FINALIZE_WITHOUT_VERIFICATION = "finalize_without_verification"
+INVALID_PAYLOAD = "invalid_payload"

@@ -15,11 +15,14 @@ from appv21.extensions.skills import SkillRouter
 from appv21.extensions.verifier import VerifierExtension
 from appv21.providers.base import AgentProvider
 from appv21.providers.deterministic import DeterministicWorkspaceProvider
+from appv21.runtime.decision_validator import DecisionValidator
 from appv21.runtime.event_bus import EventBus
 from appv21.runtime.model_registry import ModelRegistry
 from appv21.runtime.session_store import JsonlSessionStore
+from appv21.runtime.state_machine import RuntimeStateMachine
 from appv21.state.store import InMemoryEventStore
 from appv21.tools.broker import ToolBroker
+from appv21.tools.evidence_store import EvidenceStore
 from appv21.validators.artifacts import ArtifactValidator
 
 
@@ -35,7 +38,10 @@ class AppV21RuntimeServices:
     context: DualContextManager
     prompt_builder: PromptBuilder
     artifact_validator: ArtifactValidator
+    decision_validator: DecisionValidator
+    state_machine: RuntimeStateMachine
     event_store: InMemoryEventStore
+    evidence_store: EvidenceStore
     event_bus: EventBus
     session_store: JsonlSessionStore
     extension_runner: ExtensionRunner
@@ -63,7 +69,10 @@ def create_appv21_runtime_services(
         context=DualContextManager(),
         prompt_builder=PromptBuilder(),
         artifact_validator=ArtifactValidator(),
+        decision_validator=DecisionValidator(),
+        state_machine=RuntimeStateMachine(),
         event_store=InMemoryEventStore(),
+        evidence_store=EvidenceStore(),
         event_bus=EventBus(),
         session_store=JsonlSessionStore(path),
         extension_runner=ExtensionRunner([TraceExtension()] if enable_trace_extension else []),

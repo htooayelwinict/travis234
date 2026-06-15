@@ -217,13 +217,25 @@ def test_matrix_probe_reports_include_top_level_counts(tmp_path: Path) -> None:
 def test_appv21_runtime_rejects_missing_decision_evidence(tmp_path: Path) -> None:
     class BadEvidenceProvider:
         provider_id = "bad-evidence"
+        observed = False
 
         def decide(self, prompt_payload: dict) -> RuntimeDecision:
+            if not self.observed:
+                self.observed = True
+                return RuntimeDecision(kind="observe", reason="observe first")
             return RuntimeDecision(kind="plan", reason="bad evidence", evidence_refs=["world://missing"])
 
     services = create_appv21_runtime_services(root_path=tmp_path, provider=BadEvidenceProvider())
-    result = AppV21AgentRuntime(root_path=tmp_path, services=services, max_turns=3).run("Clean up workspace.")
+    result = AppV21AgentRuntime(root_path=tmp_path, services=services, max_turns=4).run("Clean up workspace.")
 
     assert result["status"] == "failed"
     assert result["reason"] == "repeated_rejected_decision"
     assert [event["event_type"] for event in result["events"]].count("DecisionRejected") == 3
+    rejected_indexes = [index for index, event in enumerate(result["events"]) if event["event_type"] == "DecisionRejected"]
+    for index in rejected_indexes:
+        previous_mode = next(
+            event["payload"]["mode"]
+            for event in reversed(result["events"][:index])
+            if event["event_type"] == "ModeChanged"
+        )
+        assert previous_mode == "OBSERVE"
