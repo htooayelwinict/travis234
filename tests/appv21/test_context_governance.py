@@ -357,19 +357,19 @@ def test_compactor_preserves_receipts_and_repo_refs() -> None:
         producer="test",
         evidence_refs=["world://artifact/evidence"],
     )
-    state.world.artifacts["artifact-a"] = Artifact(
-        artifact_id="artifact-a",
-        kind="manifest",
-        content={"paths": ["README.md"]},
-        producer="test",
-        evidence_refs=["world://repo_snapshot/latest"],
-    )
     state.world.artifacts["artifact-multi"] = Artifact(
         artifact_id="artifact-multi",
         kind="manifest",
         content={"paths": ["docs/z.md", "docs/a.md"]},
         producer="test",
         evidence_refs=["world://artifact/evidence-z", "world://artifact/evidence-a"],
+    )
+    state.world.artifacts["artifact-a"] = Artifact(
+        artifact_id="artifact-a",
+        kind="manifest",
+        content={"paths": ["README.md"]},
+        producer="test",
+        evidence_refs=["world://repo_snapshot/latest"],
     )
     state.pauses.append(
         PauseState(
