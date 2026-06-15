@@ -24,6 +24,7 @@ class DecisionValidator:
             decision.kind == "finalize"
             and not state.world.verification_receipts
             and not (isinstance(payload, dict) and payload.get("explicit_noop"))
+            and not self._can_runtime_verify_before_finalize(state)
         ):
             issues.append(rejections.FINALIZE_WITHOUT_VERIFICATION)
         return issues
@@ -58,4 +59,12 @@ class DecisionValidator:
             ref in state.world.refs
             or ref in state.world.mutation_receipts
             or ref in state.world.verification_receipts
+        )
+
+    def _can_runtime_verify_before_finalize(self, state: AgentState) -> bool:
+        runtime_plan = state.plan.runtime_plan if state.plan is not None else {}
+        return (
+            bool(state.world.mutation_receipts)
+            and isinstance(runtime_plan, dict)
+            and isinstance(runtime_plan.get("verification_intent"), dict)
         )

@@ -12,11 +12,16 @@ from appv21.runtime.services import create_appv21_runtime_services
 class CompactingProvider:
     provider_id = "compacting"
 
+    def __init__(self) -> None:
+        self.calls = 0
+        self.compacted = False
+
     def decide(self, prompt_payload: dict) -> RuntimeDecision:
-        refs = prompt_payload["world"]["world_refs"]
-        if len(refs) < 8:
+        self.calls += 1
+        if self.calls <= 8:
             return RuntimeDecision(kind="tool_call", reason="Read README repeatedly.", payload={"tool_name": "read_file", "arguments": {"path": "README.md"}})
-        if prompt_payload["state"]["verification_receipts"]:
+        if not self.compacted:
+            self.compacted = True
             return RuntimeDecision(kind="compact", reason="Compact after verification evidence.")
         return RuntimeDecision(kind="finalize", reason="Verified no-op.", payload={"explicit_noop": True})
 

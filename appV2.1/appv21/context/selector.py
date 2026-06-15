@@ -25,27 +25,29 @@ class ContextSelector:
         state: AgentState,
         active_skills: list[dict[str, Any]],
         tool_specs: list[dict[str, Any]],
+        mode: str | None = None,
     ) -> dict[str, Any]:
+        selection_mode = mode or state.mode
         world_refs = self._select_world_refs(state)
-        selected_tools = self._select_tool_specs(state.mode, tool_specs)
-        selected_skills = self._select_skills(state.mode, active_skills)
+        selected_tools = self._select_tool_specs(selection_mode, tool_specs)
+        selected_skills = self._select_skills(selection_mode, active_skills)
 
         return {
-            "state": self._state_card(state),
-            "world": {"world_refs": world_refs},
+            "state": self._state_card(state, mode=selection_mode),
+            "world": self._world_card(state, world_refs),
             "skills": selected_skills,
             "tools": selected_tools,
             "selection": {
-                "mode": state.mode,
+                "mode": selection_mode,
                 "selected_world_refs": [ref["ref_id"] for ref in world_refs],
                 "selected_tools": [tool["name"] for tool in selected_tools if "name" in tool],
                 "selected_skills": [self._skill_name(skill) for skill in selected_skills],
             },
         }
 
-    def _state_card(self, state: AgentState) -> dict[str, Any]:
+    def _state_card(self, state: AgentState, *, mode: str) -> dict[str, Any]:
         return {
-            "mode": state.mode,
+            "mode": mode,
             "request": {
                 "request_id": state.request.request_id,
                 "user_goal": state.request.user_goal,
@@ -61,13 +63,31 @@ class ContextSelector:
             "terminal": state.terminal,
         }
 
+    def _world_card(self, state: AgentState, world_refs: list[dict[str, str]]) -> dict[str, Any]:
+        world = {"world_refs": world_refs}
+        if state.context.world_digest:
+            world["world_digest"] = deepcopy(state.context.world_digest)
+            world["compacted"] = True
+        return world
+
     def _select_world_refs(self, state: AgentState) -> list[dict[str, str]]:
         refs = list(state.world.refs.values())
+        if state.context.world_digest:
+            preserved_ids = set(
+                state.context.world_digest.get("preserved_world_refs")
+                or state.context.world_digest.get("latest_world_refs")
+                or []
+            )
+            refs = [ref for ref in refs if ref.ref_id in preserved_ids]
         repo_snapshot_refs = [ref for ref in refs if self._world_ref_kind(ref) == "repo_snapshot"]
-        selected_by_id = {ref.ref_id: ref for ref in repo_snapshot_refs}
-
-        latest_refs = [ref for ref in refs[-self.max_world_refs :] if ref.ref_id not in selected_by_id]
-        selected = [*repo_snapshot_refs, *latest_refs]
+        canonical_repo_ref = state.world.refs.get("world://repo_snapshot/latest")
+        if canonical_repo_ref is None and repo_snapshot_refs:
+            canonical_repo_ref = repo_snapshot_refs[-1]
+        selected: list[WorldRef] = [canonical_repo_ref] if canonical_repo_ref is not None else []
+        selected_ids = {ref.ref_id for ref in selected}
+        remaining_slots = max(self.max_world_refs - len(selected), 0)
+        latest_refs = [ref for ref in reversed(refs) if ref.ref_id not in selected_ids]
+        selected.extend(reversed(latest_refs[:remaining_slots]))
 
         return [self._world_ref_card(ref) for ref in selected]
 

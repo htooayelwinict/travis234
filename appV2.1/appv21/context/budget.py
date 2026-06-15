@@ -20,8 +20,9 @@ DEFAULT_SECTION_BUDGETS = MappingProxyType({
 
 
 def _immutable_section_budgets(section_budgets: Mapping[str, int]) -> Mapping[str, int]:
+    merged = {**DEFAULT_SECTION_BUDGETS, **dict(section_budgets)}
     return MappingProxyType(
-        {section_name: section_budgets[section_name] for section_name in DEFAULT_SECTION_BUDGETS}
+        {section_name: merged[section_name] for section_name in DEFAULT_SECTION_BUDGETS}
     )
 
 

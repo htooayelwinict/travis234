@@ -27,7 +27,7 @@ class PlannerExtension:
         manifest_moves: list[dict[str, str]] = []
 
         for path in files:
-            if path.startswith("tests/") or path == "docs/workspace_manifest.json":
+            if _is_preserved_source(path):
                 continue
             lower = path.lower()
             if "old_blob" in lower or "do_not_move" in lower or "keep" in lower:
@@ -84,3 +84,12 @@ def _destination_for(path: str) -> str | None:
     if path.startswith("tmp/"):
         return f"artifacts/tmp/{name}"
     return None
+
+
+def _is_preserved_source(path: str) -> bool:
+    if path == "README.md" or path == "docs/workspace_manifest.json":
+        return True
+    if path.startswith(("tests/", "src/", "assets/", "secrets/", "docs/")):
+        return True
+    filename = Path(path).name.lower()
+    return filename.startswith(("keep", "do_not_move", "old_blob"))

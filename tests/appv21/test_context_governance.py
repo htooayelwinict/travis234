@@ -72,6 +72,16 @@ def test_context_budget_marks_over_budget_sections() -> None:
     assert estimate["over_budget_sections"] == ["system", "tools"]
 
 
+def test_context_budget_accepts_partial_section_budget_overrides() -> None:
+    manager = ContextBudgetManager(section_budgets={"world": 10})
+
+    estimate = manager.estimate({"world": "x" * 20, "system": "ok"})
+
+    assert estimate["sections"]["world"]["budget"] == 10
+    assert estimate["sections"]["world"]["over_budget"] is True
+    assert estimate["sections"]["system"]["budget"] == DEFAULT_SECTION_BUDGETS["system"]
+
+
 def test_context_budget_defensively_copies_constructor_budget_dict() -> None:
     budgets = {
         **DEFAULT_SECTION_BUDGETS,
@@ -183,7 +193,7 @@ def test_workspace_cleanup_skill_activates_as_card() -> None:
         {
             "skill_id": "workspace_cleanup",
             "triggers": ["cleanup", "organize", "move", "workspace"],
-            "modes": ["OBSERVE", "PLAN", "ACT", "VERIFY"],
+            "modes": ["START", "THINK", "OBSERVE", "PLAN", "ACT", "VERIFY"],
             "summary": "Organize observed workspace files while preserving protected project, documentation, asset, and secret paths.",
             "tool_preferences": ["repo_snapshot", "read_file"],
             "artifact_templates": ["workspace_manifest"],
@@ -432,12 +442,70 @@ def test_context_selector_preserves_repo_snapshot_and_latest_refs() -> None:
     selected_ref_ids = [ref["ref_id"] for ref in world_refs]
     assert selected_ref_ids == [
         "world://repo_snapshot/latest",
-        "world://latest/2",
         "world://latest/3",
     ]
     assert selected["selection"]["selected_world_refs"] == selected_ref_ids
     assert all(set(ref) == {"ref_id", "kind", "summary", "trust"} for ref in world_refs)
     assert all("payload" not in ref for ref in world_refs)
+
+
+def test_context_selector_caps_repeated_repo_snapshots_to_latest_ref() -> None:
+    state = AgentState(
+        session_id="sess",
+        run_id="run",
+        request=RequestEnvelope(request_id="req", user_goal="Inspect the repo.", root_path="."),
+    )
+    for index in range(5):
+        state.world.refs[f"world://repo_snapshot/{index}"] = WorldRef(
+            ref_id=f"world://repo_snapshot/{index}",
+            kind="tool_result",
+            summary=f"repo map {index}",
+            payload={"tool_name": "repo_snapshot", "files": [f"{index}.md"]},
+        )
+    state.world.refs["world://repo_snapshot/latest"] = WorldRef(
+        ref_id="world://repo_snapshot/latest",
+        kind="repo_snapshot",
+        summary="latest repo map",
+        payload={"files": ["latest.md"]},
+    )
+    state.world.refs["world://latest/other"] = WorldRef(
+        ref_id="world://latest/other",
+        kind="tool_result",
+        summary="other evidence",
+        payload={"raw": "payload"},
+    )
+
+    selected = ContextSelector(max_world_refs=2).select(state, active_skills=[], tool_specs=[])
+
+    assert selected["selection"]["selected_world_refs"] == [
+        "world://repo_snapshot/latest",
+        "world://latest/other",
+    ]
+
+
+def test_context_selector_uses_compaction_digest_refs_and_exposes_digest() -> None:
+    state = AgentState(
+        session_id="sess",
+        run_id="run",
+        request=RequestEnvelope(request_id="req", user_goal="Inspect the repo.", root_path="."),
+    )
+    for index in range(5):
+        state.world.refs[f"world://latest/{index}"] = WorldRef(
+            ref_id=f"world://latest/{index}",
+            kind="tool_result",
+            summary=f"latest ref {index}",
+            payload={"raw": f"payload {index}"},
+        )
+    state.context.world_digest = {
+        "preserved_world_refs": ["world://latest/1", "world://latest/3"],
+        "compacted_world_ref_count": 5,
+    }
+
+    selected = ContextSelector(max_world_refs=4).select(state, active_skills=[], tool_specs=[])
+
+    assert selected["selection"]["selected_world_refs"] == ["world://latest/1", "world://latest/3"]
+    assert selected["world"]["compacted"] is True
+    assert selected["world"]["world_digest"]["compacted_world_ref_count"] == 5
 
 
 def test_compactor_preserves_receipts_and_repo_refs() -> None:
@@ -743,7 +811,8 @@ def test_prompt_context_prepared_records_budget_and_selection(tmp_path: Path) ->
             assert context_budget["total_chars"] > 0
             assert context_budget["final_prompt_chars"] == len(json.dumps(prompt_payload, sort_keys=True))
             assert context_budget["final_prompt_chars"] > context_budget["total_chars"]
-            assert prompt_payload["selection"]["mode"] == "THINK"
+            assert prompt_payload["selection"]["mode"] == "START"
+            assert prompt_payload["agent"]["mode"] == "START"
             assert set(prompt_payload["selection"]) == {"mode", "selected_world_refs", "selected_tools", "selected_skills"}
             return RuntimeDecision(kind="observe", reason="metadata captured")
 
@@ -761,7 +830,7 @@ def test_prompt_context_prepared_records_budget_and_selection(tmp_path: Path) ->
     assert event_budget["measured_without_self"] is True
     assert event_budget["total_chars"] > 0
     assert event_budget["final_prompt_chars"] > event_budget["total_chars"]
-    assert prompt_events[-1]["payload"]["selection"]["mode"] == "THINK"
+    assert prompt_events[-1]["payload"]["selection"]["mode"] == "START"
     assert "model" in prompt_events[-1]["payload"]
     assert "tool_count" in prompt_events[-1]["payload"]
     assert "skill_count" in prompt_events[-1]["payload"]
@@ -874,7 +943,7 @@ def test_non_overflow_provider_exception_is_reraised_without_recovery_events(tmp
     assert "ContextOverflowRecoveryFailed" not in event_types
 
 
-def test_context_overflow_without_compaction_emits_recovery_failed(tmp_path: Path) -> None:
+def test_context_overflow_forces_compaction_before_recovery_failure(tmp_path: Path) -> None:
     class OverflowWithoutCompactionProvider:
         provider_id = "overflow-without-compaction"
 
@@ -897,10 +966,13 @@ def test_context_overflow_without_compaction_emits_recovery_failed(tmp_path: Pat
 
     event_types = [event["event_type"] for event in runtime.store.to_dicts()]
     recovery_failure = next(event for event in runtime.store.to_dicts() if event["event_type"] == "ContextOverflowRecoveryFailed")
-    assert provider.calls == 1
+    assert provider.calls == 2
     assert event_types.count("ContextOverflowDetected") == 1
+    assert event_types.count("ContextCompactionRequested") == 1
+    compaction = next(event for event in runtime.store.to_dicts() if event["event_type"] == "ContextCompactionRequested")
+    assert compaction["payload"]["reason"] == "context_overflow_forced"
     assert event_types.count("ContextOverflowRecoveryFailed") == 1
-    assert recovery_failure["payload"]["reason"] == "compaction_unavailable"
+    assert recovery_failure["payload"]["reason"] == "retry_overflow"
 
 
 def test_finalize_emits_runtime_verified_run_memory(tmp_path: Path) -> None:

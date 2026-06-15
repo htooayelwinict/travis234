@@ -377,16 +377,16 @@ class ToolBroker:
                     safe_path = self._safe_path(path)
                     if safe_path is None:
                         errors.append(f"{key}_outside_root:{path}")
-                    elif key == "source" and self._protected_mutation_path(safe_path):
+                    elif key == "source" and self._protected_mutation_source_path(safe_path):
                         errors.append(f"protected_source_path:{path}")
-                    elif key == "destination" and self._protected_mutation_path(safe_path):
+                    elif key == "destination" and self._protected_mutation_destination_path(safe_path):
                         errors.append(f"protected_destination_path:{path}")
             elif action == "write":
                 path = str(operation.get("path") or "")
                 safe_path = self._safe_path(path)
                 if safe_path is None:
                     errors.append(f"path_outside_root:{path}")
-                elif self._protected_mutation_path(safe_path) and self._relative_path(safe_path) not in PROTECTED_WRITE_EXCEPTIONS:
+                elif self._protected_mutation_destination_path(safe_path) and self._relative_path(safe_path) not in PROTECTED_WRITE_EXCEPTIONS:
                     errors.append(f"protected_destination_path:{path}")
             else:
                 errors.append(f"unsupported_operation:{action}")
@@ -484,7 +484,7 @@ class ToolBroker:
     def _relative_path(self, path: Path) -> str:
         return path.relative_to(self.root).as_posix()
 
-    def _protected_mutation_path(self, path: Path) -> bool:
+    def _protected_mutation_source_path(self, path: Path) -> bool:
         relative_path = self._relative_path(path)
         if Path(relative_path).name in PROTECTED_MUTATION_EXACT_NAMES:
             return True
@@ -492,6 +492,17 @@ class ToolBroker:
             return True
         filename = Path(relative_path).name.lower()
         return any(filename.startswith(marker) for marker in PROTECTED_MUTATION_FILENAME_MARKERS)
+
+    def _protected_mutation_destination_path(self, path: Path) -> bool:
+        relative_path = self._relative_path(path)
+        path_parts = Path(relative_path).parts
+        if relative_path in PROTECTED_MUTATION_EXACT_NAMES:
+            return True
+        if any(relative_path == prefix.rstrip("/") or relative_path.startswith(prefix) for prefix in ("tests/", "src/", "assets/", "secrets/")):
+            return True
+        if path_parts[:1] == ("docs",) and len(path_parts) > 2:
+            return True
+        return False
 
 
 def _ignored(path: Path) -> bool:

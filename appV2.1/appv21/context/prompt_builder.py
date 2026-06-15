@@ -54,7 +54,7 @@ class PromptBuilder:
                 ],
             },
             "agent": {
-                "mode": state.mode,
+                "mode": prompt_selection.get("mode") or prompt_state.get("mode") or state.mode,
                 "request": state.request.user_goal,
                 "constraints": state.request.constraints,
             },

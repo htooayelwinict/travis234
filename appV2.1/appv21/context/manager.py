@@ -41,12 +41,13 @@ class DualContextManager:
             context["compacted"] = True
         return context
 
-    def maybe_compact(self, state: AgentState) -> list[RuntimeEvent]:
-        if not self.compactor.should_compact(state):
+    def maybe_compact(self, state: AgentState, *, force: bool = False) -> list[RuntimeEvent]:
+        if not force and not self.compactor.should_compact(state):
             return []
         world_digest = self.compactor.compact(state)
         conversation_digest = state.conversation.summary or "Conversation compacted; current request remains active."
+        reason = "context_overflow_forced" if force else "runtime_threshold_or_evidence"
         return [
-            RuntimeEvent("ContextCompactionRequested", {"reason": "runtime_threshold_or_evidence"}),
+            RuntimeEvent("ContextCompactionRequested", {"reason": reason}),
             RuntimeEvent("ContextCompacted", {"world_digest": world_digest, "conversation_digest": conversation_digest}),
         ]

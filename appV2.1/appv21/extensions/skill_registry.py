@@ -62,7 +62,7 @@ class SkillCard:
 WORKSPACE_CLEANUP_CARD = SkillCard(
     skill_id="workspace_cleanup",
     triggers=WORKSPACE_CLEANUP_TRIGGERS,
-    modes=("OBSERVE", "PLAN", "ACT", "VERIFY"),
+    modes=("START", "THINK", "OBSERVE", "PLAN", "ACT", "VERIFY"),
     summary=(
         "Organize observed workspace files while preserving protected project, "
         "documentation, asset, and secret paths."

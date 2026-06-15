@@ -103,8 +103,8 @@ class AppV21AgentRuntime:
 
     def run_turn(self, state: AgentState, *, turn_index: int = 0) -> tuple[RuntimeDecision, str | None]:
         mode_before_prompt = state.mode
-        prompt_payload = self._build_prompt_payload(state)
-        decision = self._decide_with_context_overflow_recovery(state, prompt_payload)
+        prompt_payload = self._build_prompt_payload(state, selection_mode=mode_before_prompt)
+        decision = self._decide_with_context_overflow_recovery(state, prompt_payload, selection_mode=mode_before_prompt)
         self._apply(state, [RuntimeEvent("DecisionProposed", {"turn_index": turn_index, **decision.to_dict()})])
 
         transition_rejection = self.state_machine.validate_transition(mode_before_prompt, decision)
@@ -141,7 +141,13 @@ class AppV21AgentRuntime:
             self._fail(state, "repeated_loop", {"decision": decision.to_dict(), "reason": progress_rejection})
         return decision, None
 
-    def _decide_with_context_overflow_recovery(self, state: AgentState, prompt_payload: dict[str, Any]) -> RuntimeDecision:
+    def _decide_with_context_overflow_recovery(
+        self,
+        state: AgentState,
+        prompt_payload: dict[str, Any],
+        *,
+        selection_mode: str,
+    ) -> RuntimeDecision:
         try:
             return self.services.provider.decide(prompt_payload)
         except Exception as error:
@@ -149,7 +155,7 @@ class AppV21AgentRuntime:
                 raise
             trimmed_error = self._trim_provider_error(error)
             self._apply(state, [RuntimeEvent("ContextOverflowDetected", {"error": trimmed_error})])
-            compaction_events = self.context.maybe_compact(state)
+            compaction_events = self.context.maybe_compact(state, force=True)
             if not compaction_events:
                 self._apply(
                     state,
@@ -162,7 +168,7 @@ class AppV21AgentRuntime:
                 )
                 raise
             self._apply(state, compaction_events)
-            retry_prompt_payload = self._build_prompt_payload(state)
+            retry_prompt_payload = self._build_prompt_payload(state, selection_mode=selection_mode)
             try:
                 return self.services.provider.decide(retry_prompt_payload)
             except Exception as retry_error:
@@ -199,7 +205,7 @@ class AppV21AgentRuntime:
             repr(state.result),
         )
 
-    def _build_prompt_payload(self, state: AgentState) -> dict[str, Any]:
+    def _build_prompt_payload(self, state: AgentState, *, selection_mode: str | None = None) -> dict[str, Any]:
         self._apply(state, [RuntimeEvent("ModeChanged", {"mode": "THINK"})])
         active_skills = self.skills.active_skills(state)
         turn_context = self.context.build_turn_context(state)
@@ -210,6 +216,7 @@ class AppV21AgentRuntime:
             state,
             active_skills=active_skills,
             tool_specs=tool_specs,
+            mode=selection_mode,
         )
         prompt_payload = self.services.prompt_builder.build(
             state=state,
@@ -368,6 +375,10 @@ class AppV21AgentRuntime:
                     )
                 ],
             )
+        if latest_verification_id is None and latest_receipt_id is not None:
+            latest_verification_id = self._verify_accepted_plan_before_finalize(state)
+            if state.terminal:
+                return
         if latest_verification_id is None:
             self._fail(state, "finalize_without_verification")
             return
@@ -410,6 +421,22 @@ class AppV21AgentRuntime:
             "verification_receipts": list(state.world.verification_receipts),
         }
         self._apply(state, [RuntimeEvent("RunCompleted", result)])
+
+    def _verify_accepted_plan_before_finalize(self, state: AgentState) -> str | None:
+        runtime_plan = state.plan.runtime_plan if state.plan is not None else {}
+        verification_intent = runtime_plan.get("verification_intent") if isinstance(runtime_plan, dict) else None
+        if not isinstance(verification_intent, dict):
+            return None
+        self._apply(state, [RuntimeEvent("ModeChanged", {"mode": "VERIFY"})])
+        self._hook(state, "before_verify", verification_intent)
+        verification = self.verifier.verify(root_path=self.root_path, verification_intent=verification_intent)
+        verification_id = f"verify_{uuid4().hex}"
+        self._apply(state, [RuntimeEvent("VerificationRecorded", {"verification_id": verification_id, **verification})])
+        self._hook(state, "after_verify", {"verification_id": verification_id, "status": verification["status"]})
+        if verification["status"] != "passed":
+            self._fail(state, "verification_failed", verification)
+            return None
+        return verification_id
 
     _route_decision = route_decision
 
