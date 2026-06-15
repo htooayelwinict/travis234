@@ -43,6 +43,10 @@ TOOL_NAME_MAP = {
     "mkdir": "file_management.mkdir",
     "list_files": "file_management.list_files",
 }
+FILE_MANAGEMENT_OBSERVATION_TOOL_IDS = (
+    "file_management.repo_snapshot",
+    "file_management.read_file",
+)
 
 
 def main() -> int:
@@ -231,7 +235,7 @@ def build_report(*, repo: Path, result: dict[str, Any], provider: RecordingProvi
     tool_events = [row for row in event_matrix if row["event_type"] == "ToolCallCompleted"]
     summary_evidence_turns = [row for row in prompt_matrix if row["summary_evidence_ref_count"] > 0]
     no_reobserve_after_summary_evidence = bool(summary_evidence_turns) and all(
-        not _decision_is_repo_snapshot_tool_call(decision_matrix, row["turn"])
+        not _decision_is_observation_contract_tool_call(decision_matrix, row["turn"])
         for row in summary_evidence_turns
     )
     proof = {
@@ -298,11 +302,11 @@ def _prompt_summary_evidence_ref_count(prompt_matrix: list[dict[str, Any]], turn
     return 0
 
 
-def _decision_is_repo_snapshot_tool_call(decision_matrix: list[dict[str, Any]], turn: int) -> bool:
+def _decision_is_observation_contract_tool_call(decision_matrix: list[dict[str, Any]], turn: int) -> bool:
     for row in decision_matrix:
         if row["turn"] != turn:
             continue
-        return row["kind"] == "tool_call" and row["tool_id"] == "file_management.repo_snapshot"
+        return row["kind"] == "tool_call" and row["tool_id"] in FILE_MANAGEMENT_OBSERVATION_TOOL_IDS
     return False
 
 

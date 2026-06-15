@@ -83,6 +83,37 @@ def test_dual_compaction_report_proof_flags_reobserve_after_summary_evidence(tmp
     assert report["proof"]["no_reobserve_after_summary_evidence"] is False
 
 
+def test_dual_compaction_report_proof_flags_read_file_after_summary_evidence(tmp_path):
+    provider = _DualCompactionProvider()
+    provider.prompts.append(
+        {
+            "messages": [
+                {
+                    "name": "context_summary",
+                    "summary": {"evidence_refs": ["tool:file_management.repo_snapshot:1"]},
+                }
+            ],
+            "world": {},
+        }
+    )
+    provider.decisions.append(
+        {
+            "kind": "tool_call",
+            "payload": {"tool_id": "file_management.read_file"},
+            "evidence_refs": [],
+        }
+    )
+
+    report = build_dual_compaction_report(
+        repo=tmp_path,
+        result={"status": "completed", "events": []},
+        provider=provider,
+        prompt="p",
+    )
+
+    assert report["proof"]["no_reobserve_after_summary_evidence"] is False
+
+
 def test_dual_compaction_report_ignores_malformed_summary_without_crashing(tmp_path):
     provider = _DualCompactionProvider()
     provider.prompts = [
