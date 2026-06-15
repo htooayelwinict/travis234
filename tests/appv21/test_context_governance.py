@@ -9,6 +9,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "appV2.1"))
 
 from appv21.context.budget import ContextBudgetManager, DEFAULT_SECTION_BUDGETS
+from appv21.extensions.skills import SkillRouter
+from appv21.state.models import AgentState, RequestEnvelope
 
 
 def test_context_budget_estimates_section_sizes() -> None:
@@ -118,3 +120,46 @@ def test_context_budget_over_budget_sections_use_canonical_order() -> None:
 
     assert list(estimate["sections"]) == list(DEFAULT_SECTION_BUDGETS)
     assert estimate["over_budget_sections"] == ["system", "tools"]
+
+
+def test_workspace_cleanup_skill_activates_as_card() -> None:
+    state = AgentState(
+        session_id="sess",
+        run_id="run",
+        request=RequestEnvelope(
+            request_id="req",
+            user_goal="Please cleanup and organize this workspace.",
+            root_path=".",
+        ),
+    )
+
+    cards = SkillRouter().active_skills(state)
+
+    assert cards == [
+        {
+            "skill_id": "workspace_cleanup",
+            "triggers": ["cleanup", "organize", "move", "workspace"],
+            "modes": ["OBSERVE", "PLAN", "ACT", "VERIFY"],
+            "summary": "Organize observed workspace files while preserving protected project, documentation, asset, and secret paths.",
+            "tool_preferences": ["repo_snapshot", "read_file"],
+            "artifact_templates": ["workspace_manifest"],
+            "preservation_rules": [
+                "tests/**",
+                "src/**",
+                "assets/**",
+                "secrets/**",
+                "README.md",
+                "docs/**",
+                "**/keep*",
+                "**/do_not_move*",
+                "**/old_blob*",
+            ],
+            "verification_hints": [
+                "Confirm protected paths are excluded from proposed moves.",
+                "Workspace manifest must include observed_files, protected_paths, proposed_moves, and skipped_paths sections.",
+                "Do not read or expose secret file contents.",
+            ],
+            "budget_priority": 80,
+        }
+    ]
+    assert "prompt_patch" not in cards[0]
