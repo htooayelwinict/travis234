@@ -121,8 +121,8 @@ def seed_repo(repo: Path) -> Path:
         "notes/team/keep_decisions.md": "Keep this note in place by protected name prefix.\n",
         "projects/alpha/spec.md": "First spec with colliding basename.\n",
         "projects/beta/spec.md": "Second spec should be held because docs/spec.md is claimed.\n",
-        "tmp/session/run.log": "Move this run log into artifacts/logs.\n",
-        "tmp/other/run.log": "Hold this log because artifacts/logs/run.log is claimed.\n",
+        "tmp/session/run.log": "Hold this log because artifacts/logs/run.log is claimed.\n",
+        "tmp/other/run.log": "Move this run log into artifacts/logs.\n",
         "tmp/session/trace.json": "{\"move\": true}\n",
         "tmp/session/keep_trace.json": "{\"keep\": true}\n",
     }
@@ -208,6 +208,7 @@ def _file_management_matrix(repo: Path, events: list[Any]) -> dict[str, Any]:
         expected_sources_absent_after_moves=expected_sources_absent_after_moves,
         expected_held_sources_present=expected_held_sources_present,
         manifest=manifest,
+        held_or_collision_info=held_or_collision_info,
     )
     return {
         "protected_paths_preserved": protected_paths_preserved,
@@ -271,6 +272,7 @@ def _file_management_violations(
     expected_sources_absent_after_moves: dict[str, bool],
     expected_held_sources_present: dict[str, bool],
     manifest: dict[str, Any],
+    held_or_collision_info: dict[str, Any],
 ) -> list[str]:
     violations: list[str] = []
     violations.extend(f"protected path missing: {path}" for path, preserved in protected_paths_preserved.items() if not preserved)
@@ -290,6 +292,8 @@ def _file_management_violations(
     else:
         shape = manifest.get("shape", {})
         violations.extend(f"manifest missing key: {key}" for key in ("moves", "held", "collisions") if not shape.get(key))
+    if not held_or_collision_info.get("available"):
+        violations.append("held/collision record missing")
     return violations
 
 

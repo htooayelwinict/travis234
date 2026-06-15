@@ -5,7 +5,13 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "appV2.2"))
 
-from scripts.live_appv22_complex_vague_file_management_probe import build_report, default_report_path
+from scripts.live_appv22_complex_vague_file_management_probe import (
+    EXPECTED_HELD_SOURCES,
+    EXPECTED_SOURCES_ABSENT_AFTER_MOVES,
+    build_report,
+    default_report_path,
+    seed_repo,
+)
 
 
 def test_probe_report_contains_full_matrix(tmp_path):
@@ -94,6 +100,8 @@ def test_probe_report_contains_full_matrix(tmp_path):
     assert report["file_management"]["expected_sources_absent_after_moves"]["notes/team/standup.md"] is True
     assert report["file_management"]["expected_sources_absent_after_moves"]["tmp/other/run.log"] is True
     assert report["file_management"]["expected_held_sources_present"]["tmp/session/run.log"] is True
+    assert "tmp/other/run.log" in EXPECTED_SOURCES_ABSENT_AFTER_MOVES
+    assert "tmp/session/run.log" in EXPECTED_HELD_SOURCES
     assert report["file_management"]["manifest"]["exists"] is True
     assert report["file_management"]["manifest"]["path"] == "docs/workspace_manifest.json"
     assert report["file_management"]["manifest"]["shape"]["moves"] is True
@@ -118,6 +126,58 @@ def test_probe_report_flags_protected_collision_and_missing_move_expectations(tm
     assert "protected path missing: src/app.py" in report["file_management"]["violations"]
     assert "expected destination missing: docs/standup.md" in report["file_management"]["violations"]
     assert "manifest missing key: held" in report["file_management"]["violations"]
+    assert "held/collision record missing" in report["file_management"]["violations"]
+
+
+def test_probe_report_flags_empty_held_collision_records(tmp_path):
+    (tmp_path / "README.md").write_text("# probe\n", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("print('protected runtime file')\n", encoding="utf-8")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_probe.py").write_text("def test_probe():\n    assert True\n", encoding="utf-8")
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets" / "logo.svg").write_text("<svg></svg>\n", encoding="utf-8")
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "secrets" / "prod.env").write_text("TOKEN=protected\n", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "existing.md").write_text("protected docs prefix\n", encoding="utf-8")
+    (tmp_path / "docs" / "standup.md").write_text("moved team note\n", encoding="utf-8")
+    (tmp_path / "docs" / "spec.md").write_text("moved first spec\n", encoding="utf-8")
+    (tmp_path / "notes" / "team").mkdir(parents=True)
+    (tmp_path / "notes" / "team" / "keep_decisions.md").write_text("keep\n", encoding="utf-8")
+    (tmp_path / "projects" / "beta").mkdir(parents=True)
+    (tmp_path / "projects" / "beta" / "spec.md").write_text("held collision\n", encoding="utf-8")
+    (tmp_path / "tmp" / "session").mkdir(parents=True)
+    (tmp_path / "tmp" / "session" / "run.log").write_text("held collision\n", encoding="utf-8")
+    (tmp_path / "tmp" / "session" / "keep_trace.json").write_text('{"keep": true}\n', encoding="utf-8")
+    (tmp_path / "artifacts" / "logs").mkdir(parents=True)
+    (tmp_path / "artifacts" / "logs" / "run.log").write_text("moved run log\n", encoding="utf-8")
+    (tmp_path / "docs" / "workspace_manifest.json").write_text(
+        '{"moves": [], "held": [], "collisions": []}',
+        encoding="utf-8",
+    )
+
+    report = build_report(repo=tmp_path, result={"status": "completed", "events": []}, provider=None, prompt="p")
+
+    assert report["file_management"]["held_or_collision_info"] == {
+        "available": False,
+        "manifest_entries": 0,
+        "event_mentions": 0,
+    }
+    assert "held/collision record missing" in report["file_management"]["violations"]
+
+
+def test_seeded_log_comments_match_expected_matrix(tmp_path):
+    repo = seed_repo(tmp_path / "probe")
+
+    assert (repo / "tmp" / "session" / "run.log").read_text(encoding="utf-8") == (
+        "Hold this log because artifacts/logs/run.log is claimed.\n"
+    )
+    assert (repo / "tmp" / "other" / "run.log").read_text(encoding="utf-8") == (
+        "Move this run log into artifacts/logs.\n"
+    )
+    assert "tmp/session/run.log" in EXPECTED_HELD_SOURCES
+    assert "tmp/other/run.log" in EXPECTED_SOURCES_ABSENT_AFTER_MOVES
 
 
 class _NestedUsageProvider:
