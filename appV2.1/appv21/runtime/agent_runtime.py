@@ -27,6 +27,8 @@ class AppV21AgentRuntime:
         self.skills = self.services.skills
         self.verifier = self.services.verifier
         self.context = self.services.context
+        self.context_budget = self.services.context_budget
+        self.context_selector = self.services.context_selector
         self.artifact_validator = self.services.artifact_validator
         self.decision_validator = self.services.decision_validator
         self.state_machine = self.services.state_machine
@@ -157,13 +159,23 @@ class AppV21AgentRuntime:
         turn_context = self.context.build_turn_context(state)
         decomposition = self.decomposer.decompose(state.request)
         turn_context["decomposition"] = decomposition
+        tool_specs = self.broker.tool_specs()
+        selected_context = self.context_selector.select(
+            state,
+            active_skills=active_skills,
+            tool_specs=tool_specs,
+        )
         prompt_payload = self.services.prompt_builder.build(
             state=state,
             turn_context=turn_context,
-            active_skills=active_skills,
-            tool_specs=self.broker.tool_specs(),
+            active_skills=selected_context["skills"],
+            tool_specs=selected_context["tools"],
+            selected_context=selected_context,
+            selection=selected_context["selection"],
         )
         prompt_payload["decomposition"] = decomposition
+        context_budget = self.context_budget.estimate(prompt_payload)
+        prompt_payload["context_budget"] = context_budget
         self._apply(
             state,
             [
@@ -172,7 +184,9 @@ class AppV21AgentRuntime:
                     {
                         "sections": sorted(prompt_payload),
                         "tool_count": len(prompt_payload["tools"]),
-                        "skill_count": len(active_skills),
+                        "skill_count": len(prompt_payload["skills"]),
+                        "context_budget": context_budget,
+                        "selection": prompt_payload["selection"],
                         "model": self.services.model_registry.for_role("agent").__dict__,
                     },
                 )

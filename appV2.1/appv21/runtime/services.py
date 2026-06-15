@@ -5,8 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from appv21.context.budget import ContextBudgetManager
 from appv21.context.manager import DualContextManager
 from appv21.context.prompt_builder import PromptBuilder
+from appv21.context.selector import ContextSelector
 from appv21.extensions.decomposer import DecomposerExtension
 from appv21.extensions.observer import ObserverExtension
 from appv21.extensions.planner import PlannerExtension
@@ -36,6 +38,8 @@ class AppV21RuntimeServices:
     skills: SkillRouter
     verifier: VerifierExtension
     context: DualContextManager
+    context_budget: ContextBudgetManager
+    context_selector: ContextSelector
     prompt_builder: PromptBuilder
     artifact_validator: ArtifactValidator
     decision_validator: DecisionValidator
@@ -67,6 +71,8 @@ def create_appv21_runtime_services(
         skills=SkillRouter(),
         verifier=VerifierExtension(),
         context=DualContextManager(),
+        context_budget=ContextBudgetManager(),
+        context_selector=ContextSelector(),
         prompt_builder=PromptBuilder(),
         artifact_validator=ArtifactValidator(),
         decision_validator=DecisionValidator(),

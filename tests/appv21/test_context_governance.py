@@ -11,6 +11,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "appV2.1"))
 from appv21.context.budget import ContextBudgetManager, DEFAULT_SECTION_BUDGETS
 from appv21.context.selector import ContextSelector
 from appv21.extensions.skills import SkillRouter
+from appv21.runtime.agent_runtime import AppV21AgentRuntime
+from appv21.runtime.decisions import RuntimeDecision
+from appv21.runtime.services import create_appv21_runtime_services
 from appv21.state.models import AgentState, Artifact, MutationLease, MutationReceipt, PauseState, PlanState, RequestEnvelope, WorldRef
 
 
@@ -405,3 +408,36 @@ def test_context_selector_state_output_is_isolated_from_agent_state_mutation() -
     assert state.world.mutation_receipts["receipt"].operations == [{"op": "move", "path": "README.md"}]
     assert state.world.verification_receipts["verification"] == {"checks": [{"status": "original"}]}
     assert state.pauses[0].options == [{"label": "continue"}]
+
+
+def test_prompt_context_prepared_records_budget_and_selection(tmp_path: Path) -> None:
+    class PromptMetadataProvider:
+        provider_id = "prompt-metadata"
+
+        def __init__(self) -> None:
+            self.seen_prompt = False
+
+        def decide(self, prompt_payload: dict) -> RuntimeDecision:
+            self.seen_prompt = True
+            assert "context_budget" in prompt_payload
+            assert "selection" in prompt_payload
+            assert prompt_payload["context_budget"]["total_chars"] > 0
+            assert prompt_payload["selection"]["mode"] == "THINK"
+            assert set(prompt_payload["selection"]) == {"mode", "selected_world_refs", "selected_tools", "selected_skills"}
+            return RuntimeDecision(kind="observe", reason="metadata captured")
+
+    provider = PromptMetadataProvider()
+    result = AppV21AgentRuntime(
+        root_path=tmp_path,
+        services=create_appv21_runtime_services(root_path=tmp_path, provider=provider),
+        max_turns=1,
+    ).run("Inspect the repo.")
+
+    prompt_events = [event for event in result["events"] if event["event_type"] == "PromptContextPrepared"]
+    assert provider.seen_prompt is True
+    assert prompt_events
+    assert prompt_events[-1]["payload"]["context_budget"]["total_chars"] > 0
+    assert prompt_events[-1]["payload"]["selection"]["mode"] == "THINK"
+    assert "model" in prompt_events[-1]["payload"]
+    assert "tool_count" in prompt_events[-1]["payload"]
+    assert "skill_count" in prompt_events[-1]["payload"]
