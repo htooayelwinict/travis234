@@ -5,6 +5,22 @@ from __future__ import annotations
 from appv21.state.models import AgentState
 
 
+IMMUTABLE_CONTEXT_CLASSES = [
+    "user_request",
+    "constraints",
+    "pause_state",
+    "mutation_receipts",
+    "verification_receipts",
+    "active_leases",
+]
+
+CONTEXT_PRESERVATION_POLICY = {
+    "keep_repo_snapshot_refs": True,
+    "keep_artifact_evidence_refs": True,
+    "keep_latest_world_ref_count": 3,
+}
+
+
 class RuntimeContextCompactor:
     def should_compact(self, state: AgentState) -> bool:
         return len(state.conversation.messages) >= 8 or len(state.world.refs) >= 8 or bool(state.world.verification_receipts)
@@ -21,6 +37,8 @@ class RuntimeContextCompactor:
             }
         )
         return {
+            "immutable_classes": IMMUTABLE_CONTEXT_CLASSES,
+            "preservation_policy": CONTEXT_PRESERVATION_POLICY,
             "active_request": state.request.user_goal,
             "current_mode": state.mode,
             "open_pause": state.pauses[-1].__dict__ if state.pauses else None,

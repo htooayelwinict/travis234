@@ -9,6 +9,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "appV2.1"))
 
 from appv21.context.budget import ContextBudgetManager, DEFAULT_SECTION_BUDGETS
+from appv21.context.compactor import RuntimeContextCompactor
 from appv21.context.selector import ContextSelector
 from appv21.extensions.skills import SkillRouter
 from appv21.runtime.agent_runtime import AppV21AgentRuntime
@@ -304,6 +305,89 @@ def test_context_selector_preserves_repo_snapshot_and_latest_refs() -> None:
     assert selected["selection"]["selected_world_refs"] == selected_ref_ids
     assert all(set(ref) == {"ref_id", "kind", "summary", "trust"} for ref in world_refs)
     assert all("payload" not in ref for ref in world_refs)
+
+
+def test_compactor_preserves_receipts_and_repo_refs() -> None:
+    state = AgentState(
+        session_id="sess",
+        run_id="run",
+        request=RequestEnvelope(request_id="req", user_goal="Inspect the repo.", root_path="."),
+    )
+    state.world.refs["world://old"] = WorldRef(
+        ref_id="world://old",
+        kind="tool_result",
+        summary="old ref",
+        payload={"content": "may compact"},
+    )
+    state.world.refs["world://repo_snapshot/latest"] = WorldRef(
+        ref_id="world://repo_snapshot/latest",
+        kind="repo_snapshot",
+        summary="latest repo map",
+        payload={"files": ["README.md"]},
+    )
+    state.world.refs["world://artifact/evidence"] = WorldRef(
+        ref_id="world://artifact/evidence",
+        kind="tool_result",
+        summary="artifact evidence",
+        payload={"path": "docs/report.md"},
+    )
+    for index in range(4):
+        state.world.refs[f"world://latest/{index}"] = WorldRef(
+            ref_id=f"world://latest/{index}",
+            kind="tool_result",
+            summary=f"latest ref {index}",
+            payload={"raw": f"payload {index}"},
+        )
+    state.world.artifacts["artifact"] = Artifact(
+        artifact_id="artifact",
+        kind="manifest",
+        content={"paths": ["docs/report.md"]},
+        producer="test",
+        evidence_refs=["world://artifact/evidence"],
+    )
+    state.world.mutation_leases["lease"] = MutationLease(
+        lease_id="lease",
+        operation_batch_id="batch",
+        allowed_operations=[{"op": "write", "path": "docs/report.md"}],
+        allowed_sources=[],
+        allowed_destinations=["docs/report.md"],
+    )
+    state.world.mutation_receipts["receipt"] = MutationReceipt(
+        receipt_id="receipt",
+        lease_id="lease",
+        status="completed",
+        operations=[{"op": "write", "path": "docs/report.md"}],
+        touched_paths=["docs/report.md"],
+    )
+    state.world.verification_receipts["verification"] = {"checks": [{"status": "passed"}]}
+
+    digest = RuntimeContextCompactor().compact(state)
+
+    assert digest["immutable_classes"] == [
+        "user_request",
+        "constraints",
+        "pause_state",
+        "mutation_receipts",
+        "verification_receipts",
+        "active_leases",
+    ]
+    assert digest["preservation_policy"] == {
+        "keep_repo_snapshot_refs": True,
+        "keep_artifact_evidence_refs": True,
+        "keep_latest_world_ref_count": 3,
+    }
+    assert digest["latest_world_refs"] == ["world://latest/1", "world://latest/2", "world://latest/3"]
+    assert digest["preserved_world_refs"] == [
+        "world://artifact/evidence",
+        "world://latest/1",
+        "world://latest/2",
+        "world://latest/3",
+        "world://repo_snapshot/latest",
+    ]
+    assert digest["active_leases"] == ["lease"]
+    assert digest["mutation_receipts"] == ["receipt"]
+    assert digest["verification_receipts"] == ["verification"]
+    assert digest["artifact_evidence_refs"] == {"artifact": ["world://artifact/evidence"]}
 
 
 def test_context_selector_filters_tools_by_mode() -> None:
