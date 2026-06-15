@@ -5,22 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 from appv21.runtime import rejections
-from appv21.runtime.decisions import RuntimeDecision
+from appv21.runtime.decisions import KNOWN_DECISION_KINDS, RuntimeDecision
 from appv21.state.models import AgentState
 
 
 class DecisionValidator:
-    known_decision_kinds = {
-        "observe",
-        "read_file",
-        "plan",
-        "tool_call",
-        "mutation_intent",
-        "verify",
-        "pause",
-        "compact",
-        "finalize",
-    }
+    known_decision_kinds = KNOWN_DECISION_KINDS
 
     def validate(self, decision: RuntimeDecision, state: AgentState) -> list[str]:
         issues: list[str] = []
