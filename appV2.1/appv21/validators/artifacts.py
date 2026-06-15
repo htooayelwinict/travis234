@@ -2,33 +2,16 @@
 
 from __future__ import annotations
 
+from appv21.runtime.decision_validator import DecisionValidator
 from appv21.runtime.decisions import RuntimeDecision
 from appv21.state.models import Artifact, AgentState
 
 
 class ArtifactValidator:
-    known_decision_kinds = {"observe", "read_file", "plan", "tool_call", "mutation_intent", "verify", "pause", "compact", "finalize"}
+    known_decision_kinds = DecisionValidator.known_decision_kinds
 
     def validate_decision(self, decision: RuntimeDecision, state: AgentState) -> list[str]:
-        issues: list[str] = []
-        if decision.kind not in self.known_decision_kinds:
-            issues.append(f"unknown_decision_kind:{decision.kind}")
-        for ref in decision.evidence_refs:
-            if ref == "plan://accepted/latest" and state.plan is None:
-                issues.append(f"missing_evidence_ref:{ref}")
-            elif ref == "verification://latest" and not state.world.verification_receipts:
-                issues.append(f"missing_evidence_ref:{ref}")
-            elif (
-                not ref.startswith("plan://")
-                and not ref.startswith("verification://")
-                and ref not in state.world.refs
-                and ref not in state.world.mutation_receipts
-                and ref not in state.world.verification_receipts
-            ):
-                issues.append(f"missing_evidence_ref:{ref}")
-        if decision.kind == "finalize" and not state.world.verification_receipts and not decision.payload.get("explicit_noop"):
-            issues.append("finalize_requires_verification_or_explicit_noop")
-        return issues
+        return DecisionValidator().validate(decision, state)
 
     def validate_tool_call(self, tool_call: dict, _state: AgentState) -> list[str]:
         if not tool_call.get("tool_name"):
