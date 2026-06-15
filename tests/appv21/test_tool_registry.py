@@ -69,3 +69,32 @@ def test_registry_validates_required_arguments() -> None:
     assert registry.validate_call("read_file", {}) == ["missing_argument:path"]
     assert registry.validate_call("read_file", {"path": "README.md", "extra": True}) == ["unknown_argument:extra"]
     assert registry.validate_call("read_file", {"path": "README.md"}) == []
+
+
+def test_registry_validation_is_isolated_from_schema_mutation() -> None:
+    registry = ToolRegistry()
+    definition = ToolDefinition(
+        name="read_file",
+        category=ToolCategory.INSPECT,
+        argument_schema={
+            "type": "object",
+            "required": ["path"],
+            "properties": {"path": {"type": "string"}},
+            "additionalProperties": False,
+        },
+        result_schema={"type": "object"},
+    )
+    registry.register(definition)
+
+    definition.argument_schema["required"] = []
+    definition.argument_schema["additionalProperties"] = True
+    definition.argument_schema["properties"]["path"]["type"] = "object"
+    returned = registry.get("read_file")
+    assert returned is not None
+    returned.argument_schema["required"] = []
+    listed = registry.list()[0]
+    listed.argument_schema["additionalProperties"] = True
+
+    assert registry.validate_call("read_file", {}) == ["missing_argument:path"]
+    assert registry.validate_call("read_file", {"path": "README.md", "extra": True}) == ["unknown_argument:extra"]
+    assert registry.validate_call("read_file", {"path": {"bad": True}}) == ["invalid_argument_type:path:string"]

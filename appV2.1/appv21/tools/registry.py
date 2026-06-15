@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+from dataclasses import replace
 from typing import Any
 
 from appv21.tools.definitions import ToolDefinition
@@ -14,16 +16,19 @@ class ToolRegistry:
         self._definitions: dict[str, ToolDefinition] = {}
 
     def register(self, definition: ToolDefinition) -> None:
-        self._definitions[definition.name] = definition
+        self._definitions[definition.name] = self._copy_definition(definition)
 
     def get(self, name: str) -> ToolDefinition | None:
-        return self._definitions.get(name)
+        definition = self._definitions.get(name)
+        if definition is None:
+            return None
+        return self._copy_definition(definition)
 
     def list(self) -> list[ToolDefinition]:
-        return [self._definitions[name] for name in sorted(self._definitions)]
+        return [self._copy_definition(self._definitions[name]) for name in sorted(self._definitions)]
 
     def validate_call(self, tool_name: str, arguments: dict[str, Any]) -> list[str]:
-        definition = self.get(tool_name)
+        definition = self._definitions.get(tool_name)
         if definition is None:
             return [f"unknown_tool:{tool_name}"]
 
@@ -58,3 +63,10 @@ class ToolRegistry:
         if expected_type == "array":
             return isinstance(value, list)
         return True
+
+    def _copy_definition(self, definition: ToolDefinition) -> ToolDefinition:
+        return replace(
+            definition,
+            argument_schema=deepcopy(definition.argument_schema),
+            result_schema=deepcopy(definition.result_schema),
+        )
