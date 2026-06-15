@@ -106,7 +106,7 @@ def _compact_preserved_context_section(message: dict[str, Any]) -> dict[str, Any
                 "observation_contract": skill.get("observation_contract"),
             }
             for skill in payload
-            if isinstance(skill, dict) and skill.get("tool_ids")
+            if isinstance(skill, dict) and skill.get("skill_id")
         ]
     elif section == "selection" and isinstance(payload, dict):
         compacted["payload"] = {

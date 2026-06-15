@@ -250,7 +250,7 @@ def test_agent_loop_default_context_governance_compacts_oversized_provider_promp
 
     provider_payload = json.dumps(provider.prompts[0], sort_keys=True, default=str)
     assert raw_marker not in provider_payload
-    assert provider.prompts[0]["skills"] == []
+    assert [skill["skill_id"] for skill in provider.prompts[0]["skills"]] == ["oversized_prompt.active"]
     assert any(message.get("name") == "context_summary" for message in provider.prompts[0]["messages"])
     summary_events = [event for event in result["events"] if event["event_type"] == "ContextSummaryUpdated"]
     assert summary_events
@@ -326,10 +326,15 @@ def test_dual_context_preserves_compact_observation_contract(tmp_path):
         "make this workspace sane and keep a record"
     )
 
+    assert len(provider.prompts) == 2
+    second_prompt_payload = json.dumps(provider.prompts[1], sort_keys=True, default=str)
+    assert raw_marker not in second_prompt_payload
+    assert provider.prompts[1]["world"] == {"world_refs": {}}
+    assert any(message.get("name") == "context_summary" for message in provider.prompts[1]["messages"])
     contract = provider.prompts[1]["skills"][0]["observation_contract"]
     assert contract is not None
-    assert tuple(contract["evidence_refs"]) == ("world://repo_snapshot/latest",)
-    assert tuple(contract["evidence_kinds"]) == ("file_management.repo_snapshot",)
+    assert contract["evidence_refs"] == ("world://repo_snapshot/latest",)
+    assert contract["evidence_kinds"] == ("file_management.repo_snapshot",)
     assert contract["preferred_tool_id"] == "file_management.repo_snapshot"
 
 

@@ -205,6 +205,47 @@ def test_agent_compressor_emits_structured_summary() -> None:
     assert compacted[-1]["content"] == "continue"
 
 
+def test_agent_compressor_preserves_empty_tool_skill_observation_contract() -> None:
+    observation_contract = {
+        "evidence_refs": ("world://web_research/latest",),
+        "evidence_kinds": ("web_research.search",),
+        "preferred_tool_id": "web_research.search",
+    }
+    messages = [
+        {
+            "role": "system",
+            "name": "provider_identity",
+            "content": "x",
+            "payload": {"identity": "x"},
+        },
+        {
+            "role": "system",
+            "name": "provider_context_section",
+            "section": "skills",
+            "content": "skills: oversized",
+            "payload": [
+                {
+                    "skill_id": "web_research.search",
+                    "extension_id": "web_research",
+                    "summary": "Search the web",
+                    "tool_ids": (),
+                    "observation_contract": observation_contract,
+                }
+            ],
+        },
+        {"role": "user", "name": "user_goal", "content": "research this"},
+    ]
+
+    compacted = AgentContextCompressor(max_chars=900, threshold=0.1).compress(
+        messages, previous_summary={}
+    )
+
+    skills_message = next(message for message in compacted if message.get("section") == "skills")
+    assert skills_message["payload"][0]["skill_id"] == "web_research.search"
+    assert skills_message["payload"][0]["tool_ids"] == ()
+    assert skills_message["payload"][0]["observation_contract"] == observation_contract
+
+
 def test_agent_compressor_summary_preserves_middle_constraints_and_notes() -> None:
     messages = [
         {"role": "system", "content": "s"},
