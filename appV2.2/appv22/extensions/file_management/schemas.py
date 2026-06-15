@@ -11,3 +11,25 @@ WORKSPACE_MANIFEST_SCHEMA = {
         "collisions": {"type": "array"},
     },
 }
+
+REPO_SNAPSHOT_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "status": {"type": "string", "enum": ["completed"]},
+        "files": {"type": "array", "items": {"type": "string"}},
+        "directories": {"type": "array", "items": {"type": "string"}},
+        "errors": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["status", "files", "directories", "errors"],
+}
+
+READ_FILE_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "status": {"type": "string", "enum": ["completed", "denied", "failed"]},
+        "path": {"type": "string"},
+        "content": {"type": "string"},
+        "errors": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["status", "path", "content"],
+}

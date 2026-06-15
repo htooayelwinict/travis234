@@ -16,6 +16,10 @@ class FileMutationExecutor:
         if errors:
             return {"status": "denied", "touched_paths": [], "errors": errors}
 
+        preflight_errors = self._preflight(operations, root=root)
+        if preflight_errors:
+            return {"status": "denied", "touched_paths": [], "errors": preflight_errors}
+
         touched: list[str] = []
         for operation in operations:
             action = operation["action"]
@@ -43,3 +47,20 @@ class FileMutationExecutor:
                 path.write_text(content, encoding="utf-8")
                 touched.append(path_name)
         return {"status": "applied", "touched_paths": sorted(set(touched)), "errors": []}
+
+    def _preflight(self, operations: list[dict], *, root: Path) -> list[str]:
+        errors: list[str] = []
+        for operation in operations:
+            if operation.get("action") != "move":
+                continue
+            source_name = str(operation["source"])
+            destination_name = str(operation["destination"])
+            source = root / source_name
+            destination = root / destination_name
+            if not source.exists():
+                errors.append(f"missing_source:{source_name}")
+            elif not source.is_file():
+                errors.append(f"non_file_source:{source_name}")
+            if destination.exists():
+                errors.append(f"destination_exists:{destination_name}")
+        return errors

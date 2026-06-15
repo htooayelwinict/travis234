@@ -29,14 +29,54 @@ class WorkspaceManifestVerifier:
             try:
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
                 checks.append({"name": "manifest_json_valid", "passed": isinstance(manifest, dict)})
+                if not isinstance(manifest, dict):
+                    manifest = {}
             except json.JSONDecodeError:
                 checks.append({"name": "manifest_json_valid", "passed": False})
                 manifest = {}
 
         for key in WORKSPACE_MANIFEST_SCHEMA["required"]:
             checks.append({"name": f"manifest_has_{key}", "passed": key in manifest})
+        for key, spec in WORKSPACE_MANIFEST_SCHEMA["properties"].items():
+            if key in manifest:
+                checks.append({"name": f"manifest_type_{key}", "passed": _matches_type(manifest[key], spec["type"])})
+        for key in ("moves", "held", "collisions"):
+            if key in verification_intent:
+                checks.append({"name": f"verification_{key}_match", "passed": _canonical(manifest.get(key)) == _canonical(verification_intent[key])})
+        intended_moves = verification_intent.get("moves", manifest.get("moves", []))
+        if isinstance(intended_moves, list):
+            for move in intended_moves:
+                if not isinstance(move, dict):
+                    checks.append({"name": "move_shape_valid", "passed": False})
+                    continue
+                source = str(move.get("source", ""))
+                destination = str(move.get("destination", ""))
+                destination_inside = not _outside(root, destination)
+                source_inside = not _outside(root, source)
+                checks.append({
+                    "name": f"move_destination_exists:{destination}",
+                    "passed": destination_inside and (root / destination).is_file(),
+                })
+                checks.append({
+                    "name": f"move_source_absent:{source}",
+                    "passed": source_inside and not (root / source).exists(),
+                })
         return {
             "status": "passed" if all(bool(check["passed"]) for check in checks) else "failed",
             "checks": checks,
             "manifest": manifest,
         }
+
+
+def _matches_type(value: object, expected_type: str) -> bool:
+    if expected_type == "object":
+        return isinstance(value, dict)
+    if expected_type == "array":
+        return isinstance(value, list)
+    if expected_type == "string":
+        return isinstance(value, str)
+    return False
+
+
+def _canonical(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))

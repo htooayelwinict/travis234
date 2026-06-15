@@ -87,6 +87,67 @@ def test_policy_rejects_root_escape_and_protected_paths(tmp_path):
     assert "unsupported_write_path:notes/manifest.json" in errors
 
 
+def test_policy_rejects_duplicate_move_destinations_and_absolute_paths(tmp_path):
+    (tmp_path / "draft.md").write_text("draft", encoding="utf-8")
+    (tmp_path / "notes.md").write_text("notes", encoding="utf-8")
+
+    errors = FileMoveMutationPolicy().validate(
+        [
+            {"action": "move", "source": "draft.md", "destination": "docs/shared.md"},
+            {"action": "move", "source": "notes.md", "destination": "docs/shared.md"},
+            {"action": "move", "source": "/tmp/source.md", "destination": "docs/absolute-source.md"},
+            {"action": "move", "source": "draft.md", "destination": "/tmp/destination.md"},
+            {"action": "write", "path": "/tmp/manifest.json", "content": "{}"},
+        ],
+        root_path=tmp_path,
+    )
+
+    assert "duplicate_destination:docs/shared.md" in errors
+    assert "absolute_path:source:/tmp/source.md" in errors
+    assert "absolute_path:destination:/tmp/destination.md" in errors
+    assert "absolute_path:path:/tmp/manifest.json" in errors
+
+
+def test_policy_preflights_move_sources_before_execution(tmp_path):
+    (tmp_path / "folder_source").mkdir()
+
+    errors = FileMoveMutationPolicy().validate(
+        [
+            {"action": "move", "source": "missing.md", "destination": "docs/missing.md"},
+            {"action": "move", "source": "folder_source", "destination": "docs/folder_source"},
+        ],
+        root_path=tmp_path,
+    )
+
+    assert "missing_source:missing.md" in errors
+    assert "non_file_source:folder_source" in errors
+
+
+def test_read_file_denies_protected_paths_with_schema_compatible_payload(tmp_path):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git/config").write_text("private", encoding="utf-8")
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "secrets/token.txt").write_text("secret", encoding="utf-8")
+    registry = ToolRegistry()
+    FileManagementExtension().register_tools(registry)
+
+    git_read = registry.handler("file_management.read_file")({"path": ".git/config"}, {"root_path": tmp_path})
+    secret_read = registry.handler("file_management.read_file")({"path": "secrets/token.txt"}, {"root_path": tmp_path})
+    missing_read = registry.handler("file_management.read_file")({"path": "missing.txt"}, {"root_path": tmp_path})
+
+    assert git_read == {"status": "denied", "path": ".git/config", "content": "", "errors": ["protected_path:.git/config"]}
+    assert secret_read == {
+        "status": "denied",
+        "path": "secrets/token.txt",
+        "content": "",
+        "errors": ["protected_path:secrets/token.txt"],
+    }
+    assert missing_read == {"status": "failed", "path": "missing.txt", "content": "", "errors": ["missing_file:missing.txt"]}
+    schema = registry.definition("file_management.read_file").result_schema
+    assert "errors" in schema["properties"]
+    assert set(schema["required"]) == {"status", "path", "content"}
+
+
 def test_planner_holds_moves_when_destination_collides():
     state = AgentState("sess", "run", RequestEnvelope("req", "cleanup", "/workspace"))
     state.world_refs["world://repo_snapshot/latest"] = {
@@ -126,6 +187,20 @@ def test_executor_applies_validated_moves_and_manifest(tmp_path):
     assert json.loads((tmp_path / "docs/workspace_manifest.json").read_text(encoding="utf-8"))["generated_by"] == "appv22"
 
 
+def test_executor_preflight_denies_batch_without_partial_mutation(tmp_path):
+    (tmp_path / "first.md").write_text("first", encoding="utf-8")
+    operations = [
+        {"action": "move", "source": "first.md", "destination": "docs/first.md"},
+        {"action": "move", "source": "missing.md", "destination": "docs/missing.md"},
+    ]
+
+    result = FileMutationExecutor().apply(operations, root_path=tmp_path)
+
+    assert result == {"status": "denied", "touched_paths": [], "errors": ["missing_source:missing.md"]}
+    assert (tmp_path / "first.md").read_text(encoding="utf-8") == "first"
+    assert not (tmp_path / "docs/first.md").exists()
+
+
 def test_manifest_verifier_checks_required_manifest_fields(tmp_path):
     manifest_path = tmp_path / "docs/workspace_manifest.json"
     manifest_path.parent.mkdir()
@@ -142,3 +217,49 @@ def test_manifest_verifier_checks_required_manifest_fields(tmp_path):
     assert result["status"] == "passed"
     assert all(check["passed"] for check in result["checks"])
     assert result["manifest"]["generated_by"] == "appv22"
+
+
+def test_manifest_verifier_rejects_type_mismatches_and_intent_mismatches(tmp_path):
+    manifest_path = tmp_path / "docs/workspace_manifest.json"
+    manifest_path.parent.mkdir()
+    manifest_path.write_text(
+        json.dumps({"generated_by": "appv22", "moves": {}, "held": [], "collisions": []}),
+        encoding="utf-8",
+    )
+
+    result = WorkspaceManifestVerifier().verify(
+        root_path=tmp_path,
+        verification_intent={"manifest_path": "docs/workspace_manifest.json", "moves": []},
+    )
+
+    assert result["status"] == "failed"
+    assert {"name": "manifest_type_moves", "passed": False} in result["checks"]
+    assert {"name": "verification_moves_match", "passed": False} in result["checks"]
+
+
+def test_manifest_verifier_checks_intended_moves_on_disk(tmp_path):
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs/draft.md").write_text("draft", encoding="utf-8")
+    manifest_path = tmp_path / "docs/workspace_manifest.json"
+    move = {"source": "draft.md", "destination": "docs/draft.md"}
+    manifest_path.write_text(
+        json.dumps({"generated_by": "appv22", "moves": [move], "held": ["README.md"], "collisions": []}),
+        encoding="utf-8",
+    )
+
+    result = WorkspaceManifestVerifier().verify(
+        root_path=tmp_path,
+        verification_intent={
+            "manifest_path": "docs/workspace_manifest.json",
+            "moves": [move],
+            "held": ["README.md"],
+            "collisions": [],
+        },
+    )
+
+    assert result["status"] == "passed"
+    assert {"name": "verification_moves_match", "passed": True} in result["checks"]
+    assert {"name": "verification_held_match", "passed": True} in result["checks"]
+    assert {"name": "verification_collisions_match", "passed": True} in result["checks"]
+    assert {"name": "move_destination_exists:docs/draft.md", "passed": True} in result["checks"]
+    assert {"name": "move_source_absent:draft.md", "passed": True} in result["checks"]
