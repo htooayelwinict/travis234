@@ -273,6 +273,29 @@ def test_executor_preflight_denies_batch_without_partial_mutation(tmp_path):
     assert not (tmp_path / "docs/first.md").exists()
 
 
+def test_executor_preflights_manifest_write_parent_before_moves(tmp_path):
+    (tmp_path / "draft.md").write_text("draft", encoding="utf-8")
+    (tmp_path / "docs").write_text("not a directory", encoding="utf-8")
+    operations = [
+        {"action": "move", "source": "draft.md", "destination": "archive/draft.md"},
+        {
+            "action": "write",
+            "path": "docs/workspace_manifest.json",
+            "content": {"generated_by": "appv22", "moves": [], "held": [], "collisions": []},
+        },
+    ]
+
+    result = FileMutationExecutor().apply(operations, root_path=tmp_path)
+
+    assert result == {
+        "status": "failed",
+        "touched_paths": [],
+        "errors": ["blocked_write_parent:docs/workspace_manifest.json"],
+    }
+    assert (tmp_path / "draft.md").read_text(encoding="utf-8") == "draft"
+    assert not (tmp_path / "archive/draft.md").exists()
+
+
 def test_manifest_verifier_checks_required_manifest_fields(tmp_path):
     manifest_path = tmp_path / "docs/workspace_manifest.json"
     manifest_path.parent.mkdir()
