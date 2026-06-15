@@ -32,3 +32,13 @@ def test_tool_result_envelope_uses_payload_ref() -> None:
     )
 
     assert envelope.payload_ref == "world://tool_result/toolres_1"
+    serialized = envelope.to_dict()
+    assert serialized["payload_ref"] == "world://tool_result/toolres_1"
+
+    serialized["prompt_summary"]["file_count"] = 99
+    serialized["evidence_refs"].append("world://unexpected")
+    serialized["artifacts"].append({"artifact_id": "unexpected"})
+
+    assert envelope.prompt_summary == {"file_count": 1}
+    assert envelope.evidence_refs == []
+    assert envelope.artifacts == []

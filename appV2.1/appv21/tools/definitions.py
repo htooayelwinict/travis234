@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -48,7 +49,7 @@ class ToolResultEnvelope:
             "status": self.status,
             "trust": self.trust,
             "payload_ref": self.payload_ref,
-            "prompt_summary": self.prompt_summary,
-            "evidence_refs": self.evidence_refs,
-            "artifacts": self.artifacts,
+            "prompt_summary": deepcopy(self.prompt_summary),
+            "evidence_refs": list(self.evidence_refs),
+            "artifacts": deepcopy(self.artifacts),
         }
