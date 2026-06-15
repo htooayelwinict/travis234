@@ -226,6 +226,46 @@ def test_appv22_adapter_does_not_reobserve_when_summary_satisfies_observation_co
     assert coerced.reason == "summary evidence exists"
 
 
+def test_appv22_adapter_suppresses_legacy_observe_replay_when_summary_satisfies_contract() -> None:
+    prompt = {
+        "state": {"runtime_plan": {}, "mutation_receipts": {}, "verification_receipts": {}},
+        "world": {"world_refs": {}},
+        "messages": [
+            {
+                "role": "system",
+                "name": "context_summary",
+                "summary": {"evidence_refs": ["world://repo_snapshot/latest"]},
+            }
+        ],
+        "selection": {
+            "selected_tools": ["file_management.repo_snapshot", "file_management.read_file"],
+        },
+        "skills": [
+            {
+                "skill_id": "file_management.cleanup",
+                "tool_ids": ("file_management.repo_snapshot", "file_management.read_file"),
+                "observation_contract": {
+                    "evidence_refs": ("world://repo_snapshot/latest",),
+                    "evidence_kinds": ("file_management.repo_snapshot",),
+                    "preferred_tool_id": "file_management.repo_snapshot",
+                },
+            }
+        ],
+    }
+    decision = RuntimeDecision(
+        "tool_call",
+        "legacy observe replay",
+        {"tool_id": "file_management.repo_snapshot", "arguments": {}},
+        [],
+    )
+
+    coerced = appv2_env_provider._coerce_appv22_progression(prompt, decision)
+
+    assert coerced.kind == "plan"
+    assert coerced.payload == {}
+    assert coerced.evidence_refs == ["world://repo_snapshot/latest"]
+
+
 def test_appv22_adapter_observes_when_contract_evidence_is_missing() -> None:
     prompt = {
         "state": {"runtime_plan": {}, "mutation_receipts": {}, "verification_receipts": {}},
@@ -252,6 +292,39 @@ def test_appv22_adapter_observes_when_contract_evidence_is_missing() -> None:
 
     assert coerced.kind == "tool_call"
     assert coerced.payload == {"tool_id": "file_management.repo_snapshot", "arguments": {}}
+
+
+def test_appv22_adapter_uses_later_selected_missing_observation_contract() -> None:
+    prompt = {
+        "state": {"runtime_plan": {}, "mutation_receipts": {}, "verification_receipts": {}},
+        "world": {"world_refs": {}},
+        "messages": [],
+        "selection": {
+            "selected_tools": ["selected.inventory_probe"],
+        },
+        "skills": [
+            {
+                "skill_id": "unselected.contract",
+                "observation_contract": {
+                    "evidence_refs": ("world://unselected/latest",),
+                    "preferred_tool_id": "unselected.repo_snapshot",
+                },
+            },
+            {
+                "skill_id": "selected.contract",
+                "observation_contract": {
+                    "evidence_refs": ("world://selected/latest",),
+                    "preferred_tool_id": "selected.inventory_probe",
+                },
+            },
+        ],
+    }
+    decision = RuntimeDecision("plan", "need selected observation", {}, [])
+
+    coerced = appv2_env_provider._coerce_appv22_progression(prompt, decision)
+
+    assert coerced.kind == "tool_call"
+    assert coerced.payload == {"tool_id": "selected.inventory_probe", "arguments": {}}
 
 
 def test_appv22_adapter_ignores_unrelated_summary_evidence_for_observation_contract() -> None:

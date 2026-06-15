@@ -174,6 +174,11 @@ def _appv21_compatible_prompt(prompt: dict) -> dict:
 
 
 def _coerce_appv22_progression(prompt: dict, decision: RuntimeDecision) -> RuntimeDecision:
+    if decision.kind == "tool_call":
+        satisfied_observation = _satisfied_observation_tool_call(prompt, decision)
+        if satisfied_observation is not None:
+            return satisfied_observation
+
     if decision.kind != "plan":
         return decision
 
@@ -213,6 +218,32 @@ def _coerce_appv22_progression(prompt: dict, decision: RuntimeDecision) -> Runti
     return decision
 
 
+def _satisfied_observation_tool_call(prompt: dict, decision: RuntimeDecision) -> RuntimeDecision | None:
+    payload = decision.payload if isinstance(decision.payload, dict) else {}
+    tool_id = payload.get("tool_id")
+    if not isinstance(tool_id, str):
+        return None
+
+    contracts = _observation_contracts(prompt)
+    if not contracts:
+        return None
+
+    evidence = ContextEvidence.from_prompt(prompt)
+    for contract in contracts:
+        preferred_tool_id = contract.get("preferred_tool_id")
+        if preferred_tool_id != tool_id:
+            continue
+        if not _contract_satisfied(contract, evidence):
+            continue
+        return RuntimeDecision(
+            kind="plan",
+            reason="Observation evidence already exists; continue planning.",
+            payload={},
+            evidence_refs=list(evidence.refs),
+        )
+    return None
+
+
 def _world_refs(prompt: dict) -> list[Any]:
     world = prompt.get("world") if isinstance(prompt.get("world"), dict) else {}
     refs = world.get("world_refs") if isinstance(world, dict) else None
@@ -239,7 +270,6 @@ def _missing_observation_tool(prompt: dict, selected_tools: list[str]) -> str | 
         preferred_tool_id = contract.get("preferred_tool_id")
         if isinstance(preferred_tool_id, str) and preferred_tool_id in selected_tool_ids:
             return preferred_tool_id
-        return None
     return None
 
 

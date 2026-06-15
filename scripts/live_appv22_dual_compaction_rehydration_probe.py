@@ -313,8 +313,9 @@ def _prompt_row(*, index: int, prompt: dict[str, Any]) -> dict[str, Any]:
     summary_evidence_refs = [
         ref
         for message in summary_messages
-        for ref in ((message.get("summary") or {}).get("evidence_refs") or [])
-        if isinstance(message.get("summary"), dict)
+        for summary in [message.get("summary")]
+        if isinstance(summary, dict)
+        for ref in (summary.get("evidence_refs") or [])
     ]
     world = prompt.get("world") if isinstance(prompt.get("world"), dict) else {}
     world_refs = world.get("world_refs") if isinstance(world, dict) and isinstance(world.get("world_refs"), dict) else {}

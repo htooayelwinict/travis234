@@ -83,6 +83,34 @@ def test_dual_compaction_report_proof_flags_reobserve_after_summary_evidence(tmp
     assert report["proof"]["no_reobserve_after_summary_evidence"] is False
 
 
+def test_dual_compaction_report_ignores_malformed_summary_without_crashing(tmp_path):
+    provider = _DualCompactionProvider()
+    provider.prompts = [
+        {
+            "messages": [
+                {
+                    "name": "context_summary",
+                    "summary": "malformed summary",
+                }
+            ],
+            "world": {},
+        }
+    ]
+    provider.decisions = [
+        {"kind": "respond", "payload": {}, "evidence_refs": []},
+    ]
+
+    report = build_dual_compaction_report(
+        repo=tmp_path,
+        result={"status": "completed", "events": []},
+        provider=provider,
+        prompt="p",
+    )
+
+    assert report["prompt_matrix"][0]["context_summary_visible"] is True
+    assert report["prompt_matrix"][0]["summary_evidence_ref_count"] == 0
+
+
 def test_probe_report_contains_full_matrix(tmp_path):
     (tmp_path / "README.md").write_text("# probe\n", encoding="utf-8")
     (tmp_path / "src").mkdir()
