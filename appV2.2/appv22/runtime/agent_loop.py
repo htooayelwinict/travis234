@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from appv22.context.compressor import _compact_world_ref_payload
@@ -12,6 +12,10 @@ from appv22.runtime.reducer import apply_event
 from appv22.runtime.services import AppV22Services
 from appv22.state.events import RuntimeEvent
 from appv22.state.models import AgentState, RequestEnvelope
+
+
+def _active_request_text(state: AgentState) -> str:
+    return state.request.active_user_request or state.request.user_goal
 
 
 class AppV22AgentRuntime:
@@ -31,26 +35,53 @@ class AppV22AgentRuntime:
         services: AppV22Services,
         max_turns: int = 12,
         provider_retry_attempts: int = 1,
+        event_sink: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.root_path = Path(root_path)
         self.services = services
         self.max_turns = max_turns
         self.provider_retry_attempts = max(0, provider_retry_attempts)
+        self.event_sink = event_sink
         self.events: list[RuntimeEvent] = []
 
-    def run(self, user_goal: str) -> dict:
+    def run(
+        self,
+        user_goal: str,
+        *,
+        active_user_request: str | None = None,
+        ui_context: dict[str, Any] | None = None,
+    ) -> dict:
         state = AgentState(
             f"sess_{uuid4().hex}",
             f"run_{uuid4().hex}",
-            RequestEnvelope(f"req_{uuid4().hex}", user_goal, str(self.root_path)),
+            RequestEnvelope(
+                f"req_{uuid4().hex}",
+                user_goal,
+                str(self.root_path),
+                active_user_request=active_user_request or user_goal,
+                ui_context=dict(ui_context or {}),
+            ),
         )
         return self._run_state(state)
 
-    def continue_run(self, previous_result: dict[str, Any], user_goal: str) -> dict:
+    def continue_run(
+        self,
+        previous_result: dict[str, Any],
+        user_goal: str,
+        *,
+        active_user_request: str | None = None,
+        ui_context: dict[str, Any] | None = None,
+    ) -> dict:
         state = AgentState(
             str(previous_result.get("session_id") or f"sess_{uuid4().hex}"),
             f"run_{uuid4().hex}",
-            RequestEnvelope(f"req_{uuid4().hex}", user_goal, str(self.root_path)),
+            RequestEnvelope(
+                f"req_{uuid4().hex}",
+                user_goal,
+                str(self.root_path),
+                active_user_request=active_user_request or user_goal,
+                ui_context=dict(ui_context or {}),
+            ),
         )
         world_refs = previous_result.get("world_refs")
         if isinstance(world_refs, dict):
@@ -128,14 +159,11 @@ class AppV22AgentRuntime:
             return
 
         if decision.kind == "finalize":
-            finalize_guidance = self._finalize_guidance(state, resolved)
-            if finalize_guidance:
-                self._apply(state, RuntimeEvent("ModeChanged", {"mode": self._mode_for_guidance(finalize_guidance, resolved)}))
-                for item in finalize_guidance:
-                    self._record_runtime_guidance(state, open_risk=item)
-                self._record_named_finalize_tool_guidance(state, resolved, finalize_guidance)
-                return
-            self._complete_from_tool_loop(state, reason="tool_loop_completed")
+            self._complete_from_tool_loop(
+                state,
+                reason="tool_loop_completed",
+                assistant_message=self._assistant_message_from_decision(decision),
+            )
             return
 
         if decision.kind == "pause":
@@ -161,13 +189,6 @@ class AppV22AgentRuntime:
                         f"Last tool feedback: {unresolved_feedback.get('tool_id')} was {unresolved_feedback.get('status')}."
                     ),
                 )
-                return
-            finalize_guidance = self._finalize_guidance(state, resolved)
-            if finalize_guidance:
-                self._apply(state, RuntimeEvent("ModeChanged", {"mode": self._mode_for_guidance(finalize_guidance, resolved)}))
-                for item in finalize_guidance:
-                    self._record_runtime_guidance(state, open_risk=item)
-                self._record_named_finalize_tool_guidance(state, resolved, finalize_guidance)
                 return
             self._record_runtime_guidance(state, progress="Model requested compaction; Hermes context transform remains active.")
             return
@@ -302,7 +323,6 @@ class AppV22AgentRuntime:
         )
         if is_observe_tool and result.get("status") == "completed":
             self._apply(state, RuntimeEvent("ModeChanged", {"mode": "THINK"}))
-            self._record_post_tool_finalize_guidance(state, resolved)
         elif result.get("status") in {"denied", "failed"}:
             self._apply(state, RuntimeEvent("ModeChanged", {"mode": "THINK"}))
             guidance_messages = self._tool_result_guidance(resolved, result)
@@ -326,9 +346,6 @@ class AppV22AgentRuntime:
                     f"{default_guidance}"
                 ),
             )
-        elif result.get("status") == "completed":
-            self._record_post_tool_finalize_guidance(state, resolved)
-
     def _execute_tool_call(self, state: AgentState, resolved, *, tool_id: str, arguments: Any, active_tool_ids) -> dict:
         if not isinstance(arguments, dict):
             arguments = {}
@@ -339,6 +356,8 @@ class AppV22AgentRuntime:
             request_context={
                 "request_id": state.request.request_id,
                 "user_goal": state.request.user_goal,
+                "active_user_request": state.request.active_user_request,
+                "ui_context": deepcopy(state.request.ui_context),
                 "mode": state.mode,
             },
         )
@@ -517,7 +536,7 @@ class AppV22AgentRuntime:
                     "payload": payload,
                 }
             )
-        messages.append({"role": "user", "name": "user_goal", "content": state.request.user_goal})
+        messages.append({"role": "user", "name": "active_user_request", "content": _active_request_text(state)})
         return messages
 
     def _prompt_from_governed_messages(self, messages: list[dict[str, Any]]) -> dict:
@@ -623,6 +642,11 @@ class AppV22AgentRuntime:
     def _apply(self, state: AgentState, event: RuntimeEvent) -> None:
         self.events.append(event)
         apply_event(state, event)
+        if self.event_sink is not None:
+            try:
+                self.event_sink(event.to_dict())
+            except Exception:  # noqa: BLE001 - UI sinks must not break the agent loop.
+                pass
 
     def _record_runtime_guidance(self, state: AgentState, *, progress: str | None = None, open_risk: str | None = None) -> None:
         summary = deepcopy(state.context_summary)
@@ -688,17 +712,6 @@ class AppV22AgentRuntime:
                     redacted = redacted.replace(denied, "[redacted denied argument]")
             return redacted
         return value
-
-    def _record_post_tool_finalize_guidance(self, state: AgentState, resolved) -> None:
-        finalize_guidance = self._finalize_guidance(state, resolved)
-        if not finalize_guidance:
-            return
-        mode = self._mode_for_guidance(finalize_guidance, resolved)
-        if mode != state.mode:
-            self._apply(state, RuntimeEvent("ModeChanged", {"mode": mode}))
-        for item in finalize_guidance:
-            self._record_runtime_guidance(state, open_risk=item)
-        self._record_named_finalize_tool_guidance(state, resolved, finalize_guidance)
 
     def _preferred_observation_tool_id(self, resolved) -> str | None:
         for card in resolved.skill_cards:
@@ -767,20 +780,6 @@ class AppV22AgentRuntime:
     def _tool_result_guidance(self, resolved, result: dict[str, Any]) -> tuple[str, ...]:
         return self.services.extension_registry.tool_result_guidance(resolved.extension_ids, result)
 
-    def _finalize_guidance(self, state: AgentState, resolved) -> tuple[str, ...]:
-        return self.services.extension_registry.finalize_guidance(resolved.extension_ids, state)
-
-    def _mode_for_guidance(self, guidance: tuple[str, ...], resolved) -> str:
-        text = " ".join(str(item) for item in guidance)
-        for tool_id in resolved.tool_ids:
-            if not isinstance(tool_id, str) or tool_id not in text:
-                continue
-            definition = self.services.tool_registry.definition(tool_id)
-            if definition is not None and definition.category == "observe":
-                return "OBSERVE"
-            return "ACT"
-        return "THINK"
-
     def _apply_named_recovery_tool_mode(self, state: AgentState, resolved, current_tool_id: str, guidance: tuple[str, ...]) -> None:
         named_tool_ids = self._named_recovery_tool_ids(resolved, current_tool_id, guidance)
         if not named_tool_ids:
@@ -814,19 +813,6 @@ class AppV22AgentRuntime:
             open_risk=(
                 f"Recovery guidance names selected tool {next_tool_id}; "
                 f"the next decision should call {next_tool_id} instead of retrying {current_tool_id}."
-            ),
-        )
-
-    def _record_named_finalize_tool_guidance(self, state: AgentState, resolved, guidance: tuple[str, ...]) -> None:
-        named_tool_ids = self._named_guidance_tool_ids(resolved, guidance)
-        if not named_tool_ids:
-            return
-        next_tool_id = named_tool_ids[0]
-        self._record_runtime_guidance(
-            state,
-            open_risk=(
-                f"Finalization guidance names selected tool {next_tool_id}; "
-                f"the next decision should call {next_tool_id} before finalizing."
             ),
         )
 
@@ -872,7 +858,7 @@ class AppV22AgentRuntime:
         return None
 
     def _should_complete_observation_only(self, state: AgentState, resolved) -> bool:
-        goal = state.request.user_goal.lower()
+        goal = _active_request_text(state).lower()
         no_workspace_change_requested = any(
             marker in goal
             for marker in (
@@ -893,7 +879,7 @@ class AppV22AgentRuntime:
             and self._observation_contract_satisfied(state, resolved)
         )
 
-    def _complete_from_tool_loop(self, state: AgentState, *, reason: str) -> None:
+    def _complete_from_tool_loop(self, state: AgentState, *, reason: str, assistant_message: str = "") -> None:
         self._apply(
             state,
             RuntimeEvent(
@@ -907,9 +893,22 @@ class AppV22AgentRuntime:
                     "world_refs": deepcopy(state.world_refs),
                     "context_summary": self._normalized_context_summary(state.context_summary),
                     "tool_results": list(state.tool_results.values()),
+                    "assistant_message": assistant_message,
                 },
             ),
         )
+
+    def _assistant_message_from_decision(self, decision) -> str:
+        payload = getattr(decision, "payload", None)
+        if isinstance(payload, dict):
+            for key in ("message", "answer", "summary", "final_message"):
+                value = payload.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()[:4000]
+        reason = getattr(decision, "reason", "")
+        if isinstance(reason, str) and reason and reason != "model_decision":
+            return reason.strip()[:4000]
+        return ""
 
     def _fail_payload(self, state: AgentState, *, reason: str, **extra: Any) -> dict[str, Any]:
         return {

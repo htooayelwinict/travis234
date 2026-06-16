@@ -14,7 +14,9 @@ class PromptBuilder:
             "system": build_system_contract(),
             "agent": {
                 "mode": mode,
-                "request": state.request.user_goal,
+                "request": state.request.active_user_request or state.request.user_goal,
+                "reference_request_context": state.request.user_goal,
+                "ui_context": deepcopy(state.request.ui_context),
                 "constraints": list(state.request.constraints),
                 "mode_contract": mode_contract(mode),
             },

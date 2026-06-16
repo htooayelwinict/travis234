@@ -22,6 +22,8 @@ class RequestEnvelope:
     user_goal: str
     root_path: str
     constraints: list[str] = field(default_factory=list)
+    active_user_request: str = ""
+    ui_context: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

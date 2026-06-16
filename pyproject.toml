@@ -5,7 +5,9 @@ requires-python = ">=3.13,<3.14"
 dependencies = [
   "langgraph>=0.6.0",
   "openrouter>=0.9.1",
+  "playwright>=1.59",
   "pydantic>=2.0",
+  "textual>=6.6.0",
 ]
 
 [dependency-groups]

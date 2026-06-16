@@ -108,6 +108,7 @@ def _appv22_decision_prompt(prompt_payload: dict) -> str:
             "If state.mode is ACT and any context_summary.open_risks says the next decision must be a tool_call, emit kind=tool_call for the named selected tool; finalize/pause/compact are invalid while that risk remains.",
             "After successful action evidence, emit finalize or pause; do not repeat the same tool call.",
             "Do not claim workspace changes unless tool results or verification receipts prove them.",
+            "For kind=finalize, put the public user-facing response in payload.message. Keep it concise. Do not include hidden reasoning.",
             *open_risks,
             json.dumps(prompt_payload, indent=2, sort_keys=True, default=str),
         ]

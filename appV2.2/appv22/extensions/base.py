@@ -33,7 +33,7 @@ class SkillCard:
             object.__setattr__(self, field_name, tuple(getattr(self, field_name)))
 
     def activates_for(self, state: AgentState) -> bool:
-        text = state.request.user_goal.lower()
+        text = (state.request.active_user_request or state.request.user_goal).lower()
         return any(trigger.lower() in text for trigger in self.triggers)
 
 
@@ -50,7 +50,4 @@ class RuntimeExtension(Protocol):
         ...
 
     def tool_result_guidance(self, result: dict[str, Any]) -> str:
-        ...
-
-    def finalize_guidance(self, state: AgentState) -> str:
         ...
