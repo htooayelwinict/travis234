@@ -34,9 +34,13 @@ class AgentState:
     mode: RuntimeMode = "START"
     active_skill_ids: list[str] = field(default_factory=list)
     active_extension_ids: list[str] = field(default_factory=list)
+    active_tool_ids: list[str] = field(default_factory=list)
     world_refs: dict[str, dict[str, Any]] = field(default_factory=dict)
     tool_results: dict[str, dict[str, Any]] = field(default_factory=dict)
     conversation_messages: list[dict[str, Any]] = field(default_factory=list)
     context_summary: dict[str, Any] = field(default_factory=dict)
+    turn_feedback: list[str] = field(default_factory=list)
+    context_metrics: list[dict[str, Any]] = field(default_factory=list)
+    mutation_seq: int = 0
     terminal: bool = False
     result: dict[str, Any] | None = None

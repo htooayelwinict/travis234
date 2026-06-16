@@ -16,6 +16,14 @@ from appv22.extensions.file_management.schemas import (
 )
 from appv22.tools.definitions import ToolDefinition
 
+_PROTECTED_PATH_PARTS = {".git", "secrets", "assets"}
+_SNAPSHOT_TEXT_SUFFIXES = {".md", ".txt", ".log", ".json", ".yaml", ".yml"}
+_SNAPSHOT_MAX_FILES = 600
+_SNAPSHOT_MAX_DIRECTORIES = 300
+_SNAPSHOT_MAX_PREVIEWS = 80
+_SNAPSHOT_PREVIEW_BYTES = 4096
+_SNAPSHOT_PREVIEW_CHARS = 700
+
 
 def register_file_management_tools(registry) -> None:
     registry.register(
@@ -26,8 +34,9 @@ def register_file_management_tools(registry) -> None:
             {"type": "object", "properties": {}},
             REPO_SNAPSHOT_OUTPUT_SCHEMA,
             "runtime_observed",
-            "Return workspace files and directories relative to the root.",
-            payload_ref_mode="latest",
+            "List workspace files and directories relative to the root. Includes dotfiles, sorted paths, and clipped text previews for common text files.",
+            freshness="turn",
+            invalidated_by_mutation=True,
         ),
         repo_snapshot,
     )
@@ -43,7 +52,7 @@ def register_file_management_tools(registry) -> None:
             },
             READ_FILE_OUTPUT_SCHEMA,
             "runtime_observed",
-            "Read a workspace file by relative path.",
+            "Read exact text content from one workspace file by relative path.",
         ),
         read_file,
     )
@@ -63,7 +72,7 @@ def register_file_management_tools(registry) -> None:
             },
             WRITE_FILE_OUTPUT_SCHEMA,
             "runtime_observed",
-            "Write complete text content to a workspace file by relative path. Creates parent directories.",
+            "Write complete text content to one workspace file by relative path. Creates parent directories.",
         ),
         write_file,
     )
@@ -79,7 +88,7 @@ def register_file_management_tools(registry) -> None:
             },
             MKDIR_OUTPUT_SCHEMA,
             "runtime_observed",
-            "Create a workspace directory by relative path.",
+            "Create one workspace directory by relative path.",
         ),
         mkdir,
     )
@@ -99,7 +108,7 @@ def register_file_management_tools(registry) -> None:
             },
             MOVE_FILE_OUTPUT_SCHEMA,
             "runtime_observed",
-            "Move a workspace file from source to destination. Creates parent directories.",
+            "Move one workspace file from source to destination. Creates parent directories.",
         ),
         move_file,
     )
@@ -120,7 +129,7 @@ def register_file_management_tools(registry) -> None:
             },
             COPY_FILE_OUTPUT_SCHEMA,
             "runtime_observed",
-            "Copy a workspace file from source to destination. Creates parent directories.",
+            "Copy one workspace file from source to destination. Creates parent directories.",
         ),
         copy_file,
     )
@@ -147,34 +156,65 @@ def repo_snapshot(_args: dict, context: dict) -> dict:
     files: list[str] = []
     directories: list[str] = []
     text_previews: dict[str, str] = {}
+    errors: list[str] = []
     for path in root.rglob("*"):
-        relative = path.relative_to(root).as_posix()
-        if relative == ".git" or relative.startswith(".git/"):
+        try:
+            relative = path.relative_to(root).as_posix()
+        except ValueError:
             continue
-        if path.is_file():
+        if _protected_path(relative) or path.is_symlink():
+            continue
+        try:
+            is_file = path.is_file()
+            is_dir = path.is_dir()
+        except OSError:
+            errors.append(f"snapshot_stat_error:{relative}")
+            continue
+        if is_file:
+            if len(files) >= _SNAPSHOT_MAX_FILES:
+                errors.append("snapshot_file_limit_reached")
+                continue
             files.append(relative)
-            preview = _safe_text_preview(relative, path)
-            if preview is not None:
+            preview = _safe_text_preview(relative, path, root=root)
+            if preview is not None and len(text_previews) < _SNAPSHOT_MAX_PREVIEWS:
                 text_previews[relative] = preview
-        elif path.is_dir():
+        elif is_dir:
+            if len(directories) >= _SNAPSHOT_MAX_DIRECTORIES:
+                errors.append("snapshot_directory_limit_reached")
+                continue
             directories.append(relative)
     return {
         "status": "completed",
         "files": sorted(files),
         "directories": sorted(directories),
         "text_previews": dict(sorted(text_previews.items())),
-        "errors": [],
+        "errors": sorted(set(errors)),
     }
 
 
-def _safe_text_preview(relative: str, path: Path, *, max_chars: int = 700) -> str | None:
-    lowered = relative.lower()
-    if lowered.startswith(("secrets/", ".git/", "assets/")):
-        return None
-    if path.suffix.lower() not in {".md", ".txt", ".log", ".json", ".yaml", ".yml"}:
+def _safe_text_preview(relative: str, path: Path, *, root: Path, max_chars: int = _SNAPSHOT_PREVIEW_CHARS) -> str | None:
+    if _protected_path(relative) or path.is_symlink():
         return None
     try:
-        content = path.read_text(encoding="utf-8")
+        path.resolve().relative_to(root)
+    except ValueError:
+        return None
+    if path.suffix.lower() not in _SNAPSHOT_TEXT_SUFFIXES:
+        return None
+    try:
+        if path.stat().st_size > _SNAPSHOT_PREVIEW_BYTES:
+            return None
+    except OSError:
+        return None
+    try:
+        with path.open("rb") as handle:
+            raw = handle.read(_SNAPSHOT_PREVIEW_BYTES + 1)
+    except OSError:
+        return None
+    if len(raw) > _SNAPSHOT_PREVIEW_BYTES:
+        return None
+    try:
+        content = raw.decode("utf-8")
     except UnicodeDecodeError:
         return None
     return content[:max_chars]
@@ -390,13 +430,16 @@ def _file_transfer_result(status: str, source: str, destination: str, overwritte
 
 
 def _protected_read(path: str) -> bool:
-    normalized = path.replace("\\", "/").lstrip("/").lower()
-    return normalized.startswith((".git/", "secrets/", "assets/"))
+    return _protected_path(path)
 
 
 def _protected_mutation(path: str) -> bool:
-    normalized = path.replace("\\", "/").lstrip("/").lower()
-    return normalized.startswith((".git/", "secrets/", "assets/"))
+    return _protected_path(path)
+
+
+def _protected_path(path: str) -> bool:
+    parts = [part.lower() for part in path.replace("\\", "/").lstrip("/").split("/") if part]
+    return any(part in _PROTECTED_PATH_PARTS for part in parts)
 
 
 def _validate_single_mutation_path(root: Path, path: str) -> str:
@@ -439,7 +482,7 @@ def _available_sibling_path(root: Path, relative: str) -> str:
 
 def _request_forbids_overwrite(context: dict) -> bool:
     request = context.get("request") if isinstance(context.get("request"), dict) else {}
-    goal = str(request.get("user_goal", "")).lower()
+    goal = str(request.get("active_user_request") or request.get("user_goal", "")).lower()
     return any(
         marker in goal
         for marker in (

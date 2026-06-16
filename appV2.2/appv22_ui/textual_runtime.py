@@ -87,9 +87,7 @@ class AppV22TextualApp(App):
 
     def action_cancel_or_quit(self) -> None:
         if self.controller.state.running:
-            self.controller.state.running = False
-            self.controller.state.mode = "INTERRUPTED"
-            self.controller.state.add_notice("UI interrupted; provider call may finish in background")
+            self.controller.interrupt_running_turn()
             self._refresh_all()
             return
         self.exit()
@@ -125,9 +123,9 @@ class AppV22TextualApp(App):
             log.write(f"ui summary chars={len(state.conversation_summary)}")
         if state.ui_context_metrics:
             log.write(f"ui metrics={state.ui_context_metrics}")
-        risks = state.context_summary.get("open_risks")
-        if isinstance(risks, list) and risks:
-            log.write(f"open risks={len(risks)}")
+        blockers = state.context_summary.get("blockers")
+        if isinstance(blockers, list) and blockers:
+            log.write(f"blockers={len(blockers)}")
             for risk in risks[-4:]:
                 log.write(f"- {risk}")
 

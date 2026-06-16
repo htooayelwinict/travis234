@@ -8,7 +8,7 @@ from appv22.context.budget import estimate_chars
 from appv22.context.summaries import structured_summary
 
 
-SUMMARY_KEYS = ("goals", "decisions", "progress", "open_risks", "evidence_refs")
+SUMMARY_KEYS = ("goals", "decisions", "progress", "blockers", "evidence_refs")
 PRESERVED_CONTEXT_SECTIONS = ("agent", "state", "skills", "tools", "tool_definitions", "world", "selection")
 
 
@@ -32,10 +32,10 @@ def _summary_content(summary: dict[str, list[Any]], *, fallback: str) -> str:
     if progress:
         lines.append("Relevant progress/evidence:")
         lines.extend(f"- {item[:240]}" for item in progress[-6:])
-    open_risks = [str(item) for item in summary.get("open_risks", []) if item]
-    if open_risks:
-        lines.append("Open risks:")
-        lines.extend(f"- {item[:240]}" for item in open_risks[-4:])
+    blockers = [str(item) for item in summary.get("blockers", []) if item]
+    if blockers:
+        lines.append("Active blockers:")
+        lines.extend(f"- {item[:240]}" for item in blockers[-4:])
     return "\n".join(lines)
 
 

@@ -27,12 +27,15 @@ class SkillCard:
     tool_ids: tuple[str, ...]
     observation_contract: ObservationContract | None = None
     instructions: tuple[str, ...] = ()
+    always_active: bool = False
 
     def __post_init__(self) -> None:
         for field_name in ("triggers", "modes", "tool_ids", "instructions"):
             object.__setattr__(self, field_name, tuple(getattr(self, field_name)))
 
     def activates_for(self, state: AgentState) -> bool:
+        if self.always_active:
+            return True
         text = (state.request.active_user_request or state.request.user_goal).lower()
         return any(trigger.lower() in text for trigger in self.triggers)
 

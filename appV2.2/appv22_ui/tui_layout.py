@@ -79,11 +79,11 @@ def _context_body(state: TuiState) -> list[str]:
     if isinstance(progress, list) and progress:
         lines.append(f"progress: {len(progress)}")
         lines.extend(f"- {item}" for item in progress[-4:])
-    risks = summary.get("open_risks")
-    display_risks = _display_risks(risks, progress)
-    if display_risks:
-        lines.append(f"open risks: {len(display_risks)}")
-        lines.extend(f"- {item}" for item in display_risks[-4:])
+    blockers = summary.get("blockers")
+    display_blockers = _display_risks(blockers, progress)
+    if display_blockers:
+        lines.append(f"blockers: {len(display_blockers)}")
+        lines.extend(f"- {item}" for item in display_blockers[-4:])
     if state.world_refs:
         lines.append("refs:")
         lines.extend(f"- {ref}" for ref in state.world_refs[-6:])

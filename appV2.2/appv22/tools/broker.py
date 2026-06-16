@@ -101,7 +101,14 @@ class ToolBroker:
                     create_ref=False,
                 )
 
-        return self._envelope(tool_id, status, payload, definition=definition, create_ref=status == "completed")
+        return self._envelope(
+            tool_id,
+            status,
+            payload,
+            definition=definition,
+            create_ref=status == "completed",
+            arguments=arguments,
+        )
 
     def _envelope(
         self,
@@ -111,9 +118,10 @@ class ToolBroker:
         *,
         definition=None,
         create_ref: bool,
+        arguments: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         result_id = f"toolres_{next(self._result_counter):06d}"
-        payload_ref = self._payload_ref(tool_id, payload, definition=definition) if create_ref else ""
+        payload_ref = self._payload_ref(tool_id, payload, definition=definition, arguments=arguments or {}) if create_ref else ""
         return {
             "tool_result_id": result_id,
             "tool_id": tool_id,
@@ -123,10 +131,13 @@ class ToolBroker:
             "evidence_refs": [payload_ref] if payload_ref else [],
         }
 
-    def _payload_ref(self, tool_id: str, payload: dict[str, Any], *, definition=None) -> str:
-        if getattr(definition, "payload_ref_mode", "") == "latest":
-            return f"world://{tool_id}/latest"
-        stable = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
+    def _payload_ref(self, tool_id: str, payload: dict[str, Any], *, definition=None, arguments: dict[str, Any]) -> str:
+        stable = json.dumps(
+            {"arguments": arguments, "payload": payload, "tool_id": tool_id},
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
+        )
         digest = sha256(stable.encode("utf-8")).hexdigest()[:16]
         return f"world://{tool_id}/{digest}"
 

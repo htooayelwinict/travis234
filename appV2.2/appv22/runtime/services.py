@@ -5,6 +5,7 @@ from pathlib import Path
 
 from appv22.context.compressor import AgentContextCompressor
 from appv22.context.gateway_guard import GatewayContextGuard
+from appv22.context.harness import ContextHarness
 from appv22.context.prompt_builder import PromptBuilder
 from appv22.context.selector import ContextSelector
 from appv22.extensions.registry import ExtensionRegistry
@@ -24,6 +25,7 @@ class AppV22Services:
     prompt_builder: PromptBuilder
     gateway_guard: GatewayContextGuard
     compressor: AgentContextCompressor
+    context_harness: ContextHarness | None = None
 
 
 def create_appv22_services(*, root_path, provider, extensions) -> AppV22Services:
@@ -36,16 +38,28 @@ def create_appv22_services(*, root_path, provider, extensions) -> AppV22Services
         if callable(register_tools):
             register_tools(tool_registry)
     _normalize_enveloped_tool_result_schemas(tool_registry)
+    context_selector = ContextSelector(tool_registry=tool_registry)
+    prompt_builder = PromptBuilder()
+    gateway_guard = GatewayContextGuard(max_chars=120_000)
+    compressor = AgentContextCompressor(max_chars=120_000)
+    context_harness = ContextHarness(
+        context_selector=context_selector,
+        prompt_builder=prompt_builder,
+        compressor=compressor,
+        gateway_guard=gateway_guard,
+        tool_registry=tool_registry,
+    )
     return AppV22Services(
         root,
         provider,
         extension_registry,
         tool_registry,
         ToolBroker(registry=tool_registry, root_path=root),
-        ContextSelector(),
-        PromptBuilder(),
-        GatewayContextGuard(max_chars=120_000),
-        AgentContextCompressor(max_chars=120_000),
+        context_selector,
+        prompt_builder,
+        gateway_guard,
+        compressor,
+        context_harness,
     )
 
 
@@ -66,7 +80,8 @@ def _normalize_enveloped_tool_result_schemas(tool_registry: ToolRegistry) -> Non
             schema,
             definition.trust,
             definition.guidance,
-            payload_ref_mode=definition.payload_ref_mode,
+            freshness=definition.freshness,
+            invalidated_by_mutation=definition.invalidated_by_mutation,
         )
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -44,15 +45,15 @@ class TuiAppTests(unittest.TestCase):
                 "status": "completed",
                 "reason": "tool_loop_completed",
                 "session_id": "sess_test",
-                "world_refs": {"world://repo/latest": {"summary": "snapshot"}},
-                "context_summary": {"open_risks": ["risk"], "progress": ["snapshot"]},
+                "world_refs": {"world://repo/snapshot": {"summary": "snapshot"}},
+                "context_summary": {"blockers": ["approval required: risk"], "progress": ["snapshot"]},
                 "events": [],
             }
         )
 
         self.assertEqual(state.session_id, "sess_test")
         self.assertEqual(state.world_ref_count, 1)
-        self.assertEqual(state.context_summary["open_risks"], ["risk"])
+        self.assertEqual(state.context_summary["blockers"], ["approval required: risk"])
 
     def test_tui_layout_keeps_multiline_assistant_text_inside_panel_rows(self) -> None:
         state = TuiState(workspace=Path("/tmp/workspace"))
@@ -85,7 +86,7 @@ class TuiAppTests(unittest.TestCase):
                 "world_refs": {},
                 "context_summary": {
                     "progress": ["file_management.repo_snapshot: file_management.repo_snapshot result"],
-                    "open_risks": [
+                    "blockers": [
                         "list_dir reported error: inactive_tool:list_dir",
                         "list_dir request was denied for argument keys []; treat that denial as evidence.",
                     ],
@@ -187,7 +188,7 @@ class TuiAppTests(unittest.TestCase):
         self.assertIn("UI SESSION SUMMARY - REFERENCE ONLY", prompt)
         self.assertIn("RECENT UI TURNS", prompt)
 
-    def test_tui_does_not_reuse_previous_runtime_result_as_active_state(self) -> None:
+    def test_tui_reuses_sanitized_previous_runtime_result_for_continuation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app = AppV22Tui(workspace=Path(tmp), dotenv_path=Path(".env"), max_turns=4, extensions=("file_management",))
             app.store.save(
@@ -203,7 +204,186 @@ class TuiAppTests(unittest.TestCase):
 
             previous = app._previous_result()
 
-        self.assertIsNone(previous)
+        self.assertIsInstance(previous, dict)
+        self.assertEqual(previous["session_id"], "sess_old")
+        self.assertIn("world://file_management.write_file/old", previous["world_refs"])
+
+    def test_session_store_does_not_persist_inactive_tool_risks_as_active_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SessionStore(Path(tmp))
+            store.save(
+                {
+                    "status": "completed",
+                    "reason": "tool_loop_completed",
+                    "session_id": "sess_test",
+                    "world_refs": {},
+                    "context_summary": {
+                        "progress": ["write completed"],
+                        "blockers": [
+                            "file.read reported error: inactive_tool:file.read",
+                            "file.read request was denied for argument keys ['path']; treat that denial as evidence.",
+                            "approval required: real unresolved risk",
+                        ],
+                    },
+                },
+                conversation=[],
+            )
+
+            loaded = store.load()
+
+        self.assertEqual(loaded["context_summary"]["blockers"], ["approval required: real unresolved risk"])
+        self.assertEqual(loaded["last_result"]["context_summary"]["blockers"], ["approval required: real unresolved risk"])
+
+    def test_session_store_reconciles_tool_risks_against_persisted_world_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SessionStore(Path(tmp))
+            store.save(
+                {
+                    "status": "completed",
+                    "reason": "tool_loop_completed",
+                    "session_id": "sess_test",
+                    "world_refs": {
+                        "world://file_management.read_file/ok": {
+                            "kind": "file_management.read_file",
+                            "summary": "file_management.read_file result",
+                        }
+                    },
+                    "context_summary": {
+                        "progress": ["file_management.read_file: file_management.read_file result"],
+                        "blockers": [
+                            "file_management.read_file reported error: missing_file:cat.txt",
+                            "approval required: other_tool still_active",
+                        ],
+                    },
+                },
+                conversation=[],
+            )
+
+            loaded = store.load()
+
+        self.assertEqual(loaded["context_summary"]["blockers"], ["approval required: other_tool still_active"])
+        self.assertIn(
+            "file_management.read_file: prior failed/denied tool risk resolved by later successful result",
+            loaded["context_summary"]["progress"],
+        )
+
+    def test_session_store_does_not_persist_turn_local_repair_risks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SessionStore(Path(tmp))
+            store.save(
+                {
+                    "status": "failed",
+                    "reason": "max_turns_exceeded",
+                    "session_id": "sess_test",
+                    "world_refs": {},
+                    "context_summary": {
+                        "blockers": [
+                            "Malformed tool_call decision was missing payload.tool_id; the next decision must call one selected tool.",
+                            "approval required: real task risk",
+                        ],
+                    },
+                },
+                conversation=[],
+            )
+
+            loaded = store.load()
+
+        self.assertEqual(loaded["context_summary"]["blockers"], ["approval required: real task risk"])
+        self.assertEqual(loaded["last_result"]["context_summary"]["blockers"], ["approval required: real task risk"])
+
+    def test_session_store_persists_lightweight_observe_payloads_for_rehydration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SessionStore(Path(tmp))
+            store.save(
+                {
+                    "status": "completed",
+                    "reason": "tool_loop_completed",
+                    "session_id": "sess_test",
+                    "world_refs": {
+                        "world://file_management.repo_snapshot/current": {
+                            "kind": "file_management.repo_snapshot",
+                            "summary": "file_management.repo_snapshot result",
+                            "arguments": {},
+                            "freshness": "turn",
+                            "request_id": "req_test",
+                            "run_id": "run_test",
+                            "mutation_seq": 0,
+                            "payload": {
+                                "files": ["note.txt", "docs/output.md"],
+                                "directories": ["docs"],
+                                "text_previews": {"docs/output.md": "x" * 1000},
+                            },
+                        },
+                        "world://file_management.read_file/ok": {
+                            "kind": "file_management.read_file",
+                            "summary": "file_management.read_file result",
+                            "arguments": {"path": "note.txt"},
+                            "payload": {"path": "note.txt", "content": "note"},
+                        },
+                    },
+                    "context_summary": {},
+                    "usage": {"context": {"model_calls": 1, "total_prompt_estimated_tokens": 123}},
+                },
+                conversation=[],
+            )
+
+            loaded = store.load()
+
+        snapshot = loaded["world_refs"]["world://file_management.repo_snapshot/current"]["payload"]
+        snapshot_ref = loaded["world_refs"]["world://file_management.repo_snapshot/current"]
+        read = loaded["world_refs"]["world://file_management.read_file/ok"]["payload"]
+        self.assertEqual(snapshot["files"], ["note.txt", "docs/output.md"])
+        self.assertEqual(snapshot["directories"], ["docs"])
+        self.assertLessEqual(len(snapshot["text_previews"]["docs/output.md"]), 700)
+        self.assertEqual(snapshot_ref["freshness"], "turn")
+        self.assertEqual(snapshot_ref["request_id"], "req_test")
+        self.assertEqual(snapshot_ref["run_id"], "run_test")
+        self.assertEqual(snapshot_ref["mutation_seq"], 0)
+        self.assertEqual(read["content"], "note")
+        self.assertEqual(loaded["usage"]["context"]["model_calls"], 1)
+        self.assertEqual(loaded["last_result"]["usage"]["context"]["total_prompt_estimated_tokens"], 123)
+
+    def test_session_load_drops_legacy_latest_world_refs_and_evidence_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SessionStore(Path(tmp))
+            store.path.parent.mkdir(parents=True, exist_ok=True)
+            store.path.write_text(
+                json.dumps(
+                    {
+                        "session_id": "sess_test",
+                        "status": "completed",
+                        "reason": "tool_loop_completed",
+                        "world_refs": {
+                            "world://file_management.repo_snapshot/latest": {
+                                "kind": "file_management.repo_snapshot",
+                                "payload": {"files": ["stale.txt"], "directories": []},
+                            },
+                            "world://file_management.repo_snapshot/fresh": {
+                                "kind": "file_management.repo_snapshot",
+                                "payload": {"files": ["fresh.txt"], "directories": []},
+                            },
+                        },
+                        "context_summary": {
+                            "evidence_refs": [
+                                "world://file_management.repo_snapshot/latest",
+                                "world://file_management.repo_snapshot/fresh",
+                            ],
+                            "progress": ["file_management.repo_snapshot: file_management.repo_snapshot result"],
+                        },
+                        "conversation": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            loaded = store.load()
+
+        self.assertNotIn("world://file_management.repo_snapshot/latest", loaded["world_refs"])
+        self.assertNotIn("world://file_management.repo_snapshot/latest", loaded["last_result"]["world_refs"])
+        self.assertEqual(
+            loaded["context_summary"]["evidence_refs"],
+            ["world://file_management.repo_snapshot/fresh"],
+        )
 
     def test_tui_context_manager_preserves_compaction_metrics_without_recompacting_hot_tail(self) -> None:
         manager = TuiContextManager(max_hot_lines=6, compact_after_lines=12)
@@ -262,6 +442,16 @@ class TuiAppTests(unittest.TestCase):
     def test_reset_ui_command_clears_corrupted_conversation_and_persists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app = AppV22Tui(workspace=Path(tmp), dotenv_path=Path(".env"), max_turns=4, extensions=("file_management",))
+            app.store.save(
+                {
+                    "status": "completed",
+                    "reason": "tool_loop_completed",
+                    "session_id": "sess_test",
+                    "world_refs": {"world://file_management.read_file/ok": {"kind": "file_management.read_file"}},
+                    "context_summary": {"progress": ["read completed"]},
+                },
+                conversation=[],
+            )
             app.state.conversation = [ConversationLine("user", "bad pasted chrome")]
 
             should_exit = app._command("/reset-ui")
@@ -270,7 +460,38 @@ class TuiAppTests(unittest.TestCase):
         self.assertFalse(should_exit)
         self.assertEqual(app.state.conversation, [])
         self.assertEqual(loaded["conversation"], [])
+        self.assertIn("world://file_management.read_file/ok", loaded["last_result"]["world_refs"])
+        self.assertEqual(loaded["last_result"]["context_summary"]["progress"], ["read completed"])
         self.assertIn("UI conversation reset", app.state.notice)
+
+    def test_textual_reset_ui_preserves_runtime_result(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = TextualTuiController(
+                workspace=Path(tmp),
+                dotenv_path=Path(".env"),
+                max_turns=4,
+                extensions=("file_management",),
+            )
+            controller.store.save(
+                {
+                    "status": "completed",
+                    "reason": "tool_loop_completed",
+                    "session_id": "sess_test",
+                    "world_refs": {"world://file_management.write_file/ok": {"kind": "file_management.write_file"}},
+                    "context_summary": {"progress": ["write completed"]},
+                },
+                conversation=[],
+            )
+            controller.state.conversation = [ConversationLine("user", "bad pasted chrome")]
+
+            should_exit = controller.handle_command("/reset-ui")
+            loaded = controller.store.load()
+
+        self.assertFalse(should_exit)
+        self.assertEqual(controller.state.conversation, [])
+        self.assertEqual(loaded["conversation"], [])
+        self.assertIn("world://file_management.write_file/ok", loaded["last_result"]["world_refs"])
+        self.assertEqual(loaded["last_result"]["context_summary"]["progress"], ["write completed"])
 
     def test_textual_controller_tracks_input_history_for_arrow_navigation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

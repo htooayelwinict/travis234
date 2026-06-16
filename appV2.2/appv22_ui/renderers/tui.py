@@ -46,11 +46,11 @@ def _context_lines(context_summary: dict) -> list[str]:
     progress = context_summary.get("progress")
     if progress:
         lines.append(f"progress   {progress}")
-    open_risks = context_summary.get("open_risks")
-    if isinstance(open_risks, list) and open_risks:
-        lines.append(f"open risks {len(open_risks)}")
-        for risk in open_risks[-4:]:
-            lines.append(f"- {risk}")
+    blockers = context_summary.get("blockers")
+    if isinstance(blockers, list) and blockers:
+        lines.append(f"blockers {len(blockers)}")
+        for blocker in blockers[-4:]:
+            lines.append(f"- {blocker}")
     if not lines:
         lines.append("summary available")
     return lines

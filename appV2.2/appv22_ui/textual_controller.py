@@ -31,6 +31,7 @@ class TextualTuiController:
         )
         self.history: list[str] = []
         self.history_index: int | None = None
+        self._interrupted = False
 
     def record_submitted_text(self, text: str) -> None:
         text = text.strip()
@@ -82,7 +83,7 @@ class TextualTuiController:
             self.state.conversation.clear()
             self.state.events.clear()
             self.state.add_notice("UI conversation reset. Runtime world/context refs are preserved.")
-            self._save_ui_context({})
+            self._save_ui_context(self.previous_result() or {})
             return False
         if command == "/clear":
             self.state.clear_transient()
@@ -96,9 +97,9 @@ class TextualTuiController:
             self.state.add_notice(f"showing last {min(len(self.state.events), 14)} agent-loop events")
             return False
         if command == "/context":
-            risks = self.state.context_summary.get("open_risks")
-            risk_count = len(risks) if isinstance(risks, list) else 0
-            self.state.add_notice(f"context refs={self.state.world_ref_count} open_risks={risk_count}")
+            blockers = self.state.context_summary.get("blockers")
+            blocker_count = len(blockers) if isinstance(blockers, list) else 0
+            self.state.add_notice(f"context refs={self.state.world_ref_count} blockers={blocker_count}")
             return False
         if command == "/refs":
             self.state.add_notice(", ".join(self.state.world_refs[-8:]) or "no world refs")
@@ -149,7 +150,9 @@ class TextualTuiController:
         self.state.add_user(accepted)
         self.state.running = True
         self.state.mode = "START"
+        self._interrupted = False
         event_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
+        previous = self.previous_result()
 
         def event_sink(event: dict[str, Any]) -> None:
             event_queue.put(("event", event))
@@ -160,7 +163,7 @@ class TextualTuiController:
                     self.build_runtime_prompt(accepted),
                     active_user_request=accepted,
                     ui_context=self.ui_context_payload(),
-                    previous_result=None,
+                    previous_result=previous,
                     event_sink=event_sink,
                 )
                 event_queue.put(("result", result))
@@ -179,6 +182,9 @@ class TextualTuiController:
                     self.state.apply_event(payload)
                     on_event(ui_event)
                 elif kind == "result":
+                    if self._interrupted or self.state.mode == "INTERRUPTED":
+                        self.state.add_notice("ignored late result from interrupted turn")
+                        continue
                     self.state.apply_result(payload)
                     self._save_ui_context(payload)
                 elif kind == "error":
@@ -195,6 +201,19 @@ class TextualTuiController:
         thread = threading.Thread(target=pump, daemon=True)
         thread.start()
         return thread
+
+    def interrupt_running_turn(self) -> None:
+        self._interrupted = True
+        self.state.running = False
+        self.state.mode = "INTERRUPTED"
+        self.state.add_notice("UI interrupted; late provider/tool results will be ignored")
+
+    def previous_result(self) -> dict[str, Any] | None:
+        loaded = self.store.load()
+        if not isinstance(loaded, dict):
+            return None
+        previous = loaded.get("last_result")
+        return dict(previous) if isinstance(previous, dict) else None
 
     def _save_ui_context(self, result: dict[str, Any]) -> None:
         enriched = dict(result)

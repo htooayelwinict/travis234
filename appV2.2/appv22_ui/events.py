@@ -102,9 +102,9 @@ def _detail_for(event_type: str, payload: dict[str, Any]) -> str:
     if event_type == "WorldRefAdded":
         return str(payload.get("ref") or payload.get("world_ref") or payload.get("uri") or "")
     if event_type == "ContextSummaryUpdated":
-        risks = payload.get("open_risks")
-        if isinstance(risks, list) and risks:
-            return f"open risks: {len(risks)}"
+        blockers = payload.get("blockers")
+        if isinstance(blockers, list) and blockers:
+            return f"blockers: {len(blockers)}"
         return "summary refreshed"
     if event_type in {"RunCompleted", "RunFailed", "ProviderCallFailed"}:
         return str(payload.get("reason") or payload.get("message") or payload.get("status") or "")

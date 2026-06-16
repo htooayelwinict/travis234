@@ -6,7 +6,16 @@ from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
 
-from appv22.context.compressor import _compact_world_ref_payload
+from appv22.context.freshness import is_world_ref_fresh
+from appv22.context.summary_hygiene import (
+    drop_unavailable_tool_risks,
+    is_durable_blocker,
+    is_turn_local_repair_risk,
+    normalized_context_summary,
+    resolve_tool_risks_after_success,
+    resolve_tool_risks_from_world_refs,
+    strip_turn_local_repair_risks,
+)
 from appv22.runtime.decisions import KNOWN_DECISION_KINDS, RuntimeDecision
 from appv22.runtime.reducer import apply_event
 from appv22.runtime.services import AppV22Services
@@ -88,7 +97,7 @@ class AppV22AgentRuntime:
             state.world_refs = deepcopy(world_refs)
         context_summary = previous_result.get("context_summary")
         if isinstance(context_summary, dict):
-            state.context_summary = self._normalized_context_summary(context_summary)
+            state.context_summary = resolve_tool_risks_from_world_refs(context_summary, state.world_refs)
         return self._run_state(state)
 
     def _run_state(self, state: AgentState) -> dict:
@@ -99,14 +108,29 @@ class AppV22AgentRuntime:
             resolved = self.services.extension_registry.resolve_active(state)
             state.active_extension_ids = list(resolved.extension_ids)
             state.active_skill_ids = [card.skill_id for card in resolved.skill_cards]
+            state.context_summary = resolve_tool_risks_from_world_refs(
+                strip_turn_local_repair_risks(drop_unavailable_tool_risks(state.context_summary, resolved.tool_ids)),
+                state.world_refs,
+            )
 
-            selected = self.services.context_selector.select(state, resolved, pre_turn_mode=state.mode)
-            prompt = self.services.prompt_builder.build(state, selected)
-            provider_prompt = self._provider_bound_prompt(state, prompt)
+            if self.services.context_harness is None:
+                raise RuntimeError("context_harness_not_configured")
+            packet = self.services.context_harness.prepare_turn(state, resolved, pre_turn_mode=state.mode)
+            if packet.context_summary_update is not None and packet.context_summary_update != state.context_summary:
+                self._apply(
+                    state,
+                    RuntimeEvent(
+                        "ContextSummaryUpdated",
+                        self._merge_context_summaries(state.context_summary, packet.context_summary_update),
+                    ),
+                )
+            provider_prompt = packet.provider_prompt
+            selected_tool_ids = provider_prompt.get("selection", {}).get("selected_tools", [])
+            state.active_tool_ids = [tool_id for tool_id in selected_tool_ids if isinstance(tool_id, str)]
 
             try:
                 decision = self._decide_with_provider_retries(state, provider_prompt)
-                decision = self._repair_decision_shape(decision, resolved)
+                decision = self._repair_decision_shape(decision, state.active_tool_ids)
                 self._validate_decision(decision)
                 self._apply(state, RuntimeEvent("DecisionProposed", self._decision_event_payload(turn_index, decision)))
                 self._route(state, decision, resolved)
@@ -167,9 +191,7 @@ class AppV22AgentRuntime:
             return
 
         if decision.kind == "pause":
-            if self._should_complete_observation_only(state, resolved):
-                self._complete_from_tool_loop(state, reason="observation_only_completed")
-            elif self._has_completed_non_observe_tool(state):
+            if self._has_completed_non_observe_tool(state):
                 self._complete_from_tool_loop(state, reason="tool_loop_completed")
             else:
                 self._apply(state, RuntimeEvent("RunFailed", self._fail_payload(state, reason="paused")))
@@ -201,7 +223,9 @@ class AppV22AgentRuntime:
         arguments = payload.get("arguments", {})
 
         if not isinstance(tool_id, str) or not tool_id:
-            if "tool_call" in payload or not resolved.tool_ids:
+            if "tool_call" in payload or not state.active_tool_ids:
+                if not state.active_tool_ids and self._complete_from_latest_observe_result(state):
+                    return
                 self._apply(
                     state,
                     RuntimeEvent(
@@ -218,19 +242,19 @@ class AppV22AgentRuntime:
             self._apply(state, RuntimeEvent("ModeChanged", {"mode": "THINK"}))
             self._record_runtime_guidance(
                 state,
-                open_risk=(
+                turn_feedback=(
                     "Malformed tool_call decision was missing payload.tool_id; "
-                    "the next decision must call one selected tool using payload.tool_id and payload.arguments, "
-                    "or finalize only if existing evidence already proves completion."
+                    "treated as turn-local provider repair feedback. Continue from selected tools or existing evidence."
                 ),
-            )
+                )
+            return
+
+        if not state.active_tool_ids and self._complete_from_latest_observe_result(state):
             return
 
         if tool_id.lower() in {"none", "null", "no_tool", "no-op", "noop"}:
             if self._has_completed_non_observe_tool(state):
                 self._complete_from_tool_loop(state, reason="tool_loop_completed")
-            elif self._should_complete_observation_only(state, resolved):
-                self._complete_from_tool_loop(state, reason="observation_only_completed")
             else:
                 self._apply(
                     state,
@@ -246,30 +270,13 @@ class AppV22AgentRuntime:
             return
 
         if self._tool_call_evidence_already_exists(state, tool_id, arguments):
-            if self._is_observe_tool(tool_id):
-                if self._should_complete_observation_only(state, resolved):
-                    self._record_runtime_guidance(
-                        state,
-                        progress="Observation evidence already exists and the request is observation-only; completed without replaying broad observation.",
-                    )
-                    self._complete_from_tool_loop(state, reason="observation_only_completed")
-                    return
-                self._apply(state, RuntimeEvent("ModeChanged", {"mode": "THINK"}))
+            if not self._is_observe_tool(tool_id):
                 self._record_runtime_guidance(
                     state,
-                    progress=(
-                        "Observation already satisfied by durable evidence_refs; duplicate observe tool call suppressed. "
-                        "Continue reasoning from existing evidence, rehydrate exact evidence only if needed, "
-                        "or call a selected action tool when ready."
-                    ),
+                    progress="Duplicate completed tool call suppressed; existing tool result already proves the requested action.",
                 )
+                self._complete_from_tool_loop(state, reason="tool_loop_completed")
                 return
-            self._record_runtime_guidance(
-                state,
-                progress="Duplicate completed tool call suppressed; existing tool result already proves the requested action.",
-            )
-            self._complete_from_tool_loop(state, reason="tool_loop_completed")
-            return
 
         existing_denial = self._existing_tool_call_denial(state, tool_id, arguments)
         if existing_denial is not None:
@@ -319,7 +326,7 @@ class AppV22AgentRuntime:
             resolved,
             tool_id=tool_id,
             arguments=arguments,
-            active_tool_ids=resolved.tool_ids,
+            active_tool_ids=state.active_tool_ids,
         )
         if is_observe_tool and result.get("status") == "completed":
             self._apply(state, RuntimeEvent("ModeChanged", {"mode": "THINK"}))
@@ -363,24 +370,40 @@ class AppV22AgentRuntime:
         )
         result["arguments"] = deepcopy(arguments)
         result = self._after_tool_call(state, resolved, result)
+        if self.services.context_harness is not None:
+            self.services.context_harness.record_tool_result(state, result)
         self._record_tool_result(state, result)
         return result
 
     def _record_tool_result(self, state: AgentState, result: dict[str, Any]) -> None:
-        event_type = "ToolCallCompleted" if result["status"] == "completed" else "ToolCallDenied"
+        event_type = {
+            "completed": "ToolCallCompleted",
+            "failed": "ToolCallFailed",
+        }.get(str(result.get("status")), "ToolCallDenied")
         self._apply(state, RuntimeEvent(event_type, result))
         if result["status"] == "completed":
+            resolved_summary = resolve_tool_risks_after_success(state.context_summary, str(result.get("tool_id") or ""))
+            if resolved_summary != self._normalized_context_summary(state.context_summary):
+                self._apply(state, RuntimeEvent("ContextSummaryUpdated", resolved_summary))
             arguments = result.get("arguments") if isinstance(result.get("arguments"), dict) else {}
+            definition = self._tool_definition(str(result.get("tool_id") or ""))
+            ref_id = result.get("payload_ref")
+            if not isinstance(ref_id, str) or not ref_id:
+                return
             self._apply(
                 state,
                 RuntimeEvent(
                     "WorldRefAdded",
                     {
-                        "ref_id": result.get("payload_ref") or f"world://{result['tool_id']}/latest",
+                        "ref_id": ref_id,
                         "kind": result["tool_id"],
                         "arguments": deepcopy(arguments),
                         "payload": result["payload"],
                         "summary": f"{result['tool_id']} result",
+                        "request_id": state.request.request_id,
+                        "run_id": state.run_id,
+                        "mutation_seq": state.mutation_seq,
+                        "freshness": getattr(definition, "freshness", "stable") if definition is not None else "stable",
                     },
                 ),
             )
@@ -476,11 +499,11 @@ class AppV22AgentRuntime:
             "evidence_refs": list(getattr(decision, "evidence_refs", []) or []),
         }
 
-    def _repair_decision_shape(self, decision, resolved):
+    def _repair_decision_shape(self, decision, active_tool_ids):
         payload = getattr(decision, "payload", None)
         if getattr(decision, "kind", None) != "tool_call" and isinstance(payload, dict):
             tool_id = payload.get("tool_id")
-            if isinstance(tool_id, str) and tool_id in resolved.tool_ids:
+            if isinstance(tool_id, str) and tool_id in active_tool_ids:
                 return RuntimeDecision(
                     kind="tool_call",
                     reason=str(getattr(decision, "reason", "") or "repaired selected tool payload"),
@@ -490,128 +513,8 @@ class AppV22AgentRuntime:
                 )
         return decision
 
-    def _provider_bound_prompt(self, state: AgentState, prompt: dict) -> dict:
-        prompt = deepcopy(prompt)
-        prompt["tool_definitions"] = self._selected_tool_definitions(prompt)
-        messages = self._provider_prompt_messages(state, prompt)
-        compressed = self.services.compressor.compress(messages, previous_summary=state.context_summary)
-        context_summary = self._summary_from_messages(compressed)
-        if context_summary is not None and context_summary != state.context_summary:
-            self._apply(state, RuntimeEvent("ContextSummaryUpdated", self._merge_context_summaries(state.context_summary, context_summary)))
-        compressed = self.services.gateway_guard.guard(compressed)
-        provider_prompt = self._prompt_from_governed_messages(compressed)
-        provider_prompt["state"]["context_summary"] = self._normalized_context_summary(
-            self._merge_context_summaries(state.context_summary, provider_prompt["state"].get("context_summary", {}))
-        )
-        if not provider_prompt.get("skills"):
-            provider_prompt["skills"] = deepcopy(prompt.get("skills", []))
-        if not provider_prompt.get("tools"):
-            provider_prompt["tools"] = list(prompt.get("tools", [])) if isinstance(prompt.get("tools"), list) else []
-        if not provider_prompt.get("tool_definitions"):
-            provider_prompt["tool_definitions"] = deepcopy(prompt.get("tool_definitions", []))
-        if not provider_prompt["selection"].get("selected_tools"):
-            provider_prompt["selection"] = deepcopy(prompt.get("selection", provider_prompt["selection"]))
-        if not provider_prompt["world"].get("world_refs") and state.world_refs:
-            provider_prompt["world"]["world_refs"] = self._compact_world_refs_for_prompt(state.world_refs)
-        provider_prompt["messages"] = compressed
-        return provider_prompt
-
-    def _provider_prompt_messages(self, state: AgentState, prompt: dict) -> list[dict[str, Any]]:
-        messages: list[dict[str, Any]] = [
-            {
-                "role": "system",
-                "name": "provider_identity",
-                "content": prompt.get("system", {}).get("identity", "AppV2.2 provider context"),
-                "payload": deepcopy(prompt.get("system", {})),
-            }
-        ]
-        for section in ("agent", "state", "skills", "tools", "tool_definitions", "world", "selection"):
-            payload = deepcopy(prompt.get(section, {} if section not in {"skills", "tools", "tool_definitions"} else []))
-            messages.append(
-                {
-                    "role": "system",
-                    "name": "provider_context_section",
-                    "section": section,
-                    "content": f"{section}: {json.dumps(payload, sort_keys=True, default=str)}",
-                    "payload": payload,
-                }
-            )
-        messages.append({"role": "user", "name": "active_user_request", "content": _active_request_text(state)})
-        return messages
-
-    def _prompt_from_governed_messages(self, messages: list[dict[str, Any]]) -> dict:
-        provider_prompt: dict[str, Any] = {
-            "system": {},
-            "agent": {},
-            "state": {"mode": None, "context_summary": {}},
-            "skills": [],
-            "tools": [],
-            "tool_definitions": [],
-            "world": {"world_refs": {}},
-            "selection": {"selected_tools": [], "selected_skills": [], "active_extensions": [], "available_tools": []},
-        }
-        for message in messages:
-            if message.get("name") == "provider_identity" and isinstance(message.get("payload"), dict):
-                provider_prompt["system"] = deepcopy(message["payload"])
-                continue
-            if message.get("name") != "provider_context_section":
-                continue
-            section = message.get("section")
-            if section not in provider_prompt:
-                continue
-            payload = message.get("payload")
-            if isinstance(payload, dict | list):
-                provider_prompt[section] = deepcopy(payload)
-        return provider_prompt
-
-    def _selected_tool_definitions(self, prompt: dict) -> list[dict[str, Any]]:
-        selection = prompt.get("selection") if isinstance(prompt.get("selection"), dict) else {}
-        selected_tools = selection.get("selected_tools")
-        if not isinstance(selected_tools, list):
-            return []
-        definitions: list[dict[str, Any]] = []
-        for tool_id in selected_tools:
-            if not isinstance(tool_id, str):
-                continue
-            definition = self.services.tool_registry.definition(tool_id)
-            if definition is None:
-                continue
-            definitions.append(
-                {
-                    "tool_id": definition.tool_id,
-                    "category": definition.category,
-                    "risk_level": definition.risk_level,
-                    "argument_schema": self._mutable_json_like(definition.argument_schema),
-                    "result_schema": self._mutable_json_like(definition.result_schema),
-                    "trust": definition.trust,
-                    "guidance": definition.guidance,
-                }
-            )
-        return definitions
-
-    def _mutable_json_like(self, value: Any) -> Any:
-        if isinstance(value, dict) or hasattr(value, "items"):
-            return {key: self._mutable_json_like(item) for key, item in value.items()}
-        if isinstance(value, tuple | list):
-            return [self._mutable_json_like(item) for item in value]
-        return value
-
-    def _summary_from_messages(self, messages: list[dict]) -> dict | None:
-        for message in messages:
-            summary = message.get("summary")
-            if isinstance(summary, dict):
-                return deepcopy(summary)
-        return None
-
     def _normalized_context_summary(self, summary: Any) -> dict[str, list[Any]]:
-        source = summary if isinstance(summary, dict) else {}
-        return {
-            "goals": list(source.get("goals", [])) if isinstance(source.get("goals", []), list) else [],
-            "decisions": list(source.get("decisions", [])) if isinstance(source.get("decisions", []), list) else [],
-            "progress": list(source.get("progress", [])) if isinstance(source.get("progress", []), list) else [],
-            "open_risks": list(source.get("open_risks", [])) if isinstance(source.get("open_risks", []), list) else [],
-            "evidence_refs": list(source.get("evidence_refs", [])) if isinstance(source.get("evidence_refs", []), list) else [],
-        }
+        return normalized_context_summary(summary)
 
     def _merge_context_summaries(self, base: Any, overlay: Any) -> dict[str, list[Any]]:
         merged = self._normalized_context_summary(base)
@@ -623,21 +526,25 @@ class AppV22AgentRuntime:
                     target.append(value)
         return merged
 
-    def _compact_world_refs_for_prompt(self, world_refs: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
-        compacted: dict[str, dict[str, Any]] = {}
-        for ref_id, ref in world_refs.items():
-            if not isinstance(ref_id, str) or not isinstance(ref, dict):
-                continue
-            compacted[ref_id] = {
-                "ref_id": ref.get("ref_id", ref_id),
-                "kind": ref.get("kind"),
-                "arguments": deepcopy(ref.get("arguments", {})) if isinstance(ref.get("arguments"), dict) else {},
-                "summary": str(ref.get("summary", ""))[:240],
-            }
-            payload = ref.get("payload")
-            if isinstance(payload, dict):
-                compacted[ref_id]["payload"] = _compact_world_ref_payload(payload)
-        return compacted
+    def _usage_payload(self, state: AgentState) -> dict[str, Any]:
+        if self.services.context_harness is not None:
+            payload = self.services.context_harness.usage_snapshot(state)
+        else:
+            payload = {"context": {"model_calls": len(state.context_metrics), "model_call_contexts": deepcopy(state.context_metrics)}}
+        provider_usage = self._provider_usage_snapshot()
+        if provider_usage:
+            payload["provider"] = provider_usage
+        return payload
+
+    def _provider_usage_snapshot(self) -> dict[str, Any]:
+        usage_snapshot = getattr(self.services.provider, "usage_snapshot", None)
+        if not callable(usage_snapshot):
+            return {}
+        try:
+            snapshot = usage_snapshot(reset=False)
+        except Exception:  # noqa: BLE001 - usage telemetry must not break runtime completion.
+            return {}
+        return deepcopy(snapshot) if isinstance(snapshot, dict) else {}
 
     def _apply(self, state: AgentState, event: RuntimeEvent) -> None:
         self.events.append(event)
@@ -648,7 +555,15 @@ class AppV22AgentRuntime:
             except Exception:  # noqa: BLE001 - UI sinks must not break the agent loop.
                 pass
 
-    def _record_runtime_guidance(self, state: AgentState, *, progress: str | None = None, open_risk: str | None = None) -> None:
+    def _record_runtime_guidance(
+        self,
+        state: AgentState,
+        *,
+        progress: str | None = None,
+        open_risk: str | None = None,
+        blocker: str | None = None,
+        turn_feedback: str | None = None,
+    ) -> None:
         summary = deepcopy(state.context_summary)
         evidence_refs = summary.setdefault("evidence_refs", [])
         for ref_id in state.world_refs:
@@ -659,9 +574,16 @@ class AppV22AgentRuntime:
             if progress not in progress_items:
                 progress_items.append(progress)
         if open_risk:
-            open_risks = summary.setdefault("open_risks", [])
-            if open_risk not in open_risks:
-                open_risks.append(open_risk)
+            if is_turn_local_repair_risk(open_risk) or not is_durable_blocker(open_risk):
+                turn_feedback = open_risk
+            else:
+                blocker = open_risk
+        if blocker:
+            blockers = summary.setdefault("blockers", [])
+            if blocker not in blockers:
+                blockers.append(blocker)
+        if turn_feedback and turn_feedback not in state.turn_feedback:
+            state.turn_feedback.append(turn_feedback)
         self._apply(state, RuntimeEvent("ContextSummaryUpdated", self._normalized_context_summary(summary)))
 
     def _record_tool_recovery_guidance(self, state: AgentState, guidance_messages: tuple[str, ...]) -> None:
@@ -730,25 +652,64 @@ class AppV22AgentRuntime:
             if contract is None:
                 continue
             evidence_refs = getattr(contract, "evidence_refs", ())
-            if evidence_refs and any(ref in state.world_refs for ref in evidence_refs):
+            if evidence_refs and any(
+                ref in state.world_refs and self._world_ref_fresh_for_tool(state, state.world_refs[ref])
+                for ref in evidence_refs
+            ):
                 return True
             evidence_kinds = getattr(contract, "evidence_kinds", ())
-            if evidence_kinds and any(ref.get("kind") in evidence_kinds for ref in state.world_refs.values() if isinstance(ref, dict)):
+            if evidence_kinds and any(
+                ref.get("kind") in evidence_kinds and self._world_ref_fresh_for_tool(state, ref)
+                for ref in state.world_refs.values()
+                if isinstance(ref, dict)
+            ):
                 return True
         return False
 
     def _tool_call_evidence_already_exists(self, state: AgentState, tool_id: str, arguments: Any) -> bool:
         if not isinstance(arguments, dict):
             return False
-        if self.services.tool_registry.definition(tool_id) is None:
+        if self._tool_definition(tool_id) is None:
             return False
         for world_ref in state.world_refs.values():
             if not isinstance(world_ref, dict) or world_ref.get("kind") != tool_id:
                 continue
             existing_arguments = world_ref.get("arguments")
             if isinstance(existing_arguments, dict) and existing_arguments == arguments:
+                definition = self._tool_definition(tool_id)
+                if definition is not None and definition.category == "observe" and not self._world_ref_has_usable_payload(world_ref):
+                    return False
+                if not self._world_ref_fresh_for_tool(state, world_ref):
+                    return False
                 return True
         return False
+
+    def _tool_definition(self, tool_id: str):
+        definition = getattr(self.services.tool_registry, "definition", None)
+        if not callable(definition):
+            return None
+        return definition(tool_id)
+
+    def _world_ref_fresh_for_tool(self, state: AgentState, world_ref: dict[str, Any]) -> bool:
+        tool_id = world_ref.get("kind")
+        if not isinstance(tool_id, str):
+            return False
+        definition = self._tool_definition(tool_id)
+        if definition is None:
+            return True
+        return is_world_ref_fresh(state, world_ref, definition)
+
+    @staticmethod
+    def _world_ref_has_usable_payload(world_ref: dict[str, Any]) -> bool:
+        payload = world_ref.get("payload")
+        if not isinstance(payload, dict) or not payload:
+            return False
+        kind = world_ref.get("kind")
+        if kind == "file_management.repo_snapshot":
+            return isinstance(payload.get("files"), list) or isinstance(payload.get("directories"), list)
+        if kind == "file_management.read_file":
+            return isinstance(payload.get("content"), str)
+        return True
 
     def _existing_tool_call_denial(self, state: AgentState, tool_id: str, arguments: Any) -> dict[str, Any] | None:
         if not isinstance(arguments, dict):
@@ -784,7 +745,7 @@ class AppV22AgentRuntime:
         named_tool_ids = self._named_recovery_tool_ids(resolved, current_tool_id, guidance)
         if not named_tool_ids:
             return
-        definition = self.services.tool_registry.definition(named_tool_ids[0])
+        definition = self._tool_definition(named_tool_ids[0])
         mode = "OBSERVE" if definition is not None and definition.category == "observe" else "ACT"
         self._apply(state, RuntimeEvent("ModeChanged", {"mode": mode}))
 
@@ -838,7 +799,7 @@ class AppV22AgentRuntime:
         return alternates + current
 
     def _is_observe_tool(self, tool_id: str) -> bool:
-        definition = self.services.tool_registry.definition(tool_id)
+        definition = self._tool_definition(tool_id)
         return definition is not None and definition.category == "observe"
 
     def _has_completed_non_observe_tool(self, state: AgentState) -> bool:
@@ -857,28 +818,6 @@ class AppV22AgentRuntime:
                 return tool_id
         return None
 
-    def _should_complete_observation_only(self, state: AgentState, resolved) -> bool:
-        goal = _active_request_text(state).lower()
-        no_workspace_change_requested = any(
-            marker in goal
-            for marker in (
-                "do not mutate",
-                "don't mutate",
-                "no mutation",
-                "do not change files",
-                "don't change files",
-                "do not write",
-                "don't write",
-            )
-        )
-        pause_after_evidence = "pause after" in goal or "after you have enough evidence" in goal
-        inspect_only = "inspect" in goal or "observe" in goal or "evidence" in goal
-        return (
-            no_workspace_change_requested
-            and (pause_after_evidence or inspect_only)
-            and self._observation_contract_satisfied(state, resolved)
-        )
-
     def _complete_from_tool_loop(self, state: AgentState, *, reason: str, assistant_message: str = "") -> None:
         self._apply(
             state,
@@ -892,11 +831,29 @@ class AppV22AgentRuntime:
                     "evidence_refs": list(state.world_refs.keys()),
                     "world_refs": deepcopy(state.world_refs),
                     "context_summary": self._normalized_context_summary(state.context_summary),
+                    "turn_feedback": list(state.turn_feedback),
                     "tool_results": list(state.tool_results.values()),
+                    "usage": self._usage_payload(state),
                     "assistant_message": assistant_message,
                 },
             ),
         )
+
+    def _complete_from_latest_observe_result(self, state: AgentState) -> bool:
+        for result in reversed(list(state.tool_results.values())):
+            if not isinstance(result, dict) or result.get("status") != "completed":
+                continue
+            tool_id = result.get("tool_id")
+            if not isinstance(tool_id, str) or not self._is_observe_tool(tool_id):
+                continue
+            payload = result.get("payload")
+            if isinstance(payload, dict):
+                message = json.dumps(payload, indent=2, sort_keys=True, default=str)[:4000]
+            else:
+                message = str(payload or "Completed observe result is available.")[:4000]
+            self._complete_from_tool_loop(state, reason="tool_loop_completed", assistant_message=message)
+            return True
+        return False
 
     def _assistant_message_from_decision(self, decision) -> str:
         payload = getattr(decision, "payload", None)
@@ -919,6 +876,8 @@ class AppV22AgentRuntime:
             "evidence_refs": list(state.world_refs.keys()),
             "world_refs": deepcopy(state.world_refs),
             "context_summary": self._normalized_context_summary(state.context_summary),
+            "turn_feedback": list(state.turn_feedback),
             "tool_results": list(state.tool_results.values()),
+            "usage": self._usage_payload(state),
             **extra,
         }

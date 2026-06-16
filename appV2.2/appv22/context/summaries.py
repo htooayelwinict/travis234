@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-SUMMARY_KEYS = ("goals", "decisions", "progress", "open_risks", "evidence_refs")
+SUMMARY_KEYS = ("goals", "decisions", "progress", "blockers", "evidence_refs")
 IMPORTANT_USER_MARKERS = (
     "constraint",
     "instruction",
@@ -70,7 +70,7 @@ def structured_summary(messages: list[dict[str, Any]], previous_summary: dict[st
 
     decisions = _summary_list(previous, "decisions")
     progress = _summary_list(previous, "progress")
-    open_risks = _summary_list(previous, "open_risks")
+    blockers = _summary_list(previous, "blockers")
     evidence_refs = _summary_list(previous, "evidence_refs")
 
     for message in messages:
@@ -90,7 +90,7 @@ def structured_summary(messages: list[dict[str, Any]], previous_summary: dict[st
 
         if role == "assistant" and content:
             if any(marker in lowered for marker in RISK_MARKERS):
-                _append_unique(open_risks, content)
+                _append_unique(blockers, content)
             else:
                 _append_unique(progress, content)
             continue
@@ -105,6 +105,6 @@ def structured_summary(messages: list[dict[str, Any]], previous_summary: dict[st
         "goals": goals,
         "decisions": decisions,
         "progress": progress,
-        "open_risks": open_risks,
+        "blockers": blockers,
         "evidence_refs": evidence_refs,
     }

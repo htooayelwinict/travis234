@@ -90,7 +90,9 @@ def create_appv22_provider_from_appv2_env(
 
 
 def _appv22_decision_prompt(prompt_payload: dict) -> str:
-    open_risks = _active_open_risk_lines(prompt_payload)
+    blockers = _active_blocker_lines(prompt_payload)
+    turn_feedback = _turn_feedback_lines(prompt_payload)
+    latest_tool_results = _latest_tool_result_lines(prompt_payload)
     return "\n".join(
         [
             "You are the AppV2.2 Pi-Hermes coding agent decision engine.",
@@ -100,35 +102,71 @@ def _appv22_decision_prompt(prompt_payload: dict) -> str:
             "Reason internally only. Never rely on a separate planning lane.",
             "Use selected tools only. If exact facts are needed, request a read-only tool_call instead of trusting summaries.",
             "If you say a tool is required, kind must be tool_call and payload must include tool_id plus arguments.",
-            "If world_refs or context_summary contain an exact durable ref, treat that observation as already done.",
-            "After denied/failed tool feedback, runtime guidance and context_summary.open_risks supersede earlier one-shot user or skill instructions that the feedback says already happened.",
+            "World refs prove a tool result happened; they do not prove mutable current state remains unchanged.",
+            "For current filesystem or external state, use a fresh observe tool unless a selected tool definition marks an existing ref fresh for this request.",
+            "Durable blockers are active constraints. Turn feedback is repair guidance for the current run only.",
             "Use structured evidence_refs as authoritative and ignore partial/truncated world:// strings in prose.",
             "Do not repeat broad observation tools just because raw payload was compacted; rehydrate only when missing raw details are necessary.",
             "Use only selected tool calls for workspace changes; unsupported payload shapes are invalid.",
-            "If state.mode is ACT and any context_summary.open_risks says the next decision must be a tool_call, emit kind=tool_call for the named selected tool; finalize/pause/compact are invalid while that risk remains.",
-            "After successful action evidence, emit finalize or pause; do not repeat the same tool call.",
+            "If durable blockers require a selected tool or user clarification, address them before finalizing.",
+            "After successful action evidence, continue the Pi-style loop until the latest user request is fully satisfied; do not finalize after only the first successful action when more requested actions remain.",
             "Do not claim workspace changes unless tool results or verification receipts prove them.",
             "For kind=finalize, put the public user-facing response in payload.message. Keep it concise. Do not include hidden reasoning.",
-            *open_risks,
+            *blockers,
+            *turn_feedback,
+            *latest_tool_results,
             json.dumps(prompt_payload, indent=2, sort_keys=True, default=str),
         ]
     )
 
 
-def _active_open_risk_lines(prompt_payload: dict) -> list[str]:
+def _active_blocker_lines(prompt_payload: dict) -> list[str]:
     state = prompt_payload.get("state") if isinstance(prompt_payload, dict) else {}
     if not isinstance(state, dict):
         return []
     summary = state.get("context_summary")
     if not isinstance(summary, dict):
         return []
-    risks = summary.get("open_risks")
-    if not isinstance(risks, list) or not risks:
+    blockers = summary.get("blockers")
+    if not isinstance(blockers, list) or not blockers:
         return []
-    lines = ["CURRENT OPEN RISKS:"]
-    for risk in risks[-6:]:
-        if risk:
-            lines.append(f"- {str(risk)[:600]}")
+    lines = ["CURRENT DURABLE BLOCKERS:"]
+    for blocker in blockers[-6:]:
+        if blocker:
+            lines.append(f"- {str(blocker)[:600]}")
+    return lines
+
+
+def _turn_feedback_lines(prompt_payload: dict) -> list[str]:
+    state = prompt_payload.get("state") if isinstance(prompt_payload, dict) else {}
+    if not isinstance(state, dict):
+        return []
+    feedback = state.get("turn_feedback")
+    if not isinstance(feedback, list) or not feedback:
+        return []
+    lines = ["CURRENT TURN FEEDBACK:"]
+    for item in feedback[-6:]:
+        if item:
+            lines.append(f"- {str(item)[:600]}")
+    return lines
+
+
+def _latest_tool_result_lines(prompt_payload: dict) -> list[str]:
+    state = prompt_payload.get("state") if isinstance(prompt_payload, dict) else {}
+    if not isinstance(state, dict):
+        return []
+    latest = state.get("latest_tool_results")
+    if not isinstance(latest, list) or not latest:
+        return []
+    lines = [
+        "LATEST TOOL RESULTS - HOT PI-STYLE CONTEXT:",
+        "These are the immediate prior tool results for this run. Consume them before requesting another tool.",
+        "If a completed read-only result answers the latest user request, kind must be finalize with payload.message based on that result.",
+    ]
+    for item in latest[-4:]:
+        if not isinstance(item, dict):
+            continue
+        lines.append(json.dumps(item, sort_keys=True, default=str)[:1600])
     return lines
 
 

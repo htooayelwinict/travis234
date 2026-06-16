@@ -98,6 +98,7 @@ DEFAULT_REDUCER = ReducerRegistry(
         WorldRefAddedHandler(),
         MappingUpsertHandler("ToolCallCompleted", "tool_results", "tool_result_id"),
         MappingUpsertHandler("ToolCallDenied", "tool_results", "tool_result_id"),
+        MappingUpsertHandler("ToolCallFailed", "tool_results", "tool_result_id"),
         FieldAssignmentHandler("ContextSummaryUpdated", "context_summary"),
         RunCompletedHandler(),
         RunFailedHandler(),

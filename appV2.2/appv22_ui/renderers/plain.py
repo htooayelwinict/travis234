@@ -19,12 +19,12 @@ class PlainRenderer:
             lines.append(f"usage: {usage}")
         context_summary = summary.get("context_summary")
         if isinstance(context_summary, dict) and context_summary:
-            open_risks = context_summary.get("open_risks")
+            blockers = context_summary.get("blockers")
             progress = context_summary.get("progress")
             if progress:
                 lines.append(f"progress: {progress}")
-            if open_risks:
-                lines.append(f"open_risks: {open_risks}")
+            if blockers:
+                lines.append(f"blockers: {blockers}")
         events = events_from_result(result)
         if events:
             lines.append("")

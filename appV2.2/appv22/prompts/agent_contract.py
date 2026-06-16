@@ -16,11 +16,13 @@ AGENT_LOOP_CONTRACT = (
 
 DUAL_CONTEXT_CONTRACT = (
     "Hermes dual context is active: hot context carries current turn state, while compacted context carries stable run memory.",
-    "Raw tool output may be compacted, but exact world_refs and context_summary.evidence_refs are durable operational pointers.",
-    "Treat exact world_refs as valid evidence that an observation or action already happened.",
+    "Raw tool output may be compacted, but exact world_refs and context_summary.evidence_refs are durable tool-evidence pointers.",
+    "Treat exact world_refs as evidence that a tool result happened, not proof that mutable current state remains unchanged.",
+    "For current filesystem or external state, use a fresh observe tool unless the tool definition marks an existing ref fresh for this request.",
     "Use the structured evidence_refs array as authoritative; ignore truncated prose fragments such as partial world:// strings.",
+    "Treat state.latest_tool_results as the hot Pi-style tool-result lane for the current run.",
     "Request rehydration only when you need raw payload details not present in the compacted world_ref or summary.",
-    "Do not repeat broad observation when durable evidence_refs already satisfy the next decision.",
+    "Do not repeat broad observation only when fresh durable evidence_refs already satisfy the next decision.",
 )
 
 TOOL_CONTRACT = (
@@ -28,13 +30,15 @@ TOOL_CONTRACT = (
     "Tool calls must use payload.tool_id and payload.arguments. Do not write tool names only in prose.",
     "Use read-only tools to observe or rehydrate exact evidence. Use write/edit/action tools directly for workspace changes.",
     "Use only selected tool calls for workspace changes; unsupported payload shapes are invalid.",
-    "If context_summary.open_risks or runtime guidance says finalization is blocked, resolve that risk with a selected tool before attempting finalize again.",
-    "If context_summary.open_risks or runtime guidance tells you to call a selected tool, do not emit compact; call that selected tool with corrected arguments.",
-    "When state.mode is ACT and context_summary.open_risks says the next decision must be a tool_call, emitting finalize, pause, or compact is invalid until that selected tool call is made or the risk is resolved.",
+    "If context_summary.blockers or runtime feedback says finalization is blocked, resolve the durable blocker with a selected tool before attempting finalize again.",
+    "Turn feedback is current-run repair guidance only; do not persist it as task memory.",
+    "When state.mode is ACT and context_summary.blockers says the next decision must be a tool_call, emitting finalize, pause, or compact is invalid until that blocker is resolved.",
     "After tool feedback, runtime guidance supersedes earlier user or skill instructions for one-shot, guard-exercise, or blocked-call steps that the tool result says already happened.",
     "Fill every required argument from the selected tool schema; if known facts must be composed into one required string argument, put them in that argument instead of inventing sibling fields.",
     "If the latest tool result was denied or failed, do not emit compact as the recovery action; repair the arguments, choose another selected tool, or finalize only when existing evidence proves completion.",
-    "After a successful action result proves the task is complete, emit finalize or pause; do not repeat the same tool call.",
+    "If state.latest_tool_results contains a completed read-only result that answers the latest user request, finalize from that result instead of calling the same read-only tool again.",
+    "After a successful action result, continue the loop until all requested actions are complete; emit finalize only when evidence proves the whole latest request is satisfied.",
+    "For multi-step requests, do not finalize after only one action if the latest user request clearly requires additional tool-backed steps.",
 )
 
 MODE_CONTRACTS: dict[str, tuple[str, ...]] = {
@@ -43,13 +47,13 @@ MODE_CONTRACTS: dict[str, tuple[str, ...]] = {
         "Call a selected observation tool when exact workspace evidence is missing.",
     ),
     "THINK": (
-        "Choose the next model decision from state, evidence refs, tool results, and open risks.",
-        "Trust exact durable world_refs after compaction; rehydrate only missing raw details.",
+        "Choose the next model decision from state, evidence refs, tool results, durable blockers, and turn feedback.",
+        "Trust exact durable world_refs as historical tool evidence after compaction; rehydrate or re-observe mutable current state when freshness is missing.",
         "Use tool_call for actions; do not route through a separate planning lane.",
     ),
     "OBSERVE": (
         "Use selected_tools to collect exact repo/file/world evidence.",
-        "Once durable evidence_refs exist, do not repeat the same broad observation.",
+        "Once fresh durable evidence_refs exist, do not repeat the same broad observation.",
     ),
     "ACT": (
         "Apply workspace changes only through explicit selected tool calls.",

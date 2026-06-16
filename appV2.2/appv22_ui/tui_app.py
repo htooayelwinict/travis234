@@ -64,16 +64,14 @@ class AppV22Tui:
             self.state.conversation.clear()
             self.state.events.clear()
             self.state.add_notice("UI conversation reset. Runtime world/context refs are preserved.")
-            self.store.save(
-                {
-                    "status": self.state.status,
-                    "reason": self.state.reason,
-                    "session_id": self.state.session_id,
-                    "world_refs": {},
-                    "context_summary": self.state.context_summary,
-                },
-                conversation=self.state.conversation,
-            )
+            preserved = self._previous_result() or {}
+            preserved.setdefault("status", self.state.status)
+            preserved.setdefault("reason", self.state.reason)
+            preserved.setdefault("session_id", self.state.session_id)
+            preserved.setdefault("world_refs", {})
+            preserved.setdefault("context_summary", self.state.context_summary)
+            preserved["ui_context"] = self._ui_context_payload()
+            self.store.save(preserved, conversation=self.state.conversation)
             return False
         if command == "/clear":
             self.state.clear_transient()
@@ -87,9 +85,9 @@ class AppV22Tui:
             self.state.add_notice(f"showing last {min(len(self.state.events), 14)} agent-loop events")
             return False
         if command == "/context":
-            risks = self.state.context_summary.get("open_risks")
-            risk_count = len(risks) if isinstance(risks, list) else 0
-            self.state.add_notice(f"context refs={self.state.world_ref_count} open_risks={risk_count}")
+            blockers = self.state.context_summary.get("blockers")
+            blocker_count = len(blockers) if isinstance(blockers, list) else 0
+            self.state.add_notice(f"context refs={self.state.world_ref_count} blockers={blocker_count}")
             return False
         if command == "/refs":
             self.state.add_notice(", ".join(self.state.world_refs[-8:]) or "no world refs")
@@ -131,7 +129,7 @@ class AppV22Tui:
         except KeyboardInterrupt:
             self.state.running = False
             self.state.mode = "INTERRUPTED"
-            self.state.add_notice("turn interrupted in UI; type /exit to leave or continue with a new request")
+            self.state.add_notice("turn interrupted in UI; late provider/tool results will be ignored")
             self._draw()
             return
         self._drain_events(event_queue)
@@ -161,6 +159,9 @@ class AppV22Tui:
             if kind == "event":
                 self.state.apply_event(payload)
             elif kind == "result":
+                if self.state.mode == "INTERRUPTED":
+                    self.state.add_notice("ignored late result from interrupted turn")
+                    continue
                 self.state.apply_result(payload)
                 payload = self._with_ui_context(payload)
                 self.store.save(payload, conversation=self.state.conversation)
@@ -173,7 +174,11 @@ class AppV22Tui:
                 self.state.add_notice(f"agent error: {payload}")
 
     def _previous_result(self) -> dict[str, Any] | None:
-        return None
+        loaded = self.store.load()
+        if not isinstance(loaded, dict):
+            return None
+        previous = loaded.get("last_result")
+        return dict(previous) if isinstance(previous, dict) else None
 
     def _runtime_prompt(self, prompt: str) -> str:
         runtime_prompt, hot_lines, summary = self.context_manager.prepare_prompt(
