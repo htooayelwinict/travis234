@@ -5,11 +5,9 @@ from appv22.providers.appv2_env import (
     create_appv22_provider_from_appv2_env,
     normalize_appv22_decision_payload,
 )
-from appv22.providers.deterministic import DeterministicAppV22Provider
 
 __all__ = [
     "AppV2EnvAppV22ProviderAdapter",
-    "DeterministicAppV22Provider",
     "create_appv22_provider_from_appv2_env",
     "normalize_appv22_decision_payload",
 ]

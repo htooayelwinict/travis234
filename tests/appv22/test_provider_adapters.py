@@ -192,6 +192,120 @@ def test_appv2_env_adapter_coerces_premature_plan_to_prompt_visible_tool():
     assert decision.payload == {"tool_id": "extension.snapshot", "arguments": {}}
 
 
+def test_appv2_env_adapter_coerces_context_request_tool_call_to_snapshot():
+    class DelegateProvider:
+        provider_id = "appv2-env-worker"
+
+        def decide(self, _prompt):
+            return {
+                "decision_id": "dec_context_request",
+                "kind": "tool_call",
+                "reason": "need context",
+                "payload": {"action": "request_initial_context"},
+                "evidence_refs": [],
+            }
+
+    adapter = AppV2EnvAppV22ProviderAdapter(DelegateProvider())
+
+    decision = adapter.decide(
+        {
+            "world": {"world_refs": {}},
+            "selection": {"selected_tools": ["file_management.repo_snapshot"]},
+            "state": {"runtime_plan": {}, "mutation_receipts": {}, "verification_receipts": {}},
+            "skills": [
+                {
+                    "tool_ids": ("file_management.repo_snapshot",),
+                    "observation_contract": {
+                        "evidence_refs": ("world://repo_snapshot/latest",),
+                        "preferred_tool_id": "file_management.repo_snapshot",
+                    },
+                }
+            ],
+        }
+    )
+
+    assert decision.kind == "tool_call"
+    assert decision.payload == {"tool_id": "file_management.repo_snapshot", "arguments": {}}
+
+
+def test_appv2_env_adapter_repairs_context_request_even_when_summary_evidence_exists():
+    class DelegateProvider:
+        provider_id = "appv2-env-worker"
+
+        def decide(self, _prompt):
+            return {
+                "decision_id": "dec_context_request_after_compaction",
+                "kind": "tool_call",
+                "reason": "lost evidence after compaction",
+                "payload": {"next_step": "request_observation"},
+                "evidence_refs": [],
+            }
+
+    adapter = AppV2EnvAppV22ProviderAdapter(DelegateProvider())
+
+    decision = adapter.decide(
+        {
+            "world": {
+                "world_refs": {
+                    "world://repo_snapshot/latest": {"kind": "file_management.repo_snapshot"}
+                }
+            },
+            "messages": [
+                {
+                    "name": "context_summary",
+                    "summary": {"evidence_refs": ["world://repo_snapshot/latest"]},
+                }
+            ],
+            "selection": {"selected_tools": ["file_management.repo_snapshot"]},
+            "state": {"runtime_plan": {}, "mutation_receipts": {}, "verification_receipts": {}},
+        }
+    )
+
+    assert decision.kind == "tool_call"
+    assert decision.payload == {"tool_id": "file_management.repo_snapshot", "arguments": {}}
+
+
+def test_appv2_env_adapter_does_not_own_runtime_phase_progression():
+    class DelegateProvider:
+        provider_id = "appv2-env-worker"
+
+        def __init__(self):
+            self.calls = 0
+
+        def decide(self, _prompt):
+            self.calls += 1
+            return {
+                "decision_id": "dec_delegate_pause",
+                "kind": "pause",
+                "reason": "delegate still owns model response only",
+                "payload": {},
+                "evidence_refs": [],
+            }
+
+    delegate = DelegateProvider()
+    adapter = AppV2EnvAppV22ProviderAdapter(delegate)
+
+    decision = adapter.decide(
+        {
+            "state": {
+                "runtime_plan": {
+                    "mutation_intent": {
+                        "operation_batch_id": "batch",
+                        "operations": [{"action": "write", "path": "docs/a.md", "content": "a"}],
+                    }
+                },
+                "mutation_receipts": {},
+                "verification_receipts": {},
+            },
+            "world": {"world_refs": {"world://repo_snapshot/latest": {}}},
+            "selection": {"selected_tools": ["file_management.repo_snapshot"]},
+        }
+    )
+
+    assert delegate.calls == 1
+    assert decision.kind == "pause"
+
+
 def test_appv22_adapter_does_not_reobserve_when_summary_satisfies_observation_contract() -> None:
     prompt = {
         "state": {"runtime_plan": {}, "mutation_receipts": {}, "verification_receipts": {}},
@@ -428,7 +542,7 @@ def test_appv22_adapter_requires_contract_ref_when_ref_and_kind_are_declared() -
     assert coerced.payload == {"tool_id": "file_management.repo_snapshot", "arguments": {}}
 
 
-def test_appv2_env_adapter_coerces_redundant_plan_to_mutation_intent_and_adds_appv21_plan_alias():
+def test_appv2_env_adapter_passes_runtime_plan_alias_without_phase_coercion():
     class DelegateProvider:
         provider_id = "appv2-env-worker"
 
@@ -463,8 +577,8 @@ def test_appv2_env_adapter_coerces_redundant_plan_to_mutation_intent_and_adds_ap
     )
 
     assert delegate.prompt["state"]["plan"] == {"runtime_plan": runtime_plan}
-    assert decision.kind == "mutation_intent"
-    assert decision.payload == runtime_plan["mutation_intent"]
+    assert decision.kind == "plan"
+    assert decision.payload == {}
 
 
 def test_appv2_env_factory_discovers_local_appv21_sibling_path(tmp_path, monkeypatch):

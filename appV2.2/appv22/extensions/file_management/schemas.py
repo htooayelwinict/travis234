@@ -18,6 +18,7 @@ REPO_SNAPSHOT_OUTPUT_SCHEMA = {
         "status": {"type": "string", "enum": ["completed"]},
         "files": {"type": "array", "items": {"type": "string"}},
         "directories": {"type": "array", "items": {"type": "string"}},
+        "text_previews": {"type": "object"},
         "errors": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["status", "files", "directories", "errors"],

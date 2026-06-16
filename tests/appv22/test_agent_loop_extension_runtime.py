@@ -8,7 +8,6 @@ sys.path.insert(0, str(ROOT / "appV2.2"))
 from appv22 import AppV22AgentRuntime
 from appv22.extensions.base import SkillCard
 from appv22.extensions.file_management.extension import FileManagementExtension
-from appv22.providers.deterministic import DeterministicAppV22Provider
 from appv22.context.compressor import AgentContextCompressor
 from appv22.context.gateway_guard import GatewayContextGuard
 from appv22.runtime.decisions import RuntimeDecision
@@ -173,12 +172,23 @@ class PassingVerifier:
         return {"status": "passed"}
 
 
-def test_agent_loop_uses_capability_registry_without_file_imports(tmp_path):
+def test_agent_loop_rejects_non_executable_deterministic_plan_without_cleanup_fallback(tmp_path):
     (tmp_path / "notes").mkdir()
     (tmp_path / "notes" / "a.md").write_text("a", encoding="utf-8")
+    provider = SequenceProvider(
+        [
+            RuntimeDecision(
+                "tool_call",
+                "observe workspace before planning",
+                {"tool_id": "file_management.repo_snapshot", "arguments": {}},
+            ),
+            RuntimeDecision("plan", "non-executable plan", {}),
+            RuntimeDecision("pause", "stop after repair guidance"),
+        ]
+    )
     services = create_appv22_services(
         root_path=tmp_path,
-        provider=DeterministicAppV22Provider(),
+        provider=provider,
         extensions=[FileManagementExtension()],
     )
 
@@ -186,20 +196,271 @@ def test_agent_loop_uses_capability_registry_without_file_imports(tmp_path):
         "make this workspace sane and keep a record"
     )
 
+    assert result["status"] == "failed"
+    assert result["reason"] == "paused"
+    assert any(
+        "Plan was non-executable" in item
+        for item in provider.prompts[2]["state"]["context_summary"]["open_risks"]
+    )
+    assert not (tmp_path / "docs" / "a.md").exists()
+
+
+def test_agent_loop_executes_model_authored_file_creation_plan(tmp_path):
+    provider = SequenceProvider(
+        [
+            RuntimeDecision(
+                "tool_call",
+                "observe workspace before planning",
+                {"tool_id": "file_management.repo_snapshot", "arguments": {}},
+            ),
+            RuntimeDecision(
+                "plan",
+                "create a useful handoff record from observed context",
+                {
+                    "proposed_artifact": {
+                        "path": "docs/NEXT_STEPS.md",
+                        "content": "# Next Steps\n\nHandoff note for whoever picks this up next.\n",
+                    }
+                },
+                ["world://repo_snapshot/latest"],
+            ),
+            RuntimeDecision("mutation_intent", "apply accepted model plan"),
+            RuntimeDecision("finalize", "verify created file"),
+        ]
+    )
+    services = create_appv22_services(
+        root_path=tmp_path,
+        provider=provider,
+        extensions=[FileManagementExtension()],
+    )
+
+    result = AppV22AgentRuntime(root_path=tmp_path, services=services, max_turns=8).run(
+        "make a small useful record for whoever picks this up next"
+    )
+
     assert result["status"] == "completed"
-    assert (tmp_path / "docs" / "a.md").is_file()
-    assert result["mutation_receipts"]
-    assert result["verification_receipts"]
-    assert isinstance(result["mutation_receipts"][0], dict)
-    assert "receipt_id" in result["mutation_receipts"][0]
-    assert isinstance(result["verification_receipts"][0], dict)
-    assert "verification_id" in result["verification_receipts"][0]
+    assert (tmp_path / "docs" / "NEXT_STEPS.md").read_text(encoding="utf-8") == (
+        "# Next Steps\n\nHandoff note for whoever picks this up next.\n"
+    )
+    mutation = result["mutation_receipts"][0]
+    assert mutation["operations"] == [
+        {
+            "action": "write",
+            "path": "docs/NEXT_STEPS.md",
+            "content": "# Next Steps\n\nHandoff note for whoever picks this up next.\n",
+        }
+    ]
+
+
+def test_agent_loop_accepts_model_proposed_artifact_relative_path_alias(tmp_path):
+    provider = SequenceProvider(
+        [
+            RuntimeDecision(
+                "tool_call",
+                "observe workspace before planning",
+                {"tool_id": "file_management.repo_snapshot", "arguments": {}},
+            ),
+            RuntimeDecision(
+                "plan",
+                "create a useful handoff record from observed context",
+                {
+                    "proposed_artifact": {
+                        "relative_path": "docs/handoff.md",
+                        "content": "# Handoff\n\nNext person should wire tax checkout.\n",
+                    }
+                },
+                ["world://repo_snapshot/latest"],
+            ),
+            RuntimeDecision("mutation_intent", "apply accepted model plan"),
+            RuntimeDecision("finalize", "verify created file"),
+        ]
+    )
+    services = create_appv22_services(
+        root_path=tmp_path,
+        provider=provider,
+        extensions=[FileManagementExtension()],
+    )
+
+    result = AppV22AgentRuntime(root_path=tmp_path, services=services, max_turns=8).run(
+        "leave something useful for the next person"
+    )
+
+    assert result["status"] == "completed"
+    assert (tmp_path / "docs" / "handoff.md").is_file()
+
+
+def test_agent_loop_repairs_malformed_tool_call_when_active_observation_tool_exists(tmp_path):
+    provider = SequenceProvider(
+        [
+            RuntimeDecision("tool_call", "missing tool id", {"next_step": "observe"}),
+            RuntimeDecision("pause", "stop after repaired observation"),
+        ]
+    )
+    services = create_appv22_services(
+        root_path=tmp_path,
+        provider=provider,
+        extensions=[FileManagementExtension()],
+    )
+
+    result = AppV22AgentRuntime(root_path=tmp_path, services=services, max_turns=4).run(
+        "leave a useful record"
+    )
+
+    assert result["status"] == "failed"
+    assert result["reason"] == "paused"
+    tool_events = [event for event in result["events"] if event["event_type"] == "ToolCallCompleted"]
+    assert tool_events[0]["payload"]["tool_id"] == "file_management.repo_snapshot"
+
+
+def test_agent_loop_advances_to_plan_when_observation_request_repeats_after_evidence(tmp_path):
+    provider = SequenceProvider(
+        [
+            RuntimeDecision(
+                "tool_call",
+                "observe first",
+                {"tool_id": "file_management.repo_snapshot", "arguments": {}},
+            ),
+            RuntimeDecision(
+                "tool_call",
+                "model forgot compacted evidence",
+                {"next_step": "request_observation"},
+            ),
+            RuntimeDecision(
+                "plan",
+                "plan from preserved evidence",
+                {
+                    "proposed_artifact": {
+                        "path": "docs/office-story.md",
+                        "content": "# Office Story\n\nEvidence survived compaction.\n",
+                    }
+                },
+                ["world://repo_snapshot/latest"],
+            ),
+            RuntimeDecision("mutation_intent", "apply plan"),
+            RuntimeDecision("finalize", "verify"),
+        ]
+    )
+    services = create_appv22_services(
+        root_path=tmp_path,
+        provider=provider,
+        extensions=[FileManagementExtension()],
+    )
+
+    result = AppV22AgentRuntime(root_path=tmp_path, services=services, max_turns=8).run(
+        "leave a useful office story"
+    )
+
+    assert result["status"] == "completed"
+    tool_events = [event for event in result["events"] if event["event_type"] == "ToolCallCompleted"]
+    assert len(tool_events) == 1
+    mode_events = [event["payload"]["mode"] for event in result["events"] if event["event_type"] == "ModeChanged"]
+    assert "PLAN" in mode_events
+    assert (tmp_path / "docs" / "office-story.md").is_file()
+
+
+def test_agent_loop_suppresses_repeated_observation_tool_after_evidence(tmp_path):
+    provider = SequenceProvider(
+        [
+            RuntimeDecision(
+                "tool_call",
+                "observe first",
+                {"tool_id": "file_management.repo_snapshot", "arguments": {}},
+            ),
+            RuntimeDecision(
+                "tool_call",
+                "repeat observe",
+                {"tool_id": "file_management.repo_snapshot", "arguments": {}},
+            ),
+            RuntimeDecision("pause", "inspect anti-thrash"),
+        ]
+    )
+    services = create_appv22_services(
+        root_path=tmp_path,
+        provider=provider,
+        extensions=[FileManagementExtension()],
+    )
+
+    result = AppV22AgentRuntime(root_path=tmp_path, services=services, max_turns=4).run(
+        "leave a useful office story"
+    )
+
+    assert result["status"] == "failed"
+    assert result["reason"] == "paused"
+    tool_events = [event for event in result["events"] if event["event_type"] == "ToolCallCompleted"]
+    assert len(tool_events) == 1
+    assert any(
+        "Observation already satisfied" in item
+        for item in provider.prompts[2]["state"]["context_summary"]["progress"]
+    )
+
+
+def test_agent_loop_reprompts_after_non_executable_plan_payload(tmp_path):
+    provider = SequenceProvider(
+        [
+            RuntimeDecision(
+                "tool_call",
+                "observe first",
+                {"tool_id": "file_management.repo_snapshot", "arguments": {}},
+            ),
+            RuntimeDecision("plan", "non executable", {}),
+            RuntimeDecision(
+                "plan",
+                "repaired executable plan",
+                {
+                    "proposed_artifact": {
+                        "path": "docs/repaired.md",
+                        "content": "# Repaired\n\nExecutable plan after runtime guidance.\n",
+                    }
+                },
+                ["world://file_management.repo_snapshot/latest"],
+            ),
+            RuntimeDecision("mutation_intent", "apply repaired plan"),
+            RuntimeDecision("finalize", "verify repaired plan"),
+        ]
+    )
+    services = create_appv22_services(
+        root_path=tmp_path,
+        provider=provider,
+        extensions=[FileManagementExtension()],
+    )
+
+    result = AppV22AgentRuntime(root_path=tmp_path, services=services, max_turns=8).run(
+        "leave a useful record"
+    )
+
+    assert result["status"] == "completed"
+    assert (tmp_path / "docs" / "repaired.md").is_file()
+    assert any(
+        "Plan was non-executable" in item
+        for item in provider.prompts[2]["state"]["context_summary"]["open_risks"]
+    )
+
+
+def test_agent_loop_rejects_malformed_tool_call_without_active_tools(tmp_path):
+    provider = SequenceProvider(
+        [
+            RuntimeDecision("tool_call", "missing tool id", {"next_step": "observe"}),
+        ]
+    )
+    services = create_appv22_services(
+        root_path=tmp_path,
+        provider=provider,
+        extensions=[],
+    )
+
+    result = AppV22AgentRuntime(root_path=tmp_path, services=services, max_turns=4).run(
+        "no matching skill"
+    )
+
+    assert result["status"] == "failed"
+    assert result["reason"] == "malformed_tool_call"
+    assert result["message"] == "tool_call decision missing tool_id"
 
 
 def test_agent_loop_fails_when_max_turns_exceeded(tmp_path):
     services = create_appv22_services(
         root_path=tmp_path,
-        provider=DeterministicAppV22Provider(),
+        provider=RecordingProvider(RuntimeDecision("pause", "not reached")),
         extensions=[FileManagementExtension()],
     )
 
@@ -291,7 +552,10 @@ def test_dual_context_compacts_large_world_context_and_carries_summary_to_next_t
     second_prompt_payload = json.dumps(provider.prompts[1], sort_keys=True, default=str)
     assert raw_marker not in first_prompt_payload
     assert raw_marker not in second_prompt_payload
-    assert provider.prompts[1]["world"] == {"world_refs": {}}
+    assert "world://file_management.repo_snapshot/latest" in provider.prompts[1]["world"]["world_refs"]
+    assert provider.prompts[1]["world"]["world_refs"]["world://file_management.repo_snapshot/latest"]["kind"] == (
+        "file_management.repo_snapshot"
+    )
     assert any(message.get("name") == "context_summary" for message in provider.prompts[1]["messages"])
     summary_events = [event for event in result["events"] if event["event_type"] == "ContextSummaryUpdated"]
     assert summary_events
@@ -329,11 +593,14 @@ def test_dual_context_preserves_compact_observation_contract(tmp_path):
     assert len(provider.prompts) == 2
     second_prompt_payload = json.dumps(provider.prompts[1], sort_keys=True, default=str)
     assert raw_marker not in second_prompt_payload
-    assert provider.prompts[1]["world"] == {"world_refs": {}}
+    assert "world://file_management.repo_snapshot/latest" in provider.prompts[1]["world"]["world_refs"]
+    assert provider.prompts[1]["world"]["world_refs"]["world://file_management.repo_snapshot/latest"]["kind"] == (
+        "file_management.repo_snapshot"
+    )
     assert any(message.get("name") == "context_summary" for message in provider.prompts[1]["messages"])
     contract = provider.prompts[1]["skills"][0]["observation_contract"]
     assert contract is not None
-    assert contract["evidence_refs"] == ("world://repo_snapshot/latest",)
+    assert contract["evidence_refs"] == ("world://file_management.repo_snapshot/latest",)
     assert contract["evidence_kinds"] == ("file_management.repo_snapshot",)
     assert contract["preferred_tool_id"] == "file_management.repo_snapshot"
 

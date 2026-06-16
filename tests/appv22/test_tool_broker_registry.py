@@ -36,8 +36,8 @@ def test_tool_broker_executes_registered_active_tool(tmp_path):
     assert result["tool_result_id"].startswith("toolres_")
     assert result["status"] == "completed"
     assert result["payload"] == {"message": "hello"}
-    assert result["payload_ref"].startswith("world://tool_payload/")
-    assert result["evidence_refs"] == []
+    assert result["payload_ref"].startswith("world://demo.echo/")
+    assert result["evidence_refs"] == [result["payload_ref"]]
 
 
 def test_tool_broker_denies_missing_required_argument(tmp_path):

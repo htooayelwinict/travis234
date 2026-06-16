@@ -17,7 +17,6 @@ sys.path.insert(0, str(ROOT / "appV2.2"))
 from appv22 import AppV22AgentRuntime
 from appv22.extensions.file_management.extension import FileManagementExtension
 from appv22.providers.appv2_env import create_appv22_provider_from_appv2_env
-from appv22.providers.deterministic import DeterministicAppV22Provider
 from appv22.runtime.services import create_appv22_services
 
 DEFAULT_PROMPT = "Can you clean this mess up safely and keep a record?"
@@ -64,7 +63,7 @@ APPV2_ENV_FILE_MANAGEMENT_TOOL_NAME_MAP = {
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--provider", choices=["deterministic", "appv2-env"], default="deterministic")
+    parser.add_argument("--provider", choices=["appv2-env"], default="appv2-env")
     parser.add_argument("--dotenv", default=".env")
     parser.add_argument("--prompt", default=DEFAULT_PROMPT)
     parser.add_argument("--output", type=Path)
@@ -130,8 +129,6 @@ def bounded_probe_run(timeout_seconds: int):
 
 
 def create_provider(provider_name: str, *, dotenv_path: str):
-    if provider_name == "deterministic":
-        return DeterministicAppV22Provider()
     return create_appv22_provider_from_appv2_env(
         dotenv_path=dotenv_path,
         tool_name_map=APPV2_ENV_FILE_MANAGEMENT_TOOL_NAME_MAP,

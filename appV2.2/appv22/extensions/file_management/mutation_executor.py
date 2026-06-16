@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 
 from appv22.extensions.file_management.mutation_policy import (
-    FileMoveMutationPolicy,
+    FileMutationPolicy,
     _canonical_relative_path,
     _casefold_canonical_key,
     _casefolded_existing_file_keys,
@@ -17,7 +17,7 @@ class FileMutationExecutor:
 
     def apply(self, operations: list[dict], *, root_path) -> dict:
         root = Path(root_path).resolve()
-        errors = FileMoveMutationPolicy().validate(operations, root_path=root)
+        errors = FileMutationPolicy().validate(operations, root_path=root)
         if errors:
             return {"status": "denied", "touched_paths": [], "errors": errors}
 

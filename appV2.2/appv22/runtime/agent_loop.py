@@ -56,9 +56,72 @@ class AppV22AgentRuntime:
 
     def _route(self, state, decision, resolved) -> None:
         if decision.kind == "tool_call":
+            tool_id = decision.payload.get("tool_id") if isinstance(decision.payload, dict) else None
+            preferred_observation_tool_id = self._preferred_observation_tool_id(resolved)
+            if (
+                self._observation_contract_satisfied(state, resolved)
+                and not self._is_explicit_rehydration_request(decision)
+                and (
+                not isinstance(tool_id, str)
+                or not tool_id
+                or tool_id == preferred_observation_tool_id
+                )
+            ):
+                self._record_runtime_guidance(
+                    state,
+                    progress=(
+                        "Observation already satisfied by durable evidence_refs; proceed in PLAN mode. "
+                        "Do not repeat broad observation. Emit proposed_artifact.path and "
+                        "proposed_artifact.content or a concrete mutation_intent.operations payload."
+                    ),
+                )
+                self._apply(state, RuntimeEvent("ModeChanged", {"mode": "PLAN"}))
+                return
+            if not isinstance(tool_id, str) or not tool_id:
+                repaired_tool_id = preferred_observation_tool_id
+                if repaired_tool_id:
+                    tool_id = repaired_tool_id
+                    decision_payload = deepcopy(decision.payload) if isinstance(decision.payload, dict) else {}
+                    decision_payload["tool_id"] = tool_id
+                    decision_payload.setdefault("arguments", {})
+                    decision = type(decision)(
+                        kind=decision.kind,
+                        reason=f"{decision.reason} Runtime repaired missing tool_id from active tools.",
+                        payload=decision_payload,
+                        evidence_refs=list(decision.evidence_refs),
+                        decision_id=decision.decision_id,
+                    )
+                else:
+                    self._apply(
+                        state,
+                        RuntimeEvent(
+                            "RunFailed",
+                            {
+                                "status": "failed",
+                                "reason": "malformed_tool_call",
+                                "message": "tool_call decision missing tool_id",
+                                "payload": deepcopy(decision.payload),
+                            },
+                        ),
+                    )
+                    return
+            if not isinstance(tool_id, str) or not tool_id:
+                self._apply(
+                    state,
+                    RuntimeEvent(
+                        "RunFailed",
+                        {
+                            "status": "failed",
+                            "reason": "malformed_tool_call",
+                            "message": "tool_call decision missing tool_id",
+                            "payload": deepcopy(decision.payload),
+                        },
+                    ),
+                )
+                return
             self._apply(state, RuntimeEvent("ModeChanged", {"mode": "OBSERVE"}))
             result = self.services.broker.execute(
-                decision.payload["tool_id"],
+                tool_id,
                 decision.payload.get("arguments", {}),
                 active_tool_ids=resolved.tool_ids,
             )
@@ -70,7 +133,7 @@ class AppV22AgentRuntime:
                     RuntimeEvent(
                         "WorldRefAdded",
                         {
-                            "ref_id": f"world://{result['tool_id'].split('.')[-1]}/latest",
+                            "ref_id": result.get("payload_ref") or f"world://{result['tool_id']}/latest",
                             "kind": result["tool_id"],
                             "payload": result["payload"],
                             "summary": f"{result['tool_id']} result",
@@ -82,7 +145,17 @@ class AppV22AgentRuntime:
             self._apply(state, RuntimeEvent("ModeChanged", {"mode": "PLAN"}))
             planner_id = self._single(resolved.planner_ids, "planner")
             planner = self.services.capability_registry.planner(planner_id)
-            self._apply(state, RuntimeEvent("PlanAccepted", planner.plan(state)))
+            plan = self._plan_with_model_payload(planner, state, decision.payload)
+            if plan is None:
+                self._record_runtime_guidance(
+                    state,
+                    open_risk=(
+                        "Plan was non-executable. Produce a repaired plan with proposed_artifact.path "
+                        "and proposed_artifact.content, or mutation_intent.operations. Cite existing evidence_refs."
+                    ),
+                )
+                return
+            self._apply(state, RuntimeEvent("PlanAccepted", plan))
             return
         if decision.kind == "mutation_intent":
             self._apply(state, RuntimeEvent("ModeChanged", {"mode": "ACT"}))
@@ -98,7 +171,8 @@ class AppV22AgentRuntime:
             )
             policy = self.services.capability_registry.mutation_policy(policy_id)
             executor = self.services.capability_registry.mutation_executor(executor_id)
-            operations = decision.payload["operations"]
+            mutation_intent = decision.payload if decision.payload.get("operations") else state.runtime_plan.get("mutation_intent", {})
+            operations = mutation_intent["operations"]
             errors = policy.validate(operations, root_path=self.root_path)
             if errors:
                 self._apply(
@@ -116,7 +190,7 @@ class AppV22AgentRuntime:
                     "MutationLeaseIssued",
                     {
                         "lease_id": lease_id,
-                        "operation_batch_id": decision.payload["operation_batch_id"],
+                        "operation_batch_id": mutation_intent["operation_batch_id"],
                         "allowed_operations": operations,
                     },
                 ),
@@ -140,7 +214,7 @@ class AppV22AgentRuntime:
                 RuntimeEvent(
                     "MutationApplied",
                     {
-                        "receipt_id": f"mut_{decision.payload['operation_batch_id']}",
+                        "receipt_id": f"mut_{mutation_intent['operation_batch_id']}",
                         "lease_id": lease_id,
                         "operations": operations,
                         **applied,
@@ -190,6 +264,16 @@ class AppV22AgentRuntime:
     def _apply(self, state, event: RuntimeEvent) -> None:
         self.events.append(event)
         apply_event(state, event)
+
+    def _plan_with_model_payload(self, planner, state, payload: dict) -> dict:
+        try:
+            return planner.plan(state, decision_payload=payload)
+        except ValueError as exc:
+            if str(exc) == "model_authored_plan_required":
+                return None
+            raise
+        except TypeError:
+            return planner.plan(state)
 
     def _provider_bound_prompt(self, state, prompt: dict) -> dict:
         messages = self._provider_prompt_messages(state, prompt)
@@ -243,6 +327,7 @@ class AppV22AgentRuntime:
                 "runtime_plan": {},
                 "mutation_receipts": {},
                 "verification_receipts": {},
+                "context_summary": {},
             },
             "skills": [],
             "tools": [],
@@ -281,6 +366,59 @@ class AppV22AgentRuntime:
                 raise ValueError(f"inactive {label}: {planned_id}")
             return planned_id
         return self._single(active_ids, label)
+
+    def _preferred_observation_tool_id(self, resolved) -> str | None:
+        for card in resolved.skill_cards:
+            contract = getattr(card, "observation_contract", None)
+            preferred = getattr(contract, "preferred_tool_id", None)
+            if isinstance(preferred, str) and preferred in resolved.tool_ids:
+                return preferred
+        return resolved.tool_ids[0] if resolved.tool_ids else None
+
+    def _observation_contract_satisfied(self, state, resolved) -> bool:
+        for card in resolved.skill_cards:
+            contract = getattr(card, "observation_contract", None)
+            if contract is None:
+                continue
+            evidence_refs = getattr(contract, "evidence_refs", ())
+            if evidence_refs and any(ref in state.world_refs for ref in evidence_refs):
+                return True
+            evidence_kinds = getattr(contract, "evidence_kinds", ())
+            if evidence_kinds and any(
+                world_ref.get("kind") in evidence_kinds
+                for world_ref in state.world_refs.values()
+                if isinstance(world_ref, dict)
+            ):
+                return True
+        return False
+
+    def _is_explicit_rehydration_request(self, decision) -> bool:
+        payload_text = json.dumps(decision.payload, sort_keys=True, default=str).lower()
+        reason = str(getattr(decision, "reason", "")).lower()
+        text = f"{reason} {payload_text}"
+        return "rehydrat" in text or "recover exact" in text or "exact workspace evidence" in text
+
+    def _record_runtime_guidance(
+        self,
+        state,
+        *,
+        progress: str | None = None,
+        open_risk: str | None = None,
+    ) -> None:
+        summary = deepcopy(state.context_summary)
+        evidence_refs = summary.setdefault("evidence_refs", [])
+        for ref_id in state.world_refs:
+            if ref_id not in evidence_refs:
+                evidence_refs.append(ref_id)
+        if progress:
+            progress_items = summary.setdefault("progress", [])
+            if progress not in progress_items:
+                progress_items.append(progress)
+        if open_risk:
+            open_risks = summary.setdefault("open_risks", [])
+            if open_risk not in open_risks:
+                open_risks.append(open_risk)
+        self._apply(state, RuntimeEvent("ContextSummaryUpdated", summary))
 
     def _single(self, values: tuple[str, ...], label: str) -> str:
         if len(values) != 1:

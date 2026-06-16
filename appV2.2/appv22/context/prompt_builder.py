@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from appv22.prompts.agent_contract import build_system_contract, mode_contract
 from appv22.state.models import AgentState
 
 
@@ -10,11 +11,12 @@ class PromptBuilder:
     def build(self, state: AgentState, selected_context: dict[str, Any]) -> dict[str, Any]:
         mode = selected_context["selection"]["mode"]
         return {
-            "system": {"identity": "AppV2.2 Pi-Hermes extension runtime"},
+            "system": build_system_contract(),
             "agent": {
                 "mode": mode,
                 "request": state.request.user_goal,
                 "constraints": list(state.request.constraints),
+                "mode_contract": mode_contract(mode),
             },
             "state": deepcopy(selected_context["state"]),
             "skills": deepcopy(selected_context["skills"]),

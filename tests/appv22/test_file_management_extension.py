@@ -1,13 +1,14 @@
 import json
 import sys
 from pathlib import Path
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "appV2.2"))
 
 from appv22.extensions.file_management.extension import FileManagementExtension
 from appv22.extensions.file_management.mutation_executor import FileMutationExecutor
-from appv22.extensions.file_management.mutation_policy import FileMoveMutationPolicy
-from appv22.extensions.file_management.planner import FileCleanupPlanner
+from appv22.extensions.file_management.mutation_policy import FileMutationPolicy
+from appv22.extensions.file_management.planner import ModelAuthoredFilePlanner
 from appv22.extensions.file_management.verifier import WorkspaceManifestVerifier
 from appv22.extensions.registry import ExtensionRegistry
 from appv22.runtime.capabilities import CapabilityRegistry
@@ -26,29 +27,40 @@ def test_file_management_extension_registers_all_capabilities():
     resolved = registry.resolve_active(state)
 
     assert resolved.extension_ids == ("file_management",)
-    assert resolved.planner_ids == ("file_management.cleanup_planner",)
-    assert resolved.mutation_policy_ids == ("file_management.safe_file_moves",)
+    assert resolved.planner_ids == ("file_management.model_authored_file_planner",)
+    assert resolved.mutation_policy_ids == ("file_management.safe_file_mutations",)
     assert resolved.mutation_executor_ids == ("file_management.file_mutation_executor",)
     assert resolved.verifier_ids == ("file_management.manifest_verifier",)
     assert resolved.tool_ids == ("file_management.read_file", "file_management.repo_snapshot")
-    assert resolved.artifact_schema_ids == ("file_management.workspace_manifest",)
-    assert capabilities.planner("file_management.cleanup_planner")
-    assert capabilities.mutation_policy("file_management.safe_file_moves")
+    assert resolved.artifact_schema_ids == ()
+    assert capabilities.planner("file_management.model_authored_file_planner")
+    assert capabilities.mutation_policy("file_management.safe_file_mutations")
     assert capabilities.mutation_executor("file_management.file_mutation_executor")
     assert capabilities.verifier("file_management.manifest_verifier")
-    assert capabilities.artifact_schema("file_management.workspace_manifest")["required"] == [
-        "generated_by",
-        "moves",
-        "held",
-        "collisions",
-    ]
 
 
 def test_file_management_skill_activation_handles_vague_prompts():
     extension = FileManagementExtension()
-    state = AgentState("sess", "run", RequestEnvelope("req", "make this workspace sane and keep a record", "."))
+    state = AgentState("sess", "run", RequestEnvelope("req", "leave a useful record for the next person", "."))
 
     assert extension.skill_cards()[0].activates_for(state) is True
+
+
+def test_file_management_skill_activation_handles_creation_and_documentation_prompts():
+    extension = FileManagementExtension()
+    prompts = [
+        "leave something useful for the next person",
+        "capture the decision in a small durable file",
+        "make a practical checklist from my notes",
+        "create the smallest sensible runbook stub",
+    ]
+
+    assert [
+        extension.skill_cards()[0].activates_for(
+            AgentState("sess", "run", RequestEnvelope("req", prompt, "."))
+        )
+        for prompt in prompts
+    ] == [True, True, True, True]
 
 
 def test_file_management_extension_registers_snapshot_and_read_tools(tmp_path):
@@ -66,6 +78,7 @@ def test_file_management_extension_registers_snapshot_and_read_tools(tmp_path):
     assert snapshot["status"] == "completed"
     assert snapshot["files"] == ["nested/data.json", "notes.md"]
     assert snapshot["directories"] == ["nested"]
+    assert snapshot["text_previews"] == {"nested/data.json": "{}", "notes.md": "hello"}
     assert read == {"status": "completed", "path": "notes.md", "content": "hello"}
 
 
@@ -76,22 +89,57 @@ def test_policy_rejects_root_escape_and_protected_paths(tmp_path):
         {"action": "move", "source": "../outside.md", "destination": "docs/outside.md"},
         {"action": "move", "source": "README.md", "destination": "docs/readme.md"},
         {"action": "move", "source": "draft.md", "destination": "docs/existing.md"},
-        {"action": "write", "path": "notes/manifest.json", "content": "{}"},
+        {"action": "write", "path": "secrets/generated.txt", "content": "{}"},
     ]
 
-    errors = FileMoveMutationPolicy().validate(operations, root_path=tmp_path)
+    errors = FileMutationPolicy().validate(operations, root_path=tmp_path)
 
     assert "path_outside_root:../outside.md->docs/outside.md" in errors
     assert "protected_source_path:README.md" in errors
     assert "destination_exists:docs/existing.md" in errors
-    assert "unsupported_write_path:notes/manifest.json" in errors
+    assert "protected_write_path:secrets/generated.txt" in errors
+
+
+def test_policy_allows_model_authored_safe_file_creation(tmp_path):
+    errors = FileMutationPolicy().validate(
+        [
+            {
+                "action": "write",
+                "path": "docs/NEXT_STEPS.md",
+                "content": "# Next Steps\n\nHandoff record.\n",
+            }
+        ],
+        root_path=tmp_path,
+    )
+
+    assert errors == []
+
+
+def test_verifier_accepts_created_files_intent(tmp_path):
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs/NEXT_STEPS.md").write_text("# Next Steps\n\nHandoff record.\n", encoding="utf-8")
+
+    result = WorkspaceManifestVerifier().verify(
+        root_path=tmp_path,
+        verification_intent={
+            "created_files": [
+                {
+                    "path": "docs/NEXT_STEPS.md",
+                    "content": "# Next Steps\n\nHandoff record.\n",
+                }
+            ]
+        },
+    )
+
+    assert result["status"] == "passed"
+    assert {"name": "created_file_exists:docs/NEXT_STEPS.md", "passed": True} in result["checks"]
 
 
 def test_policy_rejects_duplicate_move_destinations_and_absolute_paths(tmp_path):
     (tmp_path / "draft.md").write_text("draft", encoding="utf-8")
     (tmp_path / "notes.md").write_text("notes", encoding="utf-8")
 
-    errors = FileMoveMutationPolicy().validate(
+    errors = FileMutationPolicy().validate(
         [
             {"action": "move", "source": "draft.md", "destination": "docs/shared.md"},
             {"action": "move", "source": "notes.md", "destination": "docs/shared.md"},
@@ -111,7 +159,7 @@ def test_policy_rejects_duplicate_move_destinations_and_absolute_paths(tmp_path)
 def test_policy_preflights_move_sources_before_execution(tmp_path):
     (tmp_path / "folder_source").mkdir()
 
-    errors = FileMoveMutationPolicy().validate(
+    errors = FileMutationPolicy().validate(
         [
             {"action": "move", "source": "missing.md", "destination": "docs/missing.md"},
             {"action": "move", "source": "folder_source", "destination": "docs/folder_source"},
@@ -168,26 +216,32 @@ def test_read_file_denies_normalized_protected_path_bypass(tmp_path):
     }
 
 
-def test_read_file_denies_case_variant_readme_protected_path(tmp_path):
+def test_read_file_allows_case_variant_readme_rehydration(tmp_path):
     (tmp_path / "readme.md").write_text("private", encoding="utf-8")
     registry = ToolRegistry()
     FileManagementExtension().register_tools(registry)
 
     result = registry.handler("file_management.read_file")({"path": "readme.md"}, {"root_path": tmp_path})
 
-    assert result == {
-        "status": "denied",
-        "path": "readme.md",
-        "content": "",
-        "errors": ["protected_path:readme.md"],
-    }
+    assert result == {"status": "completed", "path": "readme.md", "content": "private"}
+
+
+def test_read_file_allows_docs_rehydration_even_when_write_policy_protects_sensitive_paths(tmp_path):
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs/context.md").write_text("office evidence", encoding="utf-8")
+    registry = ToolRegistry()
+    FileManagementExtension().register_tools(registry)
+
+    result = registry.handler("file_management.read_file")({"path": "docs/context.md"}, {"root_path": tmp_path})
+
+    assert result == {"status": "completed", "path": "docs/context.md", "content": "office evidence"}
 
 
 def test_policy_rejects_case_variant_protected_sources_and_destinations(tmp_path):
     (tmp_path / "draft.md").write_text("draft", encoding="utf-8")
     (tmp_path / "notes.md").write_text("notes", encoding="utf-8")
 
-    errors = FileMoveMutationPolicy().validate(
+    errors = FileMutationPolicy().validate(
         [
             {"action": "move", "source": "readme.md", "destination": "out/readme.md"},
             {"action": "move", "source": "README.md", "destination": "out/README.md"},
@@ -211,7 +265,7 @@ def test_policy_rejects_normalized_protected_source_and_destination(tmp_path):
     (tmp_path / "secrets").mkdir()
     (tmp_path / "secrets/token.txt").write_text("secret", encoding="utf-8")
 
-    errors = FileMoveMutationPolicy().validate(
+    errors = FileMutationPolicy().validate(
         [
             {"action": "move", "source": "safe/../secrets/token.txt", "destination": "moved/token.txt"},
             {"action": "move", "source": "safe/draft.md", "destination": "safe/../secrets/draft.md"},
@@ -227,7 +281,7 @@ def test_policy_rejects_canonical_duplicate_move_destinations(tmp_path):
     (tmp_path / "one.md").write_text("one", encoding="utf-8")
     (tmp_path / "two.md").write_text("two", encoding="utf-8")
 
-    errors = FileMoveMutationPolicy().validate(
+    errors = FileMutationPolicy().validate(
         [
             {"action": "move", "source": "one.md", "destination": "docs/file.md"},
             {"action": "move", "source": "two.md", "destination": "docs/../docs/file.md"},
@@ -247,7 +301,7 @@ def test_policy_rejects_casefolded_duplicate_move_sources(tmp_path):
         {"action": "move", "source": "SAFE/FILE.md", "destination": "moved/two.md"},
     ]
 
-    errors = FileMoveMutationPolicy().validate(operations, root_path=tmp_path)
+    errors = FileMutationPolicy().validate(operations, root_path=tmp_path)
     result = FileMutationExecutor().apply(operations, root_path=tmp_path)
 
     assert "duplicate_source:SAFE/FILE.md" in errors
@@ -262,7 +316,7 @@ def test_policy_rejects_casefolded_duplicate_move_destinations(tmp_path):
     (tmp_path / "one.md").write_text("one", encoding="utf-8")
     (tmp_path / "two.md").write_text("two", encoding="utf-8")
 
-    errors = FileMoveMutationPolicy().validate(
+    errors = FileMutationPolicy().validate(
         [
             {"action": "move", "source": "one.md", "destination": "out/File.md"},
             {"action": "move", "source": "two.md", "destination": "out/file.md"},
@@ -282,7 +336,7 @@ def test_policy_rejects_casefolded_source_destination_cross_collision(tmp_path):
         {"action": "move", "source": "b.md", "destination": "c.md"},
     ]
 
-    errors = FileMoveMutationPolicy().validate(operations, root_path=tmp_path)
+    errors = FileMutationPolicy().validate(operations, root_path=tmp_path)
     result = FileMutationExecutor().apply(operations, root_path=tmp_path)
 
     assert "source_destination_collision:B.md" in errors
@@ -300,7 +354,7 @@ def test_policy_rejects_casefolded_existing_destination_collision(tmp_path):
 
     operations = [{"action": "move", "source": "draft.md", "destination": "docs/File.md"}]
 
-    errors = FileMoveMutationPolicy().validate(operations, root_path=tmp_path)
+    errors = FileMutationPolicy().validate(operations, root_path=tmp_path)
     result = FileMutationExecutor().apply(operations, root_path=tmp_path)
 
     assert "destination_exists:docs/File.md" in errors
@@ -320,7 +374,7 @@ def test_executor_preflight_rejects_casefolded_collisions_without_partial_mutati
         {"action": "move", "source": "b.md", "destination": "c.md"},
         {"action": "move", "source": "a.md", "destination": "docs/File.md"},
     ]
-    monkeypatch.setattr(FileMoveMutationPolicy, "validate", lambda self, operations, *, root_path: [])
+    monkeypatch.setattr(FileMutationPolicy, "validate", lambda self, operations, *, root_path: [])
 
     result = FileMutationExecutor().apply(operations, root_path=tmp_path)
 
@@ -343,7 +397,7 @@ def test_policy_rejects_duplicate_canonical_sources_without_partial_mutation(tmp
         {"action": "move", "source": "safe/../safe/first.md", "destination": "moved/second.md"},
     ]
 
-    errors = FileMoveMutationPolicy().validate(operations, root_path=tmp_path)
+    errors = FileMutationPolicy().validate(operations, root_path=tmp_path)
     result = FileMutationExecutor().apply(operations, root_path=tmp_path)
 
     assert "duplicate_source:safe/first.md" in errors
@@ -353,19 +407,70 @@ def test_policy_rejects_duplicate_canonical_sources_without_partial_mutation(tmp
     assert not (tmp_path / "moved/second.md").exists()
 
 
-def test_planner_holds_moves_when_destination_collides():
+def test_planner_rejects_non_executable_model_plan_instead_of_cleanup_fallback():
     state = AgentState("sess", "run", RequestEnvelope("req", "cleanup", "/workspace"))
     state.world_refs["world://repo_snapshot/latest"] = {
         "payload": {"files": ["draft.md", "docs/draft.md", "logs/run.json", "run.json"]}
     }
 
-    plan = FileCleanupPlanner().plan(state)
+    with pytest.raises(ValueError, match="model_authored_plan_required"):
+        ModelAuthoredFilePlanner().plan(state, decision_payload={"plan_steps": [{"path": "docs/handoff.md"}]})
 
-    assert plan["mutation_intent"]["operation_batch_id"] == "workspace_cleanup"
-    assert {move["source"] for move in plan["verification_intent"]["moves"]} == {"logs/run.json"}
-    assert sorted(plan["verification_intent"]["held"]) == ["draft.md", "run.json"]
-    collisions = plan["verification_intent"]["collisions"]
-    assert {collision["source"] for collision in collisions} == {"draft.md", "run.json"}
+
+def test_planner_accepts_model_authored_proposed_artifact():
+    state = AgentState("sess", "run", RequestEnvelope("req", "create record", "/workspace"))
+
+    plan = ModelAuthoredFilePlanner().plan(
+        state,
+        decision_payload={
+            "proposed_artifact": {
+                "relative_path": "docs/handoff.md",
+                "content": "# Handoff\n\nUse the observed context.\n",
+            }
+        },
+    )
+
+    assert plan["planner_id"] == "file_management.model_authored_file_planner"
+    assert plan["mutation_intent"] == {
+        "operation_batch_id": "model_authored_file_creation",
+        "operations": [
+            {
+                "action": "write",
+                "path": "docs/handoff.md",
+                "content": "# Handoff\n\nUse the observed context.\n",
+            }
+        ],
+    }
+
+
+def test_planner_prefers_proposed_artifact_over_non_runtime_mutation_shape():
+    state = AgentState("sess", "run", RequestEnvelope("req", "create record", "/workspace"))
+
+    plan = ModelAuthoredFilePlanner().plan(
+        state,
+        decision_payload={
+            "mutation_intent": {
+                "operations": [
+                    {
+                        "kind": "create_file",
+                        "path": "docs/checklist.md",
+                    }
+                ]
+            },
+            "proposed_artifact": {
+                "path": "docs/checklist.md",
+                "content": "# Checklist\n\n- [ ] Ship it.\n",
+            },
+        },
+    )
+
+    assert plan["mutation_intent"]["operations"] == [
+        {
+            "action": "write",
+            "path": "docs/checklist.md",
+            "content": "# Checklist\n\n- [ ] Ship it.\n",
+        }
+    ]
 
 
 def test_executor_applies_validated_moves_and_manifest(tmp_path):
@@ -378,7 +483,7 @@ def test_executor_applies_validated_moves_and_manifest(tmp_path):
             "content": {"generated_by": "appv22", "moves": [], "held": [], "collisions": []},
         },
     ]
-    assert FileMoveMutationPolicy().validate(operations, root_path=tmp_path) == []
+    assert FileMutationPolicy().validate(operations, root_path=tmp_path) == []
 
     result = FileMutationExecutor().apply(operations, root_path=tmp_path)
 

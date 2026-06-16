@@ -54,7 +54,11 @@ def _append_world_refs(message: dict[str, Any], progress: list[Any], evidence_re
             _append_unique(evidence_refs, stable_ref_id)
         summary = ref.get("summary")
         if summary:
-            _append_unique(progress, str(summary))
+            kind = ref.get("kind")
+            if isinstance(kind, str) and kind:
+                _append_unique(progress, f"{stable_ref_id} ({kind}): {summary}")
+            else:
+                _append_unique(progress, str(summary))
 
 
 def structured_summary(messages: list[dict[str, Any]], previous_summary: dict[str, Any]) -> dict[str, list[Any]]:

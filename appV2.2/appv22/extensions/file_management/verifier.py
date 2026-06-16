@@ -12,6 +12,9 @@ class WorkspaceManifestVerifier:
 
     def verify(self, *, root_path, verification_intent: dict) -> dict:
         root = Path(root_path).resolve()
+        if isinstance(verification_intent.get("created_files"), list):
+            return _verify_created_files(root, verification_intent["created_files"])
+
         relative = verification_intent.get("manifest_path", MANIFEST_PATH)
         checks: list[dict[str, object]] = []
         if _outside(root, str(relative)):
@@ -66,6 +69,30 @@ class WorkspaceManifestVerifier:
             "checks": checks,
             "manifest": manifest,
         }
+
+
+def _verify_created_files(root: Path, created_files: list[object]) -> dict:
+    checks: list[dict[str, object]] = []
+    verified: list[dict[str, object]] = []
+    for record in created_files:
+        if not isinstance(record, dict):
+            checks.append({"name": "created_file_shape_valid", "passed": False})
+            continue
+        path = str(record.get("path", ""))
+        content = record.get("content")
+        inside = not _outside(root, path)
+        exists = inside and (root / path).is_file()
+        checks.append({"name": f"created_file_inside_root:{path}", "passed": inside})
+        checks.append({"name": f"created_file_exists:{path}", "passed": exists})
+        if isinstance(content, str):
+            matches = exists and (root / path).read_text(encoding="utf-8") == content
+            checks.append({"name": f"created_file_content_match:{path}", "passed": matches})
+        verified.append({"path": path, "exists": exists})
+    return {
+        "status": "passed" if checks and all(bool(check["passed"]) for check in checks) else "failed",
+        "checks": checks,
+        "created_files": verified,
+    }
 
 
 def _matches_type(value: object, expected_type: str) -> bool:

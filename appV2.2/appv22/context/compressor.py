@@ -9,16 +9,34 @@ from appv22.context.summaries import structured_summary
 
 
 SUMMARY_KEYS = ("goals", "decisions", "progress", "open_risks", "evidence_refs")
-PRESERVED_CONTEXT_SECTIONS = ("agent", "state", "skills", "tools", "selection")
+PRESERVED_CONTEXT_SECTIONS = ("agent", "state", "skills", "tools", "world", "selection")
 
 
 def _summary_message(summary: dict[str, list[Any]], *, content: str) -> dict[str, Any]:
     return {
         "role": "system",
         "name": "context_summary",
-        "content": content,
+        "content": _summary_content(summary, fallback=content),
         "summary": summary,
     }
+
+
+def _summary_content(summary: dict[str, list[Any]], *, fallback: str) -> str:
+    lines = [fallback]
+    evidence_refs = [str(ref) for ref in summary.get("evidence_refs", []) if ref]
+    if evidence_refs:
+        lines.append(f"Available evidence_refs: {', '.join(evidence_refs[:8])}")
+    if fallback == "Context summary.":
+        return "\n".join(lines)
+    progress = [str(item) for item in summary.get("progress", []) if item]
+    if progress:
+        lines.append("Relevant progress/evidence:")
+        lines.extend(f"- {item[:240]}" for item in progress[-6:])
+    open_risks = [str(item) for item in summary.get("open_risks", []) if item]
+    if open_risks:
+        lines.append("Open risks:")
+        lines.extend(f"- {item[:240]}" for item in open_risks[-4:])
+    return "\n".join(lines)
 
 
 def _normal_summary(summary: dict[str, Any]) -> dict[str, list[Any]]:
@@ -97,6 +115,12 @@ def _compact_preserved_context_section(message: dict[str, Any]) -> dict[str, Any
     section = compacted.get("section")
     payload = compacted.get("payload")
     if section == "skills" and isinstance(payload, list):
+        def compact_instructions(skill: dict[str, Any]) -> tuple[str, ...]:
+            instructions = skill.get("instructions", ())
+            if not isinstance(instructions, (list, tuple)):
+                return ()
+            return tuple(str(item)[:240] for item in instructions[:4])
+
         compacted["payload"] = [
             {
                 "skill_id": skill.get("skill_id"),
@@ -104,6 +128,7 @@ def _compact_preserved_context_section(message: dict[str, Any]) -> dict[str, Any
                 "summary": str(skill.get("summary", ""))[:240],
                 "tool_ids": skill.get("tool_ids", ()),
                 "observation_contract": skill.get("observation_contract"),
+                "instructions": compact_instructions(skill),
             }
             for skill in payload
             if isinstance(skill, dict) and skill.get("skill_id")
@@ -114,8 +139,98 @@ def _compact_preserved_context_section(message: dict[str, Any]) -> dict[str, Any
             "selected_tools": payload.get("selected_tools", []),
             "selected_skills": payload.get("selected_skills", []),
         }
+    elif section == "world" and isinstance(payload, dict):
+        compacted["payload"] = _compact_world_payload(payload)
     compacted["content"] = f"{section}: {json.dumps(compacted.get('payload'), sort_keys=True, default=str)}"
     return compacted
+
+
+def _compact_world_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    world_refs = payload.get("world_refs")
+    if not isinstance(world_refs, dict):
+        return {"world_refs": {}}
+    compacted_refs: dict[str, Any] = {}
+    for ref_id, ref in world_refs.items():
+        if not isinstance(ref_id, str) or not isinstance(ref, dict):
+            continue
+        compacted_ref = {
+            "ref_id": ref.get("ref_id", ref_id),
+            "kind": ref.get("kind"),
+            "summary": str(ref.get("summary", ""))[:240],
+        }
+        ref_payload = ref.get("payload")
+        if isinstance(ref_payload, dict):
+            compacted_ref["payload"] = _compact_world_ref_payload(ref_payload)
+        compacted_refs[ref_id] = compacted_ref
+    return {"world_refs": compacted_refs}
+
+
+def _compact_world_ref_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    compacted: dict[str, Any] = {}
+    files = payload.get("files")
+    if isinstance(files, list):
+        if len(files) <= 30:
+            compacted["files"] = [str(item)[:240] for item in files]
+        else:
+            compacted["file_count"] = len(files)
+            compacted["important_files"] = _important_paths(files)
+    directories = payload.get("directories")
+    if isinstance(directories, list):
+        if len(directories) <= 30:
+            compacted["directories"] = [str(item)[:240] for item in directories]
+        else:
+            compacted["directory_count"] = len(directories)
+            compacted["important_directories"] = _important_paths(directories)
+    errors = payload.get("errors")
+    if isinstance(errors, list):
+        compacted["errors"] = [str(item)[:240] for item in errors[:20]]
+    text_previews = payload.get("text_previews")
+    if isinstance(text_previews, dict):
+        preview_items = list(text_previews.items())
+        if len(preview_items) > 30:
+            preview_items = [
+                (path, content)
+                for path, content in preview_items
+                if _is_important_path(str(path))
+            ][:30]
+        compacted["text_previews"] = {
+            str(path)[:240]: str(content)[:700]
+            for path, content in preview_items[:30]
+        }
+    for key, value in payload.items():
+        if key in compacted or key in {"files", "directories", "errors", "text_previews"}:
+            continue
+        compacted[str(key)[:120]] = _compact_generic_payload(value)
+    return compacted
+
+
+def _compact_generic_payload(value: Any, *, depth: int = 0) -> Any:
+    if depth >= 4:
+        return str(value)[:700]
+    if isinstance(value, str):
+        return value[:700]
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    if isinstance(value, dict):
+        return {
+            str(key)[:120]: _compact_generic_payload(item, depth=depth + 1)
+            for key, item in list(value.items())[:20]
+        }
+    if isinstance(value, (list, tuple)):
+        return [_compact_generic_payload(item, depth=depth + 1) for item in list(value)[:20]]
+    return str(value)[:700]
+
+
+def _important_paths(paths: list[Any]) -> list[str]:
+    return [str(path)[:240] for path in paths if _is_important_path(str(path))][:30]
+
+
+def _is_important_path(path: str) -> bool:
+    normalized = path.replace("\\", "/").lstrip("/")
+    return (
+        normalized == "README.md"
+        or normalized.startswith(("docs/", "notes/", "risks/", "finance/", "people/", "vendors/"))
+    )
 
 
 class AgentContextCompressor:
@@ -148,7 +263,7 @@ class AgentContextCompressor:
             if message.get("role") == "tool" and len(str(message.get("content", ""))) > 1000:
                 message["content"] = f"[pruned verbose tool result:{message.get('tool_result_id', 'unknown')}]"
 
-        summary = _normal_summary(structured_summary(summarizable_middle, deepcopy(previous_summary)))
+        summary = _normal_summary(structured_summary(middle, deepcopy(previous_summary)))
         return _fit_summary_candidate(
             head,
             [*preserved_middle, *tail],

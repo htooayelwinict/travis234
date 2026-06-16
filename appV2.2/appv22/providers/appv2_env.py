@@ -175,6 +175,16 @@ def _appv21_compatible_prompt(prompt: dict) -> dict:
 
 def _coerce_appv22_progression(prompt: dict, decision: RuntimeDecision) -> RuntimeDecision:
     if decision.kind == "tool_call":
+        selected_tools = _selected_tools(prompt)
+        payload = decision.payload if isinstance(decision.payload, dict) else {}
+        if not isinstance(payload.get("tool_id"), str):
+            if selected_tools:
+                return RuntimeDecision(
+                    kind="tool_call",
+                    reason="Resolve model context request to prompt-visible observation tool.",
+                    payload={"tool_id": selected_tools[0], "arguments": {}},
+                    evidence_refs=[],
+                )
         satisfied_observation = _satisfied_observation_tool_call(prompt, decision)
         if satisfied_observation is not None:
             return satisfied_observation
@@ -194,27 +204,8 @@ def _coerce_appv22_progression(prompt: dict, decision: RuntimeDecision) -> Runti
 
     state = prompt.get("state") if isinstance(prompt.get("state"), dict) else {}
     runtime_plan = state.get("runtime_plan") if isinstance(state, dict) else None
-    if not isinstance(runtime_plan, dict) or not runtime_plan:
+    if isinstance(runtime_plan, dict) and runtime_plan:
         return decision
-
-    if not state.get("mutation_receipts"):
-        mutation_intent = runtime_plan.get("mutation_intent")
-        if isinstance(mutation_intent, dict):
-            return RuntimeDecision(
-                kind="mutation_intent",
-                reason="Plan already exists; advance to mutation intent.",
-                payload=deepcopy(mutation_intent),
-                evidence_refs=["plan://accepted/latest"],
-            )
-
-    if state.get("mutation_receipts") and not state.get("verification_receipts"):
-        return RuntimeDecision(
-            kind="finalize",
-            reason="Mutation receipt exists; advance to verification/finalization.",
-            payload={},
-            evidence_refs=["plan://accepted/latest"],
-        )
-
     return decision
 
 

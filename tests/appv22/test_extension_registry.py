@@ -231,7 +231,7 @@ def test_file_management_skill_declares_observation_contract() -> None:
     contract = FILE_MANAGEMENT_SKILL.observation_contract
 
     assert contract is not None
-    assert contract.evidence_refs == ("world://repo_snapshot/latest",)
+    assert contract.evidence_refs == ("world://file_management.repo_snapshot/latest",)
     assert contract.evidence_kinds == ("file_management.repo_snapshot",)
     assert contract.preferred_tool_id == "file_management.repo_snapshot"
 

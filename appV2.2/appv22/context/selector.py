@@ -40,6 +40,7 @@ class ContextSelector:
                 "runtime_plan": deepcopy(state.runtime_plan),
                 "mutation_receipts": deepcopy(state.mutation_receipts),
                 "verification_receipts": deepcopy(state.verification_receipts),
+                "context_summary": deepcopy(state.context_summary),
             },
             "skills": serialized_skills,
             "tools": selected_tools,

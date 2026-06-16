@@ -47,6 +47,11 @@ def test_prompt_uses_pre_turn_mode_and_hides_tools_in_plan():
     selected = ContextSelector().select(state, _resolved(), pre_turn_mode="PLAN")
     prompt = PromptBuilder().build(state, selected)
 
+    assert prompt["system"]["identity"] == "AppV2.2 Pi-Hermes coding agent"
+    assert any("observe -> plan -> act -> verify" in rule for rule in prompt["system"]["agent_loop_contract"])
+    assert any("context_summary.evidence_refs" in rule for rule in prompt["system"]["dual_context_contract"])
+    assert any("selected_tools" in rule for rule in prompt["system"]["tool_contract"])
+    assert any("observation evidence" in rule for rule in prompt["agent"]["mode_contract"])
     assert prompt["agent"]["mode"] == "PLAN"
     assert prompt["selection"]["selected_tools"] == []
     assert prompt["selection"]["available_tools"] == []
@@ -124,17 +129,63 @@ def test_prompt_includes_state_receipts_world_refs_and_metadata_without_mutabili
     state.mutation_receipts["mut_1"] = {"status": "applied"}
     state.verification_receipts["verify_1"] = {"status": "passed"}
     state.world_refs["world://repo_snapshot/latest"] = {"summary": "snapshot"}
+    state.context_summary["evidence_refs"] = ["world://repo_snapshot/latest"]
+    state.context_summary["progress"] = ["repo snapshot evidence is available"]
 
     selected = ContextSelector().select(state, _resolved(), pre_turn_mode="VERIFY")
     prompt = PromptBuilder().build(state, selected)
     state.runtime_plan["step"]["id"] = "mutated"
     state.world_refs["world://repo_snapshot/latest"]["summary"] = "mutated"
     selected["state"]["mutation_receipts"]["mut_1"]["status"] = "mutated"
+    selected["state"]["context_summary"]["progress"].append("mutated")
 
     assert prompt["agent"]["constraints"] == ["stay safe"]
     assert prompt["state"]["runtime_plan"]["step"]["id"] == "plan_1"
     assert prompt["state"]["mutation_receipts"]["mut_1"]["status"] == "applied"
     assert prompt["state"]["verification_receipts"]["verify_1"]["status"] == "passed"
+    assert prompt["state"]["context_summary"]["evidence_refs"] == ["world://repo_snapshot/latest"]
+    assert prompt["state"]["context_summary"]["progress"] == ["repo snapshot evidence is available"]
     assert prompt["world"]["world_refs"]["world://repo_snapshot/latest"]["summary"] == "snapshot"
     assert prompt["selection"]["active_extensions"] == ["demo"]
     assert prompt["selection"]["available_tools"] == ["demo.inspect"]
+
+
+def test_skill_prompt_instructions_are_selected_and_prompt_visible():
+    card = SkillCard(
+        skill_id="demo.web_research",
+        extension_id="demo",
+        triggers=("research",),
+        modes=("OBSERVE",),
+        summary="Research public sources.",
+        planner_id="demo.research.planner",
+        mutation_policy_id="demo.research.policy",
+        mutation_executor_id="demo.research.executor",
+        verifier_id="demo.research.verifier",
+        tool_ids=("demo.search",),
+        artifact_schema_ids=("demo.research_report",),
+        instructions=(
+            "Use the skill prompt as the domain adapter, not as a replacement for the agent loop.",
+            "Rehydrate exact evidence before citing or writing final claims.",
+        ),
+    )
+    resolved = ResolvedExtensions(
+        ("demo",),
+        (card,),
+        ("demo.search",),
+        ("demo.research.planner",),
+        ("demo.research.policy",),
+        ("demo.research.executor",),
+        ("demo.research.verifier",),
+        ("demo.research_report",),
+    )
+    state = AgentState("sess", "run", RequestEnvelope("req", "research this", "."), mode="OBSERVE")
+
+    prompt = PromptBuilder().build(
+        state,
+        ContextSelector().select(state, resolved, pre_turn_mode="OBSERVE"),
+    )
+
+    assert prompt["skills"][0]["instructions"] == (
+        "Use the skill prompt as the domain adapter, not as a replacement for the agent loop.",
+        "Rehydrate exact evidence before citing or writing final claims.",
+    )

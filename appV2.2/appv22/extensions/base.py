@@ -31,9 +31,10 @@ class SkillCard:
     tool_ids: tuple[str, ...]
     artifact_schema_ids: tuple[str, ...]
     observation_contract: ObservationContract | None = None
+    instructions: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        for field_name in ("triggers", "modes", "tool_ids", "artifact_schema_ids"):
+        for field_name in ("triggers", "modes", "tool_ids", "artifact_schema_ids", "instructions"):
             object.__setattr__(self, field_name, tuple(getattr(self, field_name)))
 
     def activates_for(self, state: AgentState) -> bool:

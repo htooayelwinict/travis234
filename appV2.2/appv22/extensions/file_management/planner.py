@@ -1,83 +1,81 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
-
-from appv22.extensions.file_management.mutation_policy import MANIFEST_PATH, _protected
 
 
-class FileCleanupPlanner:
-    capability_id = "file_management.cleanup_planner"
+class ModelAuthoredFilePlanner:
+    capability_id = "file_management.model_authored_file_planner"
 
-    def plan(self, state) -> dict:
-        snapshot_ref = state.world_refs.get("world://repo_snapshot/latest", {})
-        snapshot = snapshot_ref.get("payload", {})
-        files = sorted(path for path in snapshot.get("files", []) if isinstance(path, str))
-        existing = set(files)
-        destinations: dict[str, str] = {}
-        moves: list[dict[str, str]] = []
-        held: list[str] = []
-        collisions: list[dict[str, str]] = []
-        operations: list[dict] = []
+    def plan(self, state, decision_payload: dict | None = None) -> dict:
+        model_plan = _model_authored_plan(decision_payload or {})
+        if model_plan is not None:
+            return model_plan
+        raise ValueError("model_authored_plan_required")
 
-        for source in files:
-            if _protected(source):
-                continue
-            destination = _destination(source)
-            if destination is None:
-                continue
-            conflict = destinations.get(destination)
-            if destination in existing or conflict is not None:
-                held.append(source)
-                collisions.append(
-                    {
-                        "source": source,
-                        "destination": destination,
-                        "conflicts_with": conflict or destination,
-                    }
-                )
-                continue
-            destinations[destination] = source
-            move = {"source": source, "destination": destination}
-            moves.append(move)
-            operations.append({"action": "move", **move})
 
-        manifest = {
-            "generated_by": "appv22",
-            "moves": moves,
-            "held": held,
-            "collisions": collisions,
-        }
-        operations.append(
+def _model_authored_plan(payload: dict) -> dict | None:
+    if not isinstance(payload, dict):
+        return None
+
+    artifact_plan = _artifact_plan(payload)
+    if artifact_plan is not None:
+        return artifact_plan
+
+    mutation_intent = payload.get("mutation_intent")
+    if isinstance(mutation_intent, dict) and isinstance(mutation_intent.get("operations"), list):
+        return _with_runtime_capabilities(
             {
-                "action": "write",
-                "path": MANIFEST_PATH,
-                "content": json.dumps(manifest, indent=2, sort_keys=True),
+                "planner_id": "file_management.model_authored_file_planner",
+                "mutation_intent": mutation_intent,
+                "verification_intent": payload.get("verification_intent", {}),
             }
         )
-        return {
-            "planner_id": self.capability_id,
-            "mutation_policy_id": "file_management.safe_file_moves",
-            "mutation_executor_id": "file_management.file_mutation_executor",
-            "verifier_id": "file_management.manifest_verifier",
+
+    return None
+
+
+def _artifact_plan(payload: dict) -> dict | None:
+    artifact = payload.get("proposed_artifact")
+    if not isinstance(artifact, dict):
+        return None
+    path = artifact.get("path", artifact.get("relative_path"))
+    content = artifact.get("content", "")
+    if not isinstance(path, str) or not path:
+        return None
+    if not isinstance(content, str):
+        content = json.dumps(content, indent=2, sort_keys=True)
+
+    return _with_runtime_capabilities(
+        {
+            "planner_id": "file_management.model_authored_file_planner",
             "mutation_intent": {
-                "operation_batch_id": "workspace_cleanup",
-                "operations": operations,
+                "operation_batch_id": "model_authored_file_creation",
+                "operations": [
+                    {
+                        "action": "write",
+                        "path": path,
+                        "content": content,
+                    }
+                ],
             },
             "verification_intent": {
-                "manifest_path": MANIFEST_PATH,
-                "moves": moves,
-                "held": held,
-                "collisions": collisions,
+                "created_files": [
+                    {
+                        "path": path,
+                        "content": content,
+                    }
+                ]
             },
         }
+    )
 
 
-def _destination(source: str) -> str | None:
-    path = Path(source)
-    suffix = path.suffix.lower()
-    if suffix == ".md":
-        return f"docs/{path.name}"
-    if suffix in {".log", ".json"}:
-        return f"artifacts/logs/{path.name}"
-    return None
+def _with_runtime_capabilities(plan: dict) -> dict:
+    plan.setdefault("planner_id", "file_management.model_authored_file_planner")
+    plan.setdefault("mutation_policy_id", "file_management.safe_file_mutations")
+    plan.setdefault("mutation_executor_id", "file_management.file_mutation_executor")
+    plan.setdefault("verifier_id", "file_management.manifest_verifier")
+    plan.setdefault("mutation_intent", {"operation_batch_id": "model_authored", "operations": []})
+    plan["mutation_intent"].setdefault("operation_batch_id", "model_authored")
+    plan.setdefault("verification_intent", {})
+    return plan

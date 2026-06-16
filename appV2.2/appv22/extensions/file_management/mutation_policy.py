@@ -13,8 +13,8 @@ _PROTECTED_NAMES_CANONICAL = tuple(name.lower() for name in PROTECTED_NAMES)
 _PROTECTED_NAME_PREFIXES_CANONICAL = tuple(prefix.lower() for prefix in PROTECTED_NAME_PREFIXES)
 
 
-class FileMoveMutationPolicy:
-    capability_id = "file_management.safe_file_moves"
+class FileMutationPolicy:
+    capability_id = "file_management.safe_file_mutations"
 
     def validate(self, operations: list[dict], *, root_path) -> list[str]:
         errors: list[str] = []
@@ -73,8 +73,8 @@ class FileMoveMutationPolicy:
                 canonical_path = None if path_absolute else _canonical_relative_path(root, path)
                 if canonical_path is None:
                     errors.append(f"path_outside_root:{path}->{path}")
-                if canonical_path != MANIFEST_PATH:
-                    errors.append(f"unsupported_write_path:{operation.get('path')}")
+                elif _protected_destination(canonical_path):
+                    errors.append(f"protected_write_path:{canonical_path}")
             else:
                 errors.append(f"unsupported_operation:{action}")
         source_keys = {key for key, _path in source_entries}

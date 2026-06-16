@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from hashlib import sha256
 from itertools import count
+import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -106,14 +108,22 @@ class ToolBroker:
         create_ref: bool,
     ) -> dict[str, Any]:
         result_id = f"toolres_{next(self._result_counter):06d}"
+        payload_ref = self._payload_ref(tool_id, payload) if create_ref else ""
         return {
             "tool_result_id": result_id,
             "tool_id": tool_id,
             "status": status,
             "payload": deepcopy(payload),
-            "payload_ref": f"world://tool_payload/{result_id}" if create_ref else "",
-            "evidence_refs": [],
+            "payload_ref": payload_ref,
+            "evidence_refs": [payload_ref] if payload_ref else [],
         }
+
+    def _payload_ref(self, tool_id: str, payload: dict[str, Any]) -> str:
+        if tool_id.endswith(".repo_snapshot"):
+            return f"world://{tool_id}/latest"
+        stable = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
+        digest = sha256(stable.encode("utf-8")).hexdigest()[:16]
+        return f"world://{tool_id}/{digest}"
 
 
 def _validate_value_against_schema(
