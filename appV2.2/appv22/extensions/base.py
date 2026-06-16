@@ -54,3 +54,6 @@ class RuntimeExtension(Protocol):
 
     def tool_result_guidance(self, result: dict[str, Any]) -> str:
         ...
+
+    def transform_tool_result(self, result: dict[str, Any]) -> dict[str, Any] | None:
+        ...

@@ -386,6 +386,54 @@ class RuntimeProtectionTests(unittest.TestCase):
         self.assertEqual(latest[0]["tool_id"], "file_management.repo_snapshot")
         self.assertEqual(latest[0]["payload"]["files"], ["alpha.txt"])
 
+    def test_context_harness_promotes_transformed_tool_result_model_view(self) -> None:
+        services = create_appv22_services(
+            root_path=Path("."),
+            provider=_CaptureProvider(),
+            extensions=[FileManagementExtension()],
+        )
+        state = AgentState("sess_test", "run_test", RequestEnvelope("req_test", "list files", "."))
+        state.tool_results["toolres_000001"] = {
+            "tool_result_id": "toolres_000001",
+            "tool_id": "file_management.repo_snapshot",
+            "status": "completed",
+            "arguments": {},
+            "payload": {"files": ["alpha.txt"], "directories": ["docs"], "text_previews": {}},
+            "model_view": "Directories: docs\nFiles: alpha.txt",
+            "user_message": "Directories: docs\nFiles: alpha.txt",
+            "evidence_refs": ["world://file_management.repo_snapshot/current"],
+        }
+        resolved = services.extension_registry.resolve_active(state)
+
+        packet = services.context_harness.prepare_turn(state, resolved)
+
+        latest = packet.provider_prompt["state"]["latest_tool_results"]
+        self.assertIn("Directories: docs", latest[0]["model_view"])
+        self.assertIn("Files: alpha.txt", latest[0]["model_view"])
+
+    def test_observe_fallback_uses_transformed_user_message_not_raw_json(self) -> None:
+        services = create_appv22_services(
+            root_path=Path("."),
+            provider=_CaptureProvider(),
+            extensions=[FileManagementExtension()],
+        )
+        runtime = AppV22AgentRuntime(root_path=Path("."), services=services)
+        state = AgentState("sess_test", "run_test", RequestEnvelope("req_test", "list files", "."))
+        state.tool_results["toolres_000001"] = {
+            "tool_result_id": "toolres_000001",
+            "tool_id": "file_management.repo_snapshot",
+            "status": "completed",
+            "arguments": {},
+            "payload": {"files": ["alpha.txt"], "directories": ["docs"], "text_previews": {}},
+            "user_message": "Directories: docs\nFiles: alpha.txt",
+            "evidence_refs": ["world://file_management.repo_snapshot/current"],
+        }
+
+        completed = runtime._complete_from_latest_observe_result(state)
+
+        self.assertTrue(completed)
+        self.assertEqual(state.result["assistant_message"], "Directories: docs\nFiles: alpha.txt")
+
     def test_repeated_observe_turn_closes_tool_surface_without_domain_classifier(self) -> None:
         services = create_appv22_services(
             root_path=Path("."),

@@ -257,6 +257,11 @@ class ContextHarness:
                 if isinstance(kind, str) and kind not in selected:
                     hidden_refs.add(ref_id)
                     hidden_kinds.add(kind)
+        normalized["progress"] = [
+            item
+            for item in normalized.get("progress", [])
+            if not _is_operational_progress(str(item))
+        ]
         if not hidden_refs and not hidden_kinds:
             return normalized
         normalized["evidence_refs"] = [ref for ref in normalized.get("evidence_refs", []) if str(ref) not in hidden_refs]
@@ -286,6 +291,9 @@ class ContextHarness:
             payload = result.get("payload")
             if isinstance(payload, dict):
                 item["payload"] = _compact_world_ref_payload(payload)
+            model_view = result.get("model_view")
+            if isinstance(model_view, str) and model_view.strip():
+                item["model_view"] = model_view.strip()[:2000]
             results.append(item)
         return results
 
@@ -354,3 +362,14 @@ class ContextHarness:
         if isinstance(value, tuple | list):
             return [self._mutable_json_like(item) for item in value]
         return value
+
+
+def _is_operational_progress(item: str) -> bool:
+    lowered = item.lower()
+    return lowered.startswith(
+        (
+            "observation already satisfied",
+            "observation evidence already exists",
+            "duplicate completed tool call suppressed",
+        )
+    )

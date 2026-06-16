@@ -64,6 +64,23 @@ class ExtensionRegistry:
                 guidance.append(message.strip())
         return tuple(guidance)
 
+    def transform_tool_result(self, extension_ids: tuple[str, ...], result: dict[str, Any]) -> dict[str, Any]:
+        current = dict(result)
+        for extension_id in extension_ids:
+            extension = self._extensions.get(extension_id)
+            if extension is None:
+                continue
+            hook = getattr(extension, "transform_tool_result", None)
+            if not callable(hook):
+                continue
+            try:
+                replacement = hook(current)
+            except Exception:  # noqa: BLE001 - transform hooks are presentation only.
+                replacement = None
+            if isinstance(replacement, dict) and replacement:
+                current = {**current, **replacement}
+        return current
+
     def before_tool_call(
         self,
         extension_ids: tuple[str, ...],

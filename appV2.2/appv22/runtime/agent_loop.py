@@ -370,6 +370,7 @@ class AppV22AgentRuntime:
         )
         result["arguments"] = deepcopy(arguments)
         result = self._after_tool_call(state, resolved, result)
+        result = self._transform_tool_result(resolved, result)
         if self.services.context_harness is not None:
             self.services.context_harness.record_tool_result(state, result)
         self._record_tool_result(state, result)
@@ -424,6 +425,12 @@ class AppV22AgentRuntime:
         transformed.setdefault("evidence_refs", deepcopy(result.get("evidence_refs", [])))
         transformed.setdefault("arguments", deepcopy(result.get("arguments", {})))
         transformed = self._validate_after_tool_result(transformed)
+        return transformed
+
+    def _transform_tool_result(self, resolved, result: dict[str, Any]) -> dict[str, Any]:
+        transformed = self.services.extension_registry.transform_tool_result(resolved.extension_ids, result)
+        if not isinstance(transformed, dict) or not transformed:
+            return result
         return transformed
 
     def _validate_after_tool_result(self, result: dict[str, Any]) -> dict[str, Any]:
@@ -846,11 +853,15 @@ class AppV22AgentRuntime:
             tool_id = result.get("tool_id")
             if not isinstance(tool_id, str) or not self._is_observe_tool(tool_id):
                 continue
-            payload = result.get("payload")
-            if isinstance(payload, dict):
-                message = json.dumps(payload, indent=2, sort_keys=True, default=str)[:4000]
+            user_message = result.get("user_message")
+            if isinstance(user_message, str) and user_message.strip():
+                message = user_message.strip()[:4000]
             else:
-                message = str(payload or "Completed observe result is available.")[:4000]
+                payload = result.get("payload")
+                if isinstance(payload, dict):
+                    message = json.dumps(payload, indent=2, sort_keys=True, default=str)[:4000]
+                else:
+                    message = str(payload or "Completed observe result is available.")[:4000]
             self._complete_from_tool_loop(state, reason="tool_loop_completed", assistant_message=message)
             return True
         return False

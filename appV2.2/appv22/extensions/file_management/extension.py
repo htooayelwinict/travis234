@@ -40,3 +40,58 @@ class FileManagementExtension:
                 "and continue using non-protected workspace evidence."
             )
         return ""
+
+    def transform_tool_result(self, result: dict[str, Any]) -> dict[str, Any] | None:
+        tool_id = result.get("tool_id")
+        if not isinstance(tool_id, str) or result.get("status") != "completed":
+            return None
+        payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
+        if tool_id == "file_management.repo_snapshot":
+            text = _format_repo_snapshot(payload)
+        elif tool_id == "file_management.read_file":
+            text = _format_read_file(payload)
+        elif tool_id in {
+            "file_management.write_file",
+            "file_management.mkdir",
+            "file_management.move_file",
+            "file_management.copy_file",
+            "file_management.delete_file",
+        }:
+            text = _format_file_action(tool_id, payload)
+        else:
+            text = ""
+        if not text:
+            return None
+        return {
+            "model_view": text,
+            "user_message": text,
+        }
+
+
+def _format_repo_snapshot(payload: dict[str, Any]) -> str:
+    directories = [str(item) for item in payload.get("directories", []) if item]
+    files = [str(item) for item in payload.get("files", []) if item]
+    lines: list[str] = []
+    if directories:
+        lines.append("Directories: " + ", ".join(directories))
+    if files:
+        lines.append("Files: " + ", ".join(files))
+    if not lines:
+        lines.append("Workspace is empty.")
+    return "\n".join(lines)
+
+
+def _format_read_file(payload: dict[str, Any]) -> str:
+    path = str(payload.get("path") or "file")
+    content = payload.get("content")
+    if not isinstance(content, str):
+        return ""
+    return f"{path}:\n{content}"
+
+
+def _format_file_action(tool_id: str, payload: dict[str, Any]) -> str:
+    path = payload.get("path") or payload.get("destination") or payload.get("source")
+    if not isinstance(path, str) or not path:
+        return f"{tool_id} completed."
+    action = tool_id.rsplit(".", 1)[-1].replace("_", " ")
+    return f"{action} completed for {path}."
