@@ -245,6 +245,8 @@ FILE_MUTATION_SKILL = SkillCard(
     triggers=(
         "write",
         "add",
+        "fix",
+        "bugfix",
         "update",
         "create",
         "make",

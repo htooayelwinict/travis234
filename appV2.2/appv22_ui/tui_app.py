@@ -33,6 +33,7 @@ class AppV22Tui:
                 extensions=extensions,
             )
         )
+        self._last_rendered_frame = ""
 
     def run(self) -> int:
         self._draw()
@@ -242,7 +243,11 @@ class AppV22Tui:
         return str(parsed.get("summary") or "") if isinstance(parsed, dict) else ""
 
     def _draw(self) -> None:
-        print(render_tui(self.state), end="", flush=True)
+        frame = render_tui(self.state)
+        if frame == self._last_rendered_frame:
+            return
+        self._last_rendered_frame = frame
+        print(frame, end="", flush=True)
 
 
 def main(argv: list[str] | None = None) -> int:

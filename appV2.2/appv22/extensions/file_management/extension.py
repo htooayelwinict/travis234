@@ -55,7 +55,9 @@ class FileManagementExtension:
         if isinstance(suggested_path, str) and any("existing_file_requires_overwrite" in str(error) for error in errors):
             return (
                 f"{tool_id} reported an existing target and suggested {suggested_path!r}; "
-                "use the suggested safe alternate path unless the user explicitly requested overwrite."
+                "when the latest request is to add, update, edit, fix, or patch existing content, "
+                "read the current file if needed and retry the same path with overwrite:true while preserving the existing content. "
+                "Use the suggested alternate path only when the latest request asks to create a separate new file."
             )
         if any("protected_path" in str(error) for error in errors):
             return (
