@@ -237,6 +237,24 @@ class RuntimeProtectionTests(unittest.TestCase):
         self.assertIn("file_management.tree", guidance)
         self.assertIn("file_management.list_directory", guidance)
 
+    def test_file_management_guidance_prefers_preserving_existing_file_over_safe_sibling_for_updates(self) -> None:
+        guidance = FileManagementExtension().tool_result_guidance(
+            {
+                "tool_id": "file_management.write_file",
+                "status": "denied",
+                "payload": {
+                    "path": "tests/test_text_metrics.py",
+                    "suggested_path": "tests/test_text_metrics-1.py",
+                    "errors": ["existing_file_requires_overwrite:tests/test_text_metrics.py"],
+                },
+            }
+        )
+
+        self.assertIn("retry the same path", guidance)
+        self.assertIn("overwrite:true", guidance)
+        self.assertIn("preserving the existing content", guidance)
+        self.assertNotIn("use the suggested safe alternate path", guidance)
+
     def test_payload_ref_includes_arguments_to_avoid_semantic_collisions(self) -> None:
         registry = ToolRegistry()
         registry.register(
@@ -606,6 +624,25 @@ class RuntimeProtectionTests(unittest.TestCase):
         self.assertIn("file_management.write_file", provider.prompt["selection"]["selected_tools"])
         self.assertIn("file_management.read_file", provider.prompt["selection"]["selected_tools"])
 
+    def test_fix_bug_prompt_selects_file_mutation_tools(self) -> None:
+        provider = _CaptureProvider()
+        services = create_appv22_services(
+            root_path=Path("."),
+            provider=provider,
+            extensions=[FileManagementExtension()],
+        )
+        runtime = AppV22AgentRuntime(root_path=Path("."), services=services, max_turns=1)
+
+        runtime.run(
+            "Fix the discount bug in src/cart.py while preserving subtotal behavior.",
+            active_user_request="Fix the discount bug in src/cart.py while preserving subtotal behavior.",
+        )
+
+        self.assertIsNotNone(provider.prompt)
+        self.assertIn("file_management.file_mutation", provider.prompt["selection"]["selected_skills"])
+        self.assertIn("file_management.write_file", provider.prompt["selection"]["selected_tools"])
+        self.assertIn("file_management.read_file", provider.prompt["selection"]["selected_tools"])
+
     def test_update_test_prompt_selects_file_mutation_tools(self) -> None:
         provider = _CaptureProvider()
         services = create_appv22_services(
@@ -850,6 +887,41 @@ class RuntimeProtectionTests(unittest.TestCase):
             any("action tool" in feedback and "finalize" in feedback for feedback in result["turn_feedback"]),
             result["turn_feedback"],
         )
+
+    def test_analysis_only_request_can_finalize_after_observe_evidence_even_with_action_tools_selected(self) -> None:
+        provider = _SequenceProvider(
+            [
+                {
+                    "kind": "tool_call",
+                    "payload": {
+                        "tool_id": "file_management.read_file",
+                        "arguments": {"path": "README.md"},
+                    },
+                },
+                {
+                    "kind": "finalize",
+                    "payload": {"message": "README inspected; no writes performed."},
+                },
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "README.md").write_text("hello", encoding="utf-8")
+            services = create_appv22_services(
+                root_path=root,
+                provider=provider,
+                extensions=[FileManagementExtension()],
+            )
+            runtime = AppV22AgentRuntime(root_path=root, services=services, max_turns=4)
+
+            result = runtime.run(
+                "Inspect README.md and explain what it says. Do not write files.",
+                active_user_request="Inspect README.md and explain what it says. Do not write files.",
+            )
+
+        self.assertEqual(result["status"], "completed", result)
+        self.assertEqual(result["assistant_message"], "README inspected; no writes performed.")
+        self.assertEqual(provider.kinds, ["tool_call", "finalize"])
 
     def test_action_request_cannot_pause_complete_from_stale_action_evidence(self) -> None:
         provider = _SequenceProvider([{"kind": "pause", "payload": {"pause_type": "tool_blocked"}}])

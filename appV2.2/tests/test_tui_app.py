@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import io
 import os
 from pathlib import Path
 import queue
@@ -8,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from appv22.extensions.file_management.extension import FileManagementExtension
 from appv22.runtime.agent_loop import AppV22AgentRuntime
@@ -975,6 +977,25 @@ class TuiAppTests(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertNotIn("NameError", completed.stderr)
+
+    def test_appv22_exposes_tui_only_no_cli_entrypoints(self) -> None:
+        app_root = Path(__file__).resolve().parents[1]
+
+        self.assertFalse((app_root / "appv22_ui" / "cli.py").exists())
+        self.assertFalse((app_root / "scripts" / "appv22_cli.py").exists())
+        self.assertTrue((app_root / "scripts" / "appv22_tui.py").exists())
+        self.assertTrue((app_root / "scripts" / "appv22_textual.py").exists())
+
+    def test_tui_draw_skips_identical_frames_to_avoid_background_flooding(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = AppV22Tui(workspace=Path(tmp), dotenv_path=Path(".env"), max_turns=4, extensions=("file_management",))
+            output = io.StringIO()
+
+            with patch("sys.stdout", output):
+                app._draw()
+                app._draw()
+
+        self.assertEqual(output.getvalue().count("CONVERSATION"), 1)
 
     def test_reset_ui_command_clears_corrupted_conversation_and_persists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

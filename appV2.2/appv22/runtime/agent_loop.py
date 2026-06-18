@@ -27,6 +27,58 @@ def _active_request_text(state: AgentState) -> str:
     return state.request.active_user_request or state.request.user_goal
 
 
+_NO_MUTATION_MARKERS = (
+    "do not write",
+    "don't write",
+    "dont write",
+    "no writes",
+    "no write",
+    "without writing",
+    "do not edit",
+    "don't edit",
+    "dont edit",
+    "do not modify",
+    "don't modify",
+    "dont modify",
+    "no changes",
+    "without changing",
+    "do not implement",
+    "don't implement",
+    "dont implement",
+)
+
+
+def _active_request_requires_action(state: AgentState) -> bool:
+    text = " ".join(_active_request_text(state).lower().split())
+    if not text:
+        return False
+    if any(marker in text for marker in _NO_MUTATION_MARKERS):
+        return False
+    return any(
+        marker in text
+        for marker in (
+            "write",
+            "add",
+            "fix",
+            "bugfix",
+            "update",
+            "create",
+            "make",
+            "mkdir",
+            "move",
+            "rename",
+            "copy",
+            "delete",
+            "remove",
+            "edit",
+            "patch",
+            "replace",
+            "save",
+            "persist",
+        )
+    )
+
+
 def _mutation_seq_from_world_refs(world_refs: dict[str, dict[str, Any]]) -> int:
     latest = 0
     for ref in world_refs.values():
@@ -919,6 +971,8 @@ class AppV22AgentRuntime:
         return results
 
     def _active_action_tools_without_current_evidence(self, state: AgentState, resolved) -> bool:
+        if not _active_request_requires_action(state):
+            return False
         has_active_action_tool = False
         for tool_id in getattr(resolved, "tool_ids", ()):
             if not isinstance(tool_id, str):
