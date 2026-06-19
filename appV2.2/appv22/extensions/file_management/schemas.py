@@ -116,6 +116,20 @@ WRITE_FILE_OUTPUT_SCHEMA = {
     "required": ["status", "path", "bytes_written"],
 }
 
+EDIT_FILE_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "status": {"type": "string", "enum": ["completed", "denied", "failed"]},
+        "path": {"type": "string"},
+        "edits_applied": {"type": "integer"},
+        "bytes_written": {"type": "integer"},
+        "first_changed_line": {"type": "integer"},
+        "diff": {"type": "string"},
+        "errors": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["status", "path", "edits_applied", "errors"],
+}
+
 MKDIR_OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {

@@ -114,6 +114,27 @@ def test_extension_resolution_ignores_inactive_skills():
     assert resolved.skill_cards == ()
 
 
+def test_extension_activation_uses_bounded_reference_context_without_replacing_latest_request():
+    registry = ExtensionRegistry()
+    registry.register(DemoExtension())
+    state = AgentState(
+        "sess",
+        "run",
+        RequestEnvelope(
+            "req",
+            "[RECENT UI TURNS]\nuser: please clean src\nassistant: listed src files\n\n[CURRENT USER REQUEST]\nthat one",
+            ".",
+            active_user_request="that one",
+            ui_context={"conversation_summary": "User is working on cleanup context.", "metrics": {"hot_lines": 2}},
+        ),
+    )
+
+    resolved = registry.resolve_active(state)
+
+    assert resolved.extension_ids == ("demo",)
+    assert resolved.tool_ids == ("demo.inspect",)
+
+
 def test_resolved_extensions_are_immutable_tuples():
     registry = ExtensionRegistry()
     registry.register(DemoExtension())

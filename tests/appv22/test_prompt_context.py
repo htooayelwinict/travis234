@@ -9,6 +9,8 @@ from appv22.context.selector import ContextSelector
 from appv22.extensions.base import SkillCard
 from appv22.extensions.registry import ResolvedExtensions
 from appv22.state.models import AgentState, RequestEnvelope
+from appv22.tools.definitions import ToolDefinition
+from appv22.tools.registry import ToolRegistry
 
 
 def _card(skill_id: str, modes: tuple[str, ...], tool_ids: tuple[str, ...]) -> SkillCard:
@@ -48,6 +50,9 @@ def test_prompt_uses_pre_turn_mode_and_exposes_selected_skill_tools_in_think():
     assert any("do not emit compact" in rule and "selected tool" in rule for rule in prompt["system"]["tool_contract"])
     assert any("supersedes earlier user or skill instructions" in rule for rule in prompt["system"]["tool_contract"])
     assert any("finalize, pause, or compact is invalid" in rule for rule in prompt["system"]["tool_contract"])
+    assert any("pause is invalid" in rule and "read-only" in rule for rule in prompt["system"]["tool_contract"])
+    assert any("planning or requesting a tool" in rule and "tool_call" in rule for rule in prompt["system"]["tool_contract"])
+    assert any("Repeated read-only tool calls" in rule and "selected action tool" in rule for rule in prompt["system"]["tool_contract"])
     assert any("required argument" in rule and "schema" in rule for rule in prompt["system"]["tool_contract"])
     assert any("tool_call for actions" in rule for rule in prompt["agent"]["mode_contract"])
     assert prompt["agent"]["mode"] == "THINK"
@@ -67,6 +72,43 @@ def test_observe_mode_exposes_only_tools_from_selected_skill_cards():
     assert prompt["selection"]["available_tools"] == ["demo.inspect"]
     assert selected["skills"][0]["tool_ids"] == ("demo.inspect",)
     assert prompt["skills"][0]["tool_ids"] == ("demo.inspect",)
+
+
+def test_repeated_observe_results_do_not_shrink_selected_tool_surface():
+    registry = ToolRegistry()
+    registry.register(
+        ToolDefinition(
+            "demo.inspect",
+            "observe",
+            "low",
+            {"type": "object", "properties": {}},
+            {"type": "object", "properties": {}},
+            "test",
+            "test",
+        ),
+        lambda _args, _context: {"status": "completed"},
+    )
+    state = AgentState("sess", "run", RequestEnvelope("req", "inspect again", "."), mode="OBSERVE")
+    state.tool_results = {
+        "toolres_1": {
+            "tool_result_id": "toolres_1",
+            "tool_id": "demo.inspect",
+            "status": "completed",
+            "arguments": {"path": "src"},
+        },
+        "toolres_2": {
+            "tool_result_id": "toolres_2",
+            "tool_id": "demo.inspect",
+            "status": "completed",
+            "arguments": {"path": "src"},
+        },
+    }
+
+    selected = ContextSelector(tool_registry=registry).select(state, _resolved(), pre_turn_mode="OBSERVE")
+
+    assert selected["selection"]["selected_tools"] == ["demo.inspect"]
+    assert selected["selection"]["available_tools"] == ["demo.inspect"]
+    assert selected["tools"] == ["demo.inspect"]
 
 
 def test_read_mode_tool_order_is_deterministic_and_scoped_to_selected_skill_cards():

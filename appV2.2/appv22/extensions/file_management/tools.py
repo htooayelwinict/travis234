@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import fnmatch
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ from uuid import uuid4
 from appv22.extensions.file_management.schemas import (
     COPY_FILE_OUTPUT_SCHEMA,
     DELETE_FILE_OUTPUT_SCHEMA,
+    EDIT_FILE_OUTPUT_SCHEMA,
     FIND_FILES_OUTPUT_SCHEMA,
     GREP_OUTPUT_SCHEMA,
     MKDIR_OUTPUT_SCHEMA,
@@ -24,15 +26,18 @@ from appv22.extensions.file_management.schemas import (
 )
 from appv22.tools.definitions import ToolDefinition
 
-_PROTECTED_PATH_PARTS = {".git", "secrets", "assets"}
+_PROTECTED_PATH_PARTS = {".git", ".env", "secrets", "assets"}
 _DEFAULT_OBSERVE_EXCLUDES = (
     ".git",
     ".hg",
     ".svn",
+    ".appv22-ui",
+    ".playwright-mcp",
     ".venv",
     "venv",
     "node_modules",
     "__pycache__",
+    "qdrant_db",
     ".pytest_cache",
     ".mypy_cache",
     ".ruff_cache",
@@ -272,6 +277,36 @@ def register_file_management_tools(registry) -> None:
             "Write complete text content to one workspace file by relative path. Creates parent directories.",
         ),
         write_file,
+    )
+    registry.register(
+        ToolDefinition(
+            "file_management.edit_file",
+            "act",
+            "medium",
+            {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "edits": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "oldText": {"type": "string"},
+                                "newText": {"type": "string"},
+                                "old_text": {"type": "string"},
+                                "new_text": {"type": "string"},
+                            },
+                        },
+                    },
+                },
+                "required": ["path", "edits"],
+            },
+            EDIT_FILE_OUTPUT_SCHEMA,
+            "runtime_observed",
+            "Apply exact targeted replacements to one existing workspace text file. Use for existing-file edits after reading current content; old text must match exactly once.",
+        ),
+        edit_file,
     )
     registry.register(
         ToolDefinition(
@@ -726,6 +761,16 @@ def read_range(args: dict, context: dict) -> dict:
             "content": "",
             "errors": [f"read_error:{canonical_relative}"],
         }
+    if not lines:
+        line_count = _file_line_count(path)
+        return {
+            "status": "failed",
+            "path": canonical_relative,
+            "start_line": start_line,
+            "end_line": end_line,
+            "content": "",
+            "errors": [f"line_range_out_of_bounds:{canonical_relative}:{start_line}:{line_count}"],
+        }
     return {
         "status": "completed",
         "path": canonical_relative,
@@ -774,6 +819,14 @@ def _read_text_preview(path: Path, *, max_chars: int) -> str | None:
     return content[:max_chars]
 
 
+def _file_line_count(path: Path) -> int:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            return sum(1 for _line in handle)
+    except (OSError, UnicodeDecodeError):
+        return 0
+
+
 def _observe_start(root: Path, relative: str) -> dict:
     if _absolute(relative):
         return {"status": "denied", "path": relative, "errors": [f"absolute_path:path:{relative}"]}
@@ -813,26 +866,26 @@ def _positive_int(value, default: int, *, maximum: int) -> int:
 
 
 def _iter_workspace_paths(root: Path, start: Path, *, exclude_patterns: tuple[str, ...]):
-    for current_root, dirnames, filenames in os.walk(start):
-        current = Path(current_root)
+    def walk(current: Path):
         relative_current = current.relative_to(root).as_posix()
         if relative_current == ".":
             relative_current = ""
-        kept_dirnames = []
-        for dirname in dirnames:
-            candidate = current / dirname
-            relative = _join_relative(relative_current, dirname)
-            if candidate.is_symlink() or _protected_path(relative) or _excluded(relative, exclude_patterns):
-                continue
-            kept_dirnames.append(dirname)
-            yield candidate, relative
-        dirnames[:] = kept_dirnames
-        for filename in filenames:
-            candidate = current / filename
-            relative = _join_relative(relative_current, filename)
+        try:
+            children = sorted(
+                current.iterdir(),
+                key=lambda child: (not child.is_dir(), child.name.lower(), child.name),
+            )
+        except OSError:
+            return
+        for candidate in children:
+            relative = _join_relative(relative_current, candidate.name)
             if candidate.is_symlink() or _protected_path(relative) or _excluded(relative, exclude_patterns):
                 continue
             yield candidate, relative
+            if candidate.is_dir():
+                yield from walk(candidate)
+
+    yield from walk(start)
 
 
 def _join_relative(parent: str, child: str) -> str:
@@ -948,8 +1001,6 @@ def write_file(args: dict, context: dict) -> dict:
             "overwritten": False,
             "errors": [f"write_target_is_directory:{canonical_relative}"],
         }
-    if path.exists() and not overwrite and _request_allows_named_update(context, canonical_relative):
-        overwrite = True
     if path.exists() and not overwrite:
         suggested_path = _available_sibling_path(root, canonical_relative)
         return {
@@ -968,6 +1019,62 @@ def write_file(args: dict, context: dict) -> dict:
         "path": canonical_relative,
         "bytes_written": len(content.encode("utf-8")),
         "overwritten": overwritten,
+        "errors": [],
+    }
+
+
+def edit_file(args: dict, context: dict) -> dict:
+    root = Path(context["root_path"]).resolve()
+    relative = str(args.get("path", ""))
+    denied = _validate_single_mutation_path(root, relative)
+    if denied:
+        return _edit_file_result("denied", relative, 0, [denied])
+    canonical_relative = _canonical_relative_path(root, relative)
+    assert canonical_relative is not None
+    path = root / canonical_relative
+    if not path.exists():
+        return _edit_file_result("failed", canonical_relative, 0, [f"missing_file:{canonical_relative}"])
+    if not path.is_file():
+        return _edit_file_result("denied", canonical_relative, 0, [f"edit_target_not_file:{canonical_relative}"])
+    if not _safe_text_file(path, max_bytes=1_000_000):
+        return _edit_file_result("failed", canonical_relative, 0, [f"unsupported_text_file:{canonical_relative}"])
+    normalized_edits, errors = _normalize_edits(args.get("edits"))
+    if errors:
+        return _edit_file_result("denied", canonical_relative, 0, errors)
+    try:
+        original = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return _edit_file_result("failed", canonical_relative, 0, [f"decode_error:{canonical_relative}"])
+    except OSError:
+        return _edit_file_result("failed", canonical_relative, 0, [f"read_error:{canonical_relative}"])
+
+    spans: list[tuple[int, int]] = []
+    for index, edit in enumerate(normalized_edits):
+        old_text = edit["old_text"]
+        matches = [match.start() for match in re.finditer(re.escape(old_text), original)]
+        if not matches:
+            return _edit_file_result("denied", canonical_relative, 0, [f"old_text_not_found:{index}"])
+        if len(matches) > 1:
+            return _edit_file_result("denied", canonical_relative, 0, [f"old_text_not_unique:{index}"])
+        spans.append((matches[0], matches[0] + len(old_text)))
+    if _overlapping_spans(spans):
+        return _edit_file_result("denied", canonical_relative, 0, ["overlapping_edits"])
+
+    updated = original
+    for edit in normalized_edits:
+        updated = updated.replace(edit["old_text"], edit["new_text"], 1)
+    try:
+        path.write_text(updated, encoding="utf-8")
+    except OSError:
+        return _edit_file_result("failed", canonical_relative, 0, [f"write_error:{canonical_relative}"])
+
+    return {
+        "status": "completed",
+        "path": canonical_relative,
+        "edits_applied": len(normalized_edits),
+        "bytes_written": len(updated.encode("utf-8")),
+        "first_changed_line": _first_changed_line(original, updated),
+        "diff": _unified_text_diff(canonical_relative, original, updated),
         "errors": [],
     }
 
@@ -1077,6 +1184,64 @@ def _file_transfer_result(status: str, source: str, destination: str, overwritte
     }
 
 
+def _edit_file_result(status: str, path: str, edits_applied: int, errors: list[str]) -> dict:
+    return {
+        "status": status,
+        "path": path,
+        "edits_applied": edits_applied,
+        "bytes_written": 0,
+        "first_changed_line": 0,
+        "diff": "",
+        "errors": errors,
+    }
+
+
+def _normalize_edits(value) -> tuple[list[dict[str, str]], list[str]]:
+    if not isinstance(value, list) or not value:
+        return [], ["missing_edits"]
+    normalized: list[dict[str, str]] = []
+    errors: list[str] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            errors.append(f"invalid_edit:{index}")
+            continue
+        old_text = item.get("oldText", item.get("old_text"))
+        new_text = item.get("newText", item.get("new_text"))
+        if not isinstance(old_text, str) or old_text == "":
+            errors.append(f"missing_old_text:{index}")
+            continue
+        if not isinstance(new_text, str):
+            errors.append(f"missing_new_text:{index}")
+            continue
+        normalized.append({"old_text": old_text, "new_text": new_text})
+    return normalized, errors
+
+
+def _overlapping_spans(spans: list[tuple[int, int]]) -> bool:
+    ordered = sorted(spans)
+    return any(current_start < previous_end for (_, previous_end), (current_start, _) in zip(ordered, ordered[1:]))
+
+
+def _first_changed_line(original: str, updated: str) -> int:
+    original_lines = original.splitlines()
+    updated_lines = updated.splitlines()
+    for index, (old_line, new_line) in enumerate(zip(original_lines, updated_lines), start=1):
+        if old_line != new_line:
+            return index
+    return min(len(original_lines), len(updated_lines)) + 1 if original != updated else 0
+
+
+def _unified_text_diff(path: str, original: str, updated: str) -> str:
+    return "".join(
+        difflib.unified_diff(
+            original.splitlines(keepends=True),
+            updated.splitlines(keepends=True),
+            fromfile=f"a/{path}",
+            tofile=f"b/{path}",
+        )
+    )
+
+
 def _protected_read(path: str) -> bool:
     return _protected_path(path)
 
@@ -1142,18 +1307,6 @@ def _request_forbids_overwrite(context: dict) -> bool:
             "not overwrite",
         )
     )
-
-
-def _request_allows_named_update(context: dict, relative: str) -> bool:
-    request = context.get("request") if isinstance(context.get("request"), dict) else {}
-    goal = str(request.get("active_user_request") or request.get("user_goal", "")).lower()
-    if not goal or _request_forbids_overwrite(context):
-        return False
-    normalized_path = relative.lower()
-    basename = Path(relative).name.lower()
-    if normalized_path not in goal and basename not in goal:
-        return False
-    return any(term in goal for term in ("update", "edit", "modify", "patch", "replace", "add"))
 
 
 def _obsolete_identifier_error(content: str) -> str:

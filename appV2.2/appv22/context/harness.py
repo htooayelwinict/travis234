@@ -64,8 +64,13 @@ class ContextHarness:
         compressed = self.gateway_guard.guard(compressed)
 
         provider_prompt = self._prompt_from_governed_messages(compressed)
+        if compressed != messages or any(
+            message.get("name") in {"context_summary", "context_guard_compaction"} for message in compressed
+        ):
+            provider_prompt["messages"] = deepcopy(compressed)
         provider_prompt.setdefault("state", {})
         provider_prompt["state"]["latest_tool_results"] = self._latest_tool_results_for_prompt(state, selected_tool_ids)
+        provider_prompt["state"]["action_refs"] = self._action_refs_for_prompt(state)
         provider_prompt["state"]["context_summary"] = self._fresh_context_summary_for_prompt(
             state,
             self._merge_context_summaries(
@@ -196,7 +201,7 @@ class ContextHarness:
         provider_prompt: dict[str, Any] = {
             "system": {},
             "agent": {},
-            "state": {"mode": None, "context_summary": {}, "latest_tool_results": []},
+            "state": {"mode": None, "context_summary": {}, "latest_tool_results": [], "action_refs": []},
             "skills": [],
             "tools": [],
             "tool_definitions": [],
@@ -262,6 +267,7 @@ class ContextHarness:
                     hidden_kinds.add(kind)
         normalized = strip_turn_local_operational_progress(normalized)
         if not hidden_refs and not hidden_kinds:
+            normalized["open_risks"] = list(normalized.get("blockers", []))
             return normalized
         normalized["evidence_refs"] = [ref for ref in normalized.get("evidence_refs", []) if str(ref) not in hidden_refs]
         normalized["progress"] = [
@@ -269,6 +275,7 @@ class ContextHarness:
             for item in normalized.get("progress", [])
             if not any(str(item).startswith(f"{kind}:") for kind in hidden_kinds)
         ]
+        normalized["open_risks"] = list(normalized.get("blockers", []))
         return normalized
 
     @staticmethod
@@ -292,9 +299,51 @@ class ContextHarness:
                 item["payload"] = _compact_world_ref_payload(payload)
             model_view = result.get("model_view")
             if isinstance(model_view, str) and model_view.strip():
-                item["model_view"] = model_view.strip()[:2000]
+                item["model_view"] = ContextHarness._compact_model_view_for_prompt(model_view, item.get("payload"))
             results.append(item)
         return results
+
+    def _action_refs_for_prompt(self, state: AgentState) -> list[dict[str, Any]]:
+        if not _request_context_wants_action_reference(state):
+            return []
+        refs: list[dict[str, Any]] = []
+        for ref_id, ref in list(state.world_refs.items())[-16:]:
+            if not isinstance(ref_id, str) or not isinstance(ref, dict):
+                continue
+            kind = ref.get("kind")
+            if not isinstance(kind, str):
+                continue
+            definition = self._tool_definition(kind)
+            if definition is None or definition.category != "act":
+                continue
+            raw_paths = _action_ref_paths(ref)
+            direction = _action_ref_direction(ref)
+            current_paths = direction.get("current_paths")
+            paths = list(current_paths) if isinstance(current_paths, list) else raw_paths
+            if not paths and not direction.get("obsolete_paths"):
+                continue
+            item = {
+                "ref_id": ref_id,
+                "kind": kind,
+                "paths": paths,
+                "summary": str(ref.get("summary", ""))[:240],
+                "freshness": ref.get("freshness", "stable"),
+            }
+            item.update(direction)
+            refs.append(item)
+        return refs[-8:]
+
+    @staticmethod
+    def _compact_model_view_for_prompt(model_view: str, compacted_payload: Any) -> str:
+        text = model_view.strip()
+        if len(text) <= 1200:
+            return text
+        if isinstance(compacted_payload, dict) and compacted_payload:
+            return (
+                "Tool result model view compacted for prompt budget; "
+                f"use compact payload and evidence_refs. Compact payload: {json.dumps(compacted_payload, sort_keys=True, default=str)[:900]}"
+            )
+        return text[:900] + f"\n[model_view compacted from {len(text)} chars]"
 
     def _world_ref_visible_for_prompt(self, state: AgentState, ref: dict[str, Any]) -> bool:
         kind = ref.get("kind")
@@ -302,7 +351,7 @@ class ContextHarness:
             return False
         definition = self._tool_definition(kind)
         if definition is None or definition.category != "act":
-            return True
+            return _request_context_wants_reference_evidence(state)
         return ref.get("request_id") == state.request.request_id
 
     def _context_metric(
@@ -370,3 +419,166 @@ class ContextHarness:
         if isinstance(value, tuple | list):
             return [self._mutable_json_like(item) for item in value]
         return value
+
+
+def _request_context_wants_reference_evidence(state: AgentState) -> bool:
+    request = state.request
+    parts = [request.active_user_request or request.user_goal, request.user_goal]
+    ui_context = request.ui_context if isinstance(request.ui_context, dict) else {}
+    summary = ui_context.get("conversation_summary")
+    if isinstance(summary, str):
+        parts.append(summary)
+    text = "\n".join(part for part in parts if isinstance(part, str)).lower()
+    latest = str(request.active_user_request or request.user_goal or "").lower()
+    normalized_latest = " ".join(latest.split())
+    if normalized_latest in {"and", "and?", "and ?", "?", "continue", "continue?", "retry"}:
+        return _has_reference_evidence(state)
+    cues = (
+        "that",
+        "those",
+        "same",
+        "previous",
+        "above",
+        "line",
+        "lines",
+        "file",
+        "files",
+        "repo",
+        "repository",
+        "code",
+        "src",
+        ".py",
+        ".ts",
+        ".js",
+        ".md",
+        ".json",
+        "planner",
+        "analyze",
+        "analyse",
+        "inspect",
+        "read",
+        "show",
+        "list",
+    )
+    return any(cue in text for cue in cues)
+
+
+def _request_context_wants_action_reference(state: AgentState) -> bool:
+    if _active_request_likely_mutates(state):
+        return False
+    return _request_context_wants_reference_evidence(state)
+
+
+def _active_request_likely_mutates(state: AgentState) -> bool:
+    request = str(state.request.active_user_request or state.request.user_goal or "").lower()
+    if any(
+        marker in request
+        for marker in (
+            "no edit",
+            "no edits",
+            "do not edit",
+            "don't edit",
+            "dont edit",
+            "no write",
+            "no writes",
+            "read only",
+            "read-only",
+            "analysis only",
+        )
+    ):
+        return False
+    mutation_words = (
+        "add",
+        "create",
+        "write",
+        "edit",
+        "update",
+        "fix",
+        "patch",
+        "replace",
+        "change",
+        "move",
+        "rename",
+        "delete",
+        "remove",
+        "copy",
+        "organize",
+        "clean",
+    )
+    return any(_contains_word(request, word) for word in mutation_words)
+
+
+def _action_ref_paths(ref: dict[str, Any]) -> list[str]:
+    paths: list[str] = []
+    for source in (ref.get("arguments"), ref.get("payload")):
+        if not isinstance(source, dict):
+            continue
+        for key in ("path", "source", "destination"):
+            value = source.get(key)
+            if isinstance(value, str) and value and value not in paths:
+                paths.append(value)
+    return paths
+
+
+def _action_ref_direction(ref: dict[str, Any]) -> dict[str, Any]:
+    kind = ref.get("kind")
+    arguments = ref.get("arguments") if isinstance(ref.get("arguments"), dict) else {}
+    payload = ref.get("payload") if isinstance(ref.get("payload"), dict) else {}
+
+    def value(key: str) -> str:
+        for source in (arguments, payload):
+            item = source.get(key)
+            if isinstance(item, str) and item:
+                return item
+        return ""
+
+    path = value("path")
+    source = value("source")
+    destination = value("destination")
+    if kind == "file_management.move_file":
+        return {
+            "source": source,
+            "destination": destination,
+            "current_paths": [destination] if destination else [],
+            "obsolete_paths": [source] if source else [],
+            "effect": f"moved {source} to {destination}" if source and destination else "moved file",
+        }
+    if kind == "file_management.copy_file":
+        return {
+            "source": source,
+            "destination": destination,
+            "current_paths": [path for path in (source, destination) if path],
+            "obsolete_paths": [],
+            "effect": f"copied {source} to {destination}" if source and destination else "copied file",
+        }
+    if kind == "file_management.delete_file":
+        return {
+            "path": path,
+            "current_paths": [],
+            "obsolete_paths": [path] if path else [],
+            "effect": f"deleted {path}" if path else "deleted file",
+        }
+    if path:
+        return {
+            "path": path,
+            "current_paths": [path],
+            "obsolete_paths": [],
+            "effect": f"updated {path}",
+        }
+    return {"current_paths": [], "obsolete_paths": []}
+
+
+def _contains_word(text: str, word: str) -> bool:
+    import re
+
+    return re.search(rf"(?<![a-z0-9_]){re.escape(word)}(?![a-z0-9_])", text) is not None
+
+
+def _has_reference_evidence(state: AgentState) -> bool:
+    for ref in state.world_refs.values():
+        if not isinstance(ref, dict):
+            continue
+        kind = ref.get("kind")
+        if isinstance(kind, str) and kind.startswith("file_management."):
+            return True
+    return False

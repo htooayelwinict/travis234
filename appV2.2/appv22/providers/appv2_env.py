@@ -91,6 +91,7 @@ def create_appv22_provider_from_appv2_env(
 
 def _appv22_decision_prompt(prompt_payload: dict) -> str:
     blockers = _active_blocker_lines(prompt_payload)
+    open_risks = _active_open_risk_lines(prompt_payload)
     turn_feedback = _turn_feedback_lines(prompt_payload)
     latest_tool_results = _latest_tool_result_lines(prompt_payload)
     return "\n".join(
@@ -106,16 +107,19 @@ def _appv22_decision_prompt(prompt_payload: dict) -> str:
             "For current filesystem or external state, use a fresh observe tool unless a selected tool definition marks an existing ref fresh for this request.",
             "Durable blockers are active constraints. Turn feedback is repair guidance for the current run only.",
             "Use structured evidence_refs as authoritative and ignore partial/truncated world:// strings in prose.",
+            "Use state.action_refs only as path pointers for prior actions. They are not current file contents; for requests like 'show the file you wrote', call a selected read-only tool on the referenced path. For move refs, destination/current_paths are current and source/obsolete_paths are stale.",
             "Do not repeat broad observation tools just because raw payload was compacted; rehydrate only when missing raw details are necessary.",
             "Use only selected tool calls for workspace changes; unsupported payload shapes are invalid.",
             "If durable blockers require a selected tool or user clarification, address them before finalizing.",
             "After successful action evidence, continue the Pi-style loop until the latest user request is fully satisfied; do not finalize after only the first successful action when more requested actions remain.",
             "Do not claim workspace changes unless tool results or verification receipts prove them.",
             "For vague follow-ups such as 'next one is X' or 'continue what failed', preserve the previous task shape from recent UI turns when it is clear enough; otherwise ask one concrete clarification.",
-            "When the request names a bare filename without a directory, use file_management.find_files before file_management.read_file instead of guessing a path.",
-            "If a read result reports missing_file and file_management.find_files is selected, call file_management.find_files to locate the file; do not finalize with a tool-unavailable answer while selected recovery tools remain.",
+            "When the request names a bare filename or ambiguous resource, use selected discovery tools before selected exact-read tools instead of guessing.",
+            "If a read result reports a missing target and selected discovery tools are available, call a selected discovery tool to locate it; do not finalize with a tool-unavailable answer while selected recovery tools remain.",
+            "For kind=finalize, payload.message must answer the user; finalize must answer the user directly. If payload.message says you are Requesting, planning, reading, observing, inspecting, listing, or calling a tool, emit tool_call instead.",
             "For kind=finalize, put the public user-facing response in payload.message. Keep it concise. Do not include hidden reasoning.",
             *blockers,
+            *open_risks,
             *turn_feedback,
             *latest_tool_results,
             json.dumps(prompt_payload, indent=2, sort_keys=True, default=str),
@@ -151,6 +155,26 @@ def _turn_feedback_lines(prompt_payload: dict) -> list[str]:
     for item in feedback[-6:]:
         if item:
             lines.append(f"- {str(item)[:600]}")
+    return lines
+
+
+def _active_open_risk_lines(prompt_payload: dict) -> list[str]:
+    state = prompt_payload.get("state") if isinstance(prompt_payload, dict) else {}
+    if not isinstance(state, dict):
+        return []
+    summary = state.get("context_summary")
+    if not isinstance(summary, dict):
+        return []
+    open_risks = summary.get("open_risks")
+    if not isinstance(open_risks, list) or not open_risks:
+        return []
+    lines = ["CURRENT OPEN RISKS:"]
+    mode = str(state.get("mode") or "")
+    if mode:
+        lines.append(f"state.mode is {mode}; if an open risk requires a selected tool_call, finalize/pause/compact are invalid until that risk is addressed.")
+    for risk in open_risks[-6:]:
+        if risk:
+            lines.append(f"- {str(risk)[:600]}")
     return lines
 
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 from typing import Any
 
 from appv22.extensions.file_management.skills import FILE_MANAGEMENT_SKILLS
@@ -9,9 +11,9 @@ from appv22.extensions.file_management.tools import register_file_management_too
 class FileManagementExtension:
     """Pi-style extension: expose skill metadata, register tools, guide failed tool recovery.
 
-    The extension does not force post-hoc task completion. The model-driven agent loop
-    decides whether to call another tool or finalize. Hermes-style context remains
-    reference material, not deterministic mutation policy.
+    The extension does not compile hidden plans. It exposes tool/skill metadata and
+    finalize guidance so the Pi-style loop can keep asking the model for selected
+    tool calls while Hermes-style context remains reference material.
     """
 
     extension_id = "file_management"
@@ -56,13 +58,98 @@ class FileManagementExtension:
             return (
                 f"{tool_id} reported an existing target and suggested {suggested_path!r}; "
                 "when the latest request is to add, update, edit, fix, or patch existing content, "
-                "read the current file if needed and retry the same path with overwrite:true while preserving the existing content. "
-                "Use the suggested alternate path only when the latest request asks to create a separate new file."
+                "read the current file if needed and use file_management.edit_file for targeted replacements. "
+                "Use file_management.write_file with overwrite:true only for complete rewrites, and use the suggested alternate path "
+                "only when the latest request asks to create a separate new file."
+            )
+        if any("copy_requires_preserve_source:true" in str(error) for error in errors):
+            source = payload.get("source")
+            destination = payload.get("destination")
+            path_hint = ""
+            if isinstance(source, str) and isinstance(destination, str):
+                path_hint = f" from {source} to {destination}"
+            return (
+                f"{tool_id} requires explicit source preservation; retry file_management.copy_file{path_hint} "
+                "with preserve_source:true and the same source/destination arguments."
             )
         if any("protected_path" in str(error) for error in errors):
             return (
                 f"{tool_id} reported a protected path; do not retry that path, "
                 "and continue using non-protected workspace evidence."
+            )
+        return ""
+
+    def finalize_guidance(self, state) -> str:
+        request = str(state.request.active_user_request or state.request.user_goal).lower()
+        completed = [
+            result
+            for result in state.tool_results.values()
+            if isinstance(result, dict)
+            and result.get("status") == "completed"
+            and isinstance(result.get("tool_id"), str)
+            and str(result.get("tool_id")).startswith("file_management.")
+        ]
+        manifest_index, manifest = _latest_manifest(completed)
+        changed_paths = _changed_paths(completed[:manifest_index] if manifest_index is not None else completed)
+        cleanup_record = _cleanup_record_requested(request)
+        if cleanup_record and changed_paths:
+            if manifest is None:
+                return (
+                    "A workspace record was requested but docs/workspace_manifest.json has not been written; "
+                    "call file_management.write_file for docs/workspace_manifest.json before finalizing."
+                )
+            missing = sorted(path for path in changed_paths if not _manifest_mentions(manifest, path))
+            if missing:
+                return (
+                    "The workspace record is missing changed paths "
+                    f"{', '.join(missing[:4])}; call file_management.write_file for docs/workspace_manifest.json "
+                    "with the missing paths before finalizing."
+                )
+
+        if cleanup_record:
+            snapshot_winners = _unresolved_snapshot_winners(state, completed)
+            if snapshot_winners:
+                source = snapshot_winners[0]
+                return (
+                    "snapshot evidence contains unresolved winning sources; "
+                    f"call file_management.move_file for {source} before finalizing."
+                )
+
+            unresolved_winners = _unresolved_manifest_winners(manifest, completed) if manifest is not None else []
+            if unresolved_winners:
+                source = unresolved_winners[0]
+                return (
+                    "The manifest names unresolved winning sources; "
+                    f"call file_management.move_file for {source} before finalizing."
+                )
+
+            unresolved_deletions = _unresolved_manifest_deletions(manifest, completed) if manifest is not None else []
+            if unresolved_deletions:
+                path = unresolved_deletions[0]
+                return (
+                    "The manifest names unresolved deletions; "
+                    f"call file_management.delete_file for {path} before finalizing."
+                )
+        if _source_reads_need_file_write(request, completed):
+            paths = _read_source_paths(completed)
+            suffix = f" using source evidence from {', '.join(paths[:4])}" if paths else ""
+            return (
+                "Source file evidence has been read for the requested file creation; "
+                "the next decision must be a tool_call to file_management.write_file "
+                f"for docs/handoff.md{suffix} before finalizing."
+            )
+        if _existing_file_edit_requested(request, completed):
+            paths = _read_source_paths(completed)
+            target = paths[0] if paths else "the existing file"
+            return (
+                "Current source file evidence has been read for the requested existing-file edit; "
+                "the next decision must be a tool_call to file_management.edit_file "
+                f"for {target} before finalizing."
+            )
+        if _mutation_write_requested(request, completed):
+            return (
+                "The latest file mutation request has no completed write evidence; "
+                "the next decision must be a tool_call to file_management.write_file before finalizing."
             )
         return ""
 
@@ -89,6 +176,7 @@ class FileManagementExtension:
             text = _format_read_file(payload)
         elif tool_id in {
             "file_management.write_file",
+            "file_management.edit_file",
             "file_management.mkdir",
             "file_management.move_file",
             "file_management.copy_file",
@@ -401,3 +489,275 @@ def _sanitize_match_payload(payload: dict[str, Any], *, limit: int) -> dict[str,
 
 def _line_count(content: str) -> int:
     return len(content.splitlines())
+
+
+def _cleanup_record_requested(request: str) -> bool:
+    has_record = any(marker in request for marker in ("manifest", "keep a record"))
+    has_cleanup = any(marker in request for marker in ("clean", "cleanup", "mess", "organize", "reorganize", "junk"))
+    return "manifest" in request or (has_record and has_cleanup)
+
+
+def _source_reads_need_file_write(request: str, results: list[dict[str, Any]]) -> bool:
+    if _request_disallows_writes(request):
+        return False
+    if not _source_compilation_file_requested(request):
+        return False
+    has_read = any(result.get("tool_id") in {"file_management.read_file", "file_management.read_many"} for result in results)
+    has_write = any(result.get("tool_id") == "file_management.write_file" for result in results)
+    return has_read and not has_write
+
+
+def _source_compilation_file_requested(request: str) -> bool:
+    if any(marker in request for marker in ("do not create", "don't create", "dont create", "no sibling file")):
+        return False
+    return any(marker in request for marker in ("handoff file", "concise handoff", "make one"))
+
+
+def _file_creation_requested(request: str) -> bool:
+    if any(marker in request for marker in ("do not create", "don't create", "dont create", "no sibling file")):
+        return False
+    return any(marker in request for marker in ("handoff file", "concise handoff", "make one")) or _has_request_word(
+        request,
+        ("create", "write"),
+    )
+
+
+def _existing_file_edit_requested(request: str, results: list[dict[str, Any]]) -> bool:
+    if _request_disallows_writes(request):
+        return False
+    if _request_is_question_only(request):
+        return False
+    if any(marker in request for marker in ("handoff file", "concise handoff", "create", "make one", "new file")):
+        return False
+    if not _has_request_word(request, ("edit", "modify", "patch", "replace", "fix", "update", "change")):
+        return False
+    has_read = any(result.get("tool_id") in {"file_management.read_file", "file_management.read_many"} for result in results)
+    has_mutation = any(result.get("tool_id") in {"file_management.edit_file", "file_management.write_file"} for result in results)
+    return has_read and not has_mutation
+
+
+def _read_source_paths(results: list[dict[str, Any]]) -> list[str]:
+    paths: list[str] = []
+    for result in results:
+        tool_id = result.get("tool_id")
+        payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
+        if tool_id == "file_management.read_file" and isinstance(payload.get("path"), str):
+            paths.append(payload["path"])
+        if tool_id == "file_management.read_many":
+            files = payload.get("files")
+            if isinstance(files, list):
+                for item in files:
+                    if isinstance(item, dict) and isinstance(item.get("path"), str):
+                        paths.append(item["path"])
+    return paths
+
+
+def _mutation_write_requested(request: str, results: list[dict[str, Any]]) -> bool:
+    if _request_disallows_writes(request):
+        return False
+    if _request_is_question_only(request):
+        return False
+    if any(marker in request for marker in ("clean", "cleanup", "mess", "organize", "reorganize", "junk")):
+        return False
+    if not _has_request_word(request, ("add", "update", "fix", "create", "write", "make")):
+        return False
+    has_mutation = any(result.get("tool_id") in {"file_management.edit_file", "file_management.write_file"} for result in results)
+    return not has_mutation
+
+
+def _has_request_word(request: str, words: tuple[str, ...]) -> bool:
+    return any(re.search(rf"(?<![a-z0-9_]){re.escape(word)}(?![a-z0-9_])", request) for word in words)
+
+
+def _request_is_question_only(request: str) -> bool:
+    question_markers = (
+        "which ",
+        "what ",
+        "where ",
+        "when ",
+        "why ",
+        "how ",
+        "tell me",
+        "explain",
+        "summarize",
+        "confirm",
+        "whether",
+    )
+    mutation_markers = (
+        "add ",
+        "update",
+        "fix",
+        "create",
+        "write",
+        "make",
+        "edit",
+        "modify",
+        "patch",
+        "replace",
+    )
+    return any(marker in request for marker in question_markers) and not any(
+        request.startswith(marker) for marker in mutation_markers
+    )
+
+
+def _request_disallows_writes(request: str) -> bool:
+    return any(
+        marker in request
+        for marker in (
+            "do not write",
+            "don't write",
+            "dont write",
+            "no writes",
+            "no write",
+            "without writing",
+            "do not edit",
+            "don't edit",
+            "dont edit",
+            "no edit",
+            "no edits",
+            "do not modify",
+            "don't modify",
+            "dont modify",
+            "do not change",
+            "don't change",
+            "dont change",
+            "no changes",
+            "no modifications",
+            "read only",
+            "read-only",
+            "analysis only",
+            "without changing",
+        )
+    )
+
+
+def _latest_manifest(results: list[dict[str, Any]]) -> tuple[int | None, Any | None]:
+    for index in range(len(results) - 1, -1, -1):
+        result = results[index]
+        if result.get("tool_id") != "file_management.write_file":
+            continue
+        payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
+        if payload.get("path") != "docs/workspace_manifest.json":
+            continue
+        arguments = result.get("arguments") if isinstance(result.get("arguments"), dict) else {}
+        content = arguments.get("content")
+        if not isinstance(content, str):
+            continue
+        try:
+            return index, json.loads(content)
+        except json.JSONDecodeError:
+            return index, content
+    return None, None
+
+
+def _changed_paths(results: list[dict[str, Any]]) -> set[str]:
+    changed: set[str] = set()
+    for result in results:
+        tool_id = result.get("tool_id")
+        payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
+        if tool_id == "file_management.move_file":
+            _add_str(changed, payload.get("source"))
+            _add_str(changed, payload.get("destination"))
+        elif tool_id == "file_management.copy_file":
+            _add_str(changed, payload.get("destination"))
+        elif tool_id == "file_management.delete_file":
+            _add_str(changed, payload.get("path"))
+        elif tool_id == "file_management.edit_file":
+            _add_str(changed, payload.get("path"))
+        elif tool_id == "file_management.write_file" and payload.get("path") != "docs/workspace_manifest.json":
+            _add_str(changed, payload.get("path"))
+    return changed
+
+
+def _manifest_mentions(manifest: Any, path: str) -> bool:
+    return not path or path in _manifest_strings(manifest)
+
+
+def _manifest_strings(value: Any) -> set[str]:
+    strings: set[str] = set()
+    if isinstance(value, str):
+        strings.add(value)
+    elif isinstance(value, dict):
+        for item in value.values():
+            strings.update(_manifest_strings(item))
+    elif isinstance(value, list | tuple):
+        for item in value:
+            strings.update(_manifest_strings(item))
+    return strings
+
+
+def _unresolved_manifest_winners(manifest: Any, results: list[dict[str, Any]]) -> list[str]:
+    winners: list[str] = []
+    if isinstance(manifest, dict):
+        for collision in manifest.get("collisions", []):
+            if isinstance(collision, dict) and isinstance(collision.get("winner"), str):
+                winners.append(collision["winner"])
+        for held in manifest.get("held", []):
+            if not isinstance(held, dict):
+                continue
+            reason = held.get("reason")
+            if isinstance(reason, str):
+                winners.extend(_claimed_sources(reason))
+    moved_sources = _completed_move_sources(results)
+    return [winner for winner in winners if winner not in moved_sources]
+
+
+def _unresolved_manifest_deletions(manifest: Any, results: list[dict[str, Any]]) -> list[str]:
+    deletions: list[str] = []
+    if isinstance(manifest, dict):
+        for deletion in manifest.get("deletions", []):
+            if isinstance(deletion, dict) and isinstance(deletion.get("path"), str):
+                deletions.append(deletion["path"])
+            elif isinstance(deletion, str):
+                deletions.append(deletion)
+    deleted_paths = _completed_deleted_paths(results)
+    return [path for path in deletions if path not in deleted_paths]
+
+
+def _unresolved_snapshot_winners(state, results: list[dict[str, Any]]) -> list[str]:
+    winners: list[str] = []
+    for ref in state.world_refs.values():
+        if not isinstance(ref, dict) or ref.get("kind") != "file_management.repo_snapshot":
+            continue
+        payload = ref.get("payload") if isinstance(ref.get("payload"), dict) else {}
+        previews = payload.get("text_previews") if isinstance(payload.get("text_previews"), dict) else {}
+        for path, text in previews.items():
+            if isinstance(path, str) and isinstance(text, str) and "move this" in text.lower():
+                winners.append(path)
+            if isinstance(text, str):
+                winners.extend(_claimed_sources(text))
+    moved_sources = _completed_move_sources(results)
+    return [winner for winner in winners if winner not in moved_sources]
+
+
+def _completed_move_sources(results: list[dict[str, Any]]) -> set[str]:
+    sources: set[str] = set()
+    for result in results:
+        if result.get("tool_id") != "file_management.move_file":
+            continue
+        payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
+        _add_str(sources, payload.get("source"))
+    return sources
+
+
+def _completed_deleted_paths(results: list[dict[str, Any]]) -> set[str]:
+    paths: set[str] = set()
+    for result in results:
+        if result.get("tool_id") != "file_management.delete_file":
+            continue
+        payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
+        _add_str(paths, payload.get("path"))
+    return paths
+
+
+def _add_str(target: set[str], value: Any) -> None:
+    if isinstance(value, str) and value:
+        target.add(value)
+
+
+def _claimed_sources(text: str) -> list[str]:
+    return [
+        match.strip(" .,\n\t")
+        for match in re.findall(r"claimed by ([A-Za-z0-9_./-]+)", text, flags=re.IGNORECASE)
+        if match.strip(" .,\n\t")
+    ]

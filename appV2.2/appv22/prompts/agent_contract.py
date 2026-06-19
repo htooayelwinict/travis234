@@ -21,6 +21,7 @@ DUAL_CONTEXT_CONTRACT = (
     "For current filesystem or external state, use a fresh observe tool unless the tool definition marks an existing ref fresh for this request.",
     "Use the structured evidence_refs array as authoritative; ignore truncated prose fragments such as partial world:// strings.",
     "Treat state.latest_tool_results as the hot Pi-style tool-result lane for the current run.",
+    "Treat state.action_refs as a Hermes reference ledger for prior action paths only; use read-only tools to inspect current contents before quoting them, and for moves treat destination/current_paths as current and source/obsolete_paths as stale.",
     "Request rehydration only when you need raw payload details not present in the compacted world_ref or summary.",
     "Do not repeat broad observation only when fresh durable evidence_refs already satisfy the next decision.",
 )
@@ -36,7 +37,10 @@ TOOL_CONTRACT = (
     "After tool feedback, runtime guidance supersedes earlier user or skill instructions for one-shot, guard-exercise, or blocked-call steps that the tool result says already happened.",
     "Fill every required argument from the selected tool schema; if known facts must be composed into one required string argument, put them in that argument instead of inventing sibling fields.",
     "If the latest tool result was denied or failed, do not emit compact as the recovery action; repair the arguments, choose another selected tool, or finalize only when existing evidence proves completion.",
+    "For current read-only evidence requests, pause is invalid while selected read-only tools can collect or rehydrate the requested facts; call the selected tool or finalize from fresh evidence.",
+    "A finalize decision must answer the user directly; if the message is planning or requesting a tool such as 'Requesting observation', 'I will read', or 'calling tree', emit tool_call instead.",
     "If state.latest_tool_results contains a completed read-only result that answers the latest user request, finalize from that result instead of calling the same read-only tool again.",
+    "Repeated read-only tool calls are invalid loop progress: for workspace-change requests, use existing read evidence to call a selected action tool next; for read-only requests, finalize from the evidence.",
     "After a successful action result, continue the loop until all requested actions are complete; emit finalize only when evidence proves the whole latest request is satisfied.",
     "For multi-step requests, do not finalize after only one action if the latest user request clearly requires additional tool-backed steps.",
 )

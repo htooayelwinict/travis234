@@ -14,6 +14,7 @@ from appv22.context.summary_hygiene import (
     normalized_context_summary,
     resolve_tool_risks_after_success,
     resolve_tool_risks_from_world_refs,
+    strip_turn_local_action_guidance_risks,
     strip_turn_local_repair_risks,
 )
 from appv22.runtime.decisions import KNOWN_DECISION_KINDS, RuntimeDecision
@@ -21,62 +22,6 @@ from appv22.runtime.reducer import apply_event
 from appv22.runtime.services import AppV22Services
 from appv22.state.events import RuntimeEvent
 from appv22.state.models import AgentState, RequestEnvelope
-
-
-def _active_request_text(state: AgentState) -> str:
-    return state.request.active_user_request or state.request.user_goal
-
-
-_NO_MUTATION_MARKERS = (
-    "do not write",
-    "don't write",
-    "dont write",
-    "no writes",
-    "no write",
-    "without writing",
-    "do not edit",
-    "don't edit",
-    "dont edit",
-    "do not modify",
-    "don't modify",
-    "dont modify",
-    "no changes",
-    "without changing",
-    "do not implement",
-    "don't implement",
-    "dont implement",
-)
-
-
-def _active_request_requires_action(state: AgentState) -> bool:
-    text = " ".join(_active_request_text(state).lower().split())
-    if not text:
-        return False
-    if any(marker in text for marker in _NO_MUTATION_MARKERS):
-        return False
-    return any(
-        marker in text
-        for marker in (
-            "write",
-            "add",
-            "fix",
-            "bugfix",
-            "update",
-            "create",
-            "make",
-            "mkdir",
-            "move",
-            "rename",
-            "copy",
-            "delete",
-            "remove",
-            "edit",
-            "patch",
-            "replace",
-            "save",
-            "persist",
-        )
-    )
 
 
 def _mutation_seq_from_world_refs(world_refs: dict[str, dict[str, Any]]) -> int:
@@ -88,6 +33,11 @@ def _mutation_seq_from_world_refs(world_refs: dict[str, dict[str, Any]]) -> int:
         if isinstance(mutation_seq, int):
             latest = max(latest, mutation_seq)
     return latest
+
+
+def _is_after_tool_result_schema_denial(result: dict[str, Any]) -> bool:
+    payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
+    return result.get("status") == "failed" and payload.get("reason") == "after_tool_result_schema_invalid"
 
 
 class AppV22AgentRuntime:
@@ -161,7 +111,10 @@ class AppV22AgentRuntime:
             state.mutation_seq = _mutation_seq_from_world_refs(state.world_refs)
         context_summary = previous_result.get("context_summary")
         if isinstance(context_summary, dict):
-            state.context_summary = resolve_tool_risks_from_world_refs(context_summary, state.world_refs)
+            state.context_summary = resolve_tool_risks_from_world_refs(
+                strip_turn_local_action_guidance_risks(context_summary),
+                state.world_refs,
+            )
         return self._run_state(state)
 
     def _run_state(self, state: AgentState) -> dict:
@@ -179,6 +132,8 @@ class AppV22AgentRuntime:
 
             if self.services.context_harness is None:
                 raise RuntimeError("context_harness_not_configured")
+            self.services.context_harness.compressor = self.services.compressor
+            self.services.context_harness.gateway_guard = self.services.gateway_guard
             packet = self.services.context_harness.prepare_turn(state, resolved, pre_turn_mode=state.mode)
             if packet.context_summary_update is not None and packet.context_summary_update != state.context_summary:
                 self._apply(
@@ -247,13 +202,42 @@ class AppV22AgentRuntime:
             return
 
         if decision.kind == "finalize":
-            if self._active_action_tools_without_current_evidence(state, resolved):
+            unresolved_feedback = self._latest_unresolved_tool_feedback(state)
+            if unresolved_feedback is not None and not self._has_completed_non_observe_tool(state):
+                guidance_messages = self._tool_result_guidance(resolved, unresolved_feedback)
+                if self._guidance_requires_recovery_tool(resolved, unresolved_feedback, guidance_messages):
+                    self._record_tool_recovery_guidance(state, guidance_messages)
+                    self._record_runtime_guidance(
+                        state,
+                        open_risk=(
+                            "Recent tool feedback remains unresolved; finalization would hide the failed tool loop. "
+                            "The next turn should call a selected recovery tool or rely on later successful evidence."
+                        ),
+                    )
+                    self._apply(
+                        state,
+                        RuntimeEvent(
+                            "RunFailed",
+                            self._fail_payload(
+                                state,
+                                reason="unresolved_tool_feedback",
+                                message=(
+                                    "The turn ended with unresolved tool feedback before any later successful evidence "
+                                    "proved the latest request."
+                                ),
+                                assistant_message=self._assistant_message_from_decision(decision),
+                            ),
+                        ),
+                    )
+                    return
+            finalize_guidance = self._finalize_guidance(resolved, state)
+            if finalize_guidance:
+                self._record_finalize_guidance(state, resolved, finalize_guidance)
                 self._record_runtime_guidance(
                     state,
                     turn_feedback=(
-                        "Finalize is premature for the latest request: selected tools include an action tool, "
-                        "but the current run has only observe evidence. The next decision must call a selected "
-                        "action tool or finalize only after current action evidence proves the request is complete."
+                        "finalize is premature while extension guidance names required action tool work; "
+                        "continue with an action tool before finalizing."
                     ),
                 )
                 return
@@ -265,18 +249,23 @@ class AppV22AgentRuntime:
             return
 
         if decision.kind == "pause":
-            if self._has_completed_non_observe_tool(state):
-                self._complete_from_tool_loop(state, reason="tool_loop_completed")
-            elif self._active_action_tools_without_current_evidence(state, resolved):
+            finalize_guidance = self._finalize_guidance(resolved, state)
+            if finalize_guidance:
+                self._record_finalize_guidance(state, resolved, finalize_guidance)
                 self._record_runtime_guidance(
                     state,
                     turn_feedback=(
-                        "Pause is premature for the latest request: selected tools include an action tool, "
-                        "but the current run has no completed action evidence. The next decision must call a "
-                        "selected action tool, ask the user a concrete clarification, or pause only when no "
-                        "selected action can satisfy the request."
+                        "Pause is premature while extension guidance names required action tool work; "
+                        "continue with a selected tool before pausing."
                     ),
                 )
+                payload = decision.payload if isinstance(decision.payload, dict) else {}
+                if payload.get("pause_type") != "tool_blocked":
+                    self._apply(state, RuntimeEvent("RunFailed", self._fail_payload(state, reason="paused")))
+            elif self._has_completed_non_observe_tool(state):
+                self._complete_from_tool_loop(state, reason="tool_loop_completed")
+            elif self._observation_contract_satisfied(state, resolved):
+                self._complete_from_tool_loop(state, reason="observation_only_completed")
             else:
                 self._apply(state, RuntimeEvent("RunFailed", self._fail_payload(state, reason="paused")))
             return
@@ -288,7 +277,7 @@ class AppV22AgentRuntime:
                 self._record_tool_recovery_guidance(state, guidance_messages)
                 self._record_runtime_guidance(
                     state,
-                    open_risk=(
+                    blocker=(
                         "Recent tool feedback remains unresolved; compacting again is not an action. "
                         "The next decision should call a selected tool with corrected arguments, choose another selected tool, "
                         "or finalize only if existing evidence already proves completion. "
@@ -308,8 +297,6 @@ class AppV22AgentRuntime:
 
         if not isinstance(tool_id, str) or not tool_id:
             if "tool_call" in payload or not state.active_tool_ids:
-                if not state.active_tool_ids and self._complete_from_latest_observe_result(state):
-                    return
                 self._apply(
                     state,
                     RuntimeEvent(
@@ -333,72 +320,25 @@ class AppV22AgentRuntime:
                 )
             return
 
-        if not state.active_tool_ids and self._complete_from_latest_observe_result(state):
-            return
-
         if tool_id.lower() in {"none", "null", "no_tool", "no-op", "noop"}:
-            if self._has_completed_non_observe_tool(state):
-                self._complete_from_tool_loop(state, reason="tool_loop_completed")
-            else:
-                self._apply(
+            assistant_message = self._assistant_payload_message_from_decision(decision)
+            if assistant_message:
+                self._complete_from_tool_loop(
                     state,
-                    RuntimeEvent(
-                        "RunFailed",
-                        self._fail_payload(
-                            state,
-                            reason="invalid_tool_call",
-                            message=f"invalid tool_id: {tool_id}",
-                        ),
-                    ),
-                )
-            return
-
-        if self._tool_call_evidence_already_exists(state, tool_id, arguments):
-            if not self._is_observe_tool(tool_id):
-                if self._tool_call_evidence_matches_current_request(state, tool_id, arguments):
-                    self._record_runtime_guidance(
-                        state,
-                        progress="Duplicate completed tool call suppressed; existing tool result already proves the requested action.",
-                    )
-                    self._complete_from_tool_loop(state, reason="tool_loop_completed")
-                    return
-                self._apply(state, RuntimeEvent("ModeChanged", {"mode": "THINK"}))
-                self._record_runtime_guidance(
-                    state,
-                    turn_feedback=(
-                        f"{tool_id} has matching stale action evidence from an earlier request; "
-                        "treat it as historical context only. It does not prove the latest mutation request is complete."
-                    ),
+                    reason="tool_loop_completed",
+                    assistant_message=assistant_message,
                 )
                 return
-
-        if self._repeated_current_observe_during_action_request(state, resolved, tool_id, arguments):
+            if self._has_completed_non_observe_tool(state):
+                self._complete_from_tool_loop(state, reason="tool_loop_completed")
+                return
             self._apply(state, RuntimeEvent("ModeChanged", {"mode": "THINK"}))
             self._record_runtime_guidance(
                 state,
                 turn_feedback=(
-                    f"Repeated observe evidence is already available for {tool_id} with the same arguments during "
-                    "the latest mutation request. Consume the latest tool result and call a selected action tool; "
-                    "do not spend another turn re-reading identical current evidence."
-                ),
-            )
-            return
-
-        existing_denial = self._existing_tool_call_denial(state, tool_id, arguments)
-        if existing_denial is not None:
-            self._apply(state, RuntimeEvent("ModeChanged", {"mode": "THINK"}))
-            guidance_messages = self._tool_result_guidance(resolved, existing_denial)
-            self._apply_named_recovery_tool_mode(state, resolved, tool_id, guidance_messages)
-            self._record_named_recovery_tool_guidance(state, resolved, tool_id, guidance_messages)
-            guidance_detail = f" {' '.join(guidance_messages)}" if guidance_messages else ""
-            self._record_runtime_guidance(
-                state,
-                open_risk=(
-                    f"Tool request denied previously for {tool_id} with the same arguments; "
-                    "do not retry with identical arguments. "
-                    "If extension or payload guidance gives corrected arguments, call the selected tool again only with corrected arguments. "
-                    "Otherwise continue from public evidence or choose another selected tool."
-                    f"{guidance_detail}"
+                    "No-op tool_call decision used a non-executable tool_id; "
+                    "treat it as turn-local provider repair feedback. "
+                    "Use kind=finalize with payload.message when no selected tool is needed."
                 ),
             )
             return
@@ -419,9 +359,15 @@ class AppV22AgentRuntime:
             reason = str(pre_tool_result.get("reason") or "extension_pre_tool_block")
             self._record_runtime_guidance(
                 state,
+                blocker=(
+                    f"{tool_id}: This denied pre-tool attempt already satisfies any instruction to exercise a guard or blocked-call path. "
+                    "Continue with selected recovery tools instead of repeating the denied call."
+                ),
+            )
+            self._record_runtime_guidance(
+                state,
                 open_risk=(
                     f"{tool_id} request was denied before execution by extension policy ({reason}); "
-                    "This denied pre-tool attempt already satisfies any instruction to exercise a guard or blocked-call path. "
                     "Do not retry the same blocked call. Continue from public evidence, call the selected tool with corrected arguments, "
                     "or choose another selected tool."
                 ),
@@ -446,6 +392,8 @@ class AppV22AgentRuntime:
             payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
             if result.get("status") == "failed" and payload.get("retryable") is True:
                 default_guidance = "treat that retryable failure as evidence and follow extension/tool guidance for recovery."
+            elif guidance_messages:
+                default_guidance = "treat that tool feedback as evidence and follow extension/tool guidance for corrected arguments."
             elif result.get("status") == "failed":
                 default_guidance = "treat that failure as evidence and continue without repeating the same failed call."
             else:
@@ -480,13 +428,20 @@ class AppV22AgentRuntime:
         if self.services.context_harness is not None:
             self.services.context_harness.record_tool_result(state, result)
         self._record_tool_result(state, result)
+        if result.get("status") == "completed":
+            finalize_guidance = self._finalize_guidance(resolved, state)
+            if finalize_guidance:
+                self._record_finalize_guidance(state, resolved, finalize_guidance)
         return result
 
     def _record_tool_result(self, state: AgentState, result: dict[str, Any]) -> None:
-        event_type = {
-            "completed": "ToolCallCompleted",
-            "failed": "ToolCallFailed",
-        }.get(str(result.get("status")), "ToolCallDenied")
+        if _is_after_tool_result_schema_denial(result):
+            event_type = "ToolCallDenied"
+        else:
+            event_type = {
+                "completed": "ToolCallCompleted",
+                "failed": "ToolCallFailed",
+            }.get(str(result.get("status")), "ToolCallDenied")
         self._apply(state, RuntimeEvent(event_type, result))
         if result["status"] == "completed":
             resolved_summary = resolve_tool_risks_after_success(state.context_summary, str(result.get("tool_id") or ""))
@@ -613,6 +568,16 @@ class AppV22AgentRuntime:
         }
 
     def _repair_decision_shape(self, decision, active_tool_ids):
+        if isinstance(decision, dict):
+            payload = decision.get("payload") if isinstance(decision.get("payload"), dict) else {}
+            evidence_refs = decision.get("evidence_refs")
+            return RuntimeDecision(
+                kind=str(decision.get("kind") or ""),
+                reason=str(decision.get("reason") or "model_decision"),
+                payload=deepcopy(payload),
+                evidence_refs=list(evidence_refs) if isinstance(evidence_refs, list) else [],
+                decision_id=str(decision.get("decision_id")) if decision.get("decision_id") else None,
+            )
         payload = getattr(decision, "payload", None)
         if getattr(decision, "kind", None) != "tool_call" and isinstance(payload, dict):
             tool_id = payload.get("tool_id")
@@ -704,7 +669,7 @@ class AppV22AgentRuntime:
     def _record_tool_recovery_guidance(self, state: AgentState, guidance_messages: tuple[str, ...]) -> None:
         for message in guidance_messages:
             if isinstance(message, str) and message.strip():
-                self._record_runtime_guidance(state, open_risk=message.strip())
+                self._record_runtime_guidance(state, blocker=message.strip())
 
     def _record_tool_payload_error_guidance(self, state: AgentState, result: dict[str, Any]) -> None:
         payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
@@ -717,7 +682,7 @@ class AppV22AgentRuntime:
         for error in errors[:6]:
             text = str(error).strip()
             if text:
-                self._record_runtime_guidance(state, open_risk=f"{tool_id} reported error: {text}")
+                self._record_runtime_guidance(state, blocker=f"{tool_id} reported error: {text}")
 
     def _redact_denied_argument_values_from_world_refs(self, state: AgentState, arguments: Any) -> None:
         if not isinstance(arguments, dict):
@@ -785,58 +750,6 @@ class AppV22AgentRuntime:
                 return True
         return False
 
-    def _tool_call_evidence_already_exists(self, state: AgentState, tool_id: str, arguments: Any) -> bool:
-        if not isinstance(arguments, dict):
-            return False
-        if self._tool_definition(tool_id) is None:
-            return False
-        for world_ref in state.world_refs.values():
-            if not isinstance(world_ref, dict) or world_ref.get("kind") != tool_id:
-                continue
-            existing_arguments = world_ref.get("arguments")
-            if isinstance(existing_arguments, dict) and existing_arguments == arguments:
-                definition = self._tool_definition(tool_id)
-                if (
-                    definition is not None
-                    and definition.category == "observe"
-                    and not self._world_ref_has_usable_payload(state, None, world_ref)
-                ):
-                    return False
-                if not self._world_ref_fresh_for_tool(state, world_ref):
-                    return False
-                return True
-        return False
-
-    def _tool_call_evidence_matches_current_request(self, state: AgentState, tool_id: str, arguments: Any) -> bool:
-        if not isinstance(arguments, dict):
-            return False
-        for world_ref in state.world_refs.values():
-            if not isinstance(world_ref, dict) or world_ref.get("kind") != tool_id:
-                continue
-            if world_ref.get("request_id") != state.request.request_id:
-                continue
-            existing_arguments = world_ref.get("arguments")
-            if isinstance(existing_arguments, dict) and existing_arguments == arguments:
-                return self._world_ref_fresh_for_tool(state, world_ref)
-        return False
-
-    def _repeated_current_observe_during_action_request(
-        self, state: AgentState, resolved, tool_id: str, arguments: Any
-    ) -> bool:
-        if not isinstance(arguments, dict) or not self._is_observe_tool(tool_id):
-            return False
-        if not self._active_action_tools_without_current_evidence(state, resolved):
-            return False
-        for result in state.tool_results.values():
-            if not isinstance(result, dict) or result.get("status") != "completed":
-                continue
-            if result.get("tool_id") != tool_id:
-                continue
-            existing_arguments = result.get("arguments")
-            if isinstance(existing_arguments, dict) and existing_arguments == arguments:
-                return True
-        return False
-
     def _tool_definition(self, tool_id: str):
         definition = getattr(self.services.tool_registry, "definition", None)
         if not callable(definition):
@@ -866,22 +779,6 @@ class AppV22AgentRuntime:
             return False
         return True
 
-    def _existing_tool_call_denial(self, state: AgentState, tool_id: str, arguments: Any) -> dict[str, Any] | None:
-        if not isinstance(arguments, dict):
-            arguments = {}
-        for result in state.tool_results.values():
-            if not isinstance(result, dict):
-                continue
-            if result.get("tool_id") != tool_id or result.get("status") not in {"denied", "failed"}:
-                continue
-            existing_arguments = result.get("arguments")
-            if isinstance(existing_arguments, dict) and existing_arguments == arguments:
-                payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
-                if result.get("status") == "failed" and payload.get("retryable") is True:
-                    continue
-                return result
-        return None
-
     def _latest_unresolved_tool_feedback(self, state: AgentState) -> dict[str, Any] | None:
         for result in reversed(list(state.tool_results.values())):
             if not isinstance(result, dict):
@@ -895,6 +792,32 @@ class AppV22AgentRuntime:
 
     def _tool_result_guidance(self, resolved, result: dict[str, Any]) -> tuple[str, ...]:
         return self.services.extension_registry.tool_result_guidance(resolved.extension_ids, result)
+
+    def _finalize_guidance(self, resolved, state: AgentState) -> tuple[str, ...]:
+        hook = getattr(self.services.extension_registry, "finalize_guidance", None)
+        if not callable(hook):
+            return ()
+        return hook(resolved.extension_ids, state)
+
+    def _record_finalize_guidance(self, state: AgentState, resolved, guidance_messages: tuple[str, ...]) -> None:
+        for message in guidance_messages:
+            if not isinstance(message, str) or not message.strip():
+                continue
+            self._record_runtime_guidance(state, blocker=message.strip())
+        named_tool_ids = self._named_guidance_tool_ids(resolved, guidance_messages)
+        if not named_tool_ids:
+            return
+        next_tool_id = named_tool_ids[0]
+        definition = self._tool_definition(next_tool_id)
+        mode = "OBSERVE" if definition is not None and definition.category == "observe" else "ACT"
+        self._apply(state, RuntimeEvent("ModeChanged", {"mode": mode}))
+        self._record_runtime_guidance(
+            state,
+            blocker=(
+                f"Finalization guidance names selected tool {next_tool_id}; "
+                f"the next decision should call {next_tool_id} before finalizing."
+            ),
+        )
 
     def _apply_named_recovery_tool_mode(self, state: AgentState, resolved, current_tool_id: str, guidance: tuple[str, ...]) -> None:
         named_tool_ids = self._named_recovery_tool_ids(resolved, current_tool_id, guidance)
@@ -918,7 +841,7 @@ class AppV22AgentRuntime:
         if next_tool_id == current_tool_id:
             self._record_runtime_guidance(
                 state,
-                open_risk=(
+                blocker=(
                     f"Recovery guidance names selected tool {next_tool_id}; "
                     f"the next decision must be a tool_call to {next_tool_id} with corrected arguments instead of repeating previously denied arguments."
                 ),
@@ -926,7 +849,7 @@ class AppV22AgentRuntime:
             return
         self._record_runtime_guidance(
             state,
-            open_risk=(
+            blocker=(
                 f"Recovery guidance names selected tool {next_tool_id}; "
                 f"the next decision should call {next_tool_id} instead of retrying {current_tool_id}."
             ),
@@ -953,6 +876,22 @@ class AppV22AgentRuntime:
         current = [tool_id for tool_id in named if tool_id == current_tool_id]
         return alternates + current
 
+    def _guidance_requires_recovery_tool(self, resolved, result: dict[str, Any], guidance: tuple[str, ...]) -> bool:
+        if not guidance:
+            return False
+        current_tool_id = result.get("tool_id")
+        if not isinstance(current_tool_id, str):
+            current_tool_id = ""
+        named = self._named_recovery_tool_ids(resolved, current_tool_id, guidance)
+        if any(tool_id != current_tool_id for tool_id in named):
+            return True
+        if current_tool_id not in named:
+            return False
+        text = " ".join(str(item).lower() for item in guidance)
+        if "do not retry" in text:
+            return False
+        return any(marker in text for marker in ("corrected arguments", "retry", "next decision must be a tool_call"))
+
     def _is_observe_tool(self, tool_id: str) -> bool:
         definition = self._tool_definition(tool_id)
         return definition is not None and definition.category == "observe"
@@ -969,27 +908,6 @@ class AppV22AgentRuntime:
             if isinstance(tool_id, str) and not self._is_observe_tool(tool_id):
                 results.append(result)
         return results
-
-    def _active_action_tools_without_current_evidence(self, state: AgentState, resolved) -> bool:
-        if not _active_request_requires_action(state):
-            return False
-        has_active_action_tool = False
-        for tool_id in getattr(resolved, "tool_ids", ()):
-            if not isinstance(tool_id, str):
-                continue
-            definition = self._tool_definition(tool_id)
-            if definition is not None and definition.category != "observe":
-                has_active_action_tool = True
-                break
-        if not has_active_action_tool:
-            return False
-        for result in state.tool_results.values():
-            if not isinstance(result, dict) or result.get("status") != "completed":
-                continue
-            tool_id = result.get("tool_id")
-            if isinstance(tool_id, str) and not self._is_observe_tool(tool_id):
-                return False
-        return True
 
     def _active_tool_id_mentioned(self, decision, active_tool_ids) -> str | None:
         text = f"{getattr(decision, 'reason', '')} {json.dumps(getattr(decision, 'payload', {}), sort_keys=True, default=str)}"
@@ -1019,36 +937,27 @@ class AppV22AgentRuntime:
             ),
         )
 
-    def _complete_from_latest_observe_result(self, state: AgentState) -> bool:
-        for result in reversed(list(state.tool_results.values())):
-            if not isinstance(result, dict) or result.get("status") != "completed":
-                continue
-            tool_id = result.get("tool_id")
-            if not isinstance(tool_id, str) or not self._is_observe_tool(tool_id):
-                continue
-            user_message = result.get("user_message")
-            if isinstance(user_message, str) and user_message.strip():
-                message = user_message.strip()[:4000]
-            else:
-                payload = result.get("payload")
-                if isinstance(payload, dict):
-                    message = json.dumps(payload, indent=2, sort_keys=True, default=str)[:4000]
-                else:
-                    message = str(payload or "Completed observe result is available.")[:4000]
-            self._complete_from_tool_loop(state, reason="tool_loop_completed", assistant_message=message)
-            return True
-        return False
-
     def _assistant_message_from_decision(self, decision) -> str:
         payload = getattr(decision, "payload", None)
         if isinstance(payload, dict):
-            for key in ("message", "answer", "summary", "final_message"):
+            for key in ("message", "assistant_message", "answer", "summary", "final_message"):
                 value = payload.get(key)
                 if isinstance(value, str) and value.strip():
                     return value.strip()[:4000]
         reason = getattr(decision, "reason", "")
         if isinstance(reason, str) and reason and reason != "model_decision":
             return reason.strip()[:4000]
+        return ""
+
+    @staticmethod
+    def _assistant_payload_message_from_decision(decision) -> str:
+        payload = getattr(decision, "payload", None)
+        if not isinstance(payload, dict):
+            return ""
+        for key in ("message", "assistant_message", "answer", "summary", "final_message"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()[:4000]
         return ""
 
     def _fail_payload(self, state: AgentState, *, reason: str, **extra: Any) -> dict[str, Any]:
@@ -1074,7 +983,7 @@ class AppV22AgentRuntime:
             resolved = None
         if resolved is not None:
             current_action_results = self._completed_non_observe_tool_results(state)
-            if self._active_action_tools_without_current_evidence(state, resolved):
+            if self._finalize_guidance(resolved, state):
                 feedback = (
                     "Turn budget exhausted before current action evidence was produced for the latest mutation request. "
                     "Continue by inspecting only if needed, then call a selected action tool; old action refs are historical context only."

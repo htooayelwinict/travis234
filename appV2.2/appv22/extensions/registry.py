@@ -64,6 +64,23 @@ class ExtensionRegistry:
                 guidance.append(message.strip())
         return tuple(guidance)
 
+    def finalize_guidance(self, extension_ids: tuple[str, ...], state: AgentState) -> tuple[str, ...]:
+        guidance: list[str] = []
+        for extension_id in extension_ids:
+            extension = self._extensions.get(extension_id)
+            if extension is None:
+                continue
+            hook = getattr(extension, "finalize_guidance", None)
+            if not callable(hook):
+                continue
+            try:
+                message = hook(state)
+            except Exception:  # noqa: BLE001 - extension hook details are not safe runtime context.
+                message = ""
+            if isinstance(message, str) and message.strip():
+                guidance.append(message.strip())
+        return tuple(guidance)
+
     def transform_tool_result(self, extension_ids: tuple[str, ...], result: dict[str, Any]) -> dict[str, Any]:
         current = dict(result)
         for extension_id in extension_ids:

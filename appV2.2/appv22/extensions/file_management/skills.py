@@ -89,10 +89,14 @@ WORKSPACE_NAVIGATION_SKILL = SkillCard(
     extension_id="file_management",
     triggers=(
         "workspace",
-        "file",
         "files",
         "path",
         "paths",
+        "clean",
+        "cleanup",
+        "mess",
+        "organize",
+        "reorganize",
         "folder",
         "folders",
         "dir",
@@ -116,7 +120,7 @@ WORKSPACE_NAVIGATION_SKILL = SkillCard(
     ),
     modes=("START", "THINK", "OBSERVE", "VERIFY"),
     summary="Pi-style workspace navigation tools for compact repo layout, file discovery, and bounded snapshots.",
-    always_active=False,
+    always_active=True,
     tool_ids=(
         "file_management.tree",
         "file_management.repo_snapshot",
@@ -130,6 +134,7 @@ WORKSPACE_NAVIGATION_SKILL = SkillCard(
         "Never call unregistered generic tools such as observe; use only selected file_management.* tool IDs.",
     ),
     observation_contract=ObservationContract(
+        evidence_refs=("world://file_management.repo_snapshot/latest",),
         evidence_kinds=("file_management.repo_snapshot", "file_management.tree", "file_management.find_files"),
         preferred_tool_id="file_management.tree",
     ),
@@ -173,7 +178,7 @@ CODE_SEARCH_SKILL = FileManagementCodeSearchSkillCard(
     ),
     modes=("START", "THINK", "OBSERVE", "VERIFY"),
     summary="Pi-style code inspection tools for symbol search, exact line-range reads, and bounded file content evidence.",
-    always_active=False,
+    always_active=True,
     tool_ids=(
         "file_management.grep",
         "file_management.read_range",
@@ -218,7 +223,7 @@ CODE_SCAN_SKILL = SkillCard(
     ),
     modes=("START", "THINK", "OBSERVE", "VERIFY"),
     summary="Pi-style bounded multi-file code scan tools for broader reviews after candidate files are selected.",
-    always_active=False,
+    always_active=True,
     tool_ids=(
         "file_management.tree",
         "file_management.find_files",
@@ -275,23 +280,37 @@ FILE_MUTATION_SKILL = SkillCard(
         "document",
         "handoff",
     ),
-    modes=("START", "THINK", "ACT", "VERIFY"),
+    modes=("START", "THINK", "OBSERVE", "ACT", "VERIFY"),
     summary="Pi-style file mutation tools for explicit workspace writes, moves, copies, directory creation, and deletion.",
     always_active=False,
     tool_ids=(
         "file_management.write_file",
+        "file_management.edit_file",
         "file_management.mkdir",
         "file_management.move_file",
         "file_management.copy_file",
         "file_management.delete_file",
         "file_management.read_file",
+        "file_management.repo_snapshot",
     ),
     instructions=(
-        "Use write_file for complete file content; create parent directories as needed.",
+        "Use edit_file for existing-file targeted edits after reading exact current content; each oldText must match exactly once.",
+        "Use write_file only for new files or complete file rewrites; create parent directories as needed.",
         "Use mkdir, move_file, copy_file, and delete_file only when the latest user request asks for filesystem changes.",
         "Use read_file before mutation only when exact current content is required.",
+        "Use file-content cues before cleanup moves; when sources have a colliding basename, the first clear colliding source claims the common destination and later colliding sources should be held or recorded.",
+        "When the user asks for a durable cleanup record, write docs/workspace_manifest.json with moves, held items, collisions, and deletions.",
+        "Treat human-authored artifacts as the primary cleanup inputs and machine/session traces as lower-priority evidence unless the user asks otherwise.",
+        "prefer move_file for reorganization, copy_file only when preserving the source is required, and remove obvious junk with file_management.delete_file when deletion is requested.",
+        "Include deletions in docs/workspace_manifest.json when deleting files.",
         "Do not invent manifests, moves, deletes, or records unless the latest user request asks for them.",
+        "Do not emit finalize until every requested mutation and record entry is backed by tool evidence.",
         "For multi-step file requests, continue using selected tools until each clear requested file operation is backed by tool evidence before finalizing.",
+    ),
+    observation_contract=ObservationContract(
+        evidence_refs=("world://file_management.repo_snapshot/latest",),
+        evidence_kinds=("file_management.repo_snapshot",),
+        preferred_tool_id="file_management.repo_snapshot",
     ),
 )
 
@@ -304,4 +323,4 @@ FILE_MANAGEMENT_SKILLS = (
 )
 
 # Compatibility alias for older imports/tests that expect one file-management card.
-FILE_MANAGEMENT_SKILL = WORKSPACE_NAVIGATION_SKILL
+FILE_MANAGEMENT_SKILL = FILE_MUTATION_SKILL

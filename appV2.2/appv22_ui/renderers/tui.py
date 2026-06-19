@@ -7,45 +7,40 @@ class TuiRenderer:
     def render(self, result: dict | None) -> str:
         summary = result_summary(result)
         events = events_from_result(result)
-        panels = [
-            _panel(
-                "APPV22 SESSION",
-                [
-                    f"id       {summary['session_id'] or '-'}",
-                    f"status   {summary['status']}",
-                    f"reason   {summary['reason'] or '-'}",
-                    f"refs     {summary['world_ref_count']}",
-                ],
-            )
+        lines = [
+            _status_line(summary),
+            _context_line(summary),
         ]
         usage = summary.get("usage")
         if usage:
-            panels.append(_panel("MODEL / TOOL METRICS", [str(usage)]))
+            lines.append(f"usage {usage}")
         if isinstance(result, dict) and result.get("assistant_message"):
-            panels.append(_panel("ASSISTANT", [str(result["assistant_message"])]))
+            lines.extend(["", str(result["assistant_message"])])
         context_summary = summary.get("context_summary")
         if isinstance(context_summary, dict) and context_summary:
-            panels.append(_panel("HERMES CONTEXT", _context_lines(context_summary)))
+            lines.extend(["", "[compaction]", *_context_lines(context_summary)])
         if events:
-            panels.append(_panel("PI-STYLE AGENT LOOP", _event_lines(events)))
-        return "\n\n".join(panels)
+            lines.extend(["", *_event_lines(events)])
+        return "\n".join(lines)
 
 
-def _panel(title: str, lines: list[str]) -> str:
-    width = max([len(title) + 4, *(len(line) + 4 for line in lines), 48])
-    top = "+" + "-" * (width - 2) + "+"
-    heading = f"| {title.ljust(width - 4)} |"
-    separator = "+" + "-" * (width - 2) + "+"
-    body = [f"| {line[: width - 4].ljust(width - 4)} |" for line in lines]
-    bottom = "+" + "-" * (width - 2) + "+"
-    return "\n".join([top, heading, separator, *body, bottom])
+def _status_line(summary: dict) -> str:
+    return (
+        f"status {summary['status']}"
+        f"  session {summary['session_id'] or '-'}"
+        f"  reason {summary['reason'] or '-'}"
+    )
+
+
+def _context_line(summary: dict) -> str:
+    return f"context refs {summary['world_ref_count']}"
 
 
 def _context_lines(context_summary: dict) -> list[str]:
     lines: list[str] = []
     progress = context_summary.get("progress")
     if progress:
-        lines.append(f"progress   {progress}")
+        lines.append(f"progress {progress}")
     blockers = context_summary.get("blockers")
     if isinstance(blockers, list) and blockers:
         lines.append(f"blockers {len(blockers)}")

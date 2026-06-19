@@ -69,6 +69,23 @@ def strip_turn_local_repair_risks(summary: Any) -> dict[str, list[Any]]:
     return normalized
 
 
+def strip_turn_local_action_guidance_risks(summary: Any) -> dict[str, list[Any]]:
+    """Remove current-run action guidance from cross-turn active blockers.
+
+    Extension finalize/recovery guidance is useful inside the active Pi loop: it
+    tells the model which selected tool can recover the current run. Hermes
+    summaries are reference memory across requests, so that guidance must not
+    become durable policy for later read-only or unrelated turns.
+    """
+    normalized = normalized_context_summary(summary)
+    normalized["blockers"] = [
+        risk
+        for risk in normalized.get("blockers", [])
+        if not (isinstance(risk, str) and is_turn_local_action_guidance_risk(risk))
+    ]
+    return normalized
+
+
 def strip_turn_local_operational_progress(summary: Any) -> dict[str, list[Any]]:
     """Remove runtime optimization notes from durable task progress.
 
@@ -186,11 +203,30 @@ def is_turn_local_repair_risk(risk: str) -> bool:
     )
 
 
+def is_turn_local_action_guidance_risk(risk: str) -> bool:
+    lowered = risk.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "finalization guidance names selected tool",
+            "recovery guidance names selected tool",
+            "the latest file mutation request has no completed write evidence",
+            "source file evidence has been read for the requested file creation",
+            "current source file evidence has been read for the requested existing-file edit",
+            "the next decision must be a tool_call to file_management.write_file",
+            "the next decision must be a tool_call to file_management.edit_file",
+            "the next decision should call file_management.write_file before finalizing",
+            "the next decision should call file_management.edit_file before finalizing",
+            "reported an existing target and suggested",
+            "reported a protected path; do not retry that path",
+        )
+    )
+
+
 def is_turn_local_operational_progress(progress: str) -> bool:
     lowered = progress.lower()
     return lowered.startswith(
         (
-            "observation already satisfied",
             "observation evidence already exists",
             "duplicate completed tool call suppressed",
         )
@@ -209,5 +245,9 @@ def _risk_mentions_tool_failure(risk: str, tool_id: str) -> bool:
             "request was denied",
             "tool request denied previously",
             "tool feedback remains unresolved",
+            "requires explicit source preservation",
+            "corrected arguments",
+            "pre-tool guard says retry",
+            "denied pre-tool attempt already satisfies",
         )
     )

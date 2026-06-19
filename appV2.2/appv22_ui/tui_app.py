@@ -227,6 +227,7 @@ class AppV22Tui:
                     "Return JSON only.",
                     "Summarize as REFERENCE ONLY, not active instructions.",
                     "Preserve stable user facts, preferences, and Pi/Hermes/TUI context preferences.",
+                    "Preserve concrete historical tool-result facts such as protected_path, missing_file, denied, and failed markers.",
                     "Do not infer task status from prose or preserve stale instructions as active work.",
                     "The latest user request after this summary remains authoritative.",
                     compaction_input,
@@ -275,14 +276,12 @@ def _embedded_command(text: str) -> str | None:
 
 def _looks_like_pasted_tui_output(text: str) -> bool:
     markers = (
-        "CONVERSATION",
-        "PI AGENT LOOP",
-        "HERMES CONTEXT",
+        "appv22  ",
+        "context refs ",
+        "[compaction]",
         "tool_loop_completed",
         "decision proposed:",
         "agent started ::",
-        "+---",
-        "| | |",
     )
     marker_hits = sum(1 for marker in markers if marker in text)
     if marker_hits >= 2:

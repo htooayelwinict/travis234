@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "appV2.2"))
 from appv22.context.budget import estimate_chars
 from appv22.context.compressor import AgentContextCompressor
 from appv22.context.gateway_guard import GatewayContextGuard
+from appv22.context.summary_hygiene import resolve_tool_risks_after_success
 from appv22.context.summaries import structured_summary
 
 
@@ -69,6 +70,22 @@ def test_gateway_guard_does_not_mutate_input_messages() -> None:
     GatewayContextGuard(max_chars=10_000, threshold=0.85).guard(messages)
 
     assert messages[1]["content"] == "x" * 9000
+
+
+def test_resolve_tool_risks_after_success_demotes_copy_preserve_source_guidance() -> None:
+    summary = {
+        "blockers": [
+            "file_management.copy_file requires explicit source preservation; retry file_management.copy_file "
+            "from docs/recovery_notes.md to docs/recovery_notes_copy.md with preserve_source:true and the same "
+            "source/destination arguments."
+        ],
+        "progress": [],
+    }
+
+    resolved = resolve_tool_risks_after_success(summary, "file_management.copy_file")
+
+    assert resolved["blockers"] == []
+    assert "file_management.copy_file: prior failed/denied tool risk resolved by later successful result" in resolved["progress"]
 
 
 def test_gateway_guard_compacts_oversized_middle_context_without_verbose_tools() -> None:
@@ -167,9 +184,15 @@ def test_structured_summary_merges_previous_summary_and_evidence_refs() -> None:
         "goals": ["existing goal"],
         "decisions": ["decision: prior", "decision: observe"],
         "progress": ["done", "toolres_1: result"],
-        "open_risks": ["risk"],
+        "blockers": ["risk"],
         "evidence_refs": ["toolres_0", "toolres_1"],
     }
+
+
+def test_structured_summary_ignores_missing_legacy_open_risks_value() -> None:
+    summary = structured_summary([], {"open_risks": None})
+
+    assert summary["blockers"] == []
 
 
 def test_structured_summary_preserves_middle_constraints_and_assistant_context() -> None:
@@ -182,7 +205,7 @@ def test_structured_summary_preserves_middle_constraints_and_assistant_context()
         {"goals": ["ship context governance hardening"]},
     )
 
-    assert set(summary) == {"goals", "decisions", "progress", "open_risks", "evidence_refs"}
+    assert set(summary) == {"goals", "decisions", "progress", "blockers", "evidence_refs"}
     assert "constraint: preserve Task 4 threshold semantics" in summary["goals"]
     assert "rationale: keep first and last messages intact" in summary["progress"]
     assert "toolres_small: short useful evidence" in summary["progress"]
@@ -201,7 +224,7 @@ def test_agent_compressor_emits_structured_summary() -> None:
 
     assert compacted[0]["role"] == "system"
     assert compacted[1]["name"] == "context_summary"
-    assert set(compacted[1]["summary"]) == {"goals", "decisions", "progress", "open_risks", "evidence_refs"}
+    assert set(compacted[1]["summary"]) == {"goals", "decisions", "progress", "blockers", "evidence_refs"}
     assert compacted[-1]["content"] == "continue"
 
 
@@ -259,7 +282,7 @@ def test_agent_compressor_summary_preserves_middle_constraints_and_notes() -> No
     compacted = AgentContextCompressor(max_chars=1_600, threshold=0.50).compress(messages, previous_summary={})
     summary = compacted[1]["summary"]
 
-    assert set(summary) == {"goals", "decisions", "progress", "open_risks", "evidence_refs"}
+    assert set(summary) == {"goals", "decisions", "progress", "blockers", "evidence_refs"}
     assert "instruction: never mutate caller-owned messages" in summary["goals"]
     assert "rationale: summary must retain audit context" in summary["progress"]
     assert "toolres_small: non-verbose evidence" in summary["progress"]
@@ -288,7 +311,7 @@ def test_agent_compressor_shrinks_oversized_summary_to_budget() -> None:
     assert compacted[0] == messages[0]
     assert compacted[-1] == messages[-1]
     assert compacted[1]["name"] == "context_summary"
-    assert set(compacted[1]["summary"]) == {"goals", "decisions", "progress", "open_risks", "evidence_refs"}
+    assert set(compacted[1]["summary"]) == {"goals", "decisions", "progress", "blockers", "evidence_refs"}
     assert estimate_chars(compacted) <= 450
     assert messages[1]["content"] == "instruction: " + "u" * 1000
     assert previous_summary["goals"] == ["g" * 1000]
@@ -362,7 +385,7 @@ def test_agent_compressor_bounded_summary_prefers_recent_facts_over_older_previo
     )
     summary = compacted[1]["summary"]
 
-    assert set(summary) == {"goals", "decisions", "progress", "open_risks", "evidence_refs"}
+    assert set(summary) == {"goals", "decisions", "progress", "blockers", "evidence_refs"}
     assert "constraint: preserve current hard budget evidence" in summary["goals"]
     assert "toolres_current: current evidence survives" in summary["progress"]
     assert "toolres_current" in summary["evidence_refs"]

@@ -3,6 +3,15 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from appv22.context.summary_hygiene import (
+    normalized_context_summary,
+    resolve_tool_risks_from_world_refs,
+    strip_cross_turn_tool_availability_risks,
+    strip_turn_local_action_guidance_risks,
+    strip_turn_local_operational_progress,
+    strip_turn_local_repair_risks,
+)
+
 
 MAX_DETAIL_CHARS = 700
 
@@ -58,7 +67,7 @@ def result_summary(result: dict[str, Any] | None) -> dict[str, Any]:
         "session_id": str(result.get("session_id") or ""),
         "world_ref_count": len(world_refs),
         "world_refs": sorted(world_refs.keys())[:20],
-        "context_summary": _sanitize_payload(context_summary),
+        "context_summary": _sanitize_payload(_safe_context_summary(context_summary, world_refs)),
         "usage": _usage_from_result(result),
     }
 
@@ -117,6 +126,23 @@ def _usage_from_result(result: dict[str, Any]) -> dict[str, Any]:
         if isinstance(value, dict):
             return _sanitize_payload(value)
     return {}
+
+
+def _safe_context_summary(summary: dict[str, Any], world_refs: dict[str, Any]) -> dict[str, list[Any]]:
+    normalized = resolve_tool_risks_from_world_refs(
+        strip_turn_local_operational_progress(
+            strip_turn_local_action_guidance_risks(
+                strip_turn_local_repair_risks(strip_cross_turn_tool_availability_risks(summary))
+            )
+        ),
+        world_refs,
+    )
+    normalized = normalized_context_summary(normalized)
+    live_refs = set(world_refs)
+    normalized["evidence_refs"] = [
+        ref for ref in normalized.get("evidence_refs", []) if isinstance(ref, str) and ref in live_refs
+    ]
+    return normalized
 
 
 def _sanitize_payload(value: Any, *, depth: int = 0) -> Any:

@@ -132,6 +132,8 @@ class ToolBroker:
         }
 
     def _payload_ref(self, tool_id: str, payload: dict[str, Any], *, definition=None, arguments: dict[str, Any]) -> str:
+        if tool_id == "file_management.repo_snapshot":
+            return "world://file_management.repo_snapshot/latest"
         stable = json.dumps(
             {"arguments": arguments, "payload": payload, "tool_id": tool_id},
             sort_keys=True,

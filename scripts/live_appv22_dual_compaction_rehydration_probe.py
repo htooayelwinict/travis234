@@ -33,16 +33,6 @@ DEFAULT_PROMPT = (
 SENTINEL_NAME = ".appv22-dual-compaction-rehydration-probe"
 SENTINEL_VALUE = "owned-by-live-appv22-dual-compaction-rehydration-probe\n"
 RAW_MARKER = "RAW_LIVE_DUAL_COMPACTION_SENTINEL"
-TOOL_NAME_MAP = {
-    "repo_snapshot": "file_management.repo_snapshot",
-    "read_file": "file_management.read_file",
-    "write_file": "file_management.write_file",
-    "move_file": "file_management.move_file",
-    "copy_file": "file_management.copy_file",
-    "delete_file": "file_management.delete_file",
-    "mkdir": "file_management.mkdir",
-    "list_files": "file_management.list_files",
-}
 FILE_MANAGEMENT_OBSERVATION_TOOL_IDS = (
     "file_management.repo_snapshot",
     "file_management.read_file",
@@ -71,10 +61,7 @@ def main() -> int:
     try:
         with bounded_probe_run(args.run_timeout_seconds):
             provider = RecordingProvider(
-                create_appv22_provider_from_appv2_env(
-                    dotenv_path=args.dotenv,
-                    tool_name_map=TOOL_NAME_MAP,
-                )
+                create_appv22_provider_from_appv2_env(dotenv_path=args.dotenv)
             )
             services = create_appv22_services(
                 root_path=repo,

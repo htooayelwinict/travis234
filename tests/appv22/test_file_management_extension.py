@@ -29,16 +29,23 @@ def test_file_management_extension_resolves_skill_and_tools(tmp_path):
     resolved = registry.resolve_active(state)
 
     assert resolved.extension_ids == ("file_management",)
-    assert resolved.tool_ids == (
+    assert "file_management.file_mutation" in [card.skill_id for card in resolved.skill_cards]
+    assert set(resolved.tool_ids) >= {
         "file_management.copy_file",
         "file_management.delete_file",
+        "file_management.edit_file",
+        "file_management.find_files",
+        "file_management.grep",
         "file_management.mkdir",
         "file_management.move_file",
         "file_management.read_file",
+        "file_management.read_range",
         "file_management.repo_snapshot",
+        "file_management.tree",
         "file_management.write_file",
-    )
-    assert resolved.skill_cards[0].observation_contract.preferred_tool_id == "file_management.repo_snapshot"
+    }
+    mutation_card = next(card for card in resolved.skill_cards if card.skill_id == "file_management.file_mutation")
+    assert mutation_card.observation_contract.preferred_tool_id == "file_management.repo_snapshot"
 
 
 def test_repo_snapshot_lists_files_and_safe_text_previews(tmp_path):
@@ -121,6 +128,47 @@ def test_write_file_denies_existing_file_without_explicit_overwrite(tmp_path):
     assert (tmp_path / "docs" / "existing.md").read_text(encoding="utf-8") == "changed\n"
 
 
+def test_edit_file_applies_unique_targeted_replacement_to_existing_file(tmp_path):
+    (tmp_path / "docs").mkdir()
+    target = tmp_path / "docs" / "existing.md"
+    target.write_text("owner: old\nstatus: pending\n", encoding="utf-8")
+    services = _services(tmp_path)
+
+    result = services.broker.execute(
+        "file_management.edit_file",
+        {
+            "path": "docs/existing.md",
+            "edits": [{"oldText": "owner: old", "newText": "owner: new"}],
+        },
+        active_tool_ids=("file_management.edit_file",),
+    )
+
+    assert result["status"] == "completed"
+    assert result["payload"]["path"] == "docs/existing.md"
+    assert result["payload"]["edits_applied"] == 1
+    assert result["payload"]["first_changed_line"] == 1
+    assert "-owner: old" in result["payload"]["diff"]
+    assert "+owner: new" in result["payload"]["diff"]
+    assert target.read_text(encoding="utf-8") == "owner: new\nstatus: pending\n"
+
+
+def test_edit_file_denies_non_unique_old_text_without_writing(tmp_path):
+    (tmp_path / "docs").mkdir()
+    target = tmp_path / "docs" / "existing.md"
+    target.write_text("todo\nkeep\ntodo\n", encoding="utf-8")
+    services = _services(tmp_path)
+
+    result = services.broker.execute(
+        "file_management.edit_file",
+        {"path": "docs/existing.md", "edits": [{"old_text": "todo", "new_text": "done"}]},
+        active_tool_ids=("file_management.edit_file",),
+    )
+
+    assert result["status"] == "denied"
+    assert result["payload"]["errors"] == ["old_text_not_unique:0"]
+    assert target.read_text(encoding="utf-8") == "todo\nkeep\ntodo\n"
+
+
 def test_file_management_extension_provides_denial_recovery_guidance():
     extension = FileManagementExtension()
     guidance = extension.tool_result_guidance(
@@ -167,6 +215,124 @@ def test_file_management_finalize_guidance_requires_write_after_source_reads_for
     assert "docs/handoff.md" in guidance
     assert "docs/operator-brief.md" in guidance
     assert "notes/ferry-window.txt" in guidance
+
+
+def test_file_management_finalize_guidance_does_not_hardcode_handoff_for_manifest_write():
+    extension = FileManagementExtension()
+    state = AgentState(
+        "sess",
+        "run",
+        RequestEnvelope(
+            "req",
+            "write docs/workspace_manifest.json recording recovery_notes.md as source and recovery_notes_archive.md as archive",
+            ".",
+        ),
+    )
+    state.tool_results["read_source"] = {
+        "tool_id": "file_management.read_file",
+        "status": "completed",
+        "payload": {"path": "docs/recovery_notes.md", "content": "# Recovery Notes\n"},
+    }
+
+    guidance = extension.finalize_guidance(state)
+
+    assert "file_management.write_file" in guidance
+    assert "docs/handoff.md" not in guidance
+
+
+def test_file_management_finalize_guidance_prefers_edit_after_source_read_for_existing_file_fix():
+    extension = FileManagementExtension()
+    state = AgentState(
+        "sess",
+        "run",
+        RequestEnvelope(
+            "req",
+            "Fix the status line in docs/existing.md from pending to done.",
+            ".",
+        ),
+    )
+    state.tool_results["read_existing"] = {
+        "tool_id": "file_management.read_file",
+        "status": "completed",
+        "payload": {"path": "docs/existing.md", "content": "owner: new\nstatus: pending\n"},
+    }
+
+    guidance = extension.finalize_guidance(state)
+
+    assert "the next decision must be a tool_call to file_management.edit_file" in guidance
+    assert "docs/existing.md" in guidance
+    assert "file_management.write_file" not in guidance
+
+
+def test_file_management_finalize_guidance_accepts_completed_edit_for_existing_file_fix():
+    extension = FileManagementExtension()
+    state = AgentState(
+        "sess",
+        "run",
+        RequestEnvelope(
+            "req",
+            "Fix the status line in docs/existing.md from pending to done.",
+            ".",
+        ),
+    )
+    state.tool_results["edit_existing"] = {
+        "tool_id": "file_management.edit_file",
+        "status": "completed",
+        "payload": {"path": "docs/existing.md", "edits_applied": 1, "errors": []},
+    }
+
+    guidance = extension.finalize_guidance(state)
+
+    assert guidance == ""
+
+
+def test_file_management_finalize_guidance_does_not_treat_no_sibling_file_as_creation_request():
+    extension = FileManagementExtension()
+    state = AgentState(
+        "sess",
+        "run",
+        RequestEnvelope(
+            "req",
+            "Change priority from high to urgent in the same notes file. Use the existing file and do not create a sibling file.",
+            ".",
+        ),
+    )
+    state.tool_results["read_existing"] = {
+        "tool_id": "file_management.read_file",
+        "status": "completed",
+        "payload": {"path": "plan/appv22-live-scope/notes.md", "content": "**Priority**: high"},
+    }
+    state.tool_results["edit_existing"] = {
+        "tool_id": "file_management.edit_file",
+        "status": "completed",
+        "payload": {"path": "plan/appv22-live-scope/notes.md", "edits_applied": 1, "errors": []},
+    }
+
+    guidance = extension.finalize_guidance(state)
+
+    assert guidance == ""
+
+
+def test_file_management_finalize_guidance_does_not_treat_retrospective_added_question_as_mutation():
+    extension = FileManagementExtension()
+    state = AgentState(
+        "sess",
+        "run",
+        RequestEnvelope(
+            "req",
+            "Still no edits. Which helper was added most recently, and which file proves its tests exist?",
+            ".",
+        ),
+    )
+    state.tool_results["read_tests"] = {
+        "tool_id": "file_management.read_file",
+        "status": "completed",
+        "payload": {"path": "tests/test_math_utils.py", "content": "def test_sign_label():\n    pass\n"},
+    }
+
+    guidance = extension.finalize_guidance(state)
+
+    assert guidance == ""
 
 
 def test_write_file_removes_obsolete_identifier_lines(tmp_path):

@@ -1093,7 +1093,7 @@ def test_agent_loop_suppresses_duplicate_broad_reobserve_after_summary_evidence(
         if event["event_type"] == "ToolCallCompleted"
         and event["payload"]["tool_id"] == "file_management.repo_snapshot"
     ]
-    assert len(tool_events) == 1
+    assert len(tool_events) == 2
 
 
 def test_agent_loop_accepts_model_write_file_tool_call(tmp_path):
@@ -1133,7 +1133,7 @@ def test_agent_loop_accepts_model_write_file_tool_call(tmp_path):
     assert (tmp_path / "docs" / "handoff.md").is_file()
 
 
-def test_agent_loop_suppresses_duplicate_completed_write_tool_call(tmp_path):
+def test_agent_loop_records_duplicate_completed_write_tool_call_as_tool_result(tmp_path):
     write_payload = {
         "tool_id": "file_management.write_file",
         "arguments": {
@@ -1160,6 +1160,7 @@ def test_agent_loop_suppresses_duplicate_completed_write_tool_call(tmp_path):
                 write_payload,
                 ["world://file_management.repo_snapshot/latest"],
             ),
+            RuntimeDecision("finalize", "done after duplicate tool result"),
         ]
     )
     services = create_appv22_services(
@@ -1179,6 +1180,8 @@ def test_agent_loop_suppresses_duplicate_completed_write_tool_call(tmp_path):
         "file_management.repo_snapshot",
         "file_management.write_file",
     ]
+    denied_events = [event for event in result["events"] if event["event_type"] == "ToolCallDenied"]
+    assert [event["payload"]["tool_id"] for event in denied_events] == ["file_management.write_file"]
 
 
 def test_agent_loop_recovers_from_malformed_tool_call_when_tool_id_is_missing(tmp_path):
@@ -1205,9 +1208,8 @@ def test_agent_loop_recovers_from_malformed_tool_call_when_tool_id_is_missing(tm
     tool_events = [event for event in result["events"] if event["event_type"] == "ToolCallCompleted"]
     assert [event["payload"]["tool_id"] for event in tool_events] == ["action_only.publish"]
     assert any(
-        event["event_type"] == "ContextSummaryUpdated"
-        and "Malformed tool_call decision was missing payload.tool_id" in json.dumps(event["payload"])
-        for event in result["events"]
+        "Malformed tool_call decision was missing payload.tool_id" in item
+        for item in result["turn_feedback"]
     )
 
 
@@ -1452,7 +1454,7 @@ def test_agent_loop_recovers_from_malformed_context_request_after_observation_ev
     assert (tmp_path / "docs" / "office-story.md").is_file()
 
 
-def test_agent_loop_suppresses_repeated_observation_tool_after_evidence(tmp_path):
+def test_agent_loop_reexecutes_repeated_observation_tool_like_pi(tmp_path):
     provider = SequenceProvider(
         [
             RuntimeDecision(
@@ -1478,14 +1480,10 @@ def test_agent_loop_suppresses_repeated_observation_tool_after_evidence(tmp_path
         "leave a useful office story"
     )
 
-    assert result["status"] == "failed"
-    assert result["reason"] == "paused"
+    assert result["status"] == "completed"
+    assert result["reason"] == "observation_only_completed"
     tool_events = [event for event in result["events"] if event["event_type"] == "ToolCallCompleted"]
-    assert len(tool_events) == 1
-    assert any(
-        "Observation already satisfied" in item
-        for item in provider.prompts[2]["state"]["context_summary"]["progress"]
-    )
+    assert len(tool_events) == 2
 
 
 def test_agent_loop_reprompts_after_non_executable_plan_payload(tmp_path):
@@ -1554,13 +1552,16 @@ def test_agent_loop_preserves_world_refs_when_gateway_guard_runs_after_hermes_co
         "leave a useful office story"
     )
 
-    assert result["status"] == "failed"
-    assert result["reason"] == "paused"
+    assert result["status"] == "completed"
+    assert result["reason"] == "observation_only_completed"
     assert any(record["triggered"] for record in services.compressor.records)
-    assert "world://file_management.repo_snapshot/latest" in provider.prompts[1]["world"]["world_refs"]
-    assert provider.prompts[1]["state"]["context_summary"]["evidence_refs"] == [
+    assert provider.prompts[1]["world"]["world_refs"] == {}
+    assert provider.prompts[1]["state"]["latest_tool_results"][0]["evidence_refs"] == [
         "world://file_management.repo_snapshot/latest"
     ]
+    assert "world://file_management.repo_snapshot/latest" in json.dumps(
+        provider.prompts[1].get("messages", []), sort_keys=True, default=str
+    )
 
 
 def test_agent_loop_allows_exact_rehydration_before_read_file(tmp_path):
@@ -1709,8 +1710,6 @@ def test_agent_loop_default_context_governance_compacts_oversized_provider_promp
     assert raw_marker not in provider_payload
     assert [skill["skill_id"] for skill in provider.prompts[0]["skills"]] == ["oversized_prompt.active"]
     assert any(message.get("name") == "context_summary" for message in provider.prompts[0]["messages"])
-    summary_events = [event for event in result["events"] if event["event_type"] == "ContextSummaryUpdated"]
-    assert summary_events
 
 
 def test_dual_context_compacts_large_world_context_and_carries_summary_to_next_turn(tmp_path):
@@ -1748,10 +1747,11 @@ def test_dual_context_compacts_large_world_context_and_carries_summary_to_next_t
     second_prompt_payload = json.dumps(provider.prompts[1], sort_keys=True, default=str)
     assert raw_marker not in first_prompt_payload
     assert raw_marker not in second_prompt_payload
-    assert "world://file_management.repo_snapshot/latest" in provider.prompts[1]["world"]["world_refs"]
-    assert provider.prompts[1]["world"]["world_refs"]["world://file_management.repo_snapshot/latest"]["kind"] == (
-        "file_management.repo_snapshot"
-    )
+    assert provider.prompts[1]["world"]["world_refs"] == {}
+    assert provider.prompts[1]["state"]["latest_tool_results"][0]["tool_id"] == "file_management.repo_snapshot"
+    assert provider.prompts[1]["state"]["latest_tool_results"][0]["evidence_refs"] == [
+        "world://file_management.repo_snapshot/latest"
+    ]
     assert any(message.get("name") == "context_summary" for message in provider.prompts[1]["messages"])
     summary_events = [event for event in result["events"] if event["event_type"] == "ContextSummaryUpdated"]
     assert summary_events
@@ -1789,16 +1789,19 @@ def test_dual_context_preserves_compact_observation_contract(tmp_path):
     assert len(provider.prompts) == 2
     second_prompt_payload = json.dumps(provider.prompts[1], sort_keys=True, default=str)
     assert raw_marker not in second_prompt_payload
-    assert "world://file_management.repo_snapshot/latest" in provider.prompts[1]["world"]["world_refs"]
-    assert provider.prompts[1]["world"]["world_refs"]["world://file_management.repo_snapshot/latest"]["kind"] == (
-        "file_management.repo_snapshot"
-    )
+    assert provider.prompts[1]["world"]["world_refs"] == {}
+    assert provider.prompts[1]["state"]["latest_tool_results"][0]["tool_id"] == "file_management.repo_snapshot"
+    assert provider.prompts[1]["state"]["latest_tool_results"][0]["evidence_refs"] == [
+        "world://file_management.repo_snapshot/latest"
+    ]
     assert any(message.get("name") == "context_summary" for message in provider.prompts[1]["messages"])
-    contract = provider.prompts[1]["skills"][0]["observation_contract"]
-    assert contract is not None
-    assert contract["evidence_refs"] == ("world://file_management.repo_snapshot/latest",)
-    assert contract["evidence_kinds"] == ("file_management.repo_snapshot",)
-    assert contract["preferred_tool_id"] == "file_management.repo_snapshot"
+    contracts = [
+        skill.get("observation_contract")
+        for skill in provider.prompts[1]["skills"]
+        if isinstance(skill.get("observation_contract"), dict)
+    ]
+    assert any("file_management.repo_snapshot" in contract["evidence_kinds"] for contract in contracts)
+    assert any(contract["preferred_tool_id"] == "file_management.repo_snapshot" for contract in contracts)
 
 
 def test_dual_context_allows_tool_rehydration_after_compaction(tmp_path):
@@ -1847,11 +1850,7 @@ def test_dual_context_allows_tool_rehydration_after_compaction(tmp_path):
     assert summary_messages
     assert summary_messages[0]["summary"]["evidence_refs"]
     tool_events = [event for event in result["events"] if event["event_type"] == "ToolCallCompleted"]
-    assert len(tool_events) == 1
-    assert any(
-        "Observation already satisfied" in item
-        for item in provider.prompts[2]["state"]["context_summary"]["progress"]
-    )
+    assert len(tool_events) == 2
     assert all(event["payload"]["tool_id"] == "file_management.repo_snapshot" for event in tool_events)
 
 
@@ -2006,7 +2005,7 @@ def test_agent_loop_records_tool_payload_errors_as_standalone_repair_guidance(tm
     assert "validation.publish reported error: note_missing_terms:safe lab note" in risks
 
 
-def test_agent_loop_duplicate_denial_guidance_distinguishes_identical_args_from_corrected_retry(tmp_path):
+def test_agent_loop_repeated_denial_records_repeated_tool_results(tmp_path):
     provider = SequenceProvider(
         [
             RuntimeDecision(
@@ -2028,16 +2027,18 @@ def test_agent_loop_duplicate_denial_guidance_distinguishes_identical_args_from_
         extensions=[ValidationErrorGuidanceExtension()],
     )
 
-    AppV22AgentRuntime(root_path=tmp_path, services=services, max_turns=3).run(
+    result = AppV22AgentRuntime(root_path=tmp_path, services=services, max_turns=3).run(
         "validation-guidance publish note"
     )
 
     risks = provider.prompts[2]["state"]["context_summary"].get("open_risks", [])
     duplicate_guidance = "\n".join(risk for risk in risks if "validation.publish" in risk)
-    assert "do not retry with identical arguments" in duplicate_guidance
-    assert "call the selected tool again only with corrected arguments" in duplicate_guidance
     assert "validation.publish reported error: note_missing_terms:safe lab note" in duplicate_guidance
-    assert "do not retry the denied tool call" not in duplicate_guidance
+    denied_events = [event for event in result["events"] if event["event_type"] == "ToolCallDenied"]
+    assert [event["payload"]["tool_id"] for event in denied_events] == [
+        "validation.publish",
+        "validation.publish",
+    ]
 
 
 def test_agent_loop_failed_tool_guidance_steers_named_alternate_tool(tmp_path):
@@ -2111,7 +2112,7 @@ def test_agent_loop_records_finalize_guidance_immediately_after_successful_obser
     assert "Observation is complete; call compact_guidance.publish before finalizing." in risks
 
 
-def test_agent_loop_duplicate_observe_guidance_is_tool_generic(tmp_path):
+def test_agent_loop_repeated_observe_records_repeated_tool_results(tmp_path):
     provider = SequenceProvider(
         [
             RuntimeDecision("tool_call", "observe first", {"tool_id": "compact_guidance.lookup", "arguments": {}}),
@@ -2125,18 +2126,17 @@ def test_agent_loop_duplicate_observe_guidance_is_tool_generic(tmp_path):
         extensions=[CompactAfterObservationGuidanceExtension()],
     )
 
-    AppV22AgentRuntime(root_path=tmp_path, services=services, max_turns=3).run(
+    result = AppV22AgentRuntime(root_path=tmp_path, services=services, max_turns=3).run(
         "compact-after-observe publish after lookup"
     )
 
-    progress = "\n".join(
-        item
-        for item in provider.prompts[2]["state"]["context_summary"].get("progress", [])
-        if "Observation already satisfied" in item
-    )
-    assert "call a selected action tool when ready" in progress
-    assert "read_file" not in progress
-    assert "write_file" not in progress
+    tool_events = [event for event in result["events"] if event["event_type"] == "ToolCallCompleted"]
+    assert [event["payload"]["tool_id"] for event in tool_events] == [
+        "compact_guidance.lookup",
+        "compact_guidance.lookup",
+    ]
+    progress = "\n".join(provider.prompts[2]["state"]["context_summary"].get("progress", []))
+    assert "Observation already satisfied" not in progress
 
 
 def test_agent_loop_moves_to_act_when_finalize_guidance_requires_tool_call(tmp_path):
@@ -2226,15 +2226,15 @@ def test_agent_loop_uses_extension_owned_before_tool_call_guard(tmp_path):
         for item in prompt["state"]["context_summary"].get("open_risks", [])
     )
     assert provider.prompts[2]["state"]["mode"] == "ACT"
-    assert any(
-        "Recovery guidance names selected tool guarded.publish; the next decision must be a tool_call to guarded.publish with corrected arguments"
-        in item
+    assert not any(
+        "pre-tool guard says retry guarded.publish with safe text" in item
+        or "Recovery guidance names selected tool guarded.publish" in item
+        or "This denied pre-tool attempt already satisfies any instruction to exercise a guard or blocked-call path" in item
         for item in provider.prompts[2]["state"]["context_summary"].get("open_risks", [])
     )
     assert any(
-        "This denied pre-tool attempt already satisfies any instruction to exercise a guard or blocked-call path"
-        in item
-        for item in provider.prompts[2]["state"]["context_summary"].get("open_risks", [])
+        "guarded.publish: prior failed/denied tool risk resolved by later successful result" in item
+        for item in provider.prompts[2]["state"]["context_summary"].get("progress", [])
     )
 
 
@@ -2919,7 +2919,7 @@ def test_agent_loop_exposes_selected_tool_argument_schemas_to_provider(tmp_path)
     assert "preserve_source" in copy_definition["argument_schema"]["properties"]
 
 
-def test_agent_loop_suppresses_repeated_denied_tool_call_and_allows_recovery(tmp_path):
+def test_agent_loop_records_repeated_denied_tool_call_and_allows_recovery(tmp_path):
     (tmp_path / "secrets").mkdir()
     (tmp_path / "secrets" / "payroll.env").write_text("TOKEN=secret\n", encoding="utf-8")
     provider = SequenceProvider(
@@ -2958,8 +2958,9 @@ def test_agent_loop_suppresses_repeated_denied_tool_call_and_allows_recovery(tmp
     assert result["status"] == "completed"
     denied_events = [event for event in result["events"] if event["event_type"] == "ToolCallDenied"]
     completed_events = [event for event in result["events"] if event["event_type"] == "ToolCallCompleted"]
-    assert len(denied_events) == 1
+    assert len(denied_events) == 2
     assert denied_events[0]["payload"]["arguments"] == {"path": "secrets/payroll.env"}
+    assert denied_events[1]["payload"]["arguments"] == {"path": "secrets/payroll.env"}
     assert [event["payload"]["tool_id"] for event in completed_events] == ["file_management.write_file"]
     assert (tmp_path / "docs" / "safe-note.md").read_text(encoding="utf-8") == "public onboarding\n"
     assert "TOKEN=secret" not in (tmp_path / "docs" / "safe-note.md").read_text(encoding="utf-8")
@@ -3007,7 +3008,7 @@ def test_agent_loop_keeps_action_only_extension_active_for_finalize_guidance(tmp
     )
 
 
-def test_agent_loop_suppresses_repeated_malformed_tool_arguments_and_allows_recovery(tmp_path):
+def test_agent_loop_records_repeated_malformed_tool_arguments_and_allows_recovery(tmp_path):
     provider = SequenceProvider(
         [
             RuntimeDecision(
@@ -3050,8 +3051,9 @@ def test_agent_loop_suppresses_repeated_malformed_tool_arguments_and_allows_reco
     assert result["status"] == "completed"
     denied_events = [event for event in result["events"] if event["event_type"] == "ToolCallDenied"]
     completed_events = [event for event in result["events"] if event["event_type"] == "ToolCallCompleted"]
-    assert len(denied_events) == 1
+    assert len(denied_events) == 2
     assert denied_events[0]["payload"]["payload"]["errors"] == ["missing_argument:path"]
+    assert denied_events[1]["payload"]["payload"]["errors"] == ["missing_argument:path"]
     assert [event["payload"]["tool_id"] for event in completed_events] == ["file_management.write_file"]
     assert (tmp_path / "docs" / "recovery-note.md").read_text(encoding="utf-8") == "public recovery note\n"
 

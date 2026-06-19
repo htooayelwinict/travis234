@@ -1,0 +1,12 @@
+{
+  "name": "appv22-pi-tui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "tui": "node appv22_ui/pi_tui/app.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/pi-tui": "file:../pi/packages/tui"
+  }
+}

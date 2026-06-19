@@ -114,14 +114,12 @@ class TuiState:
 
 def _looks_like_pasted_tui_output(text: str) -> bool:
     markers = (
-        "CONVERSATION",
-        "PI AGENT LOOP",
-        "HERMES CONTEXT",
+        "appv22  ",
+        "context refs ",
+        "[compaction]",
         "tool_loop_completed",
         "decision proposed:",
         "agent started ::",
-        "+---",
-        "| | |",
     )
     marker_hits = sum(1 for marker in markers if marker in text)
     return marker_hits >= 2 or (text.startswith("|") and marker_hits >= 1)

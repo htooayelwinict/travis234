@@ -20,8 +20,12 @@ IMPORTANT_USER_MARKERS = (
 RISK_MARKERS = ("risk", "blocker", "blocked", "unknown", "uncertain", "fail", "failure")
 
 
-def _summary_list(previous_summary: dict[str, Any], key: str) -> list[Any]:
-    value = previous_summary.get(key) or []
+def _summary_list(previous_summary: dict[str, Any], key: str, *, fallback_key: str = "") -> list[Any]:
+    value = previous_summary.get(key)
+    if value is None and fallback_key:
+        value = previous_summary.get(fallback_key)
+    if value is None:
+        return []
     if isinstance(value, list):
         return deepcopy(value)
     return [deepcopy(value)]
@@ -70,7 +74,7 @@ def structured_summary(messages: list[dict[str, Any]], previous_summary: dict[st
 
     decisions = _summary_list(previous, "decisions")
     progress = _summary_list(previous, "progress")
-    blockers = _summary_list(previous, "blockers")
+    blockers = _summary_list(previous, "blockers", fallback_key="open_risks")
     evidence_refs = _summary_list(previous, "evidence_refs")
 
     for message in messages:

@@ -9,6 +9,7 @@ from appv22.context.summary_hygiene import (
     normalized_context_summary,
     resolve_tool_risks_from_world_refs,
     strip_cross_turn_tool_availability_risks,
+    strip_turn_local_action_guidance_risks,
     strip_turn_local_operational_progress,
     strip_turn_local_repair_risks,
 )
@@ -142,7 +143,9 @@ def _sanitized_world_ref_payload(kind: str, payload: Any, *, extensions: tuple[A
 def _sanitized_context_summary(summary: dict[str, Any], *, world_refs: dict[str, Any]) -> dict[str, Any]:
     normalized = resolve_tool_risks_from_world_refs(
         strip_turn_local_operational_progress(
-            strip_turn_local_repair_risks(strip_cross_turn_tool_availability_risks(summary))
+            strip_turn_local_action_guidance_risks(
+                strip_turn_local_repair_risks(strip_cross_turn_tool_availability_risks(summary))
+            )
         ),
         world_refs,
     )

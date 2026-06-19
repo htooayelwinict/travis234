@@ -16,16 +16,23 @@ from appv22.runtime.agent_loop import AppV22AgentRuntime
 from appv22.runtime.services import create_appv22_services
 from appv22_ui.session import SessionStore
 from appv22_ui.context_manager import TuiContextManager
-from appv22_ui.textual_controller import TextualTuiController
+from appv22_ui.renderers.tui import TuiRenderer
 from appv22_ui.tui_app import AppV22Tui
 from appv22_ui.tui_layout import render_tui
 from appv22_ui.tui_state import ConversationLine, TuiState
 
 
 class TuiAppTests(unittest.TestCase):
-    def test_tui_layout_has_pi_and_hermes_panes(self) -> None:
+    def test_tui_layout_uses_pi_stream_with_hermes_compaction_status(self) -> None:
         state = TuiState(workspace=Path("/tmp/workspace"))
         state.add_user("hi")
+        state.conversation_summary = "- User preference/context: stay inside Pi + Hermes design."
+        state.ui_context_metrics = {
+            "tokens_before": 1200,
+            "compaction_count": 1,
+            "summary_source": "api",
+            "hot_lines": 4,
+        }
         state.apply_event({"event_type": "ModeChanged", "payload": {"mode": "THINK"}})
         state.apply_result(
             {
@@ -41,10 +48,14 @@ class TuiAppTests(unittest.TestCase):
 
         rendered = render_tui(state)
 
-        self.assertIn("CONVERSATION", rendered)
-        self.assertIn("PI AGENT LOOP", rendered)
-        self.assertIn("HERMES CONTEXT", rendered)
-        self.assertIn("assistant: Hello.", rendered)
+        self.assertNotIn("CONVERSATION", rendered)
+        self.assertNotIn("PI AGENT LOOP", rendered)
+        self.assertNotIn("HERMES CONTEXT", rendered)
+        self.assertIn("> hi", rendered)
+        self.assertIn("Hello.", rendered)
+        self.assertIn("[compaction]", rendered)
+        self.assertIn("compacted from 1,200 tokens", rendered)
+        self.assertIn("context refs 0 compact 1 source api hot 4", rendered)
 
     def test_tui_state_tracks_world_refs_and_context(self) -> None:
         state = TuiState(workspace=Path("/tmp/workspace"))
@@ -64,7 +75,36 @@ class TuiAppTests(unittest.TestCase):
         self.assertEqual(state.world_ref_count, 1)
         self.assertEqual(state.context_summary["blockers"], ["approval required: risk"])
 
-    def test_tui_layout_keeps_multiline_assistant_text_inside_panel_rows(self) -> None:
+    def test_tui_state_strips_turn_local_action_guidance_from_live_result(self) -> None:
+        state = TuiState(workspace=Path("/tmp/workspace"))
+
+        state.apply_result(
+            {
+                "status": "completed",
+                "reason": "tool_loop_completed",
+                "session_id": "sess_test",
+                "world_refs": {
+                    "world://file_management.edit_file/current": {
+                        "kind": "file_management.edit_file",
+                        "summary": "file_management.edit_file result",
+                    }
+                },
+                "context_summary": {
+                    "progress": ["file_management.edit_file: file_management.edit_file result"],
+                    "blockers": [
+                        "Current source file evidence has been read for the requested existing-file edit; the next decision must be a tool_call to file_management.edit_file for tests/test_calculator.py before finalizing.",
+                        "Finalization guidance names selected tool file_management.edit_file; the next decision should call file_management.edit_file before finalizing.",
+                    ],
+                    "evidence_refs": ["world://file_management.edit_file/current"],
+                },
+                "events": [],
+            }
+        )
+
+        self.assertEqual(state.context_summary["blockers"], [])
+        self.assertEqual(state.context_summary["evidence_refs"], ["world://file_management.edit_file/current"])
+
+    def test_tui_layout_keeps_multiline_assistant_text_in_stream_order(self) -> None:
         state = TuiState(workspace=Path("/tmp/workspace"))
         state.apply_result(
             {
@@ -80,10 +120,31 @@ class TuiAppTests(unittest.TestCase):
 
         rendered = render_tui(state)
 
-        self.assertIn("assistant: Line one", rendered)
+        self.assertIn("Line one", rendered)
         self.assertIn("Line two", rendered)
         self.assertIn("Line three", rendered)
-        self.assertNotIn("Line one\nLine two", rendered)
+
+    def test_noninteractive_tui_renderer_uses_pi_stream_not_panels(self) -> None:
+        rendered = TuiRenderer().render(
+            {
+                "status": "completed",
+                "reason": "tool_loop_completed",
+                "session_id": "sess_test",
+                "world_refs": {"world://file_management.read_file/ok": {"kind": "file_management.read_file"}},
+                "context_summary": {"progress": ["read completed"]},
+                "assistant_message": "Done.",
+                "events": [{"event_type": "ContextSummaryUpdated", "payload": {"blockers": []}}],
+                "usage": {"context": {"model_calls": 1}},
+            }
+        )
+
+        self.assertNotIn("APPV22 SESSION", rendered)
+        self.assertNotIn("MODEL / TOOL METRICS", rendered)
+        self.assertNotIn("HERMES CONTEXT", rendered)
+        self.assertNotIn("PI-STYLE AGENT LOOP", rendered)
+        self.assertIn("status completed", rendered)
+        self.assertIn("Done.", rendered)
+        self.assertIn("[compaction]", rendered)
 
     def test_tui_context_hides_stale_inactive_tool_risks_after_progress(self) -> None:
         state = TuiState(workspace=Path("/tmp/workspace"))
@@ -265,6 +326,146 @@ class TuiAppTests(unittest.TestCase):
         self.assertEqual(summary.source, "api")
         self.assertIn("API summary: User is Lewis.", prompt)
 
+    def test_tui_context_manager_api_compactor_preserves_deterministic_tool_ledger(self) -> None:
+        lines = [
+            ConversationLine("user", "try reading .env"),
+            ConversationLine("assistant", "The .env file is blocked (protected_path:.env). Contents were not exposed."),
+            ConversationLine("user", "read docs/ghost_notes.md"),
+            ConversationLine("assistant", "docs/ghost_notes.md is missing (missing_file:docs/ghost_notes.md)."),
+            ConversationLine("user", "create a run summary from known protected/missing events"),
+        ]
+        manager = TuiContextManager(
+            max_hot_lines=2,
+            compact_after_lines=3,
+            api_compactor=lambda _: "Session involved creating agent notes files.",
+        )
+
+        prompt, _hot_lines, summary = manager.prepare_prompt(
+            current_user_message="create a run summary from known protected/missing events",
+            conversation=lines,
+            existing_summary="- Historical tool result: protected_path:.env was hit earlier.",
+            compaction_count=1,
+        )
+
+        self.assertEqual(summary.source, "api")
+        self.assertIn("Session involved creating agent notes files.", summary.content)
+        self.assertIn("protected_path:.env", summary.content)
+        self.assertIn("missing_file:docs/ghost_notes.md", prompt)
+
+    def test_tui_context_manager_does_not_recompact_ledger_header_as_fact(self) -> None:
+        manager = TuiContextManager(
+            max_hot_lines=2,
+            compact_after_lines=3,
+            api_compactor=lambda _: "Session involved continuing the file workflow.",
+        )
+        lines = [
+            ConversationLine("user", "continue"),
+            ConversationLine("assistant", "continuing"),
+            ConversationLine("user", "next"),
+            ConversationLine("assistant", "next done"),
+            ConversationLine("user", "summarize"),
+        ]
+
+        _prompt, _hot_lines, summary = manager.prepare_prompt(
+            current_user_message="summarize",
+            conversation=lines,
+            existing_summary=(
+                "Prior summary.\n"
+                "Deterministic reference ledger:\n"
+                "- Historical tool result: protected_path:.env\n"
+            ),
+            compaction_count=2,
+        )
+
+        self.assertEqual(summary.content.count("Deterministic reference ledger:"), 1)
+        self.assertIn("Historical tool result: protected_path:.env", summary.content)
+
+    def test_tui_context_manager_drops_unsupported_api_tool_marker_claims(self) -> None:
+        manager = TuiContextManager(
+            max_hot_lines=2,
+            compact_after_lines=3,
+            api_compactor=lambda _: (
+                "Session involved .env not found, protected_path applies to .env, "
+                "and docs/missing_repeat.md is missing."
+            ),
+        )
+        lines = [
+            ConversationLine("user", "try reading .env"),
+            ConversationLine("assistant", "No .env file was found; if it existed it would be blocked by protected_path rules."),
+            ConversationLine("user", "read docs/missing_repeat.md"),
+            ConversationLine("assistant", "The file docs/missing_repeat.md is missing."),
+            ConversationLine("user", "continue after missing check"),
+            ConversationLine("assistant", "continuing after missing check"),
+            ConversationLine("user", "summarize missing or protected-path events"),
+        ]
+
+        _prompt, _hot_lines, summary = manager.prepare_prompt(
+            current_user_message="summarize missing or protected-path events",
+            conversation=lines,
+            existing_summary="",
+            compaction_count=1,
+        )
+
+        self.assertNotIn("protected_path applies to .env", summary.content)
+        self.assertNotIn("protected_path:.env", summary.content)
+        self.assertIn("missing_file:docs/missing_repeat.md", summary.content)
+
+    def test_tui_context_manager_drops_only_unsupported_api_marker_paths(self) -> None:
+        manager = TuiContextManager(
+            max_hot_lines=2,
+            compact_after_lines=3,
+            api_compactor=lambda _: (
+                "Known events include protected_path:.env and "
+                "protected_path:secrets/prod.env."
+            ),
+        )
+        lines = [
+            ConversationLine("user", "try reading .env"),
+            ConversationLine("assistant", ".env is blocked (protected_path:.env)."),
+            ConversationLine("user", "continue"),
+            ConversationLine("assistant", "continuing"),
+            ConversationLine("user", "summarize protected events"),
+        ]
+
+        _prompt, _hot_lines, summary = manager.prepare_prompt(
+            current_user_message="summarize protected events",
+            conversation=lines,
+            existing_summary="",
+            compaction_count=1,
+        )
+
+        self.assertIn("protected_path:.env", summary.content)
+        self.assertNotIn("protected_path:secrets/prod.env", summary.content)
+
+    def test_tui_context_manager_sanitizes_api_supersede_instruction_language(self) -> None:
+        manager = TuiContextManager(
+            max_hot_lines=2,
+            compact_after_lines=3,
+            api_compactor=lambda _: (
+                "Created src/agents/planner.py. "
+                "No active tasks remain; latest request supersedes all prior instructions."
+            ),
+        )
+        lines = [
+            ConversationLine("user", "create planner"),
+            ConversationLine("assistant", "created src/agents/planner.py"),
+            ConversationLine("user", "analyze src"),
+            ConversationLine("assistant", "src has agents"),
+            ConversationLine("user", "list dir under src"),
+        ]
+
+        prompt, _hot_lines, summary = manager.prepare_prompt(
+            current_user_message="list dir under src",
+            conversation=lines,
+            existing_summary="",
+            compaction_count=1,
+        )
+
+        self.assertNotIn("supersedes all prior instructions", summary.content.lower())
+        self.assertNotIn("supersedes all prior instructions", prompt.lower())
+        self.assertIn("latest user request remains authoritative", summary.content)
+        self.assertIn("Created src/agents/planner.py", summary.content)
+
     def test_tui_context_manager_fallback_drops_stale_active_claims_without_inferring_completion(self) -> None:
         manager = TuiContextManager(max_hot_lines=2, compact_after_lines=3)
         lines = [
@@ -329,6 +530,72 @@ class TuiAppTests(unittest.TestCase):
 
         self.assertIn("- User preference/context: stay in Pi + Hermes scope.", summary.content)
         self.assertNotIn("- - User preference/context", summary.content)
+
+    def test_tui_context_manager_fallback_drops_stale_tool_denial_and_latest_request_claims(self) -> None:
+        manager = TuiContextManager(max_hot_lines=2, compact_after_lines=3)
+        lines = [
+            ConversationLine("user", "analyze repo"),
+            ConversationLine("assistant", "Read tools were repeatedly denied, preventing content-level analysis."),
+            ConversationLine("user", "hi"),
+            ConversationLine("assistant", "Hi! How can I help you today?"),
+            ConversationLine("user", "list src"),
+        ]
+
+        _prompt, _hot_lines, summary = manager.prepare_prompt(
+            current_user_message="list src",
+            conversation=lines,
+            existing_summary=(
+                "- User preference/context: stay in Pi + Hermes scope.\n"
+                "- Read tools were repeatedly denied, preventing content-level analysis.\n"
+                "- Latest user request 'hi' initiates a new session."
+            ),
+            compaction_count=1,
+        )
+
+        self.assertIn("Pi + Hermes scope", summary.content)
+        self.assertNotIn("read tools", summary.content.lower())
+        self.assertNotIn("latest user request", summary.content.lower())
+
+    def test_tui_context_manager_fallback_preserves_concrete_tool_denial_history(self) -> None:
+        manager = TuiContextManager(max_hot_lines=2, compact_after_lines=3)
+        lines = [
+            ConversationLine("user", "try reading .env"),
+            ConversationLine("assistant", "The .env file is blocked (protected_path:.env). Contents were not exposed."),
+            ConversationLine("user", "read docs/missing_recovery.md"),
+            ConversationLine("assistant", "docs/missing_recovery.md is missing (missing_file:docs/missing_recovery.md)."),
+            ConversationLine("user", "continue"),
+        ]
+
+        prompt, _hot_lines, summary = manager.prepare_prompt(
+            current_user_message="mention any tool denials or failures in this session",
+            conversation=lines,
+            existing_summary="",
+            compaction_count=1,
+        )
+
+        self.assertIn("protected_path:.env", summary.content)
+        self.assertIn("missing_file:docs/missing_recovery.md", prompt)
+        self.assertIn("explicitly asks about prior UI/session events", prompt)
+
+    def test_tui_context_manager_fallback_preserves_plain_missing_file_history(self) -> None:
+        manager = TuiContextManager(max_hot_lines=2, compact_after_lines=3)
+        lines = [
+            ConversationLine("user", "read docs/ghost_notes.md"),
+            ConversationLine("assistant", "docs/ghost_notes.md is missing."),
+            ConversationLine("user", "continue"),
+            ConversationLine("assistant", "continuing"),
+            ConversationLine("user", "summarize known missing events"),
+        ]
+
+        prompt, _hot_lines, summary = manager.prepare_prompt(
+            current_user_message="summarize known missing events",
+            conversation=lines,
+            existing_summary="",
+            compaction_count=1,
+        )
+
+        self.assertIn("missing_file:docs/ghost_notes.md", summary.content)
+        self.assertIn("missing_file:docs/ghost_notes.md", prompt)
 
     def test_tui_runtime_prompt_is_bounded_after_many_turns(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -524,6 +791,38 @@ class TuiAppTests(unittest.TestCase):
         self.assertEqual(
             loaded["last_result"]["context_summary"]["progress"],
             ["src/math_utils.py updated with square(x)"],
+        )
+
+    def test_session_store_does_not_persist_turn_local_action_guidance_as_blockers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SessionStore(Path(tmp))
+            store.save(
+                {
+                    "status": "failed",
+                    "reason": "max_turns_exceeded",
+                    "session_id": "sess_test",
+                    "world_refs": {},
+                    "context_summary": {
+                        "blockers": [
+                            "The latest file mutation request has no completed write evidence; the next decision must be a tool_call to file_management.write_file before finalizing.",
+                            "Finalization guidance names selected tool file_management.write_file; the next decision should call file_management.write_file before finalizing.",
+                            "Recovery guidance names selected tool file_management.write_file; the next decision must be a tool_call to file_management.write_file with corrected arguments instead of repeating previously denied arguments.",
+                            "Current source file evidence has been read for the requested existing-file edit; the next decision must be a tool_call to file_management.edit_file for docs/existing.md before finalizing.",
+                            "Finalization guidance names selected tool file_management.edit_file; the next decision should call file_management.edit_file before finalizing.",
+                            "file_management.read_file reported a protected path; do not retry that path, and continue using non-protected workspace evidence.",
+                            "approval required: real durable blocker",
+                        ],
+                    },
+                },
+                conversation=[],
+            )
+
+            loaded = store.load()
+
+        self.assertEqual(loaded["context_summary"]["blockers"], ["approval required: real durable blocker"])
+        self.assertEqual(
+            loaded["last_result"]["context_summary"]["blockers"],
+            ["approval required: real durable blocker"],
         )
 
     def test_session_store_persists_bounded_runtime_events_for_replay(self) -> None:
@@ -871,7 +1170,7 @@ class TuiAppTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             app = AppV22Tui(workspace=Path(tmp), dotenv_path=Path(".env"), max_turns=4, extensions=("file_management",))
 
-            accepted = app._accept_user_prompt("| CONVERSATION | | | 09 run completed :: tool_loop_completed")
+            accepted = app._accept_user_prompt("appv22  /tmp/workspace\ncontext refs 1\n09 run completed :: tool_loop_completed")
 
         self.assertIsNone(accepted)
         self.assertEqual(app.state.conversation, [])
@@ -912,7 +1211,7 @@ class TuiAppTests(unittest.TestCase):
     def test_tui_state_filters_pasted_screen_chrome_when_loading_session(self) -> None:
         session = {
             "conversation": [
-                {"role": "user", "text": "| CONVERSATION | | | 09 run completed :: tool_loop_completed"},
+                {"role": "user", "text": "appv22  /tmp/workspace\ncontext refs 1\n09 run completed :: tool_loop_completed"},
                 {"role": "assistant", "text": "Hello, Lewis."},
             ],
             "last_result": {
@@ -984,7 +1283,56 @@ class TuiAppTests(unittest.TestCase):
         self.assertFalse((app_root / "appv22_ui" / "cli.py").exists())
         self.assertFalse((app_root / "scripts" / "appv22_cli.py").exists())
         self.assertTrue((app_root / "scripts" / "appv22_tui.py").exists())
-        self.assertTrue((app_root / "scripts" / "appv22_textual.py").exists())
+        self.assertFalse((app_root / "scripts" / "appv22_textual.py").exists())
+        self.assertFalse((app_root / "appv22_ui" / "textual_app.py").exists())
+        self.assertFalse((app_root / "appv22_ui" / "textual_runtime.py").exists())
+        self.assertFalse((app_root / "appv22_ui" / "textual_controller.py").exists())
+
+    def test_pi_tui_frontend_ports_pi_component_runtime(self) -> None:
+        app_root = Path(__file__).resolve().parents[1]
+        frontend = app_root / "appv22_ui" / "pi_tui" / "app.mjs"
+        package_json = app_root / "package.json"
+
+        self.assertTrue(frontend.exists())
+        self.assertTrue(package_json.exists())
+        source = frontend.read_text(encoding="utf-8")
+        manifest = json.loads(package_json.read_text(encoding="utf-8"))
+
+        self.assertIn("@earendil-works/pi-tui", manifest["dependencies"])
+        self.assertIn("new TUI(new ProcessTerminal()", source)
+        self.assertIn("new Container()", source)
+        self.assertIn("new Input()", source)
+        self.assertNotIn("readline.createInterface", source)
+        self.assertNotIn("process.stdout.write('\\x1b[2J", source)
+
+        subprocess.run(["node", "--check", str(frontend)], check=True)
+
+    def test_pi_tui_bridge_status_uses_jsonl_without_model_call(self) -> None:
+        app_root = Path(__file__).resolve().parents[1]
+        bridge = app_root / "scripts" / "appv22_tui_bridge.py"
+        with tempfile.TemporaryDirectory() as tmp:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(bridge),
+                    "--workspace",
+                    tmp,
+                    "--dotenv",
+                    ".env",
+                    "--max-turns",
+                    "2",
+                ],
+                input='{"type":"status"}\n{"type":"exit"}\n',
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        lines = [json.loads(line) for line in completed.stdout.splitlines() if line.strip()]
+        self.assertEqual(lines[0]["type"], "status")
+        self.assertEqual(lines[0]["session"]["status"], "empty")
+        self.assertEqual(lines[-1]["type"], "exit")
 
     def test_tui_draw_skips_identical_frames_to_avoid_background_flooding(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -995,7 +1343,7 @@ class TuiAppTests(unittest.TestCase):
                 app._draw()
                 app._draw()
 
-        self.assertEqual(output.getvalue().count("CONVERSATION"), 1)
+        self.assertEqual(output.getvalue().count("appv22> "), 1)
 
     def test_reset_ui_command_clears_corrupted_conversation_and_persists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1021,70 +1369,6 @@ class TuiAppTests(unittest.TestCase):
         self.assertIn("world://file_management.read_file/ok", loaded["last_result"]["world_refs"])
         self.assertEqual(loaded["last_result"]["context_summary"]["progress"], ["read completed"])
         self.assertIn("UI conversation reset", app.state.notice)
-
-    def test_textual_reset_ui_preserves_runtime_result(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            controller = TextualTuiController(
-                workspace=Path(tmp),
-                dotenv_path=Path(".env"),
-                max_turns=4,
-                extensions=("file_management",),
-            )
-            controller.store.save(
-                {
-                    "status": "completed",
-                    "reason": "tool_loop_completed",
-                    "session_id": "sess_test",
-                    "world_refs": {"world://file_management.write_file/ok": {"kind": "file_management.write_file"}},
-                    "context_summary": {"progress": ["write completed"]},
-                },
-                conversation=[],
-            )
-            controller.state.conversation = [ConversationLine("user", "bad pasted chrome")]
-
-            should_exit = controller.handle_command("/reset-ui")
-            loaded = controller.store.load()
-
-        self.assertFalse(should_exit)
-        self.assertEqual(controller.state.conversation, [])
-        self.assertEqual(loaded["conversation"], [])
-        self.assertIn("world://file_management.write_file/ok", loaded["last_result"]["world_refs"])
-        self.assertEqual(loaded["last_result"]["context_summary"]["progress"], ["write completed"])
-
-    def test_textual_controller_tracks_input_history_for_arrow_navigation(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            controller = TextualTuiController(
-                workspace=Path(tmp),
-                dotenv_path=Path(".env"),
-                max_turns=4,
-                extensions=("file_management",),
-            )
-            controller.record_submitted_text("first")
-            controller.record_submitted_text("second")
-
-            self.assertEqual(controller.previous_history(), "second")
-            self.assertEqual(controller.previous_history(), "first")
-            self.assertEqual(controller.next_history(), "second")
-
-    def test_textual_controller_builds_compacted_runtime_prompt(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            controller = TextualTuiController(
-                workspace=Path(tmp),
-                dotenv_path=Path(".env"),
-                max_turns=4,
-                extensions=("file_management",),
-            )
-            controller.state.conversation = [
-                ConversationLine("user" if index % 2 == 0 else "assistant", f"line {index} " + ("x" * 200))
-                for index in range(80)
-            ]
-
-            prompt = controller.build_runtime_prompt("who am i")
-
-        self.assertLess(len(prompt), 5000)
-        self.assertIn("UI SESSION SUMMARY - REFERENCE ONLY", prompt)
-        self.assertIn("[CURRENT USER REQUEST]\nwho am i", prompt)
-
 
 class _CaptureProvider:
     def __init__(self) -> None:

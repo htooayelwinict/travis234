@@ -159,6 +159,72 @@ class RuntimeProtectionTests(unittest.TestCase):
         self.assertIn("1: class Planner:", sliced["content"])
         self.assertIn("2:     def plan(self):", sliced["content"])
 
+    def test_tree_keeps_sibling_directory_children_under_correct_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "src" / "tools").mkdir(parents=True)
+            (root / "src" / "tools" / "registry.py").write_text("class ToolRegistry: pass\n", encoding="utf-8")
+            (root / "src" / "agents").mkdir(parents=True)
+            (root / "src" / "agents" / "planner.py").write_text("class PlannerAgent: pass\n", encoding="utf-8")
+
+            layout = tree({"path": "src", "max_depth": 4}, {"root_path": root})
+
+        self.assertEqual(layout["status"], "completed")
+        self.assertEqual(
+            layout["entries"],
+            ["agents/", "  planner.py", "tools/", "  registry.py"],
+        )
+
+    def test_observe_tools_exclude_runtime_session_and_exact_env_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "src").mkdir()
+            (root / "src" / "app.py").write_text("print('ok')\n", encoding="utf-8")
+            (root / ".env").write_text("SECRET=hidden\n", encoding="utf-8")
+            (root / ".env.example").write_text("SECRET=\n", encoding="utf-8")
+            (root / ".appv22-ui").mkdir()
+            (root / ".appv22-ui" / "session.json").write_text("{}", encoding="utf-8")
+            (root / ".playwright-mcp" / "facebook" / "Default" / "Cache").mkdir(parents=True)
+            (root / ".playwright-mcp" / "facebook" / "Default" / "Cache" / "blob").write_text("noise", encoding="utf-8")
+            (root / "qdrant_db" / "collection").mkdir(parents=True)
+            (root / "qdrant_db" / "collection" / "segment").write_text("noise", encoding="utf-8")
+
+            layout = tree({"path": "."}, {"root_path": root})
+            snapshot = repo_snapshot({"path": "."}, {"root_path": root})
+
+        self.assertEqual(layout["status"], "completed")
+        self.assertIn("app.py", "\n".join(layout["entries"]))
+        self.assertIn(".env.example", layout["entries"])
+        blocked_layout_text = "\n".join(layout["entries"])
+        self.assertNotIn(".env", layout["entries"])
+        self.assertNotIn(".appv22-ui", blocked_layout_text)
+        self.assertNotIn(".playwright-mcp", blocked_layout_text)
+        self.assertNotIn("qdrant_db", blocked_layout_text)
+        self.assertIn(".env.example", snapshot["files"])
+        self.assertNotIn(".env", snapshot["files"])
+        self.assertFalse(any(path.startswith(".appv22-ui/") for path in snapshot["files"]))
+        self.assertFalse(any(path.startswith(".playwright-mcp/") for path in snapshot["files"]))
+        self.assertFalse(any(path.startswith("qdrant_db/") for path in snapshot["files"]))
+
+    def test_read_range_beyond_eof_fails_without_empty_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "src" / "agents").mkdir(parents=True)
+            (root / "src" / "agents" / "planner.py").write_text(
+                "class Planner:\n"
+                "    pass\n",
+                encoding="utf-8",
+            )
+
+            result = read_range(
+                {"path": "src/agents/planner.py", "start_line": 3, "end_line": 20},
+                {"root_path": root},
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["content"], "")
+        self.assertIn("line_range_out_of_bounds:src/agents/planner.py:3:2", result["errors"])
+
     def test_exact_protected_names_are_denied_for_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -186,7 +252,7 @@ class RuntimeProtectionTests(unittest.TestCase):
             self.assertTrue(result["overwritten"])
             self.assertEqual((root / "note.txt").read_text(encoding="utf-8"), "new")
 
-    def test_update_named_file_allows_overwrite_while_preserving_existing_content(self) -> None:
+    def test_update_named_file_does_not_auto_overwrite_existing_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "tests").mkdir()
@@ -209,9 +275,120 @@ class RuntimeProtectionTests(unittest.TestCase):
                 context,
             )
 
-            self.assertEqual(result["status"], "completed")
-            self.assertTrue(result["overwritten"])
-            self.assertIn("test_square", (root / "tests" / "test_math_utils.py").read_text(encoding="utf-8"))
+            self.assertEqual(result["status"], "denied")
+            self.assertEqual(result["errors"], ["existing_file_requires_overwrite:tests/test_math_utils.py"])
+            self.assertNotIn("test_square", (root / "tests" / "test_math_utils.py").read_text(encoding="utf-8"))
+
+    def test_same_file_followup_does_not_auto_overwrite_existing_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "src").mkdir()
+            (root / "src" / "math_utils.py").write_text("def double(x):\n    return x * 2\n", encoding="utf-8")
+            context = {
+                "root_path": root,
+                "request": {
+                    "user_goal": (
+                        "[RECENT UI TURNS]\n"
+                        "assistant: updated src/math_utils.py and tests/test_math_utils.py\n"
+                        "[CURRENT USER REQUEST]\n"
+                        "Add one more helper to the same source file."
+                    ),
+                    "active_user_request": "Add one more helper to the same source file.",
+                },
+            }
+
+            result = write_file(
+                {
+                    "path": "src/math_utils.py",
+                    "content": "def double(x):\n    return x * 2\n\n\ndef sign_label(value):\n    return 'zero'\n",
+                },
+                context,
+            )
+
+            self.assertEqual(result["status"], "denied")
+            self.assertEqual(result["errors"], ["existing_file_requires_overwrite:src/math_utils.py"])
+            self.assertNotIn("sign_label", (root / "src" / "math_utils.py").read_text(encoding="utf-8"))
+
+    def test_vague_next_one_source_followup_does_not_auto_overwrite_existing_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "src").mkdir()
+            (root / "src" / "math_utils.py").write_text(
+                "def double(x):\n    return x * 2\n\n\ndef abs_value(x):\n    return x if x >= 0 else -x\n",
+                encoding="utf-8",
+            )
+            context = {
+                "root_path": root,
+                "request": {
+                    "user_goal": (
+                        "[RECENT UI TURNS]\n"
+                        "assistant: updated src/math_utils.py and tests/test_math_utils.py\n"
+                        "[CURRENT USER REQUEST]\n"
+                        "Next one is clamp. Add it to source with tests for below range, inside range, and above range."
+                    ),
+                    "active_user_request": (
+                        "Next one is clamp. Add it to source with tests for below range, inside range, and above range."
+                    ),
+                },
+            }
+
+            result = write_file(
+                {
+                    "path": "src/math_utils.py",
+                    "content": (
+                        "def double(x):\n"
+                        "    return x * 2\n\n\n"
+                        "def abs_value(x):\n"
+                        "    return x if x >= 0 else -x\n\n\n"
+                        "def clamp(x, low, high):\n"
+                        "    if x < low:\n"
+                        "        return low\n"
+                        "    if x > high:\n"
+                        "        return high\n"
+                        "    return x\n"
+                    ),
+                },
+                context,
+            )
+
+            self.assertEqual(result["status"], "denied")
+            self.assertEqual(result["errors"], ["existing_file_requires_overwrite:src/math_utils.py"])
+            self.assertNotIn("clamp", (root / "src" / "math_utils.py").read_text(encoding="utf-8"))
+
+    def test_test_followup_does_not_auto_overwrite_existing_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "tests").mkdir()
+            (root / "tests" / "test_math_utils.py").write_text("def test_clamp_below_range():\n    pass\n", encoding="utf-8")
+            context = {
+                "root_path": root,
+                "request": {
+                    "user_goal": (
+                        "[RECENT UI TURNS]\n"
+                        "assistant: tests/test_math_utils.py contains clamp tests but not low == high coverage.\n"
+                        "[CURRENT USER REQUEST]\n"
+                        "Add that missing low equals high clamp test."
+                    ),
+                    "active_user_request": "Add that missing low equals high clamp test.",
+                },
+            }
+
+            result = write_file(
+                {
+                    "path": "tests/test_math_utils.py",
+                    "content": (
+                        "def test_clamp_below_range():\n"
+                        "    pass\n\n"
+                        "def test_clamp_low_equals_high():\n"
+                        "    assert clamp(5, 3, 3) == 3\n"
+                    ),
+                },
+                context,
+            )
+
+            self.assertEqual(result["status"], "denied")
+            self.assertEqual(result["errors"], ["existing_file_requires_overwrite:tests/test_math_utils.py"])
+            self.assertNotIn("test_clamp_low_equals_high", (root / "tests" / "test_math_utils.py").read_text(encoding="utf-8"))
 
     def test_file_management_guidance_maps_bare_read_file_alias_to_namespaced_tool(self) -> None:
         guidance = FileManagementExtension().tool_result_guidance(
@@ -250,10 +427,28 @@ class RuntimeProtectionTests(unittest.TestCase):
             }
         )
 
-        self.assertIn("retry the same path", guidance)
+        self.assertIn("file_management.edit_file", guidance)
+        self.assertIn("targeted replacements", guidance)
         self.assertIn("overwrite:true", guidance)
-        self.assertIn("preserving the existing content", guidance)
-        self.assertNotIn("use the suggested safe alternate path", guidance)
+        self.assertIn("complete rewrites", guidance)
+        self.assertIn("suggested alternate path only", guidance)
+
+    def test_file_management_guidance_recovers_copy_preserve_source_denial(self) -> None:
+        guidance = FileManagementExtension().tool_result_guidance(
+            {
+                "tool_id": "file_management.copy_file",
+                "status": "denied",
+                "payload": {
+                    "source": "docs/recovery_notes.md",
+                    "destination": "docs/recovery_notes_copy.md",
+                    "errors": ["copy_requires_preserve_source:true"],
+                },
+            }
+        )
+
+        self.assertIn("file_management.copy_file", guidance)
+        self.assertIn("preserve_source:true", guidance)
+        self.assertIn("retry", guidance.lower())
 
     def test_payload_ref_includes_arguments_to_avoid_semantic_collisions(self) -> None:
         registry = ToolRegistry()
@@ -447,7 +642,7 @@ class RuntimeProtectionTests(unittest.TestCase):
         self.assertIn("file_management.read_file", provider.prompt["selection"]["selected_tools"])
         self.assertIn("world://file_management.read_file/facebook", provider.prompt["world"]["world_refs"])
 
-    def test_short_continuation_without_code_evidence_does_not_activate_file_tools(self) -> None:
+    def test_short_continuation_without_code_evidence_keeps_tools_but_no_refs(self) -> None:
         provider = _CaptureProvider()
         services = create_appv22_services(
             root_path=Path("."),
@@ -467,8 +662,83 @@ class RuntimeProtectionTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(provider.prompt)
-        self.assertEqual(provider.prompt["selection"]["selected_skills"], [])
-        self.assertEqual(provider.prompt["selection"]["selected_tools"], [])
+        self.assertIn("file_management.code_search", provider.prompt["selection"]["selected_skills"])
+        self.assertIn("file_management.read_file", provider.prompt["selection"]["selected_tools"])
+        self.assertEqual(provider.prompt["world"]["world_refs"], {})
+        self.assertEqual(provider.prompt["state"]["context_summary"]["evidence_refs"], [])
+
+    def test_hermes_ui_hot_tail_keeps_file_tools_available_for_vague_repo_followup(self) -> None:
+        provider = _CaptureProvider()
+        services = create_appv22_services(
+            root_path=Path("."),
+            provider=provider,
+            extensions=[FileManagementExtension()],
+        )
+        runtime = AppV22AgentRuntime(root_path=Path("."), services=services, max_turns=1)
+
+        runtime.continue_run(
+            {
+                "session_id": "sess_old",
+                "world_refs": {
+                    "world://file_management.tree/src": {
+                        "kind": "file_management.tree",
+                        "freshness": "turn",
+                        "arguments": {"path": "src"},
+                        "payload": {"entries": ["agents/", "  planner.py", "  reflection.py"]},
+                        "summary": "file_management.tree result",
+                    },
+                    "world://file_management.find_files/agents": {
+                        "kind": "file_management.find_files",
+                        "freshness": "turn",
+                        "arguments": {"path": "src/agents", "patterns": ["*.py"]},
+                        "payload": {"matches": ["src/agents/planner.py", "src/agents/reflection.py"]},
+                        "summary": "file_management.find_files result",
+                    },
+                },
+                "context_summary": {
+                    "progress": [
+                        "file_management.tree: file_management.tree result",
+                        "file_management.find_files: file_management.find_files result",
+                    ],
+                    "evidence_refs": [
+                        "world://file_management.tree/src",
+                        "world://file_management.find_files/agents",
+                    ],
+                },
+            },
+            (
+                "[UI SESSION SUMMARY - REFERENCE ONLY]\n"
+                "User is analyzing the repository under src/agents.\n"
+                "--- END UI SESSION SUMMARY ---\n"
+                "[RECENT UI TURNS]\n"
+                "user: list dir under src\n"
+                "assistant: src contains agents/, tools/, storage/\n"
+                "user: show me full list\n"
+                "assistant: src/agents contains planner.py, reflection.py, facebook_surfer.py\n\n"
+                "assistant: Unable to analyze src/agents/planner.py because no useful read tools are available.\n\n"
+                "[CURRENT USER REQUEST]\n"
+                "analyze the planner one. give me full software desing patterns"
+            ),
+            active_user_request="analyze the planner one. give me full software desing patterns",
+            ui_context={
+                "conversation_summary": "User is analyzing the repository under src/agents.",
+                "metrics": {"compaction_count": 2, "hot_lines": 6},
+            },
+        )
+
+        self.assertIsNotNone(provider.prompt)
+        self.assertEqual(
+            provider.prompt["agent"]["request"],
+            "analyze the planner one. give me full software desing patterns",
+        )
+        self.assertEqual(
+            provider.prompt["agent"]["reference_request_context"],
+            "analyze the planner one. give me full software desing patterns",
+        )
+        self.assertNotIn("no useful read tools", provider.prompt["agent"]["reference_request_context"])
+        self.assertIn("file_management.code_search", provider.prompt["selection"]["selected_skills"])
+        self.assertIn("file_management.read_file", provider.prompt["selection"]["selected_tools"])
+        self.assertIn("file_management.find_files", provider.prompt["selection"]["selected_tools"])
 
     def test_referential_line_count_followup_keeps_prior_code_evidence_visible(self) -> None:
         provider = _CaptureProvider()
@@ -545,7 +815,7 @@ class RuntimeProtectionTests(unittest.TestCase):
         self.assertIn("file_management.code_search", provider.prompt["selection"]["selected_skills"])
         self.assertIn("file_management.read_file", provider.prompt["selection"]["selected_tools"])
 
-    def test_referential_line_count_without_code_evidence_does_not_activate_file_tools(self) -> None:
+    def test_referential_line_count_without_code_evidence_keeps_tools_but_no_refs(self) -> None:
         provider = _CaptureProvider()
         services = create_appv22_services(
             root_path=Path("."),
@@ -565,8 +835,10 @@ class RuntimeProtectionTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(provider.prompt)
-        self.assertEqual(provider.prompt["selection"]["selected_skills"], [])
-        self.assertEqual(provider.prompt["selection"]["selected_tools"], [])
+        self.assertIn("file_management.code_search", provider.prompt["selection"]["selected_skills"])
+        self.assertIn("file_management.read_file", provider.prompt["selection"]["selected_tools"])
+        self.assertEqual(provider.prompt["world"]["world_refs"], {})
+        self.assertEqual(provider.prompt["state"]["context_summary"]["evidence_refs"], [])
 
     def test_scan_codebase_prompt_selects_repo_snapshot_tool(self) -> None:
         provider = _CaptureProvider()
@@ -588,6 +860,63 @@ class RuntimeProtectionTests(unittest.TestCase):
         self.assertIn("file_management.grep", provider.prompt["selection"]["selected_tools"])
         self.assertIn("file_management.read_range", provider.prompt["selection"]["selected_tools"])
 
+    def test_repo_analysis_prompt_has_pi_style_read_only_file_tools_without_alias_guessing(self) -> None:
+        provider = _CaptureProvider()
+        services = create_appv22_services(
+            root_path=Path("."),
+            provider=provider,
+            extensions=[FileManagementExtension()],
+        )
+        runtime = AppV22AgentRuntime(root_path=Path("."), services=services, max_turns=1)
+
+        runtime.run("analyze the repo", active_user_request="analyze the repo")
+
+        self.assertIsNotNone(provider.prompt)
+        selected_tools = provider.prompt["selection"]["selected_tools"]
+        self.assertIn("file_management.tree", selected_tools)
+        self.assertIn("file_management.find_files", selected_tools)
+        self.assertIn("file_management.read_file", selected_tools)
+        self.assertIn("file_management.grep", selected_tools)
+        self.assertNotIn("observe", selected_tools)
+        self.assertNotIn("read_file", selected_tools)
+
+    def test_greeting_with_fixes_does_not_activate_mutation_tools_or_action_guidance(self) -> None:
+        provider = _CaptureProvider()
+        services = create_appv22_services(
+            root_path=Path("."),
+            provider=provider,
+            extensions=[FileManagementExtension()],
+        )
+        runtime = AppV22AgentRuntime(root_path=Path("."), services=services, max_turns=1)
+
+        result = runtime.run("hi after fixes", active_user_request="hi after fixes")
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["assistant_message"], "captured")
+        self.assertNotIn("file_management.write_file", provider.prompt["selection"]["selected_tools"])
+        self.assertNotIn("file_management.edit_file", provider.prompt["selection"]["selected_tools"])
+        self.assertEqual(result["turn_feedback"], [])
+
+    def test_noop_tool_call_is_repaired_without_terminal_failure(self) -> None:
+        provider = _SequenceProvider(
+            [
+                {"kind": "tool_call", "payload": {"tool_id": "none", "arguments": {}}},
+                {"kind": "finalize", "payload": {"message": "Hi! How can I help you with the codebase?"}},
+            ]
+        )
+        services = create_appv22_services(
+            root_path=Path("."),
+            provider=provider,
+            extensions=[FileManagementExtension()],
+        )
+        runtime = AppV22AgentRuntime(root_path=Path("."), services=services, max_turns=2)
+
+        result = runtime.run("hi after fixes", active_user_request="hi after fixes")
+
+        self.assertEqual(result["status"], "completed", result)
+        self.assertEqual(result["assistant_message"], "Hi! How can I help you with the codebase?")
+        self.assertTrue(any("No-op tool_call" in feedback for feedback in result["turn_feedback"]))
+
     def test_code_file_explanation_prompt_selects_file_read_tools(self) -> None:
         provider = _CaptureProvider()
         services = create_appv22_services(
@@ -603,7 +932,7 @@ class RuntimeProtectionTests(unittest.TestCase):
         self.assertIn("file_management.grep", provider.prompt["selection"]["selected_tools"])
         self.assertIn("file_management.read_range", provider.prompt["selection"]["selected_tools"])
         self.assertIn("file_management.read_file", provider.prompt["selection"]["selected_tools"])
-        self.assertNotIn("file_management.read_many", provider.prompt["selection"]["selected_tools"])
+        self.assertIn("file_management.read_many", provider.prompt["selection"]["selected_tools"])
 
     def test_add_helper_prompt_selects_file_mutation_tools(self) -> None:
         provider = _CaptureProvider()
@@ -675,6 +1004,20 @@ class RuntimeProtectionTests(unittest.TestCase):
         self.assertIn("fully satisfied", prompt)
         self.assertIn("before finalizing", prompt)
 
+    def test_provider_prompt_forbids_meta_tool_intent_as_finalize(self) -> None:
+        prompt = _appv22_decision_prompt(
+            {
+                "agent": {"request": "no, only src/agents list"},
+                "state": {"context_summary": {"blockers": []}, "turn_feedback": []},
+                "selection": {"selected_tools": ["file_management.tree"]},
+                "world": {"world_refs": {}},
+            }
+        )
+
+        self.assertIn("finalize must answer the user", prompt)
+        self.assertIn("Requesting", prompt)
+        self.assertIn("emit tool_call", prompt)
+
     def test_provider_prompt_surfaces_latest_tool_results_as_hot_context(self) -> None:
         prompt = _appv22_decision_prompt(
             {
@@ -722,7 +1065,7 @@ class RuntimeProtectionTests(unittest.TestCase):
         self.assertIn("For vague follow-ups such as 'next one is X'", prompt)
         self.assertIn("preserve the previous task shape", prompt)
         self.assertIn("bare filename", prompt)
-        self.assertIn("file_management.find_files before file_management.read_file", prompt)
+        self.assertIn("selected discovery tools before selected exact-read tools", prompt)
         self.assertIn("missing_file", prompt)
         self.assertIn("do not finalize with a tool-unavailable answer", prompt)
 
@@ -768,7 +1111,7 @@ class RuntimeProtectionTests(unittest.TestCase):
         self.assertIsNotNone(provider.prompt)
         self.assertNotIn("messages", provider.prompt)
 
-    def test_non_tool_prompt_does_not_select_file_tools_or_hydrate_old_file_evidence(self) -> None:
+    def test_non_tool_prompt_keeps_pi_tools_without_hydrating_old_file_evidence(self) -> None:
         provider = _CaptureProvider()
         services = create_appv22_services(
             root_path=Path("."),
@@ -798,7 +1141,7 @@ class RuntimeProtectionTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(provider.prompt)
-        self.assertEqual(provider.prompt["selection"]["selected_tools"], [])
+        self.assertIn("file_management.read_file", provider.prompt["selection"]["selected_tools"])
         self.assertEqual(provider.prompt["world"]["world_refs"], {})
         self.assertEqual(provider.prompt["state"]["context_summary"]["evidence_refs"], [])
         self.assertEqual(provider.prompt["state"]["context_summary"]["progress"], [])
@@ -835,6 +1178,94 @@ class RuntimeProtectionTests(unittest.TestCase):
             [item["tool_id"] for item in result["tool_results"]],
             ["file_management.repo_snapshot", "file_management.repo_snapshot"],
         )
+
+    def test_repeated_denied_tool_call_is_recorded_like_pi_tool_result(self) -> None:
+        provider = _SequenceProvider(
+            [
+                {
+                    "kind": "tool_call",
+                    "payload": {"tool_id": "file_management.read_file", "arguments": {"path": "../outside.txt"}},
+                },
+                {
+                    "kind": "tool_call",
+                    "payload": {"tool_id": "file_management.read_file", "arguments": {"path": "../outside.txt"}},
+                },
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            services = create_appv22_services(
+                root_path=root,
+                provider=provider,
+                extensions=[FileManagementExtension()],
+            )
+            runtime = AppV22AgentRuntime(root_path=root, services=services, max_turns=2)
+
+            result = runtime.run("read outside file twice", active_user_request="read outside file twice")
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["reason"], "max_turns_exceeded")
+        self.assertEqual(
+            [item["tool_id"] for item in result["tool_results"]],
+            ["file_management.read_file", "file_management.read_file"],
+        )
+        self.assertEqual([item["status"] for item in result["tool_results"]], ["denied", "denied"])
+
+    def test_copy_file_preserve_source_denial_recovers_with_corrected_arguments(self) -> None:
+        provider = _SequenceProvider(
+            [
+                {
+                    "kind": "tool_call",
+                    "payload": {
+                        "tool_id": "file_management.copy_file",
+                        "arguments": {
+                            "source": "docs/recovery_notes.md",
+                            "destination": "docs/recovery_notes_copy.md",
+                        },
+                    },
+                },
+                {
+                    "kind": "tool_call",
+                    "payload": {
+                        "tool_id": "file_management.copy_file",
+                        "arguments": {
+                            "source": "docs/recovery_notes.md",
+                            "destination": "docs/recovery_notes_copy.md",
+                            "preserve_source": True,
+                        },
+                    },
+                },
+                {
+                    "kind": "finalize",
+                    "payload": {"message": "Copied recovery notes."},
+                },
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "docs").mkdir()
+            (root / "docs" / "recovery_notes.md").write_text("# Recovery Notes\n", encoding="utf-8")
+            services = create_appv22_services(
+                root_path=root,
+                provider=provider,
+                extensions=[FileManagementExtension()],
+            )
+            runtime = AppV22AgentRuntime(root_path=root, services=services, max_turns=3)
+
+            result = runtime.run(
+                "copy docs/recovery_notes.md to docs/recovery_notes_copy.md",
+                active_user_request="copy docs/recovery_notes.md to docs/recovery_notes_copy.md",
+            )
+            copied = (root / "docs" / "recovery_notes_copy.md").read_text(encoding="utf-8")
+
+        self.assertEqual(result["status"], "completed", result)
+        self.assertEqual(copied, "# Recovery Notes\n")
+        self.assertEqual([item["status"] for item in result["tool_results"]], ["denied", "completed"])
+        self.assertGreaterEqual(len(provider.prompts), 2)
+        second_prompt_text = str(provider.prompts[1]["state"])
+        self.assertIn("preserve_source:true", second_prompt_text)
+        self.assertIn("corrected arguments", second_prompt_text)
+        self.assertNotIn("without retrying the same denied call", second_prompt_text)
 
     def test_action_request_cannot_finalize_after_only_observe_evidence(self) -> None:
         provider = _SequenceProvider(
@@ -923,6 +1354,50 @@ class RuntimeProtectionTests(unittest.TestCase):
         self.assertEqual(result["assistant_message"], "README inspected; no writes performed.")
         self.assertEqual(provider.kinds, ["tool_call", "finalize"])
 
+    def test_no_edit_analysis_request_does_not_trigger_existing_file_edit_guidance(self) -> None:
+        provider = _SequenceProvider(
+            [
+                {
+                    "kind": "tool_call",
+                    "payload": {
+                        "tool_id": "file_management.read_file",
+                        "arguments": {"path": "src/agents/planner.py"},
+                    },
+                },
+                {
+                    "kind": "finalize",
+                    "payload": {"message": "PlanningAgent uses a facade-style planner around retrieval and LLM calls."},
+                },
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "src" / "agents").mkdir(parents=True)
+            (root / "src" / "agents" / "planner.py").write_text(
+                "class PlanningAgent:\n"
+                "    def create_plan(self):\n"
+                "        return 'plan'\n",
+                encoding="utf-8",
+            )
+            services = create_appv22_services(
+                root_path=root,
+                provider=provider,
+                extensions=[FileManagementExtension()],
+            )
+            runtime = AppV22AgentRuntime(root_path=root, services=services, max_turns=3)
+
+            result = runtime.run(
+                "analyze planner.py design patterns no edit",
+                active_user_request="analyze planner.py design patterns no edit",
+            )
+
+        self.assertEqual(result["status"], "completed", result)
+        self.assertEqual(
+            result["assistant_message"],
+            "PlanningAgent uses a facade-style planner around retrieval and LLM calls.",
+        )
+        self.assertFalse(any("edit_file" in feedback for feedback in result["turn_feedback"]))
+
     def test_action_request_cannot_pause_complete_from_stale_action_evidence(self) -> None:
         provider = _SequenceProvider([{"kind": "pause", "payload": {"pause_type": "tool_blocked"}}])
         previous_result = {
@@ -1000,6 +1475,66 @@ class RuntimeProtectionTests(unittest.TestCase):
         self.assertTrue(any("current action evidence" in feedback for feedback in result["turn_feedback"]))
         self.assertIn("current action evidence", result["assistant_message"])
 
+    def test_read_only_followup_after_stale_write_guidance_does_not_report_mutation_failure(self) -> None:
+        provider = _SequenceProvider(
+            [
+                {
+                    "kind": "tool_call",
+                    "payload": {
+                        "tool_id": "file_management.read_file",
+                        "arguments": {"path": "tests/test_math_utils.py"},
+                    },
+                },
+                {
+                    "kind": "tool_call",
+                    "payload": {
+                        "tool_id": "file_management.read_file",
+                        "arguments": {"path": "tests/test_math_utils.py"},
+                    },
+                },
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "tests").mkdir()
+            (root / "tests" / "test_math_utils.py").write_text(
+                "from src.math_utils import double\n\n"
+                "def test_double():\n"
+                "    assert double(2) == 4\n",
+                encoding="utf-8",
+            )
+            services = create_appv22_services(
+                root_path=root,
+                provider=provider,
+                extensions=[FileManagementExtension()],
+            )
+            runtime = AppV22AgentRuntime(root_path=root, services=services, max_turns=2)
+            previous_result = {
+                "status": "failed",
+                "reason": "max_turns_exceeded",
+                "session_id": "sess_test",
+                "world_refs": {},
+                "context_summary": {
+                    "blockers": [
+                        "The latest file mutation request has no completed write evidence; the next decision must be a tool_call to file_management.write_file before finalizing.",
+                        "Finalization guidance names selected tool file_management.write_file; the next decision should call file_management.write_file before finalizing.",
+                    ]
+                },
+            }
+
+            result = runtime.continue_run(
+                previous_result,
+                "Read only the tests file and tell me whether all helpers now have at least one test. Do not edit.",
+                active_user_request=(
+                    "Read only the tests file and tell me whether all helpers now have at least one test. Do not edit."
+                ),
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["reason"], "max_turns_exceeded")
+        self.assertFalse(any("current action evidence" in feedback for feedback in result["turn_feedback"]))
+        self.assertNotIn("workspace change", result.get("assistant_message", ""))
+
     def test_repeated_observe_in_action_request_guides_to_action_without_reexecuting(self) -> None:
         updated_source = (
             "def word_count(text):\n"
@@ -1058,9 +1593,9 @@ class RuntimeProtectionTests(unittest.TestCase):
         self.assertIn("def character_count", written)
         self.assertEqual(
             [item["tool_id"] for item in result["tool_results"]],
-            ["file_management.read_file", "file_management.write_file"],
+            ["file_management.read_file", "file_management.read_file", "file_management.write_file"],
         )
-        self.assertTrue(any("Repeated observe evidence" in feedback for feedback in result["turn_feedback"]))
+        self.assertFalse(any("Repeated observe evidence" in feedback for feedback in result["turn_feedback"]))
 
     def test_action_request_exhaustion_reports_partial_current_action_evidence(self) -> None:
         updated_source = "def double(x):\n    return x * 2\n\n\ndef negate(x):\n    return -x\n"
@@ -1174,7 +1709,11 @@ class RuntimeProtectionTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "completed")
         self.assertIn("def negate", written)
-        self.assertTrue(any("stale action evidence" in feedback for feedback in result["turn_feedback"]))
+        self.assertEqual(
+            [item["tool_id"] for item in result["tool_results"]],
+            ["file_management.write_file", "file_management.write_file"],
+        )
+        self.assertFalse(any("stale action evidence" in feedback for feedback in result["turn_feedback"]))
         self.assertFalse(
             any(
                 "Duplicate completed tool call suppressed" in progress
@@ -1305,12 +1844,14 @@ class RuntimeProtectionTests(unittest.TestCase):
             "evidence_refs": ["world://file_management.repo_snapshot/current"],
         }
 
-        completed = runtime._complete_from_latest_observe_result(state)
+        resolved = services.extension_registry.resolve_active(state)
+        packet = services.context_harness.prepare_turn(state, resolved)
 
-        self.assertTrue(completed)
-        self.assertEqual(state.result["assistant_message"], "Directories: docs\nFiles: alpha.txt")
+        latest = packet.provider_prompt["state"]["latest_tool_results"]
+        self.assertEqual(latest[-1]["payload"]["files"], ["alpha.txt"])
+        self.assertEqual(latest[-1]["payload"]["directories"], ["docs"])
 
-    def test_repeated_observe_turn_closes_tool_surface_without_domain_classifier(self) -> None:
+    def test_repeated_observe_turn_preserves_pi_read_tool_surface(self) -> None:
         services = create_appv22_services(
             root_path=Path("."),
             provider=_CaptureProvider(),
@@ -1337,8 +1878,11 @@ class RuntimeProtectionTests(unittest.TestCase):
 
         packet = services.context_harness.prepare_turn(state, resolved)
 
-        self.assertEqual(packet.provider_prompt["selection"]["selected_tools"], [])
-        self.assertEqual(packet.provider_prompt["tools"], [])
+        self.assertIn("file_management.tree", packet.provider_prompt["selection"]["selected_tools"])
+        self.assertIn("file_management.repo_snapshot", packet.provider_prompt["selection"]["selected_tools"])
+        self.assertIn("file_management.find_files", packet.provider_prompt["selection"]["selected_tools"])
+        self.assertIn("file_management.read_file", packet.provider_prompt["selection"]["selected_tools"])
+        self.assertEqual(packet.provider_prompt["tools"], packet.provider_prompt["selection"]["selected_tools"])
         self.assertEqual(packet.provider_prompt["state"]["latest_tool_results"][-1]["payload"]["files"], ["alpha.txt"])
 
     def test_repeated_observe_does_not_close_action_tool_surface(self) -> None:
@@ -1436,6 +1980,98 @@ class RuntimeProtectionTests(unittest.TestCase):
         self.assertNotIn("file_management.write_file: file_management.write_file result", summary["progress"])
         self.assertIn("file_management.read_file: file_management.read_file result", summary["progress"])
 
+    def test_context_harness_exposes_safe_action_refs_for_read_only_followup(self) -> None:
+        services = create_appv22_services(
+            root_path=Path("."),
+            provider=_CaptureProvider(),
+            extensions=[FileManagementExtension()],
+        )
+        state = AgentState(
+            "sess_test",
+            "run_new",
+            RequestEnvelope(
+                "req_new",
+                "show me the file you wrote",
+                ".",
+                active_user_request="show me the file you wrote",
+            ),
+        )
+        state.world_refs = {
+            "world://file_management.write_file/old": {
+                "kind": "file_management.write_file",
+                "arguments": {"path": "src/math_utils.py", "content": "def double(x):\n    return x * 2\n"},
+                "summary": "file_management.write_file result",
+                "payload": {"path": "src/math_utils.py", "bytes_written": 32},
+                "request_id": "req_old",
+                "run_id": "run_old",
+                "freshness": "stable",
+                "mutation_seq": 1,
+            }
+        }
+        state.mutation_seq = 1
+        state.context_summary = {
+            "progress": ["file_management.write_file: file_management.write_file result"],
+            "evidence_refs": ["world://file_management.write_file/old"],
+        }
+        resolved = services.extension_registry.resolve_active(state)
+
+        packet = services.context_harness.prepare_turn(state, resolved)
+
+        self.assertIn("file_management.read_file", packet.provider_prompt["selection"]["selected_tools"])
+        self.assertNotIn("world://file_management.write_file/old", packet.provider_prompt["world"]["world_refs"])
+        action_refs = packet.provider_prompt["state"]["action_refs"]
+        self.assertEqual(action_refs[0]["ref_id"], "world://file_management.write_file/old")
+        self.assertEqual(action_refs[0]["kind"], "file_management.write_file")
+        self.assertEqual(action_refs[0]["paths"], ["src/math_utils.py"])
+        self.assertNotIn("content", action_refs[0])
+
+    def test_context_harness_labels_move_action_refs_for_compacted_summaries(self) -> None:
+        services = create_appv22_services(
+            root_path=Path("."),
+            provider=_CaptureProvider(),
+            extensions=[FileManagementExtension()],
+        )
+        state = AgentState(
+            "sess_test",
+            "run_new",
+            RequestEnvelope(
+                "req_new",
+                "summarize all modified files",
+                ".",
+                active_user_request="summarize all modified files",
+            ),
+        )
+        state.world_refs = {
+            "world://file_management.move_file/old": {
+                "kind": "file_management.move_file",
+                "arguments": {
+                    "source": "docs/math_utils_notes.md",
+                    "destination": "docs/math_helpers.md",
+                },
+                "summary": "file_management.move_file result",
+                "payload": {
+                    "source": "docs/math_utils_notes.md",
+                    "destination": "docs/math_helpers.md",
+                },
+                "request_id": "req_old",
+                "run_id": "run_old",
+                "freshness": "stable",
+                "mutation_seq": 1,
+            }
+        }
+        state.mutation_seq = 1
+        resolved = services.extension_registry.resolve_active(state)
+
+        packet = services.context_harness.prepare_turn(state, resolved)
+
+        action_refs = packet.provider_prompt["state"]["action_refs"]
+        self.assertEqual(action_refs[0]["kind"], "file_management.move_file")
+        self.assertEqual(action_refs[0]["paths"], ["docs/math_helpers.md"])
+        self.assertEqual(action_refs[0]["source"], "docs/math_utils_notes.md")
+        self.assertEqual(action_refs[0]["destination"], "docs/math_helpers.md")
+        self.assertEqual(action_refs[0]["current_paths"], ["docs/math_helpers.md"])
+        self.assertEqual(action_refs[0]["obsolete_paths"], ["docs/math_utils_notes.md"])
+
     def test_continue_run_resolves_blockers_from_existing_world_refs_before_prompt(self) -> None:
         provider = _CaptureProvider()
         services = create_appv22_services(
@@ -1521,9 +2157,13 @@ class RuntimeProtectionTests(unittest.TestCase):
             }
         }
 
-        exists = runtime._tool_call_evidence_already_exists(state, "file_management.repo_snapshot", {})
-
-        self.assertFalse(exists)
+        self.assertFalse(
+            runtime._world_ref_has_usable_payload(
+                state,
+                None,
+                state.world_refs["world://file_management.repo_snapshot/payloadless"],
+            )
+        )
 
     def test_persisted_repo_snapshot_does_not_suppress_fresh_list_request(self) -> None:
         services = create_appv22_services(
@@ -1548,9 +2188,7 @@ class RuntimeProtectionTests(unittest.TestCase):
             }
         }
 
-        exists = runtime._tool_call_evidence_already_exists(state, "file_management.repo_snapshot", {})
-
-        self.assertFalse(exists)
+        self.assertFalse(runtime._world_ref_fresh_for_tool(state, state.world_refs["world://file_management.repo_snapshot/stale"]))
 
     def test_read_file_evidence_is_stale_after_workspace_mutation(self) -> None:
         services = create_appv22_services(
@@ -1587,13 +2225,6 @@ class RuntimeProtectionTests(unittest.TestCase):
         state.active_extension_ids = list(resolved.extension_ids)
 
         self.assertFalse(runtime._observation_contract_satisfied(state, resolved))
-        self.assertFalse(
-            runtime._tool_call_evidence_already_exists(
-                state,
-                "file_management.read_file",
-                {"path": "tests/test_math_utils.py"},
-            )
-        )
 
     def test_continue_run_restores_mutation_sequence_from_persisted_world_refs(self) -> None:
         provider = _CaptureProvider()
@@ -1670,13 +2301,6 @@ class RuntimeProtectionTests(unittest.TestCase):
 
         self.assertIn("file_management.code_search", [card.skill_id for card in resolved.skill_cards])
         self.assertFalse(runtime._observation_contract_satisfied(state, resolved))
-        self.assertFalse(
-            runtime._tool_call_evidence_already_exists(
-                state,
-                "file_management.read_file",
-                {"path": "src/agents/facebook_surfer.py"},
-            )
-        )
 
     def test_clipped_read_file_evidence_with_line_count_satisfies_line_count_followup(self) -> None:
         services = create_appv22_services(
@@ -1707,13 +2331,6 @@ class RuntimeProtectionTests(unittest.TestCase):
         state.active_extension_ids = list(resolved.extension_ids)
 
         self.assertTrue(runtime._observation_contract_satisfied(state, resolved))
-        self.assertTrue(
-            runtime._tool_call_evidence_already_exists(
-                state,
-                "file_management.read_file",
-                {"path": "src/agents/facebook_surfer.py"},
-            )
-        )
 
     def test_turn_scoped_world_ref_is_not_fresh_across_requests(self) -> None:
         registry = ToolRegistry()
@@ -1834,7 +2451,7 @@ class RuntimeProtectionTests(unittest.TestCase):
         self.assertEqual(result["status"], "completed")
         self.assertIsInstance(result.get("payload_ref"), str)
         self.assertTrue(result["payload_ref"].startswith("world://file_management.repo_snapshot/"))
-        self.assertFalse(result["payload_ref"].endswith("/latest"))
+        self.assertTrue(result["payload_ref"].endswith("/latest"))
 
     def test_malformed_tool_call_guidance_is_turn_feedback_not_persisted_blocker(self) -> None:
         runtime = AppV22AgentRuntime(
@@ -1876,10 +2493,81 @@ class RuntimeProtectionTests(unittest.TestCase):
 
         result = runtime.run("what's inside src", active_user_request="what's inside src")
 
-        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["reason"], "unresolved_tool_feedback")
         self.assertTrue(any("observe_directory" in feedback for feedback in result["turn_feedback"]))
-        self.assertTrue(any("file_management.tree" in feedback for feedback in result["turn_feedback"]))
-        self.assertTrue(any("file_management.repo_snapshot" in feedback for feedback in result["turn_feedback"]))
+        feedback_text = str(result["context_summary"]) + str(result["turn_feedback"])
+        self.assertIn("file_management.tree", feedback_text)
+        self.assertIn("file_management.repo_snapshot", feedback_text)
+
+    def test_expected_missing_file_read_can_finalize_without_recovery_tool(self) -> None:
+        provider = _SequenceProvider(
+            [
+                {
+                    "kind": "tool_call",
+                    "payload": {
+                        "tool_id": "file_management.read_file",
+                        "arguments": {"path": "plan/appv22-live-scope/missing.md"},
+                    },
+                },
+                {"kind": "finalize", "payload": {"message": "plan/appv22-live-scope/missing.md is missing."}},
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "plan" / "appv22-live-scope").mkdir(parents=True)
+            services = create_appv22_services(
+                root_path=root,
+                provider=provider,
+                extensions=[FileManagementExtension()],
+            )
+            runtime = AppV22AgentRuntime(root_path=root, services=services, max_turns=3)
+
+            result = runtime.run(
+                "Try to read plan/appv22-live-scope/missing.md, then tell me it is missing if it does not exist. Do not create it.",
+                active_user_request=(
+                    "Try to read plan/appv22-live-scope/missing.md, then tell me it is missing if it does not exist. Do not create it."
+                ),
+            )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["assistant_message"], "plan/appv22-live-scope/missing.md is missing.")
+        self.assertTrue(any(item["status"] == "failed" for item in result["tool_results"]))
+
+    def test_expected_protected_read_denial_can_finalize_without_recovery_tool(self) -> None:
+        provider = _SequenceProvider(
+            [
+                {
+                    "kind": "tool_call",
+                    "payload": {
+                        "tool_id": "file_management.read_file",
+                        "arguments": {"path": "secrets/prod.env"},
+                    },
+                },
+                {"kind": "finalize", "payload": {"message": "Access to secrets/prod.env is denied."}},
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "secrets").mkdir()
+            (root / "secrets" / "prod.env").write_text("TOKEN=secret", encoding="utf-8")
+            services = create_appv22_services(
+                root_path=root,
+                provider=provider,
+                extensions=[FileManagementExtension()],
+            )
+            runtime = AppV22AgentRuntime(root_path=root, services=services, max_turns=3)
+
+            result = runtime.run(
+                "Try to read secrets/prod.env and tell me if access is denied. Do not work around it and do not edit.",
+                active_user_request=(
+                    "Try to read secrets/prod.env and tell me if access is denied. Do not work around it and do not edit."
+                ),
+            )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["assistant_message"], "Access to secrets/prod.env is denied.")
+        self.assertTrue(any(item["status"] == "denied" for item in result["tool_results"]))
 
     def test_inactive_tool_denial_does_not_emit_duplicate_context_summary_updates(self) -> None:
         provider = _SequenceProvider(
@@ -1903,8 +2591,36 @@ class RuntimeProtectionTests(unittest.TestCase):
 
         result = runtime.run("what's inside src", active_user_request="what's inside src")
 
-        summary_update_count = sum(1 for event in result["events"] if event["event_type"] == "ContextSummaryUpdated")
-        self.assertLessEqual(summary_update_count, 1)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["reason"], "unresolved_tool_feedback")
+        self.assertTrue(any("observe_directory" in feedback for feedback in result["turn_feedback"]))
+
+    def test_inactive_tool_denial_cannot_complete_without_later_successful_evidence(self) -> None:
+        provider = _SequenceProvider(
+            [
+                {
+                    "kind": "tool_call",
+                    "payload": {
+                        "tool_id": "observe_directory",
+                        "arguments": {"path": "src"},
+                    },
+                },
+                {"kind": "finalize", "payload": {"assistant_message": "I cannot inspect src."}},
+            ]
+        )
+        services = create_appv22_services(
+            root_path=Path("."),
+            provider=provider,
+            extensions=[FileManagementExtension()],
+        )
+        runtime = AppV22AgentRuntime(root_path=Path("."), services=services, max_turns=2)
+
+        result = runtime.run("what's inside src", active_user_request="what's inside src")
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["reason"], "unresolved_tool_feedback")
+        self.assertTrue(any(item["status"] == "denied" for item in result["tool_results"]))
+        self.assertFalse(any(event["event_type"] == "RunCompleted" for event in result["events"]))
 
 
 def _unused_services() -> AppV22Services:
@@ -1961,10 +2677,12 @@ class _SequenceProvider:
     def __init__(self, decisions: list[dict]) -> None:
         self.decisions = list(decisions)
         self.kinds: list[str] = []
+        self.prompts: list[dict] = []
 
-    def decide(self, _prompt):
+    def decide(self, prompt):
         from appv22.runtime.decisions import RuntimeDecision
 
+        self.prompts.append(prompt)
         decision = self.decisions.pop(0)
         self.kinds.append(decision["kind"])
         return RuntimeDecision(

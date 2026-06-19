@@ -34,18 +34,6 @@ SEED_FILES = {
     "docs/context.md": "Current project context: runtime probe workspace.\n",
     "notes/raw_brain_dump.txt": "remember to document next steps before handoff\n",
 }
-APPV2_ENV_FILE_MANAGEMENT_TOOL_NAME_MAP = {
-    "repo_snapshot": "file_management.repo_snapshot",
-    "read_file": "file_management.read_file",
-    "write_file": "file_management.write_file",
-    "move_file": "file_management.move_file",
-    "copy_file": "file_management.copy_file",
-    "delete_file": "file_management.delete_file",
-    "mkdir": "file_management.mkdir",
-    "list_files": "file_management.list_files",
-}
-
-
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--provider", choices=["appv2-env"], default="appv2-env")
@@ -116,10 +104,7 @@ def bounded_probe_run(timeout_seconds: int):
 
 
 def create_provider(provider_name: str, *, dotenv_path: str):
-    return create_appv22_provider_from_appv2_env(
-        dotenv_path=dotenv_path,
-        tool_name_map=APPV2_ENV_FILE_MANAGEMENT_TOOL_NAME_MAP,
-    )
+    return create_appv22_provider_from_appv2_env(dotenv_path=dotenv_path)
 
 
 def default_report_path(provider_name: str, *, output: Path | None = None) -> Path:
