@@ -68,6 +68,7 @@ Dependency order (each layer builds on the previous):
 1. **ai-parity** — port pi `ai`: provider/model abstraction, message types,
    streaming `AssistantMessageEvent` protocol, tool-call format. **Remove appv21**
    and build a fresh, self-contained provider with **real SSE streaming** (httpx).
+   **[DONE — `appv22/ai/`, 10 tasks, 213 tests green, zero appv21/pi/hermes imports]**
 2. **agent-loop-core-parity** — port pi `agent`: `AgentMessage`/`convertToLlm`,
    the run loop (`runLoop`/`streamAssistantResponse`/`executeToolCalls`), the
    `AgentEvent` protocol, `Agent` class, and the harness seam. Switch the loop to

@@ -1,7 +1,7 @@
 # Sub-project 1: ai-parity Design
 
 Date: 2026-06-19
-Status: Design (awaiting user review)
+Status: Implemented (10/10 tasks; 213 appv22 tests green; appv21 removed)
 Parent: `2026-06-19-appv22-pi-hermes-parity-decomposition.md`
 Reference: `pi/packages/ai/src`
 
