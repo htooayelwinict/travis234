@@ -8,6 +8,43 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
+DEFAULT_MODEL_PER_PROVIDER = {
+    "amazon-bedrock": "us.anthropic.claude-opus-4-6-v1",
+    "ant-ling": "Ring-2.6-1T",
+    "anthropic": "claude-opus-4-8",
+    "openai": "gpt-5.4",
+    "azure-openai-responses": "gpt-5.4",
+    "openai-codex": "gpt-5.5",
+    "nvidia": "nvidia/nemotron-3-super-120b-a12b",
+    "deepseek": "deepseek-v4-pro",
+    "google": "gemini-3.1-pro-preview",
+    "google-vertex": "gemini-3.1-pro-preview",
+    "github-copilot": "gpt-5.4",
+    "openrouter": "moonshotai/kimi-k2.6",
+    "vercel-ai-gateway": "zai/glm-5.1",
+    "xai": "grok-4.20-0309-reasoning",
+    "groq": "openai/gpt-oss-120b",
+    "cerebras": "zai-glm-4.7",
+    "zai": "glm-5.1",
+    "zai-coding-cn": "glm-5.1",
+    "mistral": "devstral-medium-latest",
+    "minimax": "MiniMax-M2.7",
+    "minimax-cn": "MiniMax-M2.7",
+    "moonshotai": "kimi-k2.6",
+    "moonshotai-cn": "kimi-k2.6",
+    "huggingface": "moonshotai/Kimi-K2.6",
+    "fireworks": "accounts/fireworks/models/kimi-k2p6",
+    "together": "moonshotai/Kimi-K2.6",
+    "opencode": "kimi-k2.6",
+    "opencode-go": "kimi-k2.6",
+    "kimi-coding": "kimi-for-coding",
+    "cloudflare-workers-ai": "@cf/moonshotai/kimi-k2.6",
+    "cloudflare-ai-gateway": "workers-ai/@cf/moonshotai/kimi-k2.6",
+    "xiaomi": "mimo-v2.5-pro",
+    "xiaomi-token-plan-cn": "mimo-v2.5-pro",
+    "xiaomi-token-plan-ams": "mimo-v2.5-pro",
+    "xiaomi-token-plan-sgp": "mimo-v2.5-pro",
+}
 COMMON_KEYS = (
     "OPENROUTER_API_KEY",
     "OPENROUTER_MODEL",
@@ -16,6 +53,41 @@ COMMON_KEYS = (
     "OPENAI_API_KEY",
     "OPENAI_MODEL",
 )
+PROVIDER_API_KEY_ENV = {
+    "ant-ling": ("ANT_LING_API_KEY",),
+    "anthropic": ("ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"),
+    "azure-openai-responses": ("AZURE_OPENAI_API_KEY",),
+    "cerebras": ("CEREBRAS_API_KEY",),
+    "cloudflare-ai-gateway": ("CLOUDFLARE_API_KEY",),
+    "cloudflare-workers-ai": ("CLOUDFLARE_API_KEY",),
+    "deepseek": ("DEEPSEEK_API_KEY",),
+    "fireworks": ("FIREWORKS_API_KEY",),
+    "github-copilot": ("COPILOT_GITHUB_TOKEN",),
+    "google": ("GEMINI_API_KEY",),
+    "google-vertex": ("GOOGLE_CLOUD_API_KEY",),
+    "groq": ("GROQ_API_KEY",),
+    "huggingface": ("HF_TOKEN",),
+    "kimi-coding": ("KIMI_API_KEY",),
+    "minimax": ("MINIMAX_API_KEY",),
+    "minimax-cn": ("MINIMAX_CN_API_KEY",),
+    "mistral": ("MISTRAL_API_KEY",),
+    "moonshotai": ("MOONSHOT_API_KEY",),
+    "moonshotai-cn": ("MOONSHOT_API_KEY",),
+    "nvidia": ("NVIDIA_API_KEY",),
+    "opencode": ("OPENCODE_API_KEY",),
+    "opencode-go": ("OPENCODE_API_KEY",),
+    "openai": ("OPENAI_API_KEY",),
+    "openrouter": ("OPENROUTER_API_KEY",),
+    "together": ("TOGETHER_API_KEY",),
+    "vercel-ai-gateway": ("AI_GATEWAY_API_KEY",),
+    "xai": ("XAI_API_KEY",),
+    "xiaomi": ("XIAOMI_API_KEY",),
+    "xiaomi-token-plan-ams": ("XIAOMI_TOKEN_PLAN_AMS_API_KEY",),
+    "xiaomi-token-plan-cn": ("XIAOMI_TOKEN_PLAN_CN_API_KEY",),
+    "xiaomi-token-plan-sgp": ("XIAOMI_TOKEN_PLAN_SGP_API_KEY",),
+    "zai": ("ZAI_API_KEY",),
+    "zai-coding-cn": ("ZAI_CODING_CN_API_KEY",),
+}
 SUFFIXES = (
     "ENABLED", "API_KEY", "MODEL", "BASE_URL", "TIMEOUT_SECONDS", "TEMPERATURE",
     "TOP_P", "FREQUENCY_PENALTY", "PRESENCE_PENALTY", "SEED", "STOP",
@@ -87,8 +159,36 @@ def load_model_config(prefix: str, dotenv_path: "str | Path" = ".env") -> ModelC
     )
 
 
+def find_env_keys(provider: str) -> list[str] | None:
+    keys = PROVIDER_API_KEY_ENV.get(provider)
+    if not keys:
+        return None
+    found = [key for key in keys if os.environ.get(key)]
+    return found or None
+
+
+def get_env_api_key(provider: str) -> str | None:
+    keys = find_env_keys(provider)
+    if keys:
+        return os.environ.get(keys[0])
+    if provider == "amazon-bedrock" and (
+        os.environ.get("AWS_PROFILE")
+        or (os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY"))
+        or os.environ.get("AWS_BEARER_TOKEN_BEDROCK")
+        or os.environ.get("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
+        or os.environ.get("AWS_CONTAINER_CREDENTIALS_FULL_URI")
+        or os.environ.get("AWS_WEB_IDENTITY_TOKEN_FILE")
+    ):
+        return "<authenticated>"
+    return None
+
+
+def get_default_model_for_provider(provider: str) -> str | None:
+    return DEFAULT_MODEL_PER_PROVIDER.get(provider)
+
+
 def _default_model(prefix: str) -> str | None:
-    return "xiaomi/mimo-v2.5-pro" if prefix == "APPV2_WORKER_LLM" else None
+    return get_default_model_for_provider("openrouter") if prefix == "APPV2_WORKER_LLM" else None
 
 
 def _strip_inline_comment(value: str) -> str:

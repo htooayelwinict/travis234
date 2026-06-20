@@ -161,6 +161,20 @@ def test_native_appv22_provider_prompt_prioritizes_open_risk_tool_call_over_fina
     )
 
 
+def test_native_appv22_provider_prompt_forbids_tool_calls_when_no_tools_selected():
+    prompt = appv2_env_provider._appv22_decision_prompt(
+        {
+            "state": {"mode": "START", "context_summary": {}},
+            "selection": {"selected_tools": []},
+            "agent": {"request": "hi"},
+        }
+    )
+
+    assert "NO SELECTED TOOLS:" in prompt
+    assert "Do not emit kind=tool_call" in prompt
+    assert "finalize" in prompt
+
+
 def test_native_appv22_schema_does_not_expose_planner_kind():
     assert "plan" not in appv2_env_provider.APPV22_DECISION_SCHEMA["properties"]["kind"]["enum"]
 

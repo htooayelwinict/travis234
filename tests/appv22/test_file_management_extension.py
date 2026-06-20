@@ -30,18 +30,14 @@ def test_file_management_extension_resolves_skill_and_tools(tmp_path):
 
     assert resolved.extension_ids == ("file_management",)
     assert "file_management.file_mutation" in [card.skill_id for card in resolved.skill_cards]
-    assert set(resolved.tool_ids) >= {
+    assert set(resolved.tool_ids) == {
         "file_management.copy_file",
         "file_management.delete_file",
         "file_management.edit_file",
-        "file_management.find_files",
-        "file_management.grep",
         "file_management.mkdir",
         "file_management.move_file",
         "file_management.read_file",
-        "file_management.read_range",
         "file_management.repo_snapshot",
-        "file_management.tree",
         "file_management.write_file",
     }
     mutation_card = next(card for card in resolved.skill_cards if card.skill_id == "file_management.file_mutation")
@@ -152,6 +148,90 @@ def test_edit_file_applies_unique_targeted_replacement_to_existing_file(tmp_path
     assert target.read_text(encoding="utf-8") == "owner: new\nstatus: pending\n"
 
 
+def test_edit_file_schema_matches_pi_strict_replacement_contract(tmp_path):
+    services = _services(tmp_path)
+
+    definition = services.tool_registry.definition("file_management.edit_file")
+    assert definition is not None
+    schema = definition.argument_schema
+
+    assert schema["additionalProperties"] is False
+    edits = schema["properties"]["edits"]
+    assert edits["minItems"] == 1
+    assert edits["items"]["required"] == ("oldText", "newText")
+    assert edits["items"]["additionalProperties"] is False
+    assert tuple(edits["items"]["properties"].keys()) == ("oldText", "newText")
+
+
+def test_edit_file_accepts_pi_legacy_top_level_old_new_text(tmp_path):
+    (tmp_path / "docs").mkdir()
+    target = tmp_path / "docs" / "existing.md"
+    target.write_text("owner: old\nstatus: pending\n", encoding="utf-8")
+    services = _services(tmp_path)
+
+    result = services.broker.execute(
+        "file_management.edit_file",
+        {
+            "path": "docs/existing.md",
+            "oldText": "owner: old",
+            "newText": "owner: new",
+        },
+        active_tool_ids=("file_management.edit_file",),
+    )
+
+    assert result["status"] == "completed"
+    assert result["payload"]["edits_applied"] == 1
+    assert target.read_text(encoding="utf-8") == "owner: new\nstatus: pending\n"
+
+
+def test_edit_file_prepare_arguments_accepts_flat_key_value_edit_array_from_model(tmp_path):
+    (tmp_path / "notes").mkdir()
+    target = tmp_path / "notes" / "alpha.txt"
+    target.write_text(
+        "Pi hooks allow intercepting agent decisions.\n"
+        "They enable custom validation and logging.\n"
+        "Hooks run seamlessly within the Pi-style loop.\n",
+        encoding="utf-8",
+    )
+    services = _services(tmp_path)
+
+    result = services.broker.execute(
+        "file_management.edit_file",
+        {
+            "path": "notes/alpha.txt",
+            "edits": [
+                "oldText",
+                "They enable custom validation and logging.",
+                "newText",
+                "They enable extension lifecycle checks.",
+            ],
+        },
+        active_tool_ids=("file_management.edit_file",),
+    )
+
+    assert result["status"] == "completed"
+    assert result["payload"]["edits_applied"] == 1
+    assert "They enable extension lifecycle checks." in target.read_text(encoding="utf-8")
+
+
+def test_file_mutation_skill_guides_line_changes_without_placeholder_edits():
+    registry = ExtensionRegistry()
+    registry.register(FileManagementExtension())
+    state = AgentState(
+        "sess",
+        "run",
+        RequestEnvelope("req", "change the second line in notes/alpha.txt", "."),
+    )
+
+    resolved = registry.resolve_active(state)
+
+    mutation_card = next(card for card in resolved.skill_cards if card.skill_id == "file_management.file_mutation")
+    instructions = "\n".join(mutation_card.instructions)
+    assert "line-based" in instructions
+    assert '{"oldText":"exact line or block from read_file"' in instructions
+    assert "Do not send placeholder strings" in instructions
+
+
 def test_edit_file_denies_non_unique_old_text_without_writing(tmp_path):
     (tmp_path / "docs").mkdir()
     target = tmp_path / "docs" / "existing.md"
@@ -160,7 +240,7 @@ def test_edit_file_denies_non_unique_old_text_without_writing(tmp_path):
 
     result = services.broker.execute(
         "file_management.edit_file",
-        {"path": "docs/existing.md", "edits": [{"old_text": "todo", "new_text": "done"}]},
+        {"path": "docs/existing.md", "edits": [{"oldText": "todo", "newText": "done"}]},
         active_tool_ids=("file_management.edit_file",),
     )
 
@@ -238,6 +318,99 @@ def test_file_management_finalize_guidance_does_not_hardcode_handoff_for_manifes
 
     assert "file_management.write_file" in guidance
     assert "docs/handoff.md" not in guidance
+
+
+def test_file_management_guides_malformed_edit_arguments_without_cleanup_domain_prompt():
+    result = {
+        "tool_id": "file_management.edit_file",
+        "status": "denied",
+        "arguments": {"path": "src/agents/planner.py", "edits": ["oldText", "newText"]},
+        "payload": {
+            "path": "src/agents/planner.py",
+            "errors": ["invalid_edit:0", "invalid_edit:1"],
+        },
+    }
+
+    guidance = FileManagementExtension().tool_result_guidance(result)
+
+    assert "file_management.edit_file" in guidance
+    assert "edits" in guidance
+    assert "array of objects" in guidance
+    assert "oldText" in guidance
+    assert "newText" in guidance
+    assert "corrected arguments" in guidance
+    assert "docs/workspace_manifest.json" not in guidance
+
+
+def test_file_management_denies_excessive_same_file_read_range_for_read_only_request():
+    state = AgentState(
+        "sess",
+        "run",
+        RequestEnvelope(
+            "req",
+            "what functions in src/agents/planner.py connect to qdrant?",
+            ".",
+            active_user_request="what functions in src/agents/planner.py connect to qdrant?",
+        ),
+    )
+    state.tool_results = {
+        f"toolres_{index}": {
+            "tool_result_id": f"toolres_{index}",
+            "tool_id": "file_management.read_range",
+            "status": "completed",
+            "arguments": {"path": "src/agents/planner.py", "start_line": 100 + index, "end_line": 130 + index},
+            "payload": {"path": "src/agents/planner.py", "content": "evidence"},
+        }
+        for index in range(3)
+    }
+
+    result = FileManagementExtension().before_tool_call(
+        state,
+        "file_management.read_range",
+        {"path": "src/agents/planner.py", "start_line": 120, "end_line": 150},
+    )
+
+    assert result is not None
+    assert result["reason"] == "redundant_read_range_budget"
+    guidance = FileManagementExtension().tool_result_guidance(
+        {
+            "tool_id": "file_management.read_range",
+            "status": "denied",
+            "payload": result["payload"] | {"errors": result["errors"]},
+        }
+    )
+    assert "finalize from existing evidence_refs" in guidance
+
+
+def test_file_management_allows_repeated_read_range_for_mutation_request():
+    state = AgentState(
+        "sess",
+        "run",
+        RequestEnvelope(
+            "req",
+            "edit src/agents/planner.py to add logging",
+            ".",
+            active_user_request="edit src/agents/planner.py to add logging",
+        ),
+    )
+    state.tool_results = {
+        f"toolres_{index}": {
+            "tool_result_id": f"toolres_{index}",
+            "tool_id": "file_management.read_range",
+            "status": "completed",
+            "arguments": {"path": "src/agents/planner.py", "start_line": 100 + index, "end_line": 130 + index},
+            "payload": {"path": "src/agents/planner.py", "content": "evidence"},
+        }
+        for index in range(3)
+    }
+
+    result = FileManagementExtension().before_tool_call(
+        state,
+        "file_management.read_range",
+        {"path": "src/agents/planner.py", "start_line": 120, "end_line": 150},
+    )
+
+    assert result is None
 
 
 def test_file_management_finalize_guidance_prefers_edit_after_source_read_for_existing_file_fix():

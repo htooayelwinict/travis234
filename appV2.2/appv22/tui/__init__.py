@@ -1,32 +1,75 @@
 """appv22 port of pi's tui (differential renderer + components)."""
 
-from appv22.tui.component import Box, Component, Container, CURSOR_MARKER, Spacer, Text
+from appv22.tui.component import (
+    Box,
+    Component,
+    Container,
+    CURSOR_MARKER,
+    FooterComponent,
+    Input,
+    Markdown,
+    SelectItem,
+    SelectList,
+    SimpleAutocompleteProvider,
+    Spacer,
+    StatusLine,
+    Text,
+)
 from appv22.tui.interactive import (
     AssistantMessageComponent,
+    BashExecutionComponent,
+    BranchSummaryMessageComponent,
+    CompactionSummaryMessageComponent,
+    CustomMessageComponent,
     InteractiveRenderer,
+    ParsedSkillBlock,
+    SkillInvocationMessageComponent,
     ToolExecutionComponent,
+    UserMessageComponent,
+    message_to_component,
+    parse_skill_block,
+    user_message_to_component,
 )
+from appv22.tui.interactive_mode import InteractiveMode
 from appv22.tui.terminal import FakeTerminal, ProcessTerminal, Terminal
 from appv22.tui.tui import RenderInfo, TUI
 from appv22.tui.utils import strip_ansi, truncate_to_width, visible_width, wrap_text
 
 __all__ = [
     "AssistantMessageComponent",
+    "BashExecutionComponent",
     "Box",
+    "BranchSummaryMessageComponent",
+    "CompactionSummaryMessageComponent",
     "CURSOR_MARKER",
     "Component",
     "Container",
+    "CustomMessageComponent",
     "FakeTerminal",
+    "FooterComponent",
+    "Input",
+    "InteractiveMode",
     "InteractiveRenderer",
+    "Markdown",
+    "ParsedSkillBlock",
     "ProcessTerminal",
     "RenderInfo",
+    "SelectItem",
+    "SelectList",
+    "SimpleAutocompleteProvider",
     "Spacer",
+    "StatusLine",
+    "SkillInvocationMessageComponent",
     "TUI",
     "Terminal",
     "Text",
     "ToolExecutionComponent",
+    "UserMessageComponent",
+    "message_to_component",
+    "parse_skill_block",
     "strip_ansi",
     "truncate_to_width",
+    "user_message_to_component",
     "visible_width",
     "wrap_text",
 ]

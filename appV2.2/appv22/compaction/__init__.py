@@ -6,14 +6,24 @@ from appv22.compaction.compressor import (
     ContextCompressor,
     estimate_tokens,
 )
-from appv22.compaction.timing import CompactionManager, SessionLineage, SessionRecord
+from appv22.compaction.timing import (
+    CompactionManager,
+    ManualCompressionStatus,
+    SessionLineage,
+    SessionLineageStore,
+    SessionRecord,
+    summarize_manual_compression,
+)
 
 __all__ = [
     "SUMMARY_PREFIX",
     "CompactionManager",
     "CompressionResult",
     "ContextCompressor",
+    "ManualCompressionStatus",
     "SessionLineage",
+    "SessionLineageStore",
     "SessionRecord",
     "estimate_tokens",
+    "summarize_manual_compression",
 ]

@@ -20,6 +20,7 @@ from appv22.tools.definitions import ToolDefinition
 
 class RecordingProvider:
     provider_id = "recording"
+    model_id = "recording-model"
 
     def __init__(self, decision):
         self.decision = decision
@@ -67,6 +68,19 @@ class TransientFailingProvider(SequenceProvider):
             self.failures_left -= 1
             raise RuntimeError("transport leaked SECRET_PROVIDER_TOKEN=tok_retry_private")
         return super().decide(prompt)
+
+
+class OverflowThenFinalizeProvider:
+    provider_id = "overflow_then_finalize"
+
+    def __init__(self):
+        self.prompts = []
+
+    def decide(self, prompt: dict):
+        self.prompts.append(prompt)
+        if len(self.prompts) == 1:
+            raise RuntimeError("The input token count (1196265) exceeds the maximum number of tokens allowed (1048575)")
+        return RuntimeDecision("finalize", "recovered", {"message": "Recovered after compacting context."})
 
 
 class PromptMutatingGuard:
@@ -787,6 +801,243 @@ class OversizedPromptExtension:
         ]
 
 
+class ContextPayloadExtension:
+    extension_id = "context_payload"
+
+    def skill_cards(self):
+        return [
+            SkillCard(
+                skill_id="context_payload.active",
+                extension_id=self.extension_id,
+                triggers=("workspace",),
+                modes=("START",),
+                summary="test Pi-style context and provider payload hooks",
+                tool_ids=(),
+            )
+        ]
+
+    def context(self, _state, messages):
+        copied = []
+        for message in messages:
+            item = dict(message)
+            if item.get("name") == "provider_context_section" and item.get("section") == "agent":
+                item["payload"] = dict(item.get("payload") or {})
+                item["payload"]["extension_context_marker"] = "context-hook-active"
+                item["content"] = f"agent: {json.dumps(item['payload'], sort_keys=True, default=str)}"
+            copied.append(item)
+        return copied
+
+    def before_provider_request(self, _state, payload):
+        current = dict(payload)
+        current["extension_payload_marker"] = "before-provider-request-active"
+        current["state"] = dict(current.get("state") or {})
+        current["state"]["before_provider_request_marker"] = "payload-hook-active"
+        return current
+
+
+class ToolExecutionEndExtension:
+    extension_id = "tool_execution_event"
+
+    def __init__(self) -> None:
+        self.tool_events = []
+
+    def skill_cards(self):
+        return [
+            SkillCard(
+                skill_id="tool_execution_event.active",
+                extension_id=self.extension_id,
+                triggers=("tool hook",),
+                modes=("START", "OBSERVE"),
+                summary="test Pi-style tool_execution_end hook",
+                tool_ids=("tool_execution_event.echo",),
+            )
+        ]
+
+    def register_tools(self, registry):
+        registry.register(
+            ToolDefinition(
+                "tool_execution_event.echo",
+                "observe",
+                "low",
+                {
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "echo": {"type": "string"},
+                        "errors": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["echo", "errors"],
+                },
+                "runtime_observed",
+                "Echo text for tool execution hook tests.",
+            ),
+            lambda args, _context: {"status": "completed", "echo": str(args.get("text", "")), "errors": []},
+        )
+
+    def tool_execution_end(self, event):
+        self.tool_events.append(event)
+
+
+class TurnEndExtension(ToolExecutionEndExtension):
+    extension_id = "turn_end_event"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.turn_events = []
+
+    def skill_cards(self):
+        return [
+            SkillCard(
+                skill_id="turn_end_event.active",
+                extension_id=self.extension_id,
+                triggers=("turn hook",),
+                modes=("START", "OBSERVE", "THINK"),
+                summary="test Pi-style turn_end hook",
+                tool_ids=("turn_end_event.echo",),
+            )
+        ]
+
+    def register_tools(self, registry):
+        registry.register(
+            ToolDefinition(
+                "turn_end_event.echo",
+                "observe",
+                "low",
+                {
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "echo": {"type": "string"},
+                        "errors": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["echo", "errors"],
+                },
+                "runtime_observed",
+                "Echo text for turn end hook tests.",
+            ),
+            lambda args, _context: {"status": "completed", "echo": str(args.get("text", "")), "errors": []},
+        )
+
+    def turn_end(self, event):
+        self.turn_events.append(event)
+
+
+class ToolsUpdateExtension(ToolExecutionEndExtension):
+    extension_id = "tools_update_event"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.tools_events = []
+
+    def skill_cards(self):
+        return [
+            SkillCard(
+                skill_id="tools_update_event.active",
+                extension_id=self.extension_id,
+                triggers=("tools update hook",),
+                modes=("START", "THINK"),
+                summary="test Pi-style tools_update hook",
+                tool_ids=("tools_update_event.echo",),
+            )
+        ]
+
+    def register_tools(self, registry):
+        registry.register(
+            ToolDefinition(
+                "tools_update_event.echo",
+                "observe",
+                "low",
+                {
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "echo": {"type": "string"},
+                        "errors": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["echo", "errors"],
+                },
+                "runtime_observed",
+                "Echo text for tools update hook tests.",
+            ),
+            lambda args, _context: {"status": "completed", "echo": str(args.get("text", "")), "errors": []},
+        )
+
+    def tools_update(self, event):
+        self.tools_events.append(event)
+
+
+class PassiveToolsUpdateExtension:
+    extension_id = "passive_tools_update_event"
+
+    def __init__(self) -> None:
+        self.tools_events = []
+
+    def skill_cards(self):
+        return []
+
+    def tools_update(self, event):
+        self.tools_events.append(event)
+
+
+class LargeToolResultExtension:
+    extension_id = "large_tool_result"
+
+    def skill_cards(self):
+        return [
+            SkillCard(
+                skill_id="large_tool_result.active",
+                extension_id=self.extension_id,
+                triggers=("large tool result",),
+                modes=("START", "THINK", "OBSERVE"),
+                summary="test Hermes large tool result offload",
+                tool_ids=("large_tool_result.dump",),
+            )
+        ]
+
+    def register_tools(self, registry):
+        registry.register(
+            ToolDefinition(
+                "large_tool_result.dump",
+                "observe",
+                "low",
+                {"type": "object", "properties": {}, "required": []},
+                {
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                },
+                "runtime_observed",
+                "Return a large generic output for Hermes offload tests.",
+            ),
+            lambda _args, _context: {"status": "completed", "text": "x" * 25_000},
+        )
+
+
+class RuntimeSessionStartExtension:
+    extension_id = "runtime_session_start"
+
+    def __init__(self) -> None:
+        self.session_events = []
+
+    def skill_cards(self):
+        return []
+
+    def session_start(self, event):
+        self.session_events.append(event)
+
+
 class PassingPolicy:
     def validate(self, operations, *, root_path):
         return []
@@ -828,11 +1079,180 @@ def test_agent_loop_rejects_non_executable_deterministic_plan_without_cleanup_fa
 
     assert result["status"] == "failed"
     assert result["reason"] == "paused"
-    assert any(
-        "Model requested compaction" in item
-        for item in provider.prompts[2]["state"]["context_summary"]["progress"]
+
+
+def test_agent_loop_emits_pi_style_context_and_provider_payload_extension_hooks(tmp_path):
+    provider = SequenceProvider([RuntimeDecision("pause", "inspect extension hook payload")])
+    services = create_appv22_services(
+        root_path=tmp_path,
+        provider=provider,
+        extensions=[ContextPayloadExtension()],
     )
-    assert not (tmp_path / "docs" / "a.md").exists()
+
+    AppV22AgentRuntime(root_path=tmp_path, services=services, max_turns=1).run(
+        "inspect workspace context hooks"
+    )
+
+    prompt = provider.prompts[0]
+    assert prompt["agent"]["extension_context_marker"] == "context-hook-active"
+    assert prompt["extension_payload_marker"] == "before-provider-request-active"
+    assert prompt["state"]["before_provider_request_marker"] == "payload-hook-active"
+
+
+def test_agent_loop_emits_pi_style_tool_execution_end_extension_hook(tmp_path):
+    extension = ToolExecutionEndExtension()
+    provider = SequenceProvider(
+        [
+            RuntimeDecision(
+                "tool_call",
+                "run echo",
+                {"tool_id": "tool_execution_event.echo", "arguments": {"text": "hook payload"}},
+            ),
+            RuntimeDecision("finalize", "done"),
+        ]
+    )
+    services = create_appv22_services(
+        root_path=tmp_path,
+        provider=provider,
+        extensions=[extension],
+    )
+
+    result = AppV22AgentRuntime(root_path=tmp_path, services=services, max_turns=3).run(
+        "run the tool hook"
+    )
+
+    assert result["status"] == "completed"
+    assert len(extension.tool_events) == 1
+    event = extension.tool_events[0]
+    assert event["type"] == "tool_execution_end"
+    assert event["toolName"] == "tool_execution_event.echo"
+    assert isinstance(event["toolCallId"], str) and event["toolCallId"]
+    assert event["result"]["payload"]["echo"] == "hook payload"
+    assert event["isError"] is False
+
+
+def test_agent_loop_emits_pi_style_turn_end_extension_hook(tmp_path):
+    extension = TurnEndExtension()
+    provider = SequenceProvider(
+        [
+            RuntimeDecision(
+                "tool_call",
+                "run echo",
+                {"tool_id": "turn_end_event.echo", "arguments": {"text": "turn payload"}},
+            ),
+            RuntimeDecision("finalize", "done", {"message": "turn complete"}),
+        ]
+    )
+    services = create_appv22_services(
+        root_path=tmp_path,
+        provider=provider,
+        extensions=[extension],
+    )
+
+    result = AppV22AgentRuntime(root_path=tmp_path, services=services, max_turns=3).run(
+        "run the turn hook"
+    )
+
+    assert result["status"] == "completed"
+    assert len(extension.turn_events) == 2
+    tool_turn = extension.turn_events[0]
+    final_turn = extension.turn_events[1]
+    assert tool_turn["type"] == "turn_end"
+    assert tool_turn["turnIndex"] == 0
+    assert tool_turn["message"]["kind"] == "tool_call"
+    assert tool_turn["toolResults"][0]["tool_id"] == "turn_end_event.echo"
+    assert tool_turn["toolResults"][0]["payload"]["echo"] == "turn payload"
+    assert final_turn["turnIndex"] == 1
+    assert final_turn["message"]["kind"] == "finalize"
+    assert final_turn["toolResults"] == []
+
+
+def test_agent_loop_emits_pi_style_tools_update_extension_hook(tmp_path):
+    active_extension = ToolsUpdateExtension()
+    passive_extension = PassiveToolsUpdateExtension()
+    provider = RecordingProvider(RuntimeDecision("finalize", "done", {"message": "tools update captured"}))
+    services = create_appv22_services(
+        root_path=tmp_path,
+        provider=provider,
+        extensions=[active_extension, passive_extension],
+    )
+
+    result = AppV22AgentRuntime(root_path=tmp_path, services=services, max_turns=1).run(
+        "tools update hook"
+    )
+
+    assert result["status"] == "completed"
+    assert result["model"] == {"provider": "recording", "modelId": "recording-model"}
+    assert result["active_tool_ids"] == ["tools_update_event.echo"]
+    assert len(active_extension.tools_events) == 1
+    assert len(passive_extension.tools_events) == 1
+    event = active_extension.tools_events[0]
+    assert event["type"] == "tools_update"
+    assert event["toolNames"] == ["tools_update_event.echo"]
+    assert event["previousToolNames"] == ["tools_update_event.echo"]
+    assert event["activeToolNames"] == ["tools_update_event.echo"]
+    assert event["previousActiveToolNames"] == []
+    assert event["source"] == "set"
+    assert passive_extension.tools_events[0] == event
+
+
+def test_agent_loop_emits_pi_style_runtime_session_start_for_new_and_resume(tmp_path):
+    extension = RuntimeSessionStartExtension()
+    provider = SequenceProvider(
+        [
+            RuntimeDecision("finalize", "first", {"message": "first done"}),
+            RuntimeDecision("finalize", "second", {"message": "second done"}),
+        ]
+    )
+    runtime = AppV22AgentRuntime(
+        root_path=tmp_path,
+        services=create_appv22_services(
+            root_path=tmp_path,
+            provider=provider,
+            extensions=[extension],
+        ),
+        max_turns=1,
+    )
+
+    first = runtime.run("hello")
+    second = runtime.continue_run(first, "hello again")
+
+    assert first["status"] == "completed"
+    assert second["status"] == "completed"
+    assert extension.session_events == [
+        {"type": "session_start", "reason": "new"},
+        {"type": "session_start", "reason": "resume"},
+    ]
+
+
+def test_agent_loop_offloads_large_tool_result_like_hermes_reference_store(tmp_path):
+    provider = SequenceProvider(
+        [
+            RuntimeDecision("tool_call", "dump large output", {"tool_id": "large_tool_result.dump", "arguments": {}}),
+            RuntimeDecision("finalize", "done", {"message": "large output captured"}),
+        ]
+    )
+    services = create_appv22_services(
+        root_path=tmp_path,
+        provider=provider,
+        extensions=[LargeToolResultExtension()],
+    )
+
+    result = AppV22AgentRuntime(root_path=tmp_path, services=services, max_turns=3).run(
+        "large tool result"
+    )
+
+    tool_result = result["tool_results"][0]
+    payload = tool_result["payload"]
+    ref_path = tmp_path / payload["offloaded_ref"]["path"]
+    raw = json.loads(ref_path.read_text(encoding="utf-8"))
+
+    assert result["status"] == "completed"
+    assert payload["offloaded_ref"]["mode"] == "hermes-tool-result-offload"
+    assert payload["offloaded_ref"]["original_bytes"] > 20_000
+    assert len(payload["preview"]) <= 1400
+    assert raw["payload"]["text"] == "x" * 25_000
+    assert result["world_refs"][tool_result["payload_ref"]]["payload"] == payload
 
 
 def test_agent_loop_executes_model_file_creation_tool_call(tmp_path):
@@ -1405,6 +1825,37 @@ def test_agent_loop_retries_transient_provider_failure_without_leaking_details(t
             },
         }
     ]
+
+
+def test_agent_loop_compacts_prompt_before_retrying_provider_context_overflow(tmp_path):
+    provider = OverflowThenFinalizeProvider()
+    raw_marker = "RAW_PROVIDER_OVERFLOW_SENTINEL_" + ("x" * 60_000)
+    services = create_appv22_services(
+        root_path=tmp_path,
+        provider=provider,
+        extensions=[OversizedPromptExtension(raw_marker)],
+    )
+    services.compressor = AgentContextCompressor(max_chars=120_000)
+
+    result = AppV22AgentRuntime(root_path=tmp_path, services=services, max_turns=2, provider_retry_attempts=1).run(
+        "workspace cleanup"
+    )
+
+    assert result["status"] == "completed"
+    assert len(provider.prompts) == 2
+    first_prompt = json.dumps(provider.prompts[0], sort_keys=True, default=str)
+    second_prompt = json.dumps(provider.prompts[1], sort_keys=True, default=str)
+    assert provider.prompts[1] != provider.prompts[0]
+    assert len(second_prompt) < len(first_prompt)
+    assert raw_marker not in second_prompt
+    assert provider.prompts[1]["state"]["provider_overflow_recovery"]["mode"] == "hermes-overflow-recovery"
+    assert "Provider context overflow triggered Hermes recovery compaction." in json.dumps(
+        provider.prompts[1]["state"]["context_summary"],
+        sort_keys=True,
+        default=str,
+    )
+    provider_failures = [event for event in result["events"] if event["event_type"] == "ProviderCallFailed"]
+    assert provider_failures[0]["payload"]["reason"] == "context_overflow"
 
 
 def test_agent_loop_recovers_from_malformed_context_request_after_observation_evidence(tmp_path):
@@ -2216,10 +2667,13 @@ def test_agent_loop_uses_extension_owned_before_tool_call_guard(tmp_path):
     assert result["status"] == "completed"
     denied_events = [event for event in result["events"] if event["event_type"] == "ToolCallDenied"]
     completed_events = [event for event in result["events"] if event["event_type"] == "ToolCallCompleted"]
+    world_ref_events = [event for event in result["events"] if event["event_type"] == "WorldRefAdded"]
     assert len(denied_events) == 1
     assert denied_events[0]["payload"]["payload"]["errors"] == ["unsafe_text"]
     assert len(completed_events) == 1
     assert completed_events[0]["payload"]["payload"]["text"] == "safe text"
+    assert world_ref_events[0]["payload"]["kind"] == "guarded.publish"
+    assert world_ref_events[0]["payload"]["mutates_world"] is True
     assert any(
         "pre-tool guard says retry guarded.publish with safe text" in item
         for prompt in provider.prompts
@@ -3056,6 +3510,59 @@ def test_agent_loop_records_repeated_malformed_tool_arguments_and_allows_recover
     assert denied_events[1]["payload"]["payload"]["errors"] == ["missing_argument:path"]
     assert [event["payload"]["tool_id"] for event in completed_events] == ["file_management.write_file"]
     assert (tmp_path / "docs" / "recovery-note.md").read_text(encoding="utf-8") == "public recovery note\n"
+
+
+def test_agent_loop_surfaces_malformed_edit_guidance_and_allows_corrected_edit(tmp_path):
+    target = tmp_path / "src" / "agents" / "planner.py"
+    target.parent.mkdir(parents=True)
+    target.write_text('class Planner:\n    def plan(self):\n        return "plan"\n', encoding="utf-8")
+    provider = SequenceProvider(
+        [
+            RuntimeDecision(
+                "tool_call",
+                "malformed edit payload",
+                {
+                    "tool_id": "file_management.edit_file",
+                    "arguments": {"path": "src/agents/planner.py", "edits": ["oldText", "newText"]},
+                },
+            ),
+            RuntimeDecision(
+                "tool_call",
+                "corrected edit payload",
+                {
+                    "tool_id": "file_management.edit_file",
+                    "arguments": {
+                        "path": "src/agents/planner.py",
+                        "edits": [{"oldText": 'return "plan"', "newText": 'return "planned"'}],
+                    },
+                },
+            ),
+            RuntimeDecision("finalize", "done"),
+        ]
+    )
+    services = create_appv22_services(
+        root_path=tmp_path,
+        provider=provider,
+        extensions=[FileManagementExtension()],
+    )
+
+    result = AppV22AgentRuntime(root_path=tmp_path, services=services, max_turns=4).run(
+        "fix src/agents/planner.py so plan returns planned"
+    )
+
+    assert result["status"] == "completed"
+    assert 'return "planned"' in target.read_text(encoding="utf-8")
+    denied_events = [event for event in result["events"] if event["event_type"] == "ToolCallDenied"]
+    completed_events = [event for event in result["events"] if event["event_type"] == "ToolCallCompleted"]
+    assert denied_events[0]["payload"]["payload"]["errors"] == [
+        "invalid_argument_type:edits.0:expected_object",
+        "invalid_argument_type:edits.1:expected_object",
+    ]
+    assert [event["payload"]["tool_id"] for event in completed_events] == ["file_management.edit_file"]
+    second_prompt_text = json.dumps(provider.prompts[1])
+    assert "array of objects" in second_prompt_text
+    assert "corrected arguments" in second_prompt_text
+    assert "docs/workspace_manifest.json" not in second_prompt_text
 
 
 def test_agent_loop_does_not_persist_raw_model_reason_or_argument_content(tmp_path):

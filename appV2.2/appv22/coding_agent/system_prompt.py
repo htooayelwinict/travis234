@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import date as _date
 from typing import Optional
 
+from appv22.coding_agent.resource_loader import Skill, format_skills_for_prompt
+
 
 @dataclass
 class BuildSystemPromptOptions:
@@ -16,6 +18,7 @@ class BuildSystemPromptOptions:
     prompt_guidelines: list[str] = field(default_factory=list)
     append_system_prompt: str | None = None
     context_files: list[tuple[str, str]] = field(default_factory=list)  # (path, content)
+    skills: list[Skill] = field(default_factory=list)
 
 
 _PREAMBLE = (
@@ -32,11 +35,13 @@ def build_system_prompt(options: BuildSystemPromptOptions) -> str:
     if options.custom_prompt:
         prompt = options.custom_prompt + append_section
         prompt += _context_section(options.context_files)
+        if "read" in (options.selected_tools or []) and options.skills:
+            prompt += format_skills_for_prompt(options.skills)
         prompt += f"\nCurrent date: {today}"
         prompt += f"\nCurrent working directory: {prompt_cwd}"
         return prompt
 
-    tools = options.selected_tools or ["read", "bash", "edit", "write"]
+    tools = options.selected_tools if options.selected_tools is not None else ["read", "bash", "edit", "write"]
     visible_tools = [name for name in tools if options.tool_snippets.get(name)]
     if visible_tools:
         tools_list = "\n".join(f"- {name}: {options.tool_snippets[name]}" for name in visible_tools)
@@ -56,6 +61,8 @@ def build_system_prompt(options: BuildSystemPromptOptions) -> str:
     has_grep = "grep" in tools
     has_find = "find" in tools
     has_ls = "ls" in tools
+    if not tools:
+        add("No tools are active for this turn; answer directly and do not claim to inspect files, run commands, or perform actions.")
     if has_bash and not has_grep and not has_find and not has_ls:
         add("Use bash for file operations like ls, rg, find")
     for guideline in options.prompt_guidelines:
@@ -73,6 +80,8 @@ def build_system_prompt(options: BuildSystemPromptOptions) -> str:
     )
     prompt += append_section
     prompt += _context_section(options.context_files)
+    if "read" in tools and options.skills:
+        prompt += format_skills_for_prompt(options.skills)
     prompt += f"\nCurrent date: {today}"
     prompt += f"\nCurrent working directory: {prompt_cwd}"
     return prompt

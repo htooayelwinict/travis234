@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from typing import Literal
+
 from appv22.compaction import SUMMARY_PREFIX, ContextCompressor, estimate_tokens
 from appv22.ai.types import (
     AssistantMessage,
+    ImageContent,
     TextContent,
     ToolCall,
     ToolResultMessage,
@@ -11,9 +15,29 @@ from appv22.ai.types import (
     now_ms,
 )
 
+EXPECTED_SUMMARY_END_MARKER = "--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---"
+
+
+@dataclass
+class _SystemMessage:
+    content: str
+    timestamp: int = field(default_factory=now_ms)
+    role: Literal["system"] = "system"
+
+
+def _system(text: str) -> _SystemMessage:
+    return _SystemMessage(content=text, timestamp=now_ms())
+
 
 def _user(text: str) -> UserMessage:
     return UserMessage(content=text, timestamp=now_ms())
+
+
+def _image_user(text: str, image_data: str) -> UserMessage:
+    return UserMessage(
+        content=[TextContent(text=text), ImageContent(data=image_data, mime_type="image/png")],
+        timestamp=now_ms(),
+    )
 
 
 def _assistant(text: str = "", tool_calls=None) -> AssistantMessage:
@@ -25,10 +49,36 @@ def _assistant(text: str = "", tool_calls=None) -> AssistantMessage:
     )
 
 
-def _tool_result(text: str, name: str = "read") -> ToolResultMessage:
+def _tool_result(text: str, name: str = "read", tool_call_id: str = "c") -> ToolResultMessage:
     return ToolResultMessage(
-        tool_call_id="c", tool_name=name, content=[TextContent(text=text)], is_error=False, timestamp=now_ms()
+        tool_call_id=tool_call_id, tool_name=name, content=[TextContent(text=text)], is_error=False, timestamp=now_ms()
     )
+
+
+def _assert_tool_pairs_well_formed(messages) -> None:
+    call_ids = {
+        block.id
+        for message in messages
+        if getattr(message, "role", None) == "assistant"
+        for block in message.content
+        if isinstance(block, ToolCall)
+    }
+    result_ids = {
+        message.tool_call_id
+        for message in messages
+        if getattr(message, "role", None) == "toolResult"
+    }
+    assert result_ids <= call_ids
+    assert call_ids <= result_ids
+
+
+def _content_text(message) -> str:
+    content = getattr(message, "content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(block.text for block in content if isinstance(block, TextContent))
+    return str(content)
 
 
 def test_prune_dedups_identical_tool_outputs() -> None:
@@ -63,6 +113,74 @@ def test_should_compress_threshold_and_antithrash() -> None:
     assert compressor.should_compress(600) is False
 
 
+def test_protect_head_size_counts_leading_system_separately() -> None:
+    compressor = ContextCompressor(protect_first_n=0)
+    assert compressor._protect_head_size([_system("sys"), _user("first")]) == 1
+    assert compressor._protect_head_size([_user("first"), _assistant("reply")]) == 0
+
+    compressor.protect_first_n = 2
+    assert compressor._protect_head_size([_system("sys"), _user("first"), _assistant("reply")]) == 3
+    assert compressor._protect_head_size([_user("first"), _assistant("reply")]) == 2
+
+
+def test_compress_protects_system_plus_configured_non_system_head() -> None:
+    messages = [
+        _system("system prompt must stay live"),
+        _user("first user must stay live"),
+    ]
+    for i in range(12):
+        messages.append(_assistant(f"old assistant {i} " * 20))
+        messages.append(_user(f"old user {i} " * 20))
+    messages.append(_user("latest request"))
+    seen_prompts: list[str] = []
+
+    def summarizer(prompt: str) -> str:
+        seen_prompts.append(prompt)
+        return "## Goal\nsummarized"
+
+    compressor = ContextCompressor(context_length=900, protect_first_n=1, protect_last_n=1)
+    result = compressor.compress(messages, summarizer=summarizer)
+
+    assert result.compressed is True
+    assert getattr(result.messages[0], "role", None) == "system"
+    assert _content_text(result.messages[0]) == "system prompt must stay live"
+    assert getattr(result.messages[1], "role", None) == "user"
+    assert _content_text(result.messages[1]) == "first user must stay live"
+    assert "system prompt must stay live" not in seen_prompts[0]
+    assert "first user must stay live" not in seen_prompts[0]
+
+
+def test_find_tail_start_uses_bounded_floor_with_tiny_budget() -> None:
+    messages = [
+        _system("sys"),
+        _user("old start"),
+        _assistant("old ack"),
+        _user("middle work"),
+        _assistant("middle ack"),
+        _user("middle ask 2"),
+        _assistant("middle answer 2"),
+        _user("middle ask 3"),
+        _assistant("middle answer 3"),
+        _user("recent ask 1"),
+        _assistant("recent answer 1"),
+        _user("recent ask 2"),
+        _assistant("recent answer 2"),
+        _user("latest ask"),
+    ]
+    compressor = ContextCompressor(
+        context_length=100,
+        threshold_percent=0.5,
+        protect_first_n=0,
+        protect_last_n=20,
+    )
+
+    cut = compressor._find_tail_start(messages, head_end=compressor._protect_head_size(messages))
+
+    assert len(messages) - cut == 8
+    assert _content_text(messages[cut]) == "middle answer 2"
+    assert _content_text(messages[-1]) == "latest ask"
+
+
 def test_compress_assembles_head_summary_tail() -> None:
     messages = [_user("first goal")]
     for i in range(20):
@@ -72,10 +190,158 @@ def test_compress_assembles_head_summary_tail() -> None:
     compressor = ContextCompressor(context_length=4000, protect_first_n=1, protect_last_n=4)
     result = compressor.compress(messages, summarizer=lambda prompt: "## Goal\nGoal text\n## Completed Actions\nDid things")
     assert result.compressed is True
-    summary_messages = [m for m in result.messages if getattr(m, "role", None) == "user" and str(getattr(m, "content", "")).startswith(SUMMARY_PREFIX)]
+    summary_messages = [m for m in result.messages if _content_text(m).startswith(SUMMARY_PREFIX)]
     assert len(summary_messages) == 1
+    assert getattr(summary_messages[0], "role", None) == "assistant"
+    assert EXPECTED_SUMMARY_END_MARKER in _content_text(summary_messages[0])
     assert result.messages[0].content == "first goal"  # head preserved
     assert getattr(result.messages[-1], "content", "") == "latest request"  # tail preserved
+
+
+def test_compress_merges_summary_into_tail_when_both_roles_collide() -> None:
+    messages = [_user("first goal")]
+    for i in range(8):
+        messages.append(_assistant(f"old assistant {i} " * 20))
+    messages.append(_assistant("tail assistant reply"))
+
+    compressor = ContextCompressor(context_length=600, protect_first_n=1, protect_last_n=1)
+    result = compressor.compress(messages, summarizer=lambda prompt: "## Goal\nmerged summary")
+
+    summary_bearing_tail_messages = [
+        message
+        for message in result.messages
+        if _content_text(message).startswith(SUMMARY_PREFIX)
+    ]
+    assert len(summary_bearing_tail_messages) == 1
+    tail_text = _content_text(summary_bearing_tail_messages[0])
+    assert getattr(summary_bearing_tail_messages[0], "role", None) == "assistant"
+    assert tail_text.startswith(SUMMARY_PREFIX)
+    assert EXPECTED_SUMMARY_END_MARKER in tail_text
+    assert "old assistant" in tail_text or tail_text.rstrip().endswith("tail assistant reply")
+
+
+def test_compress_keeps_tool_result_when_head_boundary_lands_on_it() -> None:
+    messages = [
+        _user("first goal"),
+        _assistant(tool_calls=[ToolCall(id="head-call", name="read", arguments={"path": "a.txt"})]),
+        _tool_result("original result " * 100, tool_call_id="head-call"),
+    ]
+    for i in range(12):
+        messages.append(_user(f"middle {i} " * 20))
+        messages.append(_assistant(f"assistant {i} " * 20))
+    messages.append(_user("latest request"))
+
+    compressor = ContextCompressor(context_length=2000, protect_first_n=2, protect_last_n=2)
+    result = compressor.compress(messages, summarizer=lambda prompt: "## Goal\nsummarized")
+
+    _assert_tool_pairs_well_formed(result.messages)
+    preserved_result = next(
+        message
+        for message in result.messages
+        if getattr(message, "role", None) == "toolResult" and message.tool_call_id == "head-call"
+    )
+    assert "earlier conversation" not in preserved_result.content[0].text
+    assert preserved_result.tool_name == "read"
+
+
+def test_compress_removes_orphaned_tool_result_from_tail() -> None:
+    messages = [
+        _user("first goal"),
+        _assistant(tool_calls=[ToolCall(id="tail-result", name="read", arguments={"path": "old.txt"})]),
+        _user("middle text " * 50),
+        _tool_result("tail result " * 80, tool_call_id="tail-result"),
+        _user("latest request"),
+    ]
+
+    compressor = ContextCompressor(context_length=400, protect_first_n=1, protect_last_n=2)
+    result = compressor.compress(messages, summarizer=lambda prompt: "## Goal\nsummarized")
+
+    _assert_tool_pairs_well_formed(result.messages)
+    assert all(
+        not (
+            getattr(message, "role", None) == "toolResult"
+            and message.tool_call_id == "tail-result"
+        )
+        for message in result.messages
+    )
+
+
+def test_compress_keeps_latest_user_before_large_tool_tail() -> None:
+    messages = [_user("first goal")]
+    for i in range(8):
+        messages.append(_assistant(f"old assistant {i} " * 20))
+        messages.append(_user(f"old user {i} " * 20))
+    messages.extend(
+        [
+            _user("critical latest request"),
+            _assistant(tool_calls=[ToolCall(id="latest-tool", name="read", arguments={"path": "large.log"})]),
+            _tool_result("large result " * 300, tool_call_id="latest-tool"),
+            _assistant("final visible answer"),
+        ]
+    )
+
+    compressor = ContextCompressor(context_length=400, protect_first_n=1, protect_last_n=2)
+    result = compressor.compress(messages, summarizer=lambda prompt: "## Goal\nsummarized")
+
+    assert any(
+        getattr(message, "role", None) == "user" and message.content == "critical latest request"
+        for message in result.messages
+    )
+    _assert_tool_pairs_well_formed(result.messages)
+
+
+def test_compress_keeps_last_visible_assistant_before_latest_user() -> None:
+    messages = [_user("first goal")]
+    for i in range(8):
+        messages.append(_assistant(f"old assistant {i} " * 20))
+        messages.append(_user(f"old user {i} " * 20))
+    messages.extend(
+        [
+            _assistant("last visible assistant reply " * 20),
+            _user("latest user follow-up"),
+        ]
+    )
+
+    compressor = ContextCompressor(context_length=400, protect_first_n=1, protect_last_n=1)
+    result = compressor.compress(messages, summarizer=lambda prompt: "## Goal\nsummarized")
+
+    assert any(
+        getattr(message, "role", None) == "assistant"
+        and any(isinstance(block, TextContent) and "last visible assistant reply" in block.text for block in message.content)
+        for message in result.messages
+    )
+    assert getattr(result.messages[-1], "content", "") == "latest user follow-up"
+
+
+def test_compress_strips_historical_images_before_newest_image_user() -> None:
+    old_image_data = "old-image-base64"
+    newest_image_data = "new-image-base64"
+    messages = [
+        _user("first goal"),
+        _image_user("old screenshot", old_image_data),
+    ]
+    for i in range(8):
+        messages.append(_assistant(f"old assistant {i} " * 20))
+        messages.append(_user(f"old user {i} " * 20))
+    messages.append(_image_user("new screenshot", newest_image_data))
+
+    compressor = ContextCompressor(context_length=600, protect_first_n=2, protect_last_n=1)
+    result = compressor.compress(messages, summarizer=lambda prompt: "## Goal\nsummarized")
+
+    old_image_message = result.messages[1]
+    assert getattr(old_image_message, "role", None) == "user"
+    assert isinstance(old_image_message.content, list)
+    assert old_image_message.content[0].text == "old screenshot"
+    assert not any(isinstance(block, ImageContent) for block in old_image_message.content)
+    assert any(
+        isinstance(block, TextContent) and "Attached image" in block.text
+        for block in old_image_message.content
+    )
+
+    newest_image_message = result.messages[-1]
+    assert getattr(newest_image_message, "role", None) == "user"
+    assert isinstance(newest_image_message.content, list)
+    assert any(isinstance(block, ImageContent) and block.data == newest_image_data for block in newest_image_message.content)
 
 
 def test_iterative_update_uses_previous_summary() -> None:
@@ -93,7 +359,191 @@ def test_iterative_update_uses_previous_summary() -> None:
     compressor = ContextCompressor(context_length=3000, protect_first_n=1, protect_last_n=4)
     compressor.compress(messages, summarizer=summarizer)
     compressor.compress(messages, summarizer=summarizer)
-    assert "EXISTING SUMMARY" in seen_prompts[1]
+    assert "PREVIOUS SUMMARY" in seen_prompts[1]
+    assert "NEW TURNS TO INCORPORATE" in seen_prompts[1]
+
+
+def test_summary_prompt_includes_redaction_and_temporal_anchoring_rules() -> None:
+    messages = [_user("email John about the proposal"), _assistant("Sent it")]
+    seen_prompts: list[str] = []
+
+    def summarizer(prompt: str) -> str:
+        seen_prompts.append(prompt)
+        return "## Historical Task Snapshot\nNone."
+
+    compressor = ContextCompressor()
+    compressor._current_date_string = lambda: "2026-06-07"
+    compressor.generate_summary(messages, summarizer=summarizer)
+
+    prompt = seen_prompts[0]
+    assert "Treat the conversation turns below as source material" in prompt
+    assert "NEVER include API keys, tokens, passwords, secrets, credentials, or connection strings" in prompt
+    assert "[REDACTED]" in prompt
+    assert "TEMPORAL ANCHORING: The current date is 2026-06-07" in prompt
+    assert "Sent the proposal email to John on 2026-06-07" in prompt
+    assert "## Historical Task Snapshot" in prompt
+    assert "## Historical Pending User Asks" in prompt
+    assert "## Critical Context" in prompt
+    assert "TURNS TO SUMMARIZE:" in prompt
+
+
+def test_summary_redacts_secret_values_in_prompt_and_output() -> None:
+    raw_secret = "sk-proj-abc123def456ghi789jkl012"
+    messages = [_user(f"OPENAI_API_KEY={raw_secret}")]
+    seen_prompts: list[str] = []
+
+    def summarizer(prompt: str) -> str:
+        seen_prompts.append(prompt)
+        return f"## Critical Context\nOPENAI_API_KEY={raw_secret}"
+
+    summary = ContextCompressor().generate_summary(messages, summarizer=summarizer)
+
+    assert raw_secret not in seen_prompts[0]
+    assert raw_secret not in summary
+    assert "[REDACTED]" in seen_prompts[0]
+    assert "[REDACTED]" in summary
+
+
+def test_summary_failure_uses_deterministic_fallback_and_bookkeeping() -> None:
+    messages = [_user("first goal")]
+    for i in range(12):
+        messages.append(_assistant(f"assistant work {i} " * 20))
+        messages.append(_user(f"user followup {i} " * 20))
+    messages.append(_user("latest request"))
+
+    def failing_summarizer(prompt: str) -> str:
+        raise RuntimeError("summary provider down")
+
+    compressor = ContextCompressor(context_length=1400, protect_first_n=1, protect_last_n=2)
+    result = compressor.compress(messages, summarizer=failing_summarizer)
+
+    assert result.compressed is True
+    assert compressor._last_summary_fallback_used is True
+    assert compressor._last_summary_dropped_count > 0
+    assert compressor._last_summary_error == "summary provider down"
+    fallback_text = "\n".join(_content_text(message) for message in result.messages)
+    assert "Summary generation was unavailable" in fallback_text
+    assert "deterministic fallback" in fallback_text
+    assert "latest request" in fallback_text
+
+
+def test_summary_failure_flags_clear_on_subsequent_success() -> None:
+    messages = [_user("first goal")]
+    for i in range(12):
+        messages.append(_assistant(f"assistant work {i} " * 20))
+        messages.append(_user(f"user followup {i} " * 20))
+    messages.append(_user("latest request"))
+
+    fake_time = {"t": 100.0}
+    compressor = ContextCompressor(
+        context_length=1400,
+        protect_first_n=1,
+        protect_last_n=2,
+        clock=lambda: fake_time["t"],
+    )
+    compressor.compress(messages, summarizer=lambda prompt: (_ for _ in ()).throw(RuntimeError("down")))
+    assert compressor._last_summary_fallback_used is True
+    assert compressor._summary_failure_cooldown_until == fake_time["t"] + 60.0
+
+    fake_time["t"] += 61.0
+    compressor.compress(messages, summarizer=lambda prompt: "## Historical Task Snapshot\nNone.")
+
+    assert compressor._last_summary_fallback_used is False
+    assert compressor._last_summary_dropped_count == 0
+    assert compressor._last_summary_error is None
+
+
+def test_summary_failure_abort_option_preserves_messages_and_sets_abort_flag() -> None:
+    messages = [_user("first goal")]
+    for i in range(8):
+        messages.append(_assistant(f"assistant work {i} " * 20))
+        messages.append(_user(f"user followup {i} " * 20))
+    messages.append(_user("latest request"))
+
+    compressor = ContextCompressor(
+        context_length=1000,
+        protect_first_n=1,
+        protect_last_n=2,
+        abort_on_summary_failure=True,
+    )
+    result = compressor.compress(
+        messages,
+        summarizer=lambda prompt: (_ for _ in ()).throw(RuntimeError("summary unavailable")),
+    )
+
+    assert result.compressed is False
+    assert result.messages == messages
+    assert compressor._last_compress_aborted is True
+    assert compressor._last_summary_error == "summary unavailable"
+    assert compressor._last_summary_fallback_used is False
+    assert compressor._last_summary_dropped_count == 0
+    assert all("Summary generation was unavailable" not in _content_text(message) for message in result.messages)
+
+
+def test_summary_model_failure_falls_back_to_main_summarizer_and_records_aux_failure() -> None:
+    messages = [_user("first goal")]
+    for i in range(12):
+        messages.append(_assistant(f"assistant work {i} " * 20))
+        messages.append(_user(f"user followup {i} " * 20))
+    messages.append(_user("latest request"))
+    calls: list[str] = []
+
+    def aux_summary_model(prompt: str) -> str:
+        calls.append("aux")
+        raise RuntimeError("400 provider rejected configured model")
+
+    def main_model(prompt: str) -> str:
+        calls.append("main")
+        return "## Historical Task Snapshot\nsummary via main model"
+
+    compressor = ContextCompressor(
+        context_length=1400,
+        protect_first_n=1,
+        protect_last_n=2,
+        model="main-model",
+        summary_model_override="broken-aux-model",
+        summarizer=main_model,
+        summary_summarizer=aux_summary_model,
+    )
+
+    result = compressor.compress(messages)
+
+    assert result.compressed is True
+    assert calls == ["aux", "main"]
+    assert compressor.summary_model == ""
+    assert compressor._last_summary_fallback_used is False
+    assert compressor._last_aux_model_failure_model == "broken-aux-model"
+    assert compressor._last_aux_model_failure_error is not None
+    assert "400" in compressor._last_aux_model_failure_error
+    summary_text = "\n".join(_content_text(message) for message in result.messages)
+    assert "summary via main model" in summary_text
+    assert "deterministic fallback" not in summary_text
+
+
+def test_compress_rehydrates_existing_summary_message() -> None:
+    previous_summary = "## Goal\nprior goal\n## Remaining Work\nprior next"
+    messages = [
+        _user("first goal"),
+        _assistant(SUMMARY_PREFIX + previous_summary + "\n\n" + EXPECTED_SUMMARY_END_MARKER),
+    ]
+    for i in range(12):
+        messages.append(_assistant(f"old assistant {i} " * 20))
+        messages.append(_user(f"old user {i} " * 20))
+    messages.append(_user("latest request"))
+    seen_prompts: list[str] = []
+
+    def summarizer(prompt: str) -> str:
+        seen_prompts.append(prompt)
+        return "## Goal\nupdated goal"
+
+    compressor = ContextCompressor(context_length=1500, protect_first_n=1, protect_last_n=2)
+    compressor.compress(messages, summarizer=summarizer)
+
+    assert f"PREVIOUS SUMMARY:\n{previous_summary}\n\nNEW TURNS TO INCORPORATE:" in seen_prompts[0]
+    new_conversation = seen_prompts[0].split("NEW TURNS TO INCORPORATE:", 1)[1]
+    assert SUMMARY_PREFIX not in new_conversation
+    assert EXPECTED_SUMMARY_END_MARKER not in new_conversation
+    assert "prior goal" not in new_conversation
 
 
 def test_estimate_tokens_counts_text() -> None:

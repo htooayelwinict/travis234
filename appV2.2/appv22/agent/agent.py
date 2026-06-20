@@ -2,22 +2,55 @@
 
 from __future__ import annotations
 
+import inspect
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Union
 
-from appv22.ai.types import Message, Model, UserMessage, now_ms
+from appv22.ai.types import AssistantMessage, Message, Model, TextContent, UserMessage, empty_usage, now_ms
 from appv22.agent.agent_loop import AgentEventSink, run_agent_loop, run_agent_loop_continue
 from appv22.agent.types import (
     AbortSignal,
+    AgentEndEvent,
     AgentContext,
     AgentEvent,
     AgentLoopConfig,
     AgentMessage,
     AgentTool,
+    MessageEndEvent,
+    MessageStartEvent,
+    QueueMode,
     ThinkingLevel,
+    TurnEndEvent,
 )
 
-Listener = Callable[[AgentEvent], None]
+Listener = Callable[..., None]
+
+
+class PendingMessageQueue:
+    def __init__(self, mode: QueueMode = "one-at-a-time") -> None:
+        self.messages: list[AgentMessage] = []
+        self.mode = mode
+
+    def enqueue(self, message: AgentMessage) -> None:
+        self.messages.append(message)
+
+    def has_items(self) -> bool:
+        return bool(self.messages)
+
+    def drain(self) -> list[AgentMessage]:
+        if self.mode == "all":
+            drained = list(self.messages)
+            self.messages = []
+            return drained
+        if not self.messages:
+            return []
+        first = self.messages[0]
+        self.messages = self.messages[1:]
+        return [first]
+
+    def clear(self) -> None:
+        self.messages = []
 
 
 @dataclass
@@ -47,7 +80,16 @@ class Agent:
         tool_execution: str = "parallel",
         before_tool_call=None,
         after_tool_call=None,
+        prepare_next_turn=None,
         transform_context=None,
+        steering_mode: QueueMode = "one-at-a-time",
+        follow_up_mode: QueueMode = "one-at-a-time",
+        session_id: str | None = None,
+        thinking_budgets: dict[str, int] | None = None,
+        transport: str = "auto",
+        max_retry_delay_ms: int | None = None,
+        on_payload=None,
+        on_response=None,
     ) -> None:
         self._state = AgentState(
             system_prompt=system_prompt,
@@ -59,11 +101,21 @@ class Agent:
         self._tool_execution = tool_execution
         self._before_tool_call = before_tool_call
         self._after_tool_call = after_tool_call
+        self._prepare_next_turn = prepare_next_turn
         self._transform_context = transform_context
+        self.session_id = session_id
+        self.thinking_budgets = thinking_budgets
+        self.transport = transport
+        self.max_retry_delay_ms = max_retry_delay_ms
+        self.on_payload = on_payload
+        self.on_response = on_response
         self._listeners: list[Listener] = []
         self._signal = AbortSignal()
-        self._steering: list[AgentMessage] = []
-        self._follow_up: list[AgentMessage] = []
+        self._run_state_lock = threading.Lock()
+        self._idle_event = threading.Event()
+        self._idle_event.set()
+        self._steering = PendingMessageQueue(steering_mode)
+        self._follow_up = PendingMessageQueue(follow_up_mode)
 
     @property
     def state(self) -> AgentState:
@@ -72,6 +124,22 @@ class Agent:
     @property
     def signal(self) -> AbortSignal:
         return self._signal
+
+    @property
+    def steering_mode(self) -> QueueMode:
+        return self._steering.mode
+
+    @steering_mode.setter
+    def steering_mode(self, mode: QueueMode) -> None:
+        self._steering.mode = mode
+
+    @property
+    def follow_up_mode(self) -> QueueMode:
+        return self._follow_up.mode
+
+    @follow_up_mode.setter
+    def follow_up_mode(self, mode: QueueMode) -> None:
+        self._follow_up.mode = mode
 
     def subscribe(self, listener: Listener) -> Callable[[], None]:
         self._listeners.append(listener)
@@ -83,40 +151,72 @@ class Agent:
         return _unsubscribe
 
     def steer(self, message: AgentMessage) -> None:
-        self._steering.append(message)
+        self._steering.enqueue(message)
 
     def follow_up(self, message: AgentMessage) -> None:
-        self._follow_up.append(message)
+        self._follow_up.enqueue(message)
+
+    def clear_steering_queue(self) -> None:
+        self._steering.clear()
+
+    def clear_follow_up_queue(self) -> None:
+        self._follow_up.clear()
+
+    def clear_all_queues(self) -> None:
+        self.clear_steering_queue()
+        self.clear_follow_up_queue()
+
+    def has_queued_messages(self) -> bool:
+        return self._steering.has_items() or self._follow_up.has_items()
 
     def abort(self) -> None:
         self._signal.abort()
+
+    def wait_for_idle(self, timeout: float | None = None) -> bool:
+        return self._idle_event.wait(timeout)
 
     def reset(self) -> None:
         self._state.messages = []
         self._state.error_message = None
         self._state.streaming_message = None
         self._state.pending_tool_calls = set()
+        self.clear_all_queues()
 
-    def _build_config(self) -> AgentLoopConfig:
+    def _build_config(self, *, skip_initial_steering_poll: bool = False) -> AgentLoopConfig:
+        skip_steering_poll = {"value": skip_initial_steering_poll}
+
+        def get_steering_messages() -> list[AgentMessage]:
+            if skip_steering_poll["value"]:
+                skip_steering_poll["value"] = False
+                return []
+            return self._drain_steering()
+
         return AgentLoopConfig(
             model=self._state.model,
             convert_to_llm=self._convert_to_llm,
-            get_steering_messages=self._drain_steering,
+            get_steering_messages=get_steering_messages,
             get_follow_up_messages=self._drain_follow_up,
+            prepare_next_turn=(lambda _ctx: self._prepare_next_turn(self._signal))
+            if self._prepare_next_turn
+            else None,
             tool_execution=self._tool_execution,
             before_tool_call=self._before_tool_call,
             after_tool_call=self._after_tool_call,
             transform_context=self._transform_context,
             reasoning=None if self._state.thinking_level == "off" else self._state.thinking_level,
+            session_id=self.session_id,
+            transport=self.transport,
+            thinking_budgets=self.thinking_budgets,
+            max_retry_delay_ms=self.max_retry_delay_ms,
+            on_payload=self.on_payload,
+            on_response=self.on_response,
         )
 
     def _drain_steering(self) -> list[AgentMessage]:
-        drained, self._steering = self._steering, []
-        return drained
+        return self._steering.drain()
 
     def _drain_follow_up(self) -> list[AgentMessage]:
-        drained, self._follow_up = self._follow_up, []
-        return drained
+        return self._follow_up.drain()
 
     def _context(self) -> AgentContext:
         return AgentContext(
@@ -126,39 +226,101 @@ class Agent:
         )
 
     def prompt(self, prompt: Union[str, AgentMessage, list[AgentMessage]], stream_fn=None) -> list[AgentMessage]:
+        self._begin_run(
+            "Agent is already processing a prompt. Use steer() or follow_up() to queue messages, or wait for completion."
+        )
         if isinstance(prompt, str):
             messages: list[AgentMessage] = [UserMessage(content=prompt, timestamp=now_ms())]
         elif isinstance(prompt, list):
             messages = list(prompt)
         else:
             messages = [prompt]
-        self._state.is_streaming = True
-        self._state.error_message = None
         try:
             new_messages = run_agent_loop(
                 messages, self._context(), self._build_config(), self._make_sink(), self._signal, stream_fn
             )
+        except Exception as error:  # noqa: BLE001
+            new_messages = self._handle_run_failure(error, self._signal.aborted)
         finally:
-            self._state.is_streaming = False
-            self._state.streaming_message = None
+            self._finish_run()
         return new_messages
 
     def continue_(self, stream_fn=None) -> list[AgentMessage]:
-        self._state.is_streaming = True
+        self._begin_run("Agent is already processing. Wait for completion before continuing.")
         try:
+            context = self._context()
+            last_message = context.messages[-1] if context.messages else None
+            if last_message is None:
+                raise ValueError("No messages to continue from")
+            if getattr(last_message, "role", None) == "assistant":
+                queued_steering = self._drain_steering()
+                if queued_steering:
+                    return run_agent_loop(
+                        queued_steering,
+                        context,
+                        self._build_config(skip_initial_steering_poll=True),
+                        self._make_sink(),
+                        self._signal,
+                        stream_fn,
+                    )
+                queued_follow_up = self._drain_follow_up()
+                if queued_follow_up:
+                    return run_agent_loop(
+                        queued_follow_up, context, self._build_config(), self._make_sink(), self._signal, stream_fn
+                    )
+                raise ValueError("Cannot continue from message role: assistant")
             new_messages = run_agent_loop_continue(
-                self._context(), self._build_config(), self._make_sink(), self._signal, stream_fn
+                context, self._build_config(), self._make_sink(), self._signal, stream_fn
             )
+        except Exception as error:  # noqa: BLE001
+            new_messages = self._handle_run_failure(error, self._signal.aborted)
         finally:
+            self._finish_run()
+        return new_messages
+
+    def _handle_run_failure(self, error: BaseException, aborted: bool) -> list[AgentMessage]:
+        failure_message = AssistantMessage(
+            content=[TextContent(text="")],
+            api=self._state.model.api,
+            provider=self._state.model.provider,
+            model=self._state.model.id,
+            usage=empty_usage(),
+            stop_reason="aborted" if aborted else "error",
+            error_message=str(error),
+            timestamp=now_ms(),
+        )
+        sink = self._make_sink()
+        sink(MessageStartEvent(message=failure_message))
+        sink(MessageEndEvent(message=failure_message))
+        sink(TurnEndEvent(message=failure_message, tool_results=[]))
+        sink(AgentEndEvent(messages=[failure_message]))
+        return [failure_message]
+
+    def _begin_run(self, active_error: str) -> None:
+        with self._run_state_lock:
+            if self._state.is_streaming:
+                raise RuntimeError(active_error)
+            self._signal = AbortSignal()
+            self._idle_event.clear()
+            self._state.is_streaming = True
+            self._state.streaming_message = None
+            self._state.error_message = None
+
+    def _finish_run(self) -> None:
+        with self._run_state_lock:
             self._state.is_streaming = False
             self._state.streaming_message = None
-        return new_messages
+            self._state.pending_tool_calls = set()
+            self._idle_event.set()
 
     def _make_sink(self) -> AgentEventSink:
         def _sink(event: AgentEvent) -> None:
             self._process_event(event)
             for listener in list(self._listeners):
-                listener(event)
+                if _listener_accepts_signal(listener):
+                    listener(event, self._signal)
+                else:
+                    listener(event)
 
         return _sink
 
@@ -179,3 +341,17 @@ class Agent:
             self._state.pending_tool_calls.add(event.tool_call_id)
         elif etype == "tool_execution_end":
             self._state.pending_tool_calls.discard(event.tool_call_id)
+
+
+def _listener_accepts_signal(listener: Listener) -> bool:
+    try:
+        signature = inspect.signature(listener)
+    except (TypeError, ValueError):
+        return False
+    positional_count = 0
+    for parameter in signature.parameters.values():
+        if parameter.kind == inspect.Parameter.VAR_POSITIONAL:
+            return True
+        if parameter.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+            positional_count += 1
+    return positional_count >= 2

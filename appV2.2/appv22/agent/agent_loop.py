@@ -9,11 +9,12 @@ from __future__ import annotations
 import copy
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable, Optional, Union
+from dataclasses import replace
+from typing import Any, Callable, Optional, Union
 
 from appv22.ai.event_stream import EventStream
 from appv22.ai.stream import stream_simple as default_stream_simple
-from appv22.ai.types import AssistantMessage, Context, ToolResultMessage, now_ms
+from appv22.ai.types import AssistantMessage, Context, SimpleStreamOptions, ToolResultMessage, now_ms
 from appv22.ai.validation import validate_tool_arguments
 from appv22.agent.types import (
     AbortSignal,
@@ -36,7 +37,7 @@ from appv22.agent.types import (
     TurnStartEvent,
 )
 
-AgentEventSink = Callable[[AgentEvent], None]
+AgentEventSink = Callable[[AgentEvent], Any]
 
 
 class AgentEventStream(EventStream):
@@ -102,11 +103,11 @@ def run_agent_loop(
         tools=context.tools,
     )
 
-    emit(AgentStartEvent())
-    emit(TurnStartEvent())
+    _emit_event(emit, AgentStartEvent())
+    _emit_event(emit, TurnStartEvent())
     for prompt in prompts:
-        emit(MessageStartEvent(message=prompt))
-        emit(MessageEndEvent(message=prompt))
+        _emit_event(emit, MessageStartEvent(message=prompt))
+        _emit_event(emit, MessageEndEvent(message=prompt))
 
     _run_loop(current_context, new_messages, config, signal, emit, stream_fn)
     return new_messages
@@ -129,8 +130,8 @@ def run_agent_loop_continue(
         system_prompt=context.system_prompt, messages=context.messages, tools=context.tools
     )
 
-    emit(AgentStartEvent())
-    emit(TurnStartEvent())
+    _emit_event(emit, AgentStartEvent())
+    _emit_event(emit, TurnStartEvent())
 
     _run_loop(current_context, new_messages, config, signal, emit, stream_fn)
     return new_messages
@@ -154,14 +155,14 @@ def _run_loop(
 
         while has_more_tool_calls or pending_messages:
             if not first_turn:
-                emit(TurnStartEvent())
+                _emit_event(emit, TurnStartEvent())
             else:
                 first_turn = False
 
             if pending_messages:
                 for message in pending_messages:
-                    emit(MessageStartEvent(message=message))
-                    emit(MessageEndEvent(message=message))
+                    _emit_event(emit, MessageStartEvent(message=message))
+                    _emit_event(emit, MessageEndEvent(message=message))
                     current_context.messages.append(message)
                     new_messages.append(message)
                 pending_messages = []
@@ -170,8 +171,8 @@ def _run_loop(
             new_messages.append(message)
 
             if message.stop_reason in ("error", "aborted"):
-                emit(TurnEndEvent(message=message, tool_results=[]))
-                emit(AgentEndEvent(messages=new_messages))
+                _emit_event(emit, TurnEndEvent(message=message, tool_results=[]))
+                _emit_event(emit, AgentEndEvent(messages=new_messages))
                 return
 
             tool_calls = [c for c in message.content if getattr(c, "type", None) == "toolCall"]
@@ -185,7 +186,7 @@ def _run_loop(
                     current_context.messages.append(result)
                     new_messages.append(result)
 
-            emit(TurnEndEvent(message=message, tool_results=tool_results))
+            _emit_event(emit, TurnEndEvent(message=message, tool_results=tool_results))
 
             next_turn_ctx = ShouldStopAfterTurnContext(
                 message=message, tool_results=tool_results, context=current_context, new_messages=new_messages
@@ -194,13 +195,20 @@ def _run_loop(
                 snapshot = config.prepare_next_turn(next_turn_ctx)
                 if snapshot:
                     current_context = snapshot.context or current_context
-                    if snapshot.model is not None:
-                        config.model = snapshot.model
+                    reasoning = config.reasoning
                     if snapshot.thinking_level is not None:
-                        config.reasoning = None if snapshot.thinking_level == "off" else snapshot.thinking_level
+                        reasoning = None if snapshot.thinking_level == "off" else snapshot.thinking_level
+                    config = replace(
+                        config,
+                        model=snapshot.model or config.model,
+                        reasoning=reasoning,
+                    )
 
-            if config.should_stop_after_turn and config.should_stop_after_turn(next_turn_ctx):
-                emit(AgentEndEvent(messages=new_messages))
+            stop_turn_ctx = ShouldStopAfterTurnContext(
+                message=message, tool_results=tool_results, context=current_context, new_messages=new_messages
+            )
+            if config.should_stop_after_turn and config.should_stop_after_turn(stop_turn_ctx):
+                _emit_event(emit, AgentEndEvent(messages=new_messages))
                 return
 
             pending_messages = list(config.get_steering_messages() or []) if config.get_steering_messages else []
@@ -211,7 +219,7 @@ def _run_loop(
             continue
         break
 
-    emit(AgentEndEvent(messages=new_messages))
+    _emit_event(emit, AgentEndEvent(messages=new_messages))
 
 
 def _stream_assistant_response(
@@ -229,14 +237,28 @@ def _stream_assistant_response(
     llm_context = Context(system_prompt=context.system_prompt, messages=llm_messages, tools=_llm_tools(context.tools))
 
     stream_function = stream_fn or default_stream_simple
-    response = stream_function(config.model, llm_context, None)
+    resolved_api_key = config.get_api_key(config.model.provider) if config.get_api_key else None
+    options = SimpleStreamOptions(
+        temperature=config.temperature,
+        max_tokens=config.max_tokens,
+        signal=signal,
+        api_key=resolved_api_key or config.api_key,
+        transport=config.transport,
+        session_id=config.session_id,
+        max_retry_delay_ms=config.max_retry_delay_ms,
+        on_payload=config.on_payload,
+        on_response=config.on_response,
+        reasoning=config.reasoning,
+        thinking_budgets=config.thinking_budgets,
+    )
+    response = stream_function(config.model, llm_context, options)
 
     partial_added = False
     for event in response:
         if event.type == "start":
             context.messages.append(event.partial)
             partial_added = True
-            emit(MessageStartEvent(message=copy.copy(event.partial)))
+            _emit_event(emit, MessageStartEvent(message=copy.copy(event.partial)))
         elif event.type in (
             "text_start", "text_delta", "text_end",
             "thinking_start", "thinking_delta", "thinking_end",
@@ -244,15 +266,15 @@ def _stream_assistant_response(
         ):
             if partial_added:
                 context.messages[-1] = event.partial
-                emit(MessageUpdateEvent(message=copy.copy(event.partial), assistant_message_event=event))
+                _emit_event(emit, MessageUpdateEvent(message=copy.copy(event.partial), assistant_message_event=event))
         elif event.type in ("done", "error"):
             final_message = response.result_sync()
             if partial_added:
                 context.messages[-1] = final_message
             else:
                 context.messages.append(final_message)
-                emit(MessageStartEvent(message=copy.copy(final_message)))
-            emit(MessageEndEvent(message=final_message))
+                _emit_event(emit, MessageStartEvent(message=copy.copy(final_message)))
+            _emit_event(emit, MessageEndEvent(message=final_message))
             return final_message
 
     final_message = response.result_sync()
@@ -260,8 +282,8 @@ def _stream_assistant_response(
         context.messages[-1] = final_message
     else:
         context.messages.append(final_message)
-        emit(MessageStartEvent(message=copy.copy(final_message)))
-    emit(MessageEndEvent(message=final_message))
+        _emit_event(emit, MessageStartEvent(message=copy.copy(final_message)))
+    _emit_event(emit, MessageEndEvent(message=final_message))
     return final_message
 
 
@@ -292,7 +314,10 @@ def _execute_sequential(current_context, assistant_message, tool_calls, config, 
     finalized_calls: list[dict] = []
     messages: list[ToolResultMessage] = []
     for tool_call in tool_calls:
-        emit(ToolExecutionStartEvent(tool_call_id=tool_call.id, tool_name=tool_call.name, args=tool_call.arguments))
+        _emit_event(
+            emit,
+            ToolExecutionStartEvent(tool_call_id=tool_call.id, tool_name=tool_call.name, args=tool_call.arguments),
+        )
         preparation = _prepare_tool_call(current_context, assistant_message, tool_call, config, signal)
         if preparation["kind"] == "immediate":
             finalized = {"tool_call": tool_call, "result": preparation["result"], "is_error": preparation["is_error"]}
@@ -312,7 +337,10 @@ def _execute_sequential(current_context, assistant_message, tool_calls, config, 
 def _execute_parallel(current_context, assistant_message, tool_calls, config, signal, emit) -> _ExecutedBatch:
     entries: list = []  # either finalized dict or a callable returning finalized dict
     for tool_call in tool_calls:
-        emit(ToolExecutionStartEvent(tool_call_id=tool_call.id, tool_name=tool_call.name, args=tool_call.arguments))
+        _emit_event(
+            emit,
+            ToolExecutionStartEvent(tool_call_id=tool_call.id, tool_name=tool_call.name, args=tool_call.arguments),
+        )
         preparation = _prepare_tool_call(current_context, assistant_message, tool_call, config, signal)
         if preparation["kind"] == "immediate":
             finalized = {"tool_call": tool_call, "result": preparation["result"], "is_error": preparation["is_error"]}
@@ -398,21 +426,47 @@ def _prepare_arguments(tool: AgentTool, tool_call):
 def _execute_prepared(prepared: dict, signal, emit: AgentEventSink) -> dict:
     tool_call = prepared["tool_call"]
     accepting = {"value": True}
+    update_events: list[Any] = []
 
     def on_update(partial_result: AgentToolResult) -> None:
         if not accepting["value"]:
             return
-        emit(ToolExecutionUpdateEvent(
-            tool_call_id=tool_call.id, tool_name=tool_call.name, args=tool_call.arguments, partial_result=partial_result
-        ))
+        update_events.append(
+            emit(ToolExecutionUpdateEvent(
+                tool_call_id=tool_call.id,
+                tool_name=tool_call.name,
+                args=tool_call.arguments,
+                partial_result=partial_result,
+            ))
+        )
 
     try:
         result = prepared["tool"].execute(tool_call.id, prepared["args"], signal, on_update)
         accepting["value"] = False
+        _settle_emit_results(update_events)
         return {"result": result, "is_error": False}
     except Exception as error:  # noqa: BLE001
         accepting["value"] = False
+        _settle_emit_results(update_events)
         return {"result": _error_result(str(error)), "is_error": True}
+
+
+def _emit_event(emit: AgentEventSink, event: AgentEvent) -> None:
+    _settle_emit_result(emit(event))
+
+
+def _settle_emit_result(result: Any) -> None:
+    if result is None:
+        return
+    if hasattr(result, "result") and callable(result.result):
+        result.result()
+    elif hasattr(result, "wait") and callable(result.wait):
+        result.wait()
+
+
+def _settle_emit_results(results: list[Any]) -> None:
+    for result in results:
+        _settle_emit_result(result)
 
 
 def _finalize(current_context, assistant_message, prepared, executed, config, signal) -> dict:
@@ -445,12 +499,15 @@ def _error_result(message: str) -> AgentToolResult:
 
 
 def _emit_tool_end(finalized: dict, emit: AgentEventSink) -> None:
-    emit(ToolExecutionEndEvent(
-        tool_call_id=finalized["tool_call"].id,
-        tool_name=finalized["tool_call"].name,
-        result=finalized["result"],
-        is_error=finalized["is_error"],
-    ))
+    _emit_event(
+        emit,
+        ToolExecutionEndEvent(
+            tool_call_id=finalized["tool_call"].id,
+            tool_name=finalized["tool_call"].name,
+            result=finalized["result"],
+            is_error=finalized["is_error"],
+        ),
+    )
 
 
 def _tool_result_message(finalized: dict) -> ToolResultMessage:
@@ -465,8 +522,8 @@ def _tool_result_message(finalized: dict) -> ToolResultMessage:
 
 
 def _emit_tool_result_message(message: ToolResultMessage, emit: AgentEventSink) -> None:
-    emit(MessageStartEvent(message=message))
-    emit(MessageEndEvent(message=message))
+    _emit_event(emit, MessageStartEvent(message=message))
+    _emit_event(emit, MessageEndEvent(message=message))
 
 
 def _role_of(message) -> str:

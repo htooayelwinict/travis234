@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)")
 _CURSOR_MARKER = "\x1b_pi:c\x07"
 
 

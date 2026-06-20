@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 from appv22.agent.types import AgentTool, AgentToolResult
+from appv22.coding_agent.source_info import SourceInfo
 
 
 @dataclass
@@ -35,6 +36,8 @@ class ToolDefinition:
     render_call: Optional[Callable[..., str]] = None
     render_result: Optional[Callable[..., str]] = None
     execution_mode: str | None = None
+    prepare_arguments: Optional[Callable[[Any], Any]] = None
+    source_info: SourceInfo | None = None
 
 
 def wrap_tool_definition(
@@ -53,6 +56,7 @@ def wrap_tool_definition(
         parameters=definition.parameters,
         label=definition.label,
         execute=_execute,
+        prepare_arguments=definition.prepare_arguments,
         execution_mode=definition.execution_mode,
     )
 

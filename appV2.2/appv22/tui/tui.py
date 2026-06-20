@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from appv22.tui.component import Container
+from appv22.tui.component import CURSOR_MARKER, Container
 from appv22.tui.terminal import Terminal
-from appv22.tui.utils import truncate_to_width
+from appv22.tui.utils import truncate_to_width, visible_width
 
 _CLEAR_SCREEN = "\x1b[2J\x1b[H"
 
@@ -25,6 +25,7 @@ class RenderInfo:
     first_changed: int
     last_changed: int
     lines: list[str]
+    cursor_position: tuple[int, int] | None = None
 
 
 class TUI(Container):
@@ -42,26 +43,51 @@ class TUI(Container):
 
     def _do_render(self, force: bool) -> RenderInfo:
         width = self.terminal.columns
-        new_lines = [truncate_to_width(line, width) for line in self.render(width)]
+        rendered_lines = self.render(width)
+        cursor_position = self._extract_cursor_position(rendered_lines, self.terminal.rows)
+        new_lines = self._viewport_lines([truncate_to_width(line, width) for line in rendered_lines])
 
         size_changed = self._last_width is not None and self._last_width != width
         first_render = not self.previous_lines
 
         if force or first_render or size_changed:
-            info = self._full_render(new_lines)
+            info = self._full_render(new_lines, cursor_position)
         else:
-            info = self._diff_render(new_lines)
+            info = self._diff_render(new_lines, cursor_position)
 
         self.previous_lines = new_lines
         self._last_width = width
         self.last_render = info
         return info
 
-    def _full_render(self, new_lines: list[str]) -> RenderInfo:
-        self.terminal.write(_CLEAR_SCREEN + "\r\n".join(new_lines))
-        return RenderInfo(full=True, first_changed=0, last_changed=max(0, len(new_lines) - 1), lines=new_lines)
+    def _viewport_lines(self, lines: list[str]) -> list[str]:
+        rows = max(1, self.terminal.rows)
+        if len(lines) <= rows:
+            return lines
+        return lines[-rows:]
 
-    def _diff_render(self, new_lines: list[str]) -> RenderInfo:
+    def _extract_cursor_position(self, lines: list[str], rows: int) -> tuple[int, int] | None:
+        viewport_top = max(0, len(lines) - max(1, rows))
+        for row in range(len(lines) - 1, viewport_top - 1, -1):
+            marker_index = lines[row].find(CURSOR_MARKER)
+            if marker_index == -1:
+                continue
+            before_marker = lines[row][:marker_index]
+            lines[row] = lines[row][:marker_index] + lines[row][marker_index + len(CURSOR_MARKER) :]
+            return row - viewport_top, visible_width(before_marker)
+        return None
+
+    def _full_render(self, new_lines: list[str], cursor_position: tuple[int, int] | None) -> RenderInfo:
+        self.terminal.write(_CLEAR_SCREEN + "\r\n".join(new_lines))
+        return RenderInfo(
+            full=True,
+            first_changed=0,
+            last_changed=max(0, len(new_lines) - 1),
+            lines=new_lines,
+            cursor_position=cursor_position,
+        )
+
+    def _diff_render(self, new_lines: list[str], cursor_position: tuple[int, int] | None) -> RenderInfo:
         old_lines = self.previous_lines
         max_len = max(len(old_lines), len(new_lines))
 
@@ -73,7 +99,13 @@ class TUI(Container):
                 first_changed = index
                 break
         if first_changed == -1:
-            return RenderInfo(full=False, first_changed=-1, last_changed=-1, lines=new_lines)
+            return RenderInfo(
+                full=False,
+                first_changed=-1,
+                last_changed=-1,
+                lines=new_lines,
+                cursor_position=cursor_position,
+            )
 
         last_changed = first_changed
         for index in range(max_len - 1, first_changed - 1, -1):
@@ -88,4 +120,10 @@ class TUI(Container):
             line = new_lines[index] if index < len(new_lines) else ""
             buffer.append(_move_to_line(index) + _clear_line() + line)
         self.terminal.write("".join(buffer))
-        return RenderInfo(full=False, first_changed=first_changed, last_changed=last_changed, lines=new_lines)
+        return RenderInfo(
+            full=False,
+            first_changed=first_changed,
+            last_changed=last_changed,
+            lines=new_lines,
+            cursor_position=cursor_position,
+        )

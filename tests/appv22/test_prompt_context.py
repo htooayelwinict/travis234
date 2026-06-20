@@ -207,9 +207,9 @@ def test_skill_prompt_instructions_are_selected_and_prompt_visible():
 
 
 def test_file_management_skill_prompt_guides_vague_organization_without_planner():
-    from appv22.extensions.file_management.skills import FILE_MANAGEMENT_SKILL
+    from appv22.extensions.file_management.skills import CLEANUP_RECORD_SKILL
 
-    instruction_text = "\n".join(FILE_MANAGEMENT_SKILL.instructions)
+    instruction_text = "\n".join(CLEANUP_RECORD_SKILL.instructions)
 
     assert "file-content cues" in instruction_text
     assert "colliding basename" in instruction_text

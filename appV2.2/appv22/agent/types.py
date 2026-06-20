@@ -129,6 +129,12 @@ class AgentLoopConfig:
     after_tool_call: Optional[Callable[[AfterToolCallContext, Optional[AbortSignal]], Optional[AfterToolCallResult]]] = None
     reasoning: str | None = None
     api_key: str | None = None
+    session_id: str | None = None
+    transport: str | None = None
+    thinking_budgets: dict[str, int] | None = None
+    max_retry_delay_ms: int | None = None
+    on_payload: Any | None = None
+    on_response: Any | None = None
     temperature: float | None = None
     max_tokens: int | None = None
 

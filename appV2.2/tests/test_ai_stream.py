@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from appv22.ai.event_stream import create_assistant_message_event_stream
+from appv22.ai.models import register_provider_auth_config, reset_models
 from appv22.ai.stream import (
     ApiProvider,
     complete_simple_sync,
@@ -17,6 +18,7 @@ from appv22.ai.types import (
     Context,
     DoneEvent,
     Model,
+    SimpleStreamOptions,
     StartEvent,
     TextContent,
     UserMessage,
@@ -50,6 +52,7 @@ def _provider(api: str = "faux") -> ApiProvider:
 
 def setup_function() -> None:
     reset_api_providers()
+    reset_models()
 
 
 def test_register_and_get_provider() -> None:
@@ -74,3 +77,70 @@ def test_complete_simple_sync() -> None:
     msg = complete_simple_sync(_model(), Context(messages=[UserMessage(content="q", timestamp=now_ms())]))
     assert msg.stop_reason == "stop"
     _ = stream_simple  # referenced for import coverage
+
+
+def test_stream_simple_injects_env_api_key_when_missing(monkeypatch) -> None:
+    seen = {}
+
+    def _stream(model, context, options=None):
+        seen["options"] = options
+        return _provider().stream_simple(model, context, options)
+
+    register_api_provider(ApiProvider(api="faux", stream=_stream, stream_simple=_stream))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "env-key")
+    model = Model(id="m", name="m", api="faux", provider="openrouter", base_url="")
+
+    stream_simple(model, Context(messages=[UserMessage(content="q", timestamp=now_ms())])).result_sync()
+
+    assert seen["options"].api_key == "env-key"
+
+
+def test_stream_simple_preserves_explicit_api_key_over_env(monkeypatch) -> None:
+    seen = {}
+
+    def _stream(model, context, options=None):
+        seen["options"] = options
+        return _provider().stream_simple(model, context, options)
+
+    register_api_provider(ApiProvider(api="faux", stream=_stream, stream_simple=_stream))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "env-key")
+    model = Model(id="m", name="m", api="faux", provider="openrouter", base_url="")
+
+    stream_simple(
+        model,
+        Context(messages=[UserMessage(content="q", timestamp=now_ms())]),
+        SimpleStreamOptions(api_key="explicit-key"),
+    ).result_sync()
+
+    assert seen["options"].api_key == "explicit-key"
+
+
+def test_stream_simple_passes_registry_headers_and_auth_header() -> None:
+    seen = {}
+
+    def _stream(model, context, options=None):
+        seen["options"] = options
+        return _provider().stream_simple(model, context, options)
+
+    register_api_provider(ApiProvider(api="faux", stream=_stream, stream_simple=_stream))
+    register_provider_auth_config(
+        "proxy",
+        {"apiKey": "literal-key", "headers": {"X-Provider": "provider"}, "authHeader": True},
+    )
+    model = Model(
+        id="m",
+        name="m",
+        api="faux",
+        provider="proxy",
+        base_url="",
+        headers={"X-Model": "model"},
+    )
+
+    stream_simple(model, Context(messages=[UserMessage(content="q", timestamp=now_ms())])).result_sync()
+
+    assert seen["options"].api_key == "literal-key"
+    assert seen["options"].headers == {
+        "X-Model": "model",
+        "X-Provider": "provider",
+        "Authorization": "Bearer literal-key",
+    }

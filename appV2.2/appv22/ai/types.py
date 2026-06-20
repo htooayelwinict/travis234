@@ -8,7 +8,7 @@ from typing import Any, Literal, Union
 
 Api = str
 Provider = str
-ThinkingLevel = Literal["minimal", "low", "medium", "high", "xhigh"]
+ThinkingLevel = Literal["off", "minimal", "low", "medium", "high", "xhigh"]
 StopReason = Literal["stop", "length", "toolUse", "error", "aborted"]
 Transport = Literal["sse", "websocket", "websocket-cached", "auto"]
 
@@ -152,12 +152,18 @@ class ProviderResponse:
 class StreamOptions:
     temperature: float | None = None
     max_tokens: int | None = None
+    signal: Any | None = None
     api_key: str | None = None
     transport: Transport | None = None
+    cache_retention: str | None = None
     session_id: str | None = None
+    on_payload: Any | None = None
+    on_response: Any | None = None
     headers: dict[str, str] | None = None
     timeout_ms: int | None = None
+    websocket_connect_timeout_ms: int | None = None
     max_retries: int | None = None
+    max_retry_delay_ms: int | None = None
     metadata: dict[str, Any] | None = None
 
 

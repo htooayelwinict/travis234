@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from appv22.ai.model_resolver import ScopedModel
 from appv22.ai.overflow import is_context_overflow
 from appv22.ai.types import Model
 from appv22.ai.types import AssistantMessage
@@ -30,6 +31,8 @@ class CodingApp:
         terminal: Optional[Terminal] = None,
         context_length: int = 32000,
         summarizer=None,
+        thinking_level: str = "off",
+        scoped_models: list[ScopedModel] | None = None,
         enable_tui: bool = True,
     ) -> None:
         self.cwd = cwd
@@ -39,12 +42,19 @@ class CodingApp:
             cwd=cwd,
             model=model,
             transform_context=self._transform_context,
+            thinking_level=thinking_level,
+            scoped_models=scoped_models,
         )
         self.terminal = terminal or ProcessTerminal()
         self.tui = TUI(self.terminal)
-        self.renderer = InteractiveRenderer(self.tui)
+        tool_definitions = {
+            name: definition
+            for name in self.session.get_active_tool_names()
+            if (definition := self.session.get_tool_definition(name)) is not None
+        }
+        self.renderer = InteractiveRenderer(self.tui, tool_definitions=tool_definitions, cwd=cwd)
         if enable_tui:
-            self.session.agent.subscribe(self.renderer.handle_event)
+            self.session.subscribe(self.renderer.handle_event)
 
     def _transform_context(self, messages, signal=None):
         # Hermes preflight timing-compaction phase.

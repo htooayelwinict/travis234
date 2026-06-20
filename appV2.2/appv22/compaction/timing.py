@@ -8,15 +8,66 @@ parent_session_id lineage.
 
 from __future__ import annotations
 
+import sqlite3
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Optional
 
 from appv22.ai.types import Message
 from appv22.compaction.compressor import ContextCompressor, Summarizer, estimate_tokens
 
 SUMMARY_FAILURE_COOLDOWN_SECONDS = 60.0
+
+
+@dataclass
+class ManualCompressionStatus:
+    messages: list[Message]
+    compressed: bool
+    noop: bool
+    headline: str
+    token_line: str
+    note: str | None = None
+    focus: str | None = None
+    warning: str | None = None
+    info: str | None = None
+
+
+def summarize_manual_compression(
+    before_messages: list[Message],
+    after_messages: list[Message],
+    before_tokens: int,
+    after_tokens: int,
+) -> dict[str, object]:
+    """Return consistent Hermes-style user-facing feedback for manual compression."""
+    before_count = len(before_messages)
+    after_count = len(after_messages)
+    noop = list(after_messages) == list(before_messages)
+
+    if noop:
+        headline = f"No changes from compression: {before_count} messages"
+        if after_tokens == before_tokens:
+            token_line = f"Approx request size: ~{before_tokens:,} tokens (unchanged)"
+        else:
+            token_line = f"Approx request size: ~{before_tokens:,} → ~{after_tokens:,} tokens"
+    else:
+        headline = f"Compressed: {before_count} → {after_count} messages"
+        token_line = f"Approx request size: ~{before_tokens:,} → ~{after_tokens:,} tokens"
+
+    note = None
+    if not noop and after_count < before_count and after_tokens > before_tokens:
+        note = (
+            "Note: fewer messages can still raise this estimate when "
+            "compression rewrites the transcript into denser summaries."
+        )
+
+    return {
+        "noop": noop,
+        "headline": headline,
+        "token_line": token_line,
+        "note": note,
+    }
 
 
 class CompactionManager:
@@ -42,12 +93,41 @@ class CompactionManager:
     def _in_cooldown(self) -> bool:
         return self._clock() < self._summary_failure_cooldown_until
 
-    def _run_compress(self, messages: list[Message], summarizer, force: bool) -> tuple[list[Message], bool]:
+    @property
+    def last_prompt_tokens(self) -> int:
+        return self.compressor.last_prompt_tokens
+
+    @last_prompt_tokens.setter
+    def last_prompt_tokens(self, value: int) -> None:
+        self.compressor.last_prompt_tokens = value
+
+    @property
+    def awaiting_real_usage_after_compression(self) -> bool:
+        return self.compressor.awaiting_real_usage_after_compression
+
+    @awaiting_real_usage_after_compression.setter
+    def awaiting_real_usage_after_compression(self, value: bool) -> None:
+        self.compressor.awaiting_real_usage_after_compression = value
+
+    def _mark_compressed(self, messages: list[Message]) -> None:
+        self.compressor.last_compression_rough_tokens = estimate_tokens(messages)
+        self.compressor.last_prompt_tokens = -1
+        self.compressor.last_completion_tokens = 0
+        self.compressor.awaiting_real_usage_after_compression = True
+
+    def _run_compress(
+        self,
+        messages: list[Message],
+        summarizer,
+        force: bool,
+        *,
+        focus: str | None = None,
+    ) -> tuple[list[Message], bool]:
         summarizer = summarizer or self._summarizer
         if not force and self._in_cooldown():
             return messages, False
         try:
-            result = self.compressor.compress(messages, summarizer=summarizer)
+            result = self.compressor.compress(messages, summarizer=summarizer, focus_topic=focus, force=force)
         except Exception:  # noqa: BLE001 - summary failure => cooldown, no crash
             self._summary_failure_cooldown_until = self._clock() + SUMMARY_FAILURE_COOLDOWN_SECONDS
             return messages, False
@@ -60,25 +140,30 @@ class CompactionManager:
         if self.awaiting_real_usage_after_compression:
             return messages
         tokens = estimate_tokens(messages)
+        if self.compressor.should_defer_preflight_to_real_usage(tokens):
+            return messages
+        if self.compressor.last_prompt_tokens >= 0 and tokens > self.compressor.last_prompt_tokens:
+            self.compressor.last_prompt_tokens = tokens
         if not self.compressor.should_compress(tokens):
             return messages
         new_messages, compressed = self._run_compress(messages, summarizer, force=False)
         if compressed:
-            self.awaiting_real_usage_after_compression = True
-            self.last_prompt_tokens = -1
+            self._mark_compressed(new_messages)
         return new_messages
 
     # Phase 2: post-response (real provider prompt tokens; -1 sentinel = just compacted).
     def maybe_compress_post_response(self, messages: list[Message], prompt_tokens: int, summarizer=None) -> list[Message]:
-        self.awaiting_real_usage_after_compression = False
         real_tokens = 0 if prompt_tokens == -1 else prompt_tokens
-        self.last_prompt_tokens = real_tokens
+        self.compressor.update_from_response({
+            "prompt_tokens": real_tokens,
+            "completion_tokens": 0,
+            "total_tokens": real_tokens,
+        })
         if not self.compressor.should_compress(real_tokens):
             return messages
         new_messages, compressed = self._run_compress(messages, summarizer, force=False)
         if compressed:
-            self.last_prompt_tokens = -1
-            self.awaiting_real_usage_after_compression = True
+            self._mark_compressed(new_messages)
         return new_messages
 
     # Phase 3: overflow recovery (provider rejected; force, bounded attempts).
@@ -93,8 +178,52 @@ class CompactionManager:
 
     # Phase 4: manual /compress (force=True clears cooldown).
     def compress_manual(self, messages: list[Message], summarizer=None, focus: str | None = None) -> list[Message]:
-        new_messages, _ = self._run_compress(messages, summarizer, force=True)
-        return new_messages
+        return self.compress_manual_with_status(messages, summarizer=summarizer, focus=focus).messages
+
+    def compress_manual_with_status(
+        self,
+        messages: list[Message],
+        summarizer=None,
+        focus: str | None = None,
+    ) -> ManualCompressionStatus:
+        before_tokens = estimate_tokens(messages)
+        new_messages, compressed = self._run_compress(messages, summarizer, force=True, focus=focus)
+        after_tokens = estimate_tokens(new_messages)
+        summary = summarize_manual_compression(messages, new_messages, before_tokens, after_tokens)
+        warning = None
+        if self.compressor._last_compress_aborted:
+            error = self.compressor._last_summary_error or "unknown error"
+            warning = (
+                f"⚠️ Compression aborted: {error}. "
+                "No messages were dropped — conversation continues unchanged. "
+                "Run /compress to retry, or /new to start a fresh session."
+            )
+        elif self.compressor._last_summary_fallback_used and self.compressor._last_summary_error:
+            warning = (
+                f"⚠️ Compression summary failed: {self.compressor._last_summary_error}. "
+                "Inserted a fallback context marker."
+            )
+
+        info = None
+        if self.compressor._last_aux_model_failure_model:
+            error = self.compressor._last_aux_model_failure_error or "unknown error"
+            info = (
+                f"ℹ️ Configured compression model '{self.compressor._last_aux_model_failure_model}' "
+                f"failed ({error}). Recovered using main model; context is intact. "
+                "Check auxiliary.compression.model."
+            )
+
+        return ManualCompressionStatus(
+            messages=new_messages,
+            compressed=compressed,
+            noop=bool(summary["noop"]),
+            headline=str(summary["headline"]),
+            token_line=str(summary["token_line"]),
+            note=summary["note"] if isinstance(summary["note"], str) else None,
+            focus=focus,
+            warning=warning,
+            info=info,
+        )
 
 
 @dataclass
@@ -104,6 +233,78 @@ class SessionRecord:
     end_reason: str | None = None
 
 
+class SessionLineageStore:
+    """Small SQLite session-lineage store matching Hermes parent_session_id rows."""
+
+    def __init__(self, db_path: str | Path) -> None:
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(str(self.db_path))
+        self._conn.row_factory = sqlite3.Row
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                parent_session_id TEXT,
+                started_at REAL NOT NULL,
+                ended_at REAL,
+                end_reason TEXT
+            )
+            """
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id)"
+        )
+        self._conn.commit()
+
+    def ensure_session(self, record: SessionRecord) -> None:
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT OR IGNORE INTO sessions (id, parent_session_id, started_at, end_reason)
+                VALUES (?, ?, ?, ?)
+                """,
+                (record.id, record.parent_session_id, time.time(), record.end_reason),
+            )
+
+    def end_session(self, session_id: str, end_reason: str) -> None:
+        with self._conn:
+            self._conn.execute(
+                "UPDATE sessions SET ended_at = ?, end_reason = ? WHERE id = ? AND ended_at IS NULL",
+                (time.time(), end_reason, session_id),
+            )
+
+    def get_record(self, session_id: str) -> SessionRecord | None:
+        cursor = self._conn.execute(
+            "SELECT id, parent_session_id, end_reason FROM sessions WHERE id = ?",
+            (session_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return SessionRecord(
+            id=row["id"],
+            parent_session_id=row["parent_session_id"],
+            end_reason=row["end_reason"],
+        )
+
+    def lineage(self, current_id: str) -> list[SessionRecord]:
+        records: list[SessionRecord] = []
+        seen: set[str] = set()
+        cursor_id: str | None = current_id
+        while cursor_id and cursor_id not in seen:
+            seen.add(cursor_id)
+            record = self.get_record(cursor_id)
+            if record is None:
+                break
+            records.append(record)
+            cursor_id = record.parent_session_id
+        return list(reversed(records))
+
+    def close(self) -> None:
+        self._conn.close()
+
+
 def _default_session_id() -> str:
     return f"{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
 
@@ -111,17 +312,48 @@ def _default_session_id() -> str:
 class SessionLineage:
     """Session-id rotation with parent_session_id lineage (hermes compaction rotation)."""
 
-    def __init__(self, initial_id: str | None = None, *, id_factory: Callable[[], str] = _default_session_id) -> None:
+    def __init__(
+        self,
+        initial_id: str | None = None,
+        *,
+        id_factory: Callable[[], str] = _default_session_id,
+        store: SessionLineageStore | None = None,
+    ) -> None:
         self._id_factory = id_factory
+        self._store = store
         first = initial_id or id_factory()
         self.current = SessionRecord(id=first, parent_session_id=None)
         self.history: list[SessionRecord] = [self.current]
+        if self._store is not None:
+            self._store.ensure_session(self.current)
+
+    @classmethod
+    def load(
+        cls,
+        store: SessionLineageStore,
+        *,
+        current_id: str,
+        id_factory: Callable[[], str] = _default_session_id,
+    ) -> "SessionLineage":
+        history = store.lineage(current_id)
+        if not history:
+            return cls(initial_id=current_id, id_factory=id_factory, store=store)
+        lineage = cls.__new__(cls)
+        lineage._id_factory = id_factory
+        lineage._store = store
+        lineage.history = history
+        lineage.current = history[-1]
+        return lineage
 
     def rotate(self, reason: str = "compression") -> SessionRecord:
         self.current.end_reason = reason
+        if self._store is not None:
+            self._store.end_session(self.current.id, reason)
         new_record = SessionRecord(id=self._id_factory(), parent_session_id=self.current.id)
         self.current = new_record
         self.history.append(new_record)
+        if self._store is not None:
+            self._store.ensure_session(new_record)
         return new_record
 
     def lineage(self) -> list[str]:

@@ -12,6 +12,8 @@ class Terminal(Protocol):
 
     def write(self, data: str) -> None: ...
 
+    def set_title(self, title: str) -> None: ...
+
 
 class FakeTerminal:
     """Records writes for tests."""
@@ -23,6 +25,11 @@ class FakeTerminal:
 
     def write(self, data: str) -> None:
         self.writes.append(data)
+
+    def set_title(self, title: str) -> None:
+        self.write(f"\x1b]0;{title}\x07")
+
+    setTitle = set_title
 
     @property
     def output(self) -> str:
@@ -40,6 +47,11 @@ class ProcessTerminal:
     def write(self, data: str) -> None:  # pragma: no cover - real IO
         sys.stdout.write(data)
         sys.stdout.flush()
+
+    def set_title(self, title: str) -> None:  # pragma: no cover - real IO
+        self.write(f"\x1b]0;{title}\x07")
+
+    setTitle = set_title
 
 
 def _terminal_size() -> tuple[int, int]:

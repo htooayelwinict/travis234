@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import replace
 from typing import Callable
 
 from appv22.ai.event_stream import AssistantMessageEventStream
+from appv22.ai.models import get_api_key_and_headers
 from appv22.ai.types import (
     AssistantMessage,
     Context,
@@ -43,14 +45,42 @@ def reset_api_providers() -> None:
     _API_PROVIDERS.clear()
 
 
+def _with_model_auth(model: Model, options, options_type=StreamOptions):
+    auth = get_api_key_and_headers(model)
+    if auth.get("ok") is False:
+        raise RuntimeError(str(auth.get("error") or "Failed to resolve request auth"))
+
+    auth_api_key = auth.get("apiKey")
+    explicit_api_key = getattr(options, "api_key", None)
+    api_key = explicit_api_key if isinstance(explicit_api_key, str) and explicit_api_key.strip() else auth_api_key
+
+    headers: dict[str, str] = {}
+    auth_headers = auth.get("headers")
+    if isinstance(auth_headers, dict):
+        headers.update({str(key): str(value) for key, value in auth_headers.items()})
+    explicit_headers = getattr(options, "headers", None)
+    if isinstance(explicit_headers, dict):
+        headers.update({str(key): str(value) for key, value in explicit_headers.items()})
+    next_headers = headers or None
+
+    if options is None:
+        if api_key or next_headers:
+            return options_type(api_key=str(api_key) if api_key is not None else None, headers=next_headers)
+        return None
+    return replace(options, api_key=str(api_key) if api_key is not None else None, headers=next_headers)
+
+
 def stream(model: Model, context: Context, options: StreamOptions | None = None) -> AssistantMessageEventStream:
-    return get_api_provider(model.api).stream(model, context, options)
+    return get_api_provider(model.api).stream(model, context, _with_model_auth(model, options, StreamOptions))
 
 
 def stream_simple(
     model: Model, context: Context, options: SimpleStreamOptions | None = None
 ) -> AssistantMessageEventStream:
-    return get_api_provider(model.api).stream_simple(model, context, options)
+    next_options = _with_model_auth(model, options, SimpleStreamOptions)
+    if next_options is not None and not isinstance(next_options, SimpleStreamOptions):
+        next_options = SimpleStreamOptions(api_key=next_options.api_key, headers=next_options.headers)
+    return get_api_provider(model.api).stream_simple(model, context, next_options)
 
 
 async def complete(model: Model, context: Context, options: StreamOptions | None = None) -> AssistantMessage:
