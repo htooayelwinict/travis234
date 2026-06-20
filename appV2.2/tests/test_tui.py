@@ -310,6 +310,20 @@ def test_input_ports_pi_delete_key_forward_deletion() -> None:
     assert input_component.get_value() == "hllo"
 
 
+def test_input_ports_pi_ctrl_d_delete_char_forward_keybinding() -> None:
+    input_component = Input()
+    input_component.set_value("hello")
+    input_component.cursor = 1
+
+    input_component.handle_input("\x04")
+    assert input_component.get_value() == "hllo"
+    assert input_component.cursor == 1
+
+    input_component.cursor = len(input_component.get_value())
+    input_component.handle_input("\x04")
+    assert input_component.get_value() == "hllo"
+
+
 def test_input_ports_pi_ctrl_minus_undo_for_typing_and_delete() -> None:
     input_component = Input()
     for char in "hello world":

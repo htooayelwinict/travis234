@@ -314,6 +314,8 @@ class Input(Component):
                     self._last_action = None
                 elif char == "\x17":
                     self._delete_word_backward()
+                elif char == "\x04":
+                    self._delete_char_forward()
                 elif char == "\x15":
                     self._delete_to_line_start()
                 elif char == "\x0b":

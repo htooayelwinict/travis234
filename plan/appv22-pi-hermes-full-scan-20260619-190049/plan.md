@@ -250,6 +250,7 @@
 - [x] Focused Pi TUI Ctrl-minus undo regression after live-editor undo follow-up: red/green verified; TUI suite `58 passed`; compaction suites unchanged at `36 passed`; full excluded appv22 suite `314 passed, 2 deselected`; syntax check passed.
 - [x] Focused Pi TUI Alt+B/Alt+F word-navigation regression after live-editor keybinding follow-up: red/green verified; TUI suite `59 passed`; compaction suites unchanged at `36 passed`; full excluded appv22 suite `315 passed, 2 deselected`; syntax check passed.
 - [x] Focused Pi TUI Alt+Backspace delete-word-backward regression after live-editor keybinding follow-up: red/green verified; TUI suite `60 passed`; compaction suites unchanged at `36 passed`; full excluded appv22 suite `316 passed, 2 deselected`; syntax check passed.
+- [x] Focused Pi TUI Ctrl+D delete-char-forward regression after live-editor keybinding follow-up: red/green verified; TUI suite `61 passed`; compaction suites unchanged at `36 passed`; full excluded appv22 suite `317 passed, 2 deselected`; syntax check passed.
 
 ## Phase 1: Agent Runtime Parity
 
