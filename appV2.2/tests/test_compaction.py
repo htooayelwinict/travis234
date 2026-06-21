@@ -3,9 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-from appv22.compaction import SUMMARY_PREFIX, ContextCompressor, estimate_tokens
+from appv22.ai.providers.appv2_env import convert_messages
+from appv22.compaction import COMPRESSED_SUMMARY_METADATA_KEY, SUMMARY_PREFIX, ContextCompressor, estimate_tokens
 from appv22.ai.types import (
     AssistantMessage,
+    Context,
     ImageContent,
     TextContent,
     ToolCall,
@@ -79,6 +81,10 @@ def _content_text(message) -> str:
     if isinstance(content, list):
         return "".join(block.text for block in content if isinstance(block, TextContent))
     return str(content)
+
+
+def _has_compressed_summary_metadata(message) -> bool:
+    return bool(getattr(message, COMPRESSED_SUMMARY_METADATA_KEY, False))
 
 
 def test_prune_dedups_identical_tool_outputs() -> None:
@@ -272,6 +278,9 @@ def test_compress_assembles_head_summary_tail() -> None:
     assert getattr(summary_messages[0], "role", None) == "assistant"
     assert f"{SUMMARY_PREFIX}\n## Goal" in _content_text(summary_messages[0])
     assert EXPECTED_SUMMARY_END_MARKER in _content_text(summary_messages[0])
+    assert _has_compressed_summary_metadata(summary_messages[0]) is True
+    converted_messages, _ = convert_messages(Context(messages=[summary_messages[0]]))
+    assert COMPRESSED_SUMMARY_METADATA_KEY not in converted_messages[0]
     assert result.messages[0].content == "first goal"  # head preserved
     assert getattr(result.messages[-1], "content", "") == "latest request"  # tail preserved
 
@@ -296,6 +305,7 @@ def test_compress_merges_summary_into_tail_when_both_roles_collide() -> None:
     assert tail_text.startswith(SUMMARY_PREFIX)
     assert f"{SUMMARY_PREFIX}\n## Goal" in tail_text
     assert EXPECTED_SUMMARY_END_MARKER in tail_text
+    assert _has_compressed_summary_metadata(summary_bearing_tail_messages[0]) is True
     assert "old assistant" in tail_text or tail_text.rstrip().endswith("tail assistant reply")
 
 

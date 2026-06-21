@@ -98,6 +98,9 @@ _HISTORICAL_SUMMARY_PREFIXES = (
     "config, etc.) may reflect work described here — avoid repeating it:",
 )
 SUMMARY_END_MARKER = "--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---"
+# Hermes keeps this as an underscore-prefixed in-process key so strict provider
+# gateways never see a non-standard message field on the wire.
+COMPRESSED_SUMMARY_METADATA_KEY = "_compressed_summary"
 _TOOL_RESULT_SUMMARY_MIN = 200
 _TOOL_ARGS_MAX = 500
 _IMAGE_TOKEN_ESTIMATE = 1600
@@ -555,9 +558,14 @@ class ContextCompressor:
         role = getattr(message, "role", "user")
         return "tool" if role == "toolResult" else role
 
+    @staticmethod
+    def _mark_compressed_summary_message(message: Message) -> Message:
+        setattr(message, COMPRESSED_SUMMARY_METADATA_KEY, True)
+        return message
+
     def _summary_message(self, role: str, content: str) -> Message:
         if role == "assistant":
-            return AssistantMessage(
+            message: Message = AssistantMessage(
                 content=[TextContent(text=content)],
                 api="compaction",
                 provider="hermes",
@@ -566,7 +574,9 @@ class ContextCompressor:
                 stop_reason="stop",
                 timestamp=now_ms(),
             )
-        return UserMessage(content=content, timestamp=now_ms())
+        else:
+            message = UserMessage(content=content, timestamp=now_ms())
+        return self._mark_compressed_summary_message(message)
 
     @staticmethod
     def _prepend_text_to_message(message: Message, text: str) -> Message:
@@ -628,7 +638,11 @@ class ContextCompressor:
             prefix = summary + "\n\n" + SUMMARY_END_MARKER + "\n\n"
             for index in range(tail_start, len(messages)):
                 tail_message = messages[index]
-                result.append(self._prepend_text_to_message(tail_message, prefix) if index == tail_start else tail_message)
+                if index == tail_start:
+                    summary_tail = self._prepend_text_to_message(tail_message, prefix)
+                    result.append(self._mark_compressed_summary_message(summary_tail))
+                else:
+                    result.append(tail_message)
             return result
 
         result.append(self._summary_message(summary_role, summary + "\n\n" + SUMMARY_END_MARKER))

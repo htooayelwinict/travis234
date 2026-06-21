@@ -1,6 +1,7 @@
 """appv22 port of hermes dual-pass + timing compaction."""
 
 from appv22.compaction.compressor import (
+    COMPRESSED_SUMMARY_METADATA_KEY,
     SUMMARY_PREFIX,
     CompressionResult,
     ContextCompressor,
@@ -17,6 +18,7 @@ from appv22.compaction.timing import (
 
 __all__ = [
     "SUMMARY_PREFIX",
+    "COMPRESSED_SUMMARY_METADATA_KEY",
     "CompactionManager",
     "CompressionResult",
     "ContextCompressor",
