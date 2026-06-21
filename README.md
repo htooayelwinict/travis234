@@ -2,119 +2,190 @@
 
 <div align="center">
 
-![Banner](https://capsule-render.vercel.app/api?type=waving&height=280&color=0:0f172a,35:0ea5e9,70:22c55e,100:f59e0b&text=ALLTHEBEST&fontSize=64&fontAlignY=38&desc=LLM-Native%20Decompressor%20%E2%86%92%20Planner%20%E2%86%92%20Worker%20Kernel&descAlignY=58&animation=fadeIn)
+![Banner](https://capsule-render.vercel.app/api?type=waving&height=320&color=0:0f0c29,30:302b63,70:24243e,100:4a148c&text=ALLTHEBEST&fontSize=72&fontAlignY=34&desc=Pi%20%C3%97%20Hermes%20Python%20Agent%20Runtime&descAlignY=56&animation=fadeIn&fontColor=ffffff&stroke=00d4ff&strokeWidth=2)
 
-[![Python](https://img.shields.io/badge/Python-3.13+-1f2937?style=for-the-badge&logo=python&logoColor=white)](#)
-[![LangGraph](https://img.shields.io/badge/LangGraph-0.6+-0b3b2e?style=for-the-badge)](#)
-[![Pydantic](https://img.shields.io/badge/Pydantic-2.x-0d9488?style=for-the-badge)](#)
-[![Tests](https://img.shields.io/badge/Tested_with-pytest-334155?style=for-the-badge)](#)
+[![Python](https://img.shields.io/badge/Python-3.13+-1f2937?style=for-the-badge&logo=python&logoColor=00d4ff)](https://www.python.org/)
+[![uv](https://img.shields.io/badge/uv-0.6+-1f2937?style=for-the-badge&logo=astral&logoColor=a855f7)](https://docs.astral.sh/uv/)
+[![Pydantic](https://img.shields.io/badge/Pydantic-2.x-1f2937?style=for-the-badge&logo=pydantic&logoColor=0ea5e9)](https://docs.pydantic.dev/)
+[![LangGraph](https://img.shields.io/badge/LangGraph-0.6+-1f2937?style=for-the-badge&logo=langchain&logoColor=22c55e)](https://langchain-ai.github.io/langgraph/)
+[![Tests](https://img.shields.io/badge/Tests-536%20passing-1f2937?style=for-the-badge&logo=pytest&logoColor=f59e0b)](https://docs.pytest.org/)
+[![License](https://img.shields.io/badge/License-MIT-1f2937?style=for-the-badge&logo=opensourceinitiative&logoColor=white)](LICENSE)
 
-**A sharp runtime pipeline that turns messy requests into structured execution plans.**
+**A self-contained Python port of the Pi coding agent, fused with Hermes-style context compaction and runtime guardrails.**
 
 </div>
 
 ---
 
-## Why This Exists
+## What is this?
 
-`allthebest` is a runtime architecture playground with a strict boundary:
+`allthebest` is an agent-runtime research workspace. Its active component, **`appv22`** (`appV2.2/appv22/`), is a from-scratch Python rewrite that combines two influential agent designs:
 
-- `DecompressorRuntime` converts user intent into a validated `Envelope`
-- `PlannerRuntime` chooses strategy and emits a `Plan`
-- `WorkerKernelRuntime` executes through bounded workers and returns `Result`
+- **Pi** — the interactive coding-agent loop, differential TUI, and multi-provider LLM abstraction.
+- **Hermes** — deterministic + LLM-based context compaction, tool-loop guardrails, and overflow/output-cap recovery.
 
-The graph topology stays intentionally simple and explicit:
+The result is a terminal-native coding assistant that can read files, run bash commands, edit code, and carry on long multi-turn sessions while keeping context windows under control.
 
-`START -> decompressor_node -> planner_node -> worker_kernel_node -> END`
+> This repo also houses untracked reference copies of the upstream [`hermes-agent/`](hermes-agent/) and [`pi/`](pi/) codebases for comparison and porting. They are **not** runtime dependencies of `appv22`.
+
+---
+
+## Why It Exists
+
+Most agent runtimes either couple tightly to a single framework or hide their boundaries behind opaque abstractions. `appv22` was built to:
+
+- Keep the runtime **self-contained** and auditable in pure Python.
+- Port proven patterns from Pi and Hermes **without importing their source**.
+- Maintain strict architectural boundaries with a regression test that forbids cross-repo imports.
+- Run **offline tests** via a faux provider so CI stays fast and deterministic.
 
 ---
 
 ## Core Features
 
-- LLM-driven decompression with schema validation and repair path
-- Canonicalized `Envelope` boundary (planner fields are stripped out)
-- Deterministic planner selection across direct/code/research/infra/fallback planners
-- Worker-kernel compilation and dispatch with explicit permissions/budgets
-- Focused tests for decompressor, planner, graph, and worker kernel behavior
+| Capability | Description |
+|---|---|
+| **Interactive Coding Agent** | Read, write, edit (diff), bash, grep, find, and ls tools driven by an LLM worker. |
+| **Differential TUI** | Live event-driven terminal rendering of assistant messages, tool calls, and status. |
+| **Hermes-Style Compaction** | Dual-pass context compression: deterministic pruning + LLM summarization. |
+| **Overflow & Output-Cap Recovery** | Detects provider context errors, shrinks context, and resumes. |
+| **Tool-Loop Guardrails** | Hard-stop thresholds for repeated failed or non-progressing tool calls. |
+| **Multi-Provider LLM Registry** | OpenRouter, OpenAI-compatible, and faux/offline providers with model pattern matching. |
+| **Thinking Levels** | Per-request reasoning control via `--thinking` and scoped model cycling. |
+| **Session Persistence** | JSONL session store with resume/fork/branch support. |
+| **Offline Test Suite** | 536 pytest cases run against the faux provider without network calls. |
 
 ---
 
 ## Architecture Snapshot
 
 ```text
-app/
-  decompressor/
-    runtime.py        # LLM-only decompressor entrypoint
-    prompt_chain.py   # Coalesced model call + validation/repair
-    contracts.py      # Pydantic contracts for decompressed envelope
-    canonicalize.py   # Final boundary canonicalization
-    model_client.py   # OpenAI-compatible chat-completions client
-    env_config.py     # .env wiring for model client config
-  planner/
-    selector.py       # Deterministic planner routing
-    planners/         # direct, code, research, infra, fallback
-  worker_kernel/
-    runtime.py        # Plan -> task execution runtime
-  graph.py            # LangGraph assembly and node wiring
+appV2.2/appv22/
+├── ai/                 # Multi-provider LLM registry, streaming, env config
+│   ├── models.py
+│   ├── providers/appv2_env.py
+│   └── providers/faux.py
+├── agent/              # Stateful agent loop, iteration budgets, guardrails
+│   ├── agent.py
+│   ├── agent_loop.py
+│   └── tool_guardrails.py
+├── coding_agent/       # Session orchestration, coding tools, prompts
+│   ├── agent_session.py
+│   ├── tools/
+│   └── system_prompt.py
+├── compaction/         # Hermes-style dual-pass context compression
+│   ├── compressor.py
+│   └── timing.py
+├── tui/                # Differential terminal UI and interactive loop
+│   ├── interactive_mode.py
+│   ├── tui.py
+│   └── interactive.py
+├── app.py              # Composition root: CodingApp
+└── cli.py              # argparse entry point
+```
+
+The data flow is intentionally simple:
+
+```text
+User Input → Agent Loop → LLM Worker → Tool Calls → Tool Results → ... → Assistant Reply
+                 ↑_______________________________________________|
+                                    (context compaction runs between turns)
 ```
 
 ---
 
 ## Quickstart
 
-### 1) Environment
+### 1. Environment
+
+Requires **Python 3.13** (see `.python-version`).
 
 ```bash
+# Copy the environment template
 cp .env.example .env
 ```
 
-Set required values in `.env`:
+Edit `.env` and set at least:
 
-- `DECOMPRESSOR_LLM_ENABLED=true`
-- `DECOMPRESSOR_LLM_API_KEY=...`
-- `DECOMPRESSOR_LLM_MODEL=...`
+```text
+APPV2_WORKER_LLM_ENABLED=true
+APPV2_WORKER_LLM_API_KEY=sk-or-v1-...
+APPV2_WORKER_LLM_BASE_URL=https://openrouter.ai/api/v1
+```
 
 Optional:
 
-- `DECOMPRESSOR_LLM_BASE_URL=...`
-- `DECOMPRESSOR_LLM_PROVIDER_SORT=latency`
-- `DECOMPRESSOR_LLM_MAX_TOKENS=700`
+```text
+APPV2_WORKER_LLM_MODEL=qwen/qwen3-coder-next
+APPV2_WORKER_LLM_PROVIDER_SORT=latency
+APPV2_WORKER_LLM_MAX_TOKENS=8192
+```
 
-### 2) Install
+### 2. Install
 
 ```bash
 uv sync
 ```
 
-### 3) Run Tests
+### 3. Run the Interactive TUI
 
 ```bash
-uv run pytest -q
+uv run python appV2.2/scripts/appv22_tui.py --dotenv .env --cwd ./your-project
 ```
 
-### 4) Smoke Test Live Envelopes
+Or via the npm wrapper:
 
 ```bash
-uv run python scripts/smoke_test_envelopes.py
+npm run tui -- --dotenv .env --cwd ./your-project
 ```
 
-Or pass your own prompts:
+### 4. Run Tests
 
 ```bash
-uv run python scripts/smoke_test_envelopes.py "who am i" "today date"
+PYTHONPATH=appV2.2 .venv/bin/python -m pytest appV2.2/tests -q
 ```
 
-### Live Worker Runtime Probe
+Expected: **536 passing**.
 
-For full live QA of `decompressor -> planner -> worker kernel`, see
-[docs/live-worker-runtime-probe.md](docs/live-worker-runtime-probe.md).
+---
+
+## Usage Examples
+
+### One-shot prompt
 
 ```bash
-uv run python scripts/live_worker_runtime_probe.py \
-  --worker-model qwen/qwen3.7-max \
-  --scenario payment_retry \
-  --matrix-poll-interval 1 \
-  --out-dir plan
+uv run python appV2.2/scripts/appv22_tui.py --tui --cwd ./my-project "refactor src/utils.py"
+```
+
+### Plain REPL loop
+
+```bash
+uv run python appV2.2/scripts/appv22_tui.py --plain --cwd ./my-project
+```
+
+### Override model and thinking level
+
+```bash
+uv run python appV2.2/scripts/appv22_tui.py \
+  --model openrouter/moonshotai/kimi-k2.6 \
+  --thinking medium \
+  --cwd ./my-project
+```
+
+### Export a session to HTML
+
+```bash
+uv run python appV2.2/scripts/appv22_tui.py \
+  --export session.jsonl \
+  output.html
+```
+
+### Disable tool-loop guardrails for debugging
+
+```bash
+uv run python appV2.2/scripts/appv22_tui.py \
+  --tool-loop-hard-stop \
+  --cwd ./my-project
 ```
 
 ---
@@ -122,34 +193,110 @@ uv run python scripts/live_worker_runtime_probe.py \
 ## Example Runtime Invocation
 
 ```python
-from app.decompressor.runtime import DecompressorRuntime
+from appv22.app import CodingApp
+from appv22.ai.env_config import load_model_config
+from appv22.ai.models import get_default_model_for_provider
+from appv22.ai.register_builtins import register_builtin_providers
+from appv22.ai.types import Model
 
-runtime = DecompressorRuntime.from_env(".env")
-envelope = runtime.run("fix network_sniffer.py")
-print(envelope.model_dump_json(indent=2))
+register_builtin_providers(dotenv_path=".env")
+config = load_model_config("APPV2_WORKER_LLM", ".env")
+model_id = config.model or get_default_model_for_provider("openrouter") or "moonshotai/kimi-k2.6"
+model = Model(
+    id=model_id,
+    name=model_id,
+    api="openai-completions",
+    provider="openrouter",
+    base_url=config.base_url,
+    reasoning=False,
+    context_window=128000,
+    max_tokens=config.max_tokens or 8192,
+)
+
+app = CodingApp(cwd="./my-project", model=model, enable_tui=False)
+app.run_turn("List the 5 largest Python files")
+```
+
+---
+
+## Testing & Quality
+
+- **Framework:** pytest
+- **Total tests:** 536 passing
+- **Offline coverage:** faux provider enables full test runs without API keys
+- **Coupling guard:** `appV2.2/tests/test_no_appv21_coupling.py` ensures `appv22` never imports from `pi/` or `hermes-agent/`
+
+Run the suite:
+
+```bash
+PYTHONPATH=appV2.2 .venv/bin/python -m pytest appV2.2/tests -q
+```
+
+Run with coverage:
+
+```bash
+PYTHONPATH=appV2.2 .venv/bin/python -m pytest appV2.2/tests --cov=appV2.2/appv22 --cov-report=term-missing
+```
+
+---
+
+## Project Layout
+
+```text
+allthebest/
+├── appV2.2/                    # Active Python app (appv22)
+│   ├── appv22/                 # Source package
+│   ├── scripts/appv22_tui.py   # Main runtime launcher
+│   └── tests/                  # 536 pytest cases
+├── docs/                       # Project documentation
+│   └── appv22-recovery-audit.md
+├── hermes-agent/               # Reference: upstream Hermes Agent (untracked)
+├── pi/                         # Reference: upstream Pi monorepo (untracked)
+├── .env.example                # Environment template
+├── pyproject.toml              # Python project metadata
+├── package.json                # npm wrapper scripts
+├── uv.lock                     # uv lockfile
+└── README.md                   # You are here
 ```
 
 ---
 
 ## Design Notes
 
-- The decompressor is intentionally **descriptive**, not a planner.
-- The planner is intentionally **deterministic**, not an LLM free-for-all.
-- The worker kernel is intentionally **bounded** (permissions, budgets, explicit step types).
-- If model outputs drift, schema validation and repair guardrails catch it early.
+- **`appv22` is intentionally descriptive at the boundaries.** The decompressor/planner/worker pipeline from earlier iterations has been superseded by the agent loop.
+- **The agent loop is bounded.** Iteration budgets, tool-loop hard stops, and explicit step types prevent runaway behavior.
+- **Compaction is first-class.** Context is compressed preflight, post-response, and on overflow, not just as a last resort.
+- **Provider errors are recoverable.** Context-overflow and output-cap errors trigger shrink-and-resume rather than crashing the session.
+- **No upstream source coupling.** `appv22` does not import TypeScript code from `pi/` or Python code from `hermes-agent/`.
 
 ---
 
-## Status
+## Documentation
 
-Actively iterated architecture with heavy emphasis on:
+- [`docs/appv22-recovery-audit.md`](docs/appv22-recovery-audit.md) — Current state, gap map, kill list, and recovery plan.
+- [`AGENTS.md`](AGENTS.md) — Vibe-coding assistant rules and conventions.
+- [`hermes-agent/README.md`](hermes-agent/README.md) — Hermes Agent user guide.
+- [`pi/README.md`](pi/README.md) — Pi agent harness docs.
 
-- boundary correctness
-- prompt-chain reliability under live providers
-- safety constraints before mutation-capable planning
+---
+
+## Roadmap / Status
+
+- [x] Self-contained Python port of Pi coding-agent loop
+- [x] Hermes dual-pass context compaction integration
+- [x] Differential TUI with live event rendering
+- [x] Overflow and output-cap recovery
+- [x] Tool-loop guardrails
+- [x] 536 offline pytest tests
+- [ ] Finalize CLI polish and session export UX
+- [ ] Expand provider adapters beyond OpenRouter-compatible endpoints
 
 ---
 
 <div align="center">
-  <sub>Built for fast iteration, clear boundaries, and zero hand-wavy runtime behavior.</sub>
+
+**Built for fast iteration, clear boundaries, and zero hand-wavy runtime behavior.**
+
+<sub>Reference upstream code lives in <code>hermes-agent/</code> and <code>pi/</code>; the active runtime is <code>appV2.2/appv22/</code>.</sub>
+
 </div>

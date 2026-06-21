@@ -28,8 +28,17 @@ PYTHONPATH=appV2.2 .venv/bin/python -m pytest appV2.2/tests -q
 Result:
 
 ```text
-535 passed
+536 passed
 ```
+
+Post-audit fix already applied:
+
+- Commit: `cdfbee6 appv22 stop redundant compaction rewrites`
+- PR: `https://github.com/htooayelwinict/allthebest/pull/18`
+- Root cause fixed: after a first `/compact` inserted a fallback summary, an immediate second `/compact` could treat the existing summary as the whole compressible middle window, call the LLM again, and accept a larger rewritten summary.
+- Fix: `ContextCompressor.compress()` now no-ops before the LLM call when the existing compaction summary consumes the whole compressible window and there are no new turns to incorporate.
+- Overflow recovery adjustment: if forced overflow compression is a no-op because the transcript is already compacted, appv22 can still retry once with that already-compacted transcript.
+- Validation after fix: `PYTHONPATH=appV2.2 .venv/bin/python -m pytest appV2.2/tests -q` -> `536 passed`.
 
 Pi concepts already ported:
 
@@ -41,7 +50,7 @@ Pi concepts already ported:
 Hermes concepts already exist:
 
 - Deterministic pruning: old tool-result pruning, duplicate-output pruning, arg truncation, media stripping.
-- LLM summary compaction: summary message, fallback marker, prior-summary handling.
+- LLM summary compaction: summary message, fallback marker, prior-summary handling, and redundant-summary rewrite guard.
 - Timing manager: preflight, post-response, overflow recovery, manual compression.
 - Guardrails around repeated no-progress tool calls.
 
@@ -88,8 +97,8 @@ Out of scope for this spine:
 | Tool loop guardrails | partial | appv22/Hermes-inspired | Test against repeated scan/read loops | `appV2.2/appv22/agent/tool_guardrails.py` | High |
 | Model provider | partial | Pi AI | Keep one provider spine; avoid full matrix now | `appV2.2/appv22/ai/providers/appv2_env.py` | Medium |
 | Deterministic compaction | done | Hermes | Preserve behavior, add contract coverage | `appV2.2/appv22/compaction/compressor.py` | Medium |
-| LLM summary compaction | partial/done | Hermes | Ensure fallback never traps UI/status | `appV2.2/appv22/compaction/compressor.py` | High |
-| Compaction timing | partial | Hermes | Compare one-pass vs bounded multi-pass behavior | `appV2.2/appv22/compaction/timing.py` | High |
+| LLM summary compaction | partial/done | Hermes | Guard landed for no-op re-compact after fallback; still verify fallback never traps UI/status | `appV2.2/appv22/compaction/compressor.py` | High |
+| Compaction timing | partial | Hermes | Overflow retry with already-compacted transcript landed; still compare one-pass vs bounded multi-pass behavior | `appV2.2/appv22/compaction/timing.py` | High |
 | TUI runtime controls | broken/partial | Pi TUI | Stabilize Ctrl-C/Esc/status only | `appV2.2/appv22/tui/interactive_mode.py` | High |
 | Prompt/tool instructions | confused | Pi coding-agent | Decide exact Pi vs appv22 identity, then patch narrowly | `appV2.2/appv22/coding_agent/system_prompt.py` | High |
 | Extensions/themes/export | duplicate/optional | Pi coding-agent | Freeze; do not extend | `appV2.2/appv22/coding_agent/extensions.py` | Medium |
