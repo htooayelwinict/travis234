@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 from collections.abc import Callable
 import os
 import select
@@ -138,6 +139,7 @@ class ProcessTerminal:
         self._stdin_stop = threading.Event()
         self._stdin_fd: int | None = None
         self._saved_termios: list | None = None
+        self._stdin_decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
     def write(self, data: str) -> None:  # pragma: no cover - real IO
         sys.stdout.write(data)
@@ -176,6 +178,7 @@ class ProcessTerminal:
         self._stdin_buffer = StdinBuffer({"timeout": 10})
         self._stdin_buffer.on("data", self._forward_input_sequence)
         self._stdin_buffer.on("paste", self._forward_paste)
+        self._reset_stdin_decoder()
         self._stdin_stop.clear()
         self._stdin_thread = threading.Thread(target=self._read_stdin_loop, daemon=True)
         self._stdin_thread.start()
@@ -195,6 +198,7 @@ class ProcessTerminal:
                 pass
         self._stdin_fd = None
         self._saved_termios = None
+        self._reset_stdin_decoder()
 
     def _read_stdin_loop(self) -> None:  # pragma: no cover - real IO
         fd = self._stdin_fd
@@ -213,9 +217,18 @@ class ProcessTerminal:
                 return
             if not data:
                 continue
-            buffer = self._stdin_buffer
-            if buffer is not None:
-                buffer.process(data)
+            self._process_stdin_bytes(data)
+
+    def _process_stdin_bytes(self, data: bytes) -> None:
+        text = self._stdin_decoder.decode(data, final=False)
+        if not text:
+            return
+        buffer = self._stdin_buffer
+        if buffer is not None:
+            buffer.process(text)
+
+    def _reset_stdin_decoder(self) -> None:
+        self._stdin_decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
     def _forward_input_sequence(self, sequence: str) -> None:  # pragma: no cover - real IO
         if self.input_handler is not None:

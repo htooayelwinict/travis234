@@ -979,6 +979,21 @@ def test_process_terminal_ports_pi_start_stop_progress_cleanup() -> None:
     ]
 
 
+def test_process_terminal_ports_pi_utf8_text_decoding_before_stdin_buffer() -> None:
+    terminal = ProcessTerminal()
+    seen: list[str] = []
+    terminal.input_handler = seen.append
+    terminal._stdin_buffer = StdinBuffer({"timeout": 10})
+    terminal._stdin_buffer.on("data", terminal._forward_input_sequence)
+
+    emoji_bytes = "👨‍💻".encode("utf-8")
+    terminal._process_stdin_bytes(emoji_bytes[:2])
+    assert seen == []
+
+    terminal._process_stdin_bytes(emoji_bytes[2:])
+    assert seen == ["👨", "\u200d", "💻"]
+
+
 def test_tui_ports_pi_start_stop_terminal_lifecycle() -> None:
     terminal = FakeTerminal(columns=40)
     tui = TUI(terminal)
