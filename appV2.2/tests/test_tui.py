@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 import builtins
+import os
+import select
 import threading
 import time
 
@@ -1024,6 +1026,51 @@ def test_interactive_mode_ports_pi_tui_lifecycle_on_run_exit(tmp_path) -> None:
     assert terminal.writes[0] == "\x1b[?2004h"
     assert terminal.writes[1] == "\x1b[?25l"
     assert terminal.writes[-2:] == ["\x1b[?25h", "\x1b[?2004l"]
+
+
+def test_tui_stop_ports_pi_drain_input_before_terminal_restore() -> None:
+    class DrainingTerminal(FakeTerminal):
+        def __init__(self) -> None:
+            super().__init__(columns=40)
+            self.lifecycle: list[str] = []
+
+        def drain_input(self, max_ms: int = 1000, idle_ms: int = 50) -> None:
+            self.lifecycle.append(f"drain:{max_ms}:{idle_ms}")
+
+        def show_cursor(self) -> None:
+            self.lifecycle.append("show_cursor")
+            super().show_cursor()
+
+        def stop(self) -> None:
+            self.lifecycle.append("stop")
+            super().stop()
+
+    terminal = DrainingTerminal()
+    tui = TUI(terminal)
+    tui.start()
+
+    tui.stop()
+
+    assert terminal.lifecycle == ["drain:1000:50", "show_cursor", "stop"]
+
+
+def test_process_terminal_drain_input_discards_pending_bytes() -> None:
+    read_fd, write_fd = os.pipe()
+    try:
+        os.write(write_fd, b"\x1b[27;3u")
+        terminal = ProcessTerminal()
+        terminal._stdin_fd = read_fd
+        seen: list[str] = []
+        terminal.input_handler = seen.append
+
+        terminal.drain_input(max_ms=50, idle_ms=1)
+
+        readable, _writable, _errors = select.select([read_fd], [], [], 0)
+        assert readable == []
+        assert seen == []
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
 
 
 def test_interactive_mode_default_uses_raw_tui_input_for_prompt_submit(monkeypatch, tmp_path) -> None:

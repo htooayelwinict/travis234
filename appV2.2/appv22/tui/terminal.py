@@ -9,6 +9,7 @@ import select
 import sys
 import termios
 import threading
+import time
 import tty
 from typing import Protocol
 
@@ -27,6 +28,8 @@ class Terminal(Protocol):
     def start(self, on_input: Callable[[str], None], on_resize: Callable[[], None]) -> None: ...
 
     def stop(self) -> None: ...
+
+    def drain_input(self, max_ms: int = 1000, idle_ms: int = 50) -> None: ...
 
     def write(self, data: str) -> None: ...
 
@@ -71,6 +74,11 @@ class FakeTerminal:
             self._progress_active = False
             self.write(_PROGRESS_CLEAR)
         self.write(_BRACKETED_PASTE_DISABLE)
+
+    def drain_input(self, max_ms: int = 1000, idle_ms: int = 50) -> None:
+        return None
+
+    drainInput = drain_input
 
     def move_by(self, lines: int) -> None:
         if lines > 0:
@@ -140,6 +148,7 @@ class ProcessTerminal:
         self._stdin_fd: int | None = None
         self._saved_termios: list | None = None
         self._stdin_decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self._draining_input = False
 
     def write(self, data: str) -> None:  # pragma: no cover - real IO
         sys.stdout.write(data)
@@ -217,7 +226,51 @@ class ProcessTerminal:
                 return
             if not data:
                 continue
+            if self._draining_input:
+                continue
             self._process_stdin_bytes(data)
+
+    def drain_input(self, max_ms: int = 1000, idle_ms: int = 50) -> None:  # pragma: no cover - timing exercised in tests
+        previous_handler = self.input_handler
+        self.input_handler = None
+        self._draining_input = True
+        fd = self._stdin_fd
+        if fd is None:
+            self.input_handler = previous_handler
+            self._draining_input = False
+            return
+
+        end_time = time.monotonic() + max(0, max_ms) / 1000.0
+        idle_seconds = max(0, idle_ms) / 1000.0
+        last_data_time = time.monotonic()
+        try:
+            while True:
+                now = time.monotonic()
+                if now >= end_time:
+                    break
+                if now - last_data_time >= idle_seconds:
+                    break
+                timeout = min(idle_seconds - (now - last_data_time), end_time - now)
+                if timeout <= 0:
+                    break
+                try:
+                    readable, _writable, _errors = select.select([fd], [], [], timeout)
+                except Exception:
+                    break
+                if not readable:
+                    continue
+                try:
+                    data = os.read(fd, 4096)
+                except OSError:
+                    break
+                if not data:
+                    break
+                last_data_time = time.monotonic()
+        finally:
+            self._draining_input = False
+            self.input_handler = previous_handler
+
+    drainInput = drain_input
 
     def _process_stdin_bytes(self, data: bytes) -> None:
         text = self._stdin_decoder.decode(data, final=False)

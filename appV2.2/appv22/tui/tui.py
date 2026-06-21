@@ -191,6 +191,9 @@ class TUI(Container):
         if not self._started:
             return
         self._started = False
+        drain_input = getattr(self.terminal, "drain_input", None) or getattr(self.terminal, "drainInput", None)
+        if callable(drain_input):
+            drain_input(1000)
         self.terminal.show_cursor()
         self.terminal.stop()
 
