@@ -542,22 +542,26 @@ class InteractiveMode:
         self._refresh_footer()
         self.tui.request_render()
 
-        status = self.app.compaction.compress_manual_with_status(
-            self.app.messages,
-            focus=focus,
-        )
-        self.app.session.agent.state.messages = status.messages
-        self.history.add(StatusLine(status.headline, kind="compact"))
-        self.history.add(Text(status.token_line))
-        if status.note:
-            self.history.add(StatusLine(status.note, kind="note"))
-        if status.warning:
-            self.history.add(StatusLine(status.warning, kind="warning"))
-        if status.info:
-            self.history.add(StatusLine(status.info, kind="info"))
-        self.status.set_message("Idle")
-        self._refresh_footer()
-        self.tui.request_render()
+        try:
+            status = self.app.compaction.compress_manual_with_status(
+                self.app.messages,
+                focus=focus,
+            )
+            self.app.session.agent.state.messages = status.messages
+            self.history.add(StatusLine(status.headline, kind="compact"))
+            self.history.add(Text(status.token_line))
+            if status.note:
+                self.history.add(StatusLine(status.note, kind="note"))
+            if status.warning:
+                self.history.add(StatusLine(status.warning, kind="warning"))
+            if status.info:
+                self.history.add(StatusLine(status.info, kind="info"))
+        except Exception as error:  # noqa: BLE001 - mirror Hermes: report local command failure without trapping TUI.
+            self.history.add(StatusLine(f"Compression failed: {error}", kind="compact"))
+        finally:
+            self.status.set_message("Idle")
+            self._refresh_footer()
+            self.tui.request_render()
 
     def _run_auth_command(self, command: str, provider_query: str | None) -> None:
         if command == "login":

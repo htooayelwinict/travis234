@@ -3705,6 +3705,26 @@ def test_interactive_mode_manual_compress_renders_feedback_and_updates_footer(tm
     assert "faux-model" in rendered
 
 
+def test_interactive_mode_manual_compress_failure_resets_status(tmp_path) -> None:
+    register_api_provider(create_faux_provider(lambda m, c: text_response_events(m, "unused")))
+    terminal = FakeTerminal(columns=140)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+
+    def fail_manual_compress(*args, **kwargs):
+        raise RuntimeError("summary provider stuck")
+
+    app.compaction.compress_manual_with_status = fail_manual_compress
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+    mode.init()
+
+    mode._run_manual_compress("/compress")
+
+    rendered = "\n".join(app.tui.render(140))
+    assert mode.status._message == "Idle"
+    assert "compact: Compression failed: summary provider stuck" in rendered
+    assert "status: Compressing" not in rendered
+
+
 def test_interactive_mode_compact_alias_is_local_and_does_not_call_model(tmp_path) -> None:
     calls = {"n": 0}
 
@@ -3837,16 +3857,24 @@ def test_interactive_mode_login_api_key_is_local_tui_command(tmp_path) -> None:
     assert "model should not run" not in rendered
 
 
-def test_interactive_mode_bad_read_numeric_string_returns_tool_error_not_traceback(tmp_path) -> None:
+def test_interactive_mode_coerces_read_numeric_string_like_pi_validation(tmp_path) -> None:
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "file.py").write_text("print('ok')\n", encoding="utf-8")
     calls = {"count": 0}
+    seen_tool_result = {"text": ""}
 
     def script(model, context):
         calls["count"] += 1
         if calls["count"] == 1:
             return tool_call_response_events(model, "read", {"path": "src/file.py", "limit": "100.0"})
-        return text_response_events(model, "handled invalid read")
+        seen_tool_result["text"] = "\n".join(
+            block.text
+            for message in context.messages
+            if getattr(message, "role", None) == "toolResult"
+            for block in getattr(message, "content", [])
+            if hasattr(block, "text")
+        )
+        return text_response_events(model, "handled read")
 
     register_api_provider(create_faux_provider(script))
     terminal = FakeTerminal(columns=120)
@@ -3856,8 +3884,9 @@ def test_interactive_mode_bad_read_numeric_string_returns_tool_error_not_traceba
 
     rendered = "\n".join(app.tui.render(120))
     assert "read src/file.py" in rendered
-    assert "read.limit: expected number" in rendered
+    assert "read.limit: expected number" not in rendered
     assert "Traceback" not in rendered
+    assert "print('ok')" in seen_tool_result["text"]
     assert calls["count"] == 2
 
 
