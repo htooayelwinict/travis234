@@ -76,6 +76,7 @@ class InteractiveMode:
         self.hidden_thinking_label = self.default_hidden_thinking_label
         self.hide_thinking_block = False
         self.editor_text = ""
+        self.prompt_history: list[str] = []
         self.active_editor: Input | None = None
         self.extension_statuses: dict[str, str] = {}
         self.extension_widgets_above: dict[str, Component] = {}
@@ -235,6 +236,7 @@ class InteractiveMode:
                     submitted_queue.put(value)
 
                 prompt_component = Input(value=self.editor_text, prompt=self.prompt_label, on_submit=on_submit)
+                prompt_component.set_history(self.prompt_history)
                 prompt_component.on_escape = self._handle_editor_escape
                 prompt_component.onEscape = self._handle_editor_escape
                 prompt_component.set_autocomplete_provider(self.autocomplete_provider)
@@ -293,6 +295,7 @@ class InteractiveMode:
                     return 0
                 if not prompt:
                     continue
+                prompt_component.add_to_history(prompt)
                 bash_command = _parse_bash_command(prompt)
                 if bash_command:
                     self._run_bash_command(bash_command[0], exclude_from_context=bash_command[1])

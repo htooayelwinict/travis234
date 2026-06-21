@@ -1070,6 +1070,67 @@ def test_interactive_mode_default_uses_raw_tui_input_for_prompt_submit(monkeypat
     assert "raw reply" in strip_ansi(terminal.output)
 
 
+def test_interactive_mode_persists_pi_prompt_history_between_editors(tmp_path) -> None:
+    seen_prompts: list[str] = []
+
+    def script(model, context):
+        text = ""
+        if context.messages and getattr(context.messages[-1], "role", None) == "user":
+            content = context.messages[-1].content
+            if isinstance(content, str):
+                text = content
+            else:
+                text = "".join(block.text for block in content if isinstance(block, TextContent))
+        seen_prompts.append(text)
+        return text_response_events(model, "ok")
+
+    register_api_provider(create_faux_provider(script))
+    terminal = FakeTerminal(columns=120)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+    mode = InteractiveMode(app)
+    outcome: dict[str, object] = {}
+
+    def run_mode() -> None:
+        try:
+            outcome["code"] = mode.run()
+        except BaseException as error:  # noqa: BLE001 - test thread must surface failures.
+            outcome["error"] = error
+
+    thread = threading.Thread(target=run_mode)
+    thread.start()
+    try:
+        assert _wait_until(lambda: terminal.input_handler is not None and mode.active_editor is not None)
+        terminal.input_handler("first\r")
+        assert _wait_until(lambda: seen_prompts == ["first"], timeout=2)
+        assert _wait_until(lambda: not mode._is_turn_active() and mode.active_editor is not None, timeout=2)
+
+        terminal.input_handler("second\r")
+        assert _wait_until(lambda: seen_prompts == ["first", "second"], timeout=2)
+        assert _wait_until(lambda: not mode._is_turn_active() and mode.active_editor is not None, timeout=2)
+
+        terminal.input_handler("\x1b[A")
+        assert _wait_until(lambda: mode.active_editor is not None and mode.active_editor.get_value() == "second")
+        terminal.input_handler("\x1b[A")
+        assert _wait_until(lambda: mode.active_editor is not None and mode.active_editor.get_value() == "first")
+        terminal.input_handler("\x1b[B")
+        assert _wait_until(lambda: mode.active_editor is not None and mode.active_editor.get_value() == "second")
+        terminal.input_handler("\x1b[B")
+        assert _wait_until(lambda: mode.active_editor is not None and mode.active_editor.get_value() == "")
+
+        terminal.input_handler("/exit\r")
+        thread.join(timeout=2)
+    finally:
+        if thread.is_alive():
+            mode._shutdown_requested = True
+            if terminal.input_handler is not None:
+                terminal.input_handler("/exit\r")
+            thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert "error" not in outcome
+    assert outcome["code"] == 0
+
+
 def test_interactive_mode_editor_escape_aborts_active_turn(tmp_path, monkeypatch) -> None:
     terminal = FakeTerminal(columns=120)
     app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
@@ -1719,6 +1780,29 @@ def test_input_ports_pi_grapheme_cursor_and_delete_behavior() -> None:
     input_component.handle_input("\x1b[3~")
     assert input_component.get_value() == "ab"
     assert input_component.cursor == len("a")
+
+
+def test_input_ports_pi_up_down_prompt_history_navigation() -> None:
+    input_component = Input(value="draft")
+    input_component.addToHistory("first")
+    input_component.addToHistory("second")
+    input_component.addToHistory("second")
+
+    input_component.handle_input("\x1b[A")
+    assert input_component.get_value() == "second"
+    assert input_component.cursor == 0
+
+    input_component.handle_input("\x1b[A")
+    assert input_component.get_value() == "first"
+    assert input_component.cursor == 0
+
+    input_component.handle_input("\x1b[B")
+    assert input_component.get_value() == "second"
+    assert input_component.cursor == len("second")
+
+    input_component.handle_input("\x1b[B")
+    assert input_component.get_value() == "draft"
+    assert input_component.cursor == len("draft")
 
 
 def test_input_ports_pi_alt_d_delete_word_forward_keybinding() -> None:
