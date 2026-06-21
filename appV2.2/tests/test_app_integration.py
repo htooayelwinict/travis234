@@ -209,6 +209,76 @@ def test_coding_app_persists_preflight_compaction_when_provider_errors(tmp_path:
     )
 
 
+def test_coding_app_spine_smoke_contract_no_network_with_fallback_compaction(tmp_path: Path) -> None:
+    model = faux_model()
+    huge_tool_result = "deterministic compaction payload\n" + ("x" * 60_000)
+    seen_contexts = []
+
+    def script(m, c):
+        seen_contexts.append(c)
+        return text_response_events(m, "spine final response")
+
+    register_api_provider(create_faux_provider(script))
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=model,
+        terminal=FakeTerminal(),
+        context_length=2000,
+        summarizer=lambda prompt: (_ for _ in ()).throw(RuntimeError("summary model unavailable")),
+        enable_tui=False,
+    )
+    app.session.agent.state.messages = [
+        UserMessage(content="initial spine setup", timestamp=now_ms()),
+        AssistantMessage(
+            content=[TextContent(text="setup acknowledged")],
+            api=model.api,
+            provider=model.provider,
+            model=model.id,
+            usage=empty_usage(),
+            stop_reason="stop",
+            timestamp=now_ms(),
+        ),
+        UserMessage(content="old scan request", timestamp=now_ms()),
+        AssistantMessage(
+            content=[ToolCall(id="old-read", name="read", arguments={"path": "old.log"})],
+            api=model.api,
+            provider=model.provider,
+            model=model.id,
+            usage=empty_usage(),
+            stop_reason="toolUse",
+            timestamp=now_ms(),
+        ),
+        ToolResultMessage(
+            tool_call_id="old-read",
+            tool_name="read",
+            content=[TextContent(text=huge_tool_result)],
+            is_error=False,
+            timestamp=now_ms(),
+        ),
+        *[
+            UserMessage(content=f"old context {index} " * 200, timestamp=now_ms())
+            for index in range(16)
+        ],
+    ]
+
+    app.run_turn("finish the spine smoke request")
+
+    assert len(seen_contexts) == 1
+    assert app.compaction.compressor.compression_count == 1
+    assert app.compaction.compressor._last_summary_fallback_used is True
+    assert app.messages is app.session.agent.state.messages
+    assert any(
+        isinstance(message, AssistantMessage)
+        and any(isinstance(block, TextContent) and block.text == "spine final response" for block in message.content)
+        for message in app.messages
+    )
+    context_text = "\n".join(str(message.content) for message in seen_contexts[0].messages)
+    assert "[CONTEXT COMPACTION" in context_text
+    assert "Summary generation was unavailable" in context_text
+    assert "finish the spine smoke request" in context_text
+    assert huge_tool_result not in context_text
+
+
 def test_coding_app_recovers_context_overflow_by_compacting_and_retrying(tmp_path: Path) -> None:
     model = faux_model()
     calls = {"n": 0}
