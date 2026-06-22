@@ -14,6 +14,8 @@ from appv22.ai.models import get_model, get_models, get_providers, has_configure
 from appv22.ai.register_builtins import register_builtin_providers
 from appv22.ai.types import Model
 from appv22.app import CodingApp
+from appv22.coding_agent.config import get_agent_dir
+from appv22.coding_agent.agent_session_services import _new_session_path
 from appv22.coding_agent.export_html import export_from_file
 from appv22.tui.interactive_mode import InteractiveMode
 
@@ -205,6 +207,8 @@ def main(argv: list[str] | None = None) -> int:
         runtime_options["max_iterations"] = args.max_iterations
     if args.tool_loop_hard_stop:
         runtime_options["tool_loop_guardrails"] = {"hard_stop_enabled": True}
+    agent_dir = get_agent_dir()
+    session_path, session_id = _new_session_path(str(cwd_path), agent_dir)
 
     app = CodingApp(
         cwd=str(cwd_path),
@@ -212,6 +216,9 @@ def main(argv: list[str] | None = None) -> int:
         thinking_level=startup.thinking_level or "off",
         scoped_models=startup.scoped_models,
         enable_tui=args.tui or not args.prompt and not args.plain,
+        session_path=session_path,
+        session_id=session_id,
+        agent_dir=agent_dir,
         **runtime_options,
     )
 

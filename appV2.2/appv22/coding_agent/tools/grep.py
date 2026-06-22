@@ -17,6 +17,7 @@ from appv22.coding_agent.tools.truncate import (
     format_size,
     truncate_head,
     truncate_line,
+    truncation_to_details,
 )
 from appv22.coding_agent.tools.types import ToolContext, ToolDefinition, wrap_tool_definition
 
@@ -199,7 +200,7 @@ def _execute_grep(
         details["matchLimitReached"] = limit
     if truncation.truncated:
         notices.append(f"{format_size(DEFAULT_MAX_BYTES)} limit reached")
-        details["truncation"] = truncation
+        details["truncation"] = truncation_to_details(truncation)
     if lines_truncated:
         notices.append(f"Some lines truncated to {GREP_MAX_LINE_LENGTH} chars. Use read tool to see full lines")
         details["linesTruncated"] = True

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from appv22.compaction import CompactionManager, ContextCompressor, SessionLineage, estimate_tokens
+from appv22.compaction import CompressionResult, CompactionManager, ContextCompressor, SessionLineage, estimate_tokens
 from appv22.ai.types import UserMessage, now_ms
 
 
@@ -16,6 +16,10 @@ def _big_messages(n: int = 40, size: int = 200) -> list:
 
 def _summarizer(prompt: str) -> str:
     return "## Goal\nshort"
+
+
+def _message_with_tokens(tokens: int) -> UserMessage:
+    return UserMessage(content="x" * (tokens * 4), timestamp=now_ms())
 
 
 def _manager(**kwargs) -> CompactionManager:
@@ -34,6 +38,43 @@ def test_preflight_compresses_over_threshold_then_defers() -> None:
     assert out2 is out
 
 
+def test_preflight_compacts_once_and_preserves_latest_turn_for_next_call() -> None:
+    calls: list[str] = []
+
+    def summarizer(prompt: str) -> str:
+        calls.append(prompt)
+        return "## Goal\nshort"
+
+    compressor = ContextCompressor(context_length=2000, protect_first_n=1, protect_last_n=4)
+    manager = CompactionManager(compressor, summarizer=summarizer)
+    messages = _big_messages()
+
+    out = manager.maybe_compress_preflight(messages)
+    out2 = manager.maybe_compress_preflight(out)
+
+    assert len(out) < len(messages)
+    assert out[-1].content == "latest"
+    assert out2 is out
+    assert len(calls) == 1
+    assert compressor.compression_count == 1
+
+
+def test_preflight_below_threshold_does_not_call_summarizer() -> None:
+    calls: list[str] = []
+    compressor = ContextCompressor(context_length=2000, protect_first_n=1, protect_last_n=4)
+    manager = CompactionManager(
+        compressor,
+        summarizer=lambda prompt: calls.append(prompt) or "## Goal\nshould not run",
+    )
+    messages = [UserMessage(content="goal", timestamp=now_ms()), UserMessage(content="latest", timestamp=now_ms())]
+
+    out = manager.maybe_compress_preflight(messages)
+
+    assert out is messages
+    assert calls == []
+    assert compressor.compression_count == 0
+
+
 def test_post_response_sentinel_minus_one_treated_as_zero() -> None:
     manager = _manager()
     messages = _big_messages()
@@ -47,6 +88,27 @@ def test_post_response_real_tokens_compresses() -> None:
     messages = _big_messages()
     out = manager.maybe_compress_post_response(messages, prompt_tokens=5000)
     assert len(out) < len(messages)
+
+
+def test_post_response_compaction_noops_on_immediate_recheck_after_summary() -> None:
+    calls: list[str] = []
+
+    def summarizer(prompt: str) -> str:
+        calls.append(prompt)
+        return "## Goal\nshort"
+
+    compressor = ContextCompressor(context_length=2000, protect_first_n=1, protect_last_n=4)
+    manager = CompactionManager(compressor, summarizer=summarizer)
+    messages = _big_messages()
+
+    first = manager.maybe_compress_post_response(messages, prompt_tokens=5000)
+    second = manager.maybe_compress_post_response(first, prompt_tokens=5000)
+
+    assert len(first) < len(messages)
+    assert second is first
+    assert len(calls) == 1
+    assert compressor.compression_count == 1
+    assert first[-1].content == "latest"
 
 
 def test_compressor_update_from_response_tracks_real_usage_for_deferral() -> None:
@@ -102,6 +164,24 @@ def test_overflow_recovery_force_and_bounded() -> None:
     assert c1 is True and c2 is True
     assert c3 is False  # bounded at 2 attempts
     _ = small
+
+
+def test_overflow_recovery_retries_once_with_already_compacted_transcript_and_stops() -> None:
+    compressor = ContextCompressor(context_length=2000, protect_first_n=1, protect_last_n=4)
+    manager = CompactionManager(compressor, summarizer=_summarizer, max_overflow_attempts=1)
+    messages = _big_messages()
+
+    compacted = manager.maybe_compress_preflight(messages)
+    recovered_messages, recovered = manager.recover_overflow(compacted)
+    second_messages, second_recovered = manager.recover_overflow(recovered_messages)
+
+    assert compacted is not messages
+    assert recovered is True
+    assert recovered_messages is compacted
+    assert second_recovered is False
+    assert second_messages is recovered_messages
+    assert manager.overflow_attempts == 1
+    assert compressor.compression_count == 1
 
 
 def test_manual_force_clears_cooldown() -> None:
@@ -250,6 +330,160 @@ def test_manual_compression_status_warns_when_compression_aborts() -> None:
     assert "Compression aborted" in status.warning
     assert "down" in status.warning
     assert "No messages were dropped" in status.warning
+
+
+def test_manual_compression_status_surfaces_manager_level_failure() -> None:
+    class RaisingCompressor(ContextCompressor):
+        def compress(self, messages, summarizer=None, focus_topic=None, force=False):
+            raise RuntimeError("manager-level failure")
+
+    manager = CompactionManager(RaisingCompressor(), summarizer=_summarizer)
+
+    status = manager.compress_manual_with_status(_big_messages())
+
+    assert status.compressed is False
+    assert status.noop is True
+    assert status.headline.startswith("Compression failed:")
+    assert "No changes from compression" not in status.headline
+    assert status.warning is not None
+    assert "manager-level failure" in status.warning
+    assert "No messages were dropped" in status.warning
+
+
+def test_manual_compression_noop_reports_protected_recent_context() -> None:
+    compressor = ContextCompressor(
+        context_length=128_000,
+        threshold_percent=0.80,
+        protect_first_n=3,
+        protect_last_n=20,
+    )
+    manager = CompactionManager(compressor, summarizer=_summarizer)
+    messages = [UserMessage(content="latest huge only " + ("x" * 440_000), timestamp=now_ms())]
+    assert estimate_tokens(messages) > compressor.threshold_tokens
+
+    status = manager.compress_manual_with_status(messages)
+
+    assert status.compressed is False
+    assert status.noop is True
+    assert status.note == "No compactable history; recent context is protected."
+
+
+def test_manual_aggressive_compression_uses_tighter_tail_boundary() -> None:
+    messages = _big_messages(n=80, size=80)
+    normal = CompactionManager(
+        ContextCompressor(context_length=12_000, threshold_percent=0.5, protect_first_n=1, protect_last_n=20),
+        summarizer=_summarizer,
+    ).compress_manual_with_status(messages)
+    aggressive = CompactionManager(
+        ContextCompressor(context_length=12_000, threshold_percent=0.5, protect_first_n=1, protect_last_n=20),
+        summarizer=_summarizer,
+    ).compress_manual_with_status(messages, aggressive=True)
+
+    assert normal.compressed is True
+    assert aggressive.compressed is True
+    assert normal.aggressive is False
+    assert aggressive.aggressive is True
+    assert aggressive.first_kept_message_index > normal.first_kept_message_index
+    assert len(aggressive.messages) < len(normal.messages)
+    assert estimate_tokens(aggressive.messages) < estimate_tokens(normal.messages)
+
+
+def test_manual_aggressive_compression_loops_until_minimum_target() -> None:
+    class SequenceCompressor(ContextCompressor):
+        def __init__(self) -> None:
+            super().__init__(context_length=128_000)
+            self.calls: list[bool] = []
+            self.outputs = [20_000, 10_000, 3_000]
+
+        def compress(self, messages, summarizer=None, focus_topic=None, force=False, aggressive=False):
+            self.calls.append(bool(aggressive))
+            tokens = self.outputs[len(self.calls) - 1]
+            return CompressionResult(
+                messages=[_message_with_tokens(tokens)],
+                compressed=True,
+                savings_pct=50.0,
+                summary=f"pass {len(self.calls)}",
+                tokens_before=estimate_tokens(messages),
+                first_kept_message_index=0,
+            )
+
+    compressor = SequenceCompressor()
+    manager = CompactionManager(compressor, summarizer=_summarizer)
+
+    status = manager.compress_manual_with_status([_message_with_tokens(40_000)], aggressive=True)
+
+    assert compressor.calls == [True, True, True]
+    assert status.compressed is True
+    assert status.aggressive is True
+    assert status.compression_passes == 3
+    assert status.aggressive_stop_reason == "target_reached"
+    assert status.target_tokens == 6_400
+    assert estimate_tokens(status.messages) == 3_000
+    assert "Aggressive compression: 3 passes" in status.note
+    assert "target reached" in status.note
+
+
+def test_manual_aggressive_compression_stops_when_passes_stop_making_progress() -> None:
+    class SequenceCompressor(ContextCompressor):
+        def __init__(self) -> None:
+            super().__init__(context_length=32_000)
+            self.calls: list[bool] = []
+            self.outputs = [10_000, 9_700, 4_000]
+
+        def compress(self, messages, summarizer=None, focus_topic=None, force=False, aggressive=False):
+            self.calls.append(bool(aggressive))
+            tokens = self.outputs[len(self.calls) - 1]
+            return CompressionResult(
+                messages=[_message_with_tokens(tokens)],
+                compressed=True,
+                savings_pct=3.0,
+                summary=f"pass {len(self.calls)}",
+                tokens_before=estimate_tokens(messages),
+                first_kept_message_index=0,
+            )
+
+    compressor = SequenceCompressor()
+    manager = CompactionManager(compressor, summarizer=_summarizer)
+
+    status = manager.compress_manual_with_status([_message_with_tokens(16_000)], aggressive=True)
+
+    assert compressor.calls == [True, True]
+    assert status.compression_passes == 2
+    assert status.aggressive_stop_reason == "insufficient_progress"
+    assert status.target_tokens == 2_048
+    assert estimate_tokens(status.messages) == 9_700
+    assert "insufficient progress" in status.note
+
+
+def test_manual_compression_noops_when_existing_summary_has_no_new_middle_turns() -> None:
+    compressor = ContextCompressor(
+        context_length=30_000,
+        threshold_percent=0.5,
+        protect_first_n=3,
+        protect_last_n=20,
+    )
+    manager = CompactionManager(
+        compressor,
+        summarizer=lambda prompt: (_ for _ in ()).throw(RuntimeError("summary provider rejected first pass")),
+    )
+    messages = _big_messages(n=40, size=200)
+    first = manager.compress_manual_with_status(messages)
+    calls: list[str] = []
+
+    def expanding_summarizer(prompt: str) -> str:
+        calls.append(prompt)
+        return "## Historical Task Snapshot\n" + ("expanded successful summary " * 500)
+
+    before_tokens = estimate_tokens(first.messages)
+    second = manager.compress_manual_with_status(first.messages, summarizer=expanding_summarizer)
+
+    assert first.compressed is True
+    assert first.warning is not None
+    assert second.compressed is False
+    assert second.noop is True
+    assert second.messages == first.messages
+    assert estimate_tokens(second.messages) == before_tokens
+    assert calls == []
 
 
 def test_session_lineage_rotation() -> None:

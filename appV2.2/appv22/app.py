@@ -45,6 +45,9 @@ class CodingApp:
         settings_manager: object | None = None,
         max_iterations: int = 90,
         tool_loop_guardrails: Mapping[str, object] | None = None,
+        session_path: str | None = None,
+        session_id: str | None = None,
+        agent_dir: str | None = None,
     ) -> None:
         self.cwd = cwd
         summarizer = summarizer or _model_summarizer(model, thinking_level=thinking_level)
@@ -57,6 +60,9 @@ class CodingApp:
             settings_manager=settings_manager,
             max_iterations=max_iterations,
             tool_loop_guardrails=tool_loop_guardrails,
+            session_path=session_path,
+            session_id=session_id,
+            agent_dir=agent_dir,
         )
         resolved_context_length, threshold_percent = _resolve_compaction_window(
             model,

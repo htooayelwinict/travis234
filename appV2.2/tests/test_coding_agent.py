@@ -96,6 +96,21 @@ def test_read_tool_with_offset_and_truncation(tmp_path: Path) -> None:
     assert "more lines in file" in result.content[0].text
 
 
+def test_read_tool_truncation_details_are_json_serializable_pi_shape(tmp_path: Path) -> None:
+    target = tmp_path / "large.txt"
+    target.write_text("\n".join(f"line{i}" for i in range(2005)), encoding="utf-8")
+    tool = create_tool("read", str(tmp_path))
+
+    result = tool.execute("c1", {"path": "large.txt"})
+
+    json.dumps(result.details)
+    truncation = result.details["truncation"]
+    assert truncation["truncated"] is True
+    assert truncation["truncatedBy"] == "lines"
+    assert truncation["totalLines"] == 2005
+    assert truncation["outputLines"] == 2000
+
+
 def test_read_tool_schema_and_execution_accept_pi_number_limits(tmp_path: Path) -> None:
     target = tmp_path / "f.txt"
     target.write_text("\n".join(f"line{i}" for i in range(1, 11)), encoding="utf-8")
@@ -481,14 +496,51 @@ def test_bash_tool_truncates_tail_and_persists_full_output(tmp_path: Path) -> No
     text = result.content[0].text
     assert "line0" not in text
     assert "line2004" in text
+    json.dumps(result.details)
     truncation = result.details["truncation"]
-    assert truncation.truncated is True
-    assert truncation.truncated_by == "lines"
+    assert truncation["truncated"] is True
+    assert truncation["truncatedBy"] == "lines"
     full_output_path = Path(result.details["fullOutputPath"])
     assert full_output_path.exists()
     full_output = full_output_path.read_text(encoding="utf-8")
     assert "line0" in full_output
     assert "line2004" in full_output
+
+
+def test_truncating_find_ls_and_grep_details_are_json_serializable_pi_shape(tmp_path: Path) -> None:
+    from appv22.coding_agent.tools.find import FindOperations, create_find_tool
+    from appv22.coding_agent.tools.grep import create_grep_tool
+    from appv22.coding_agent.tools.ls import LsOperations, create_ls_tool
+
+    long_names = [f"{index:04d}-{'x' * 80}.py" for index in range(1000)]
+    find_tool = create_find_tool(
+        str(tmp_path),
+        operations=FindOperations(exists=lambda _path: True, glob=lambda _pattern, _root, _options: long_names),
+    )
+    ls_tool = create_ls_tool(
+        str(tmp_path),
+        operations=LsOperations(
+            exists=lambda _path: True,
+            is_directory=lambda path: os.path.abspath(path) == str(tmp_path.resolve()),
+            readdir=lambda _path: long_names,
+        ),
+    )
+    grep_target = tmp_path / "large.txt"
+    grep_target.write_text("\n".join(f"needle {'x' * 500} {index}" for index in range(200)), encoding="utf-8")
+    grep_tool = create_grep_tool(str(tmp_path))
+
+    results = [
+        find_tool.execute("c1", {"pattern": "*.py", "limit": 1000}),
+        ls_tool.execute("c2", {"limit": 1000}),
+        grep_tool.execute("c3", {"pattern": "needle", "path": "large.txt", "literal": True, "limit": 200}),
+    ]
+
+    for result in results:
+        json.dumps(result.details)
+        truncation = result.details["truncation"]
+        assert truncation["truncated"] is True
+        assert truncation["truncatedBy"] in {"bytes", "lines"}
+        assert "totalLines" in truncation
 
 
 def test_bash_tool_uses_operations_prefix_spawn_hook_and_updates(tmp_path: Path) -> None:
@@ -909,6 +961,31 @@ def test_build_system_prompt_includes_tools_and_cwd(tmp_path: Path) -> None:
     assert "Use read to examine files instead of cat or sed." in prompt
     assert "Be concise in your responses" in prompt
     assert str(tmp_path).replace("\\", "/") in prompt
+
+
+def test_build_system_prompt_accepts_scope_narrowing_recovery_guidelines(tmp_path: Path) -> None:
+    prompt = build_system_prompt(
+        BuildSystemPromptOptions(
+            cwd=str(tmp_path),
+            selected_tools=["read", "bash", "edit", "write"],
+            tool_snippets={
+                "read": "Read file contents",
+                "bash": "Run shell commands",
+                "edit": "Edit files",
+                "write": "Write files",
+            },
+            prompt_guidelines=[
+                "For broad migrations, first produce a bounded audit and NEXT_PATCH before implementation.",
+                "When patching, respect allowed_files, forbidden_files, test_command, success_criteria, and stop_condition.",
+                "Keep patches independently reviewable.",
+            ],
+        )
+    )
+
+    assert "bounded audit and NEXT_PATCH" in prompt
+    assert "allowed_files, forbidden_files, test_command, success_criteria, and stop_condition" in prompt
+    assert "Keep patches independently reviewable." in prompt
+    assert "continue until finished" not in prompt.lower()
 
 
 def test_build_system_prompt_includes_pi_docs_resolution_guidance(tmp_path: Path) -> None:
@@ -2328,6 +2405,60 @@ def test_tool_loop_guardrail_treats_bash_inventory_variants_as_no_progress() -> 
     assert "read with path/offset/limit" in decisions[2].message
 
 
+def test_tool_loop_guardrail_treats_broad_python_repo_scan_variants_as_no_progress() -> None:
+    from appv22.agent.tool_guardrails import ToolCallGuardrailController
+
+    controller = ToolCallGuardrailController()
+    commands = [
+        "find . -type f -name '*.py'",
+        "rg --files -g '*.py' .",
+        "find ./ -name '*.py' -type f",
+    ]
+
+    decisions = [
+        controller.after_call("bash", {"command": command}, "src/app.py\nsrc/tools/read.py", failed=False)
+        for command in commands
+    ]
+
+    assert decisions[0].action == "allow"
+    assert decisions[1].code == "idempotent_no_progress_warning"
+    assert decisions[2].action == "halt"
+    assert decisions[2].code == "idempotent_no_progress_block"
+    assert "For codebase scans" in decisions[2].message
+    assert "treat listings/search output as inventory" in decisions[2].message
+    assert "read with path/offset/limit" in decisions[2].message
+
+
+def test_tool_loop_guardrail_allows_useful_followup_reads_but_warns_on_repeated_same_read() -> None:
+    from appv22.agent.tool_guardrails import ToolCallGuardrailController
+
+    controller = ToolCallGuardrailController()
+    first = controller.after_call(
+        "read",
+        {"path": "src/a.py", "offset": 1, "limit": 40},
+        "same body",
+        failed=False,
+    )
+    useful_followup = controller.after_call(
+        "read",
+        {"path": "src/b.py", "offset": 1, "limit": 40},
+        "same body",
+        failed=False,
+    )
+    repeated = controller.after_call(
+        "read",
+        {"path": "src/a.py", "offset": 1, "limit": 40},
+        "same body",
+        failed=False,
+    )
+
+    assert first.action == "allow"
+    assert useful_followup.action == "allow"
+    assert repeated.action == "warn"
+    assert repeated.code == "idempotent_no_progress_warning"
+    assert "Use a different query/path only if the existing result is insufficient" in repeated.message
+
+
 def test_tool_loop_guardrail_normalizes_bash_inventory_paths_against_cwd(tmp_path: Path) -> None:
     from appv22.agent.tool_guardrails import ToolCallGuardrailController
 
@@ -2546,6 +2677,71 @@ def test_agent_session_injects_recovery_steering_on_bash_no_progress_warning(tmp
     assert "idempotent_no_progress_warning" in tool_results[-1].content[0].text
     assert any("Tool loop recovery instruction" in users[-1] for users in seen_user_messages if users)
     assert assistants[-1].content[0].text == "I will use the first listing and read the relevant files."
+
+
+def test_agent_session_broad_scan_recovery_steering_prefers_inventory_over_repeating_bash(tmp_path: Path) -> None:
+    model = faux_model()
+    provider_calls = {"n": 0}
+    executions: list[dict] = []
+    recovery_messages: list[str] = []
+    scan_commands = [
+        {"command": "find . -type f -name '*.py'"},
+        {"command": "rg --files -g '*.py' ."},
+    ]
+
+    def execute(tool_call_id, args, signal=None, on_update=None, ctx=None):
+        executions.append(dict(args))
+        return AgentToolResult(content=[TextContent(text="src/app.py\nsrc/tools/read.py")], details={})
+
+    bash_definition = ToolDefinition(
+        name="bash",
+        label="bash",
+        description="Execute a bash command",
+        parameters={
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"],
+        },
+        execute=execute,
+    )
+
+    def _user_text(message) -> str:
+        content = getattr(message, "content", "")
+        if isinstance(content, str):
+            return content
+        return "".join(block.text for block in content if getattr(block, "type", None) == "text")
+
+    def script(m, c):
+        provider_calls["n"] += 1
+        users = [_user_text(message) for message in c.messages if getattr(message, "role", None) == "user"]
+        if users and "Tool loop recovery instruction" in users[-1]:
+            recovery_messages.append(users[-1])
+            return text_response_events(m, "I will treat the listing as inventory and inspect only relevant files.")
+        return tool_call_response_events(
+            m,
+            "bash",
+            scan_commands[min(provider_calls["n"] - 1, len(scan_commands) - 1)],
+            call_id=f"call_{provider_calls['n']}",
+        )
+
+    register_api_provider(create_faux_provider(script))
+    session = AgentSession(cwd=str(tmp_path), model=model, tool_definitions=[bash_definition])
+
+    session.prompt("analyze the codebase bot, and read all the codes in python files")
+
+    assert executions == scan_commands
+    assert provider_calls["n"] == 3
+    assert len(recovery_messages) == 1
+    recovery = recovery_messages[0]
+    assert "Tool loop recovery instruction" in recovery
+    assert "do not call bash again for the same inventory" in recovery
+    assert "For codebase scans, treat that output as inventory" in recovery
+    assert "read with path/offset/limit" in recovery
+    assert "Use edit/write only for requested changes" in recovery
+    assert session.messages[-1].role == "assistant"
+    assert session.messages[-1].content[0].text == (
+        "I will treat the listing as inventory and inspect only relevant files."
+    )
 
 
 def test_agent_session_reissues_recovery_steering_for_escalating_tool_loop_warnings(tmp_path: Path) -> None:
@@ -4961,6 +5157,42 @@ def test_agent_session_manual_compaction_emits_start_and_end(tmp_path: Path) -> 
     assert compaction_events[1].errorMessage is None
     assert compaction_events[1].result is status
     assert session.messages == status.messages
+
+
+def test_agent_session_manual_compaction_persists_pi_first_kept_boundary(tmp_path: Path) -> None:
+    from appv22.compaction import CompactionManager, ContextCompressor, estimate_tokens
+
+    session_path = tmp_path / "session.jsonl"
+    compressor = ContextCompressor(context_length=40, protect_first_n=1, protect_last_n=1)
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        session_path=str(session_path),
+        compaction_manager=CompactionManager(
+            compressor,
+            summarizer=lambda prompt: "## Goal\nPi boundary summary.",
+        ),
+    )
+    messages = [
+        UserMessage(content=f"message {index} " + ("x" * 80), timestamp=now_ms() + index)
+        for index in range(12)
+    ]
+    session.agent.state.messages = list(messages)
+    entry_ids = [session._session_store.append_message(message) for message in messages]
+    before_tokens = estimate_tokens(messages)
+    expected_cut = compressor._find_tail_start(messages, compressor._protect_head_size(messages))
+
+    status = session.compact()
+
+    persisted = [json.loads(line) for line in session_path.read_text(encoding="utf-8").splitlines()]
+    compaction_entry = next(entry for entry in persisted if entry["type"] == "compaction")
+    assert status.first_kept_message_index == expected_cut
+    assert status.first_kept_entry_id == entry_ids[expected_cut]
+    assert compaction_entry["firstKeptEntryId"] == entry_ids[expected_cut]
+    assert compaction_entry["tokensBefore"] == before_tokens
+    assert compaction_entry["summary"] == "## Goal\nPi boundary summary."
+    assert getattr(session.messages[0], "role", None) == "compactionSummary"
+    assert _user_text(session.messages[1]) == _user_text(messages[expected_cut])
 
 
 def test_session_store_build_context_recreates_compaction_summary_message(tmp_path: Path) -> None:

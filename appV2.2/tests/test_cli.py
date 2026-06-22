@@ -26,7 +26,7 @@ def test_cli_without_prompt_starts_interactive_tui(monkeypatch, tmp_path) -> Non
     created: dict[str, object] = {}
 
     class FakeApp:
-        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models):
+        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models, **kwargs):
             self.cwd = cwd
             self.model = model
             self.enable_tui = enable_tui
@@ -90,7 +90,7 @@ def test_cli_provider_and_model_flags_resolve_registered_model(monkeypatch, tmp_
     )
 
     class FakeApp:
-        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models):
+        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models, **kwargs):
             self.cwd = cwd
             self.model = model
             self.enable_tui = enable_tui
@@ -144,6 +144,7 @@ def test_cli_passes_hermes_loop_runtime_options(monkeypatch, tmp_path) -> None:
             scoped_models,
             max_iterations=None,
             tool_loop_guardrails=None,
+            **kwargs,
         ):
             self.cwd = cwd
             self.model = model
@@ -201,7 +202,7 @@ def test_cli_model_thinking_suffix_sets_initial_thinking_level(monkeypatch, tmp_
     )
 
     class FakeApp:
-        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models):
+        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models, **kwargs):
             self.cwd = cwd
             self.model = model
             self.enable_tui = enable_tui
@@ -251,7 +252,7 @@ def test_cli_thinking_flag_overrides_model_suffix(monkeypatch, tmp_path) -> None
     )
 
     class FakeApp:
-        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models):
+        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models, **kwargs):
             self.cwd = cwd
             self.model = model
             self.enable_tui = enable_tui
@@ -293,7 +294,7 @@ def test_cli_invalid_thinking_level_warns_and_uses_default(monkeypatch, tmp_path
     created: dict[str, object] = {}
 
     class FakeApp:
-        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models):
+        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models, **kwargs):
             self.cwd = cwd
             self.model = model
             self.enable_tui = enable_tui
@@ -378,7 +379,7 @@ def test_cli_models_flag_sets_scoped_models_and_initial_model(monkeypatch, tmp_p
     )
 
     class FakeApp:
-        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models):
+        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models, **kwargs):
             self.cwd = cwd
             self.model = model
             self.enable_tui = enable_tui

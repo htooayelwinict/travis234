@@ -812,6 +812,20 @@ def test_compress_splits_oversized_protected_head_tool_result() -> None:
     _assert_tool_pairs_well_formed(result.messages)
 
 
+def test_compression_result_reports_pi_cut_boundary_for_session_compaction() -> None:
+    messages = [_user(f"message {index} " + ("x" * 80)) for index in range(12)]
+    compressor = ContextCompressor(context_length=40, protect_first_n=1, protect_last_n=1)
+    expected_cut = compressor._find_tail_start(messages, compressor._protect_head_size(messages))
+
+    result = compressor.compress(messages, summarizer=lambda prompt: "## Goal\nBoundary summary.", force=True)
+
+    assert result.compressed is True
+    assert result.summary == "## Goal\nBoundary summary."
+    assert result.tokens_before == estimate_tokens(messages)
+    assert result.first_kept_message_index == expected_cut
+    assert _content_text(result.messages[2]) == _content_text(messages[result.first_kept_message_index])
+
+
 def test_estimate_tokens_counts_text() -> None:
     messages = [_user("a" * 40)]
     assert estimate_tokens(messages) == 10

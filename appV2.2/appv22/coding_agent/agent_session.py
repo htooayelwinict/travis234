@@ -1099,9 +1099,9 @@ class AgentSession:
         try:
             status = self.compact(str(custom_instructions) if custom_instructions is not None else None)
             result = ExtensionCompactionResult(
-                summary=_extract_compaction_result_summary(status.messages),
-                first_kept_entry_id=self._session_store.leaf_id if self._session_store else "",
-                tokens_before=estimate_tokens(before_messages),
+                summary=status.summary or _extract_compaction_result_summary(status.messages),
+                first_kept_entry_id=status.first_kept_entry_id or "",
+                tokens_before=status.tokens_before or estimate_tokens(before_messages),
                 details={"status": status},
             )
         except Exception as error:  # noqa: BLE001 - mirrors Pi callback-based extension compaction failure.
@@ -1659,24 +1659,36 @@ class AgentSession:
         if original is not None and self.agent.state.model.provider == name:
             self.agent.state.model = original
 
-    def compact(self, focus: str | None = None, summarizer=None):
+    def compact(self, focus: str | None = None, summarizer=None, aggressive: bool = False):
         if self._compaction_manager is None:
             raise RuntimeError("No compaction manager configured")
         self._begin_compaction("manual")
+        before_messages = list(self.messages)
+        before_entry_ids = self._session_context_message_entry_ids()
         try:
             status = self._compaction_manager.compress_manual_with_status(
                 self.messages,
                 summarizer=summarizer,
                 focus=focus,
+                aggressive=aggressive,
             )
-            self.agent.state.messages = status.messages
-            if self._session_store:
-                first_kept = self._session_store.leaf_id or ""
+            if self._session_store and status.compressed:
+                first_kept = self._first_kept_entry_id_for_status(status, before_entry_ids)
+                summary = status.summary or _extract_compaction_result_summary(status.messages)
+                tokens_before = status.tokens_before or estimate_tokens(before_messages)
                 self._session_store.append_compaction(
-                    getattr(status.messages[0].content[0], "text", "") if status.messages else "",
+                    summary,
                     first_kept,
-                    0,
+                    tokens_before,
                 )
+                status.first_kept_entry_id = first_kept
+                snapshot = self._session_store.build_context(default_thinking_level=self.thinking_level)
+                self.agent.state.messages = snapshot.messages
+                self.agent.state.thinking_level = snapshot.thinking_level
+                self._session_name = snapshot.session_name
+                status.messages = snapshot.messages
+            else:
+                self.agent.state.messages = status.messages
             self._end_compaction(reason="manual", result=status, aborted=False, will_retry=False)
             return status
         except Exception as error:  # noqa: BLE001
@@ -1690,6 +1702,46 @@ class AgentSession:
                 error_message=None if aborted else f"Compaction failed: {message}",
             )
             raise
+
+    def _first_kept_entry_id_for_status(self, status, context_entry_ids: list[str]) -> str:
+        index = status.first_kept_message_index
+        if index is not None and 0 <= index < len(context_entry_ids):
+            return context_entry_ids[index]
+        if self._session_store:
+            return self._session_store.leaf_id or ""
+        return ""
+
+    def _session_context_message_entry_ids(self) -> list[str]:
+        if self._session_store is None:
+            return []
+        branch = self._session_store.get_branch()
+        compaction_entry = None
+        for entry in branch:
+            if entry.get("type") == "compaction" and entry.get("summary"):
+                compaction_entry = entry
+
+        def contributes(entry: dict) -> bool:
+            entry_type = entry.get("type")
+            if entry_type in {"message", "custom_message"}:
+                return True
+            return bool(entry_type == "branch_summary" and entry.get("summary"))
+
+        if compaction_entry is None:
+            return [entry["id"] for entry in branch if entry.get("id") and contributes(entry)]
+
+        ids = [compaction_entry["id"]]
+        compaction_index = branch.index(compaction_entry)
+        first_kept_id = compaction_entry.get("firstKeptEntryId")
+        found_first_kept = first_kept_id is None
+        for entry in branch[:compaction_index]:
+            if entry.get("id") == first_kept_id:
+                found_first_kept = True
+            if found_first_kept and entry.get("id") and contributes(entry):
+                ids.append(entry["id"])
+        for entry in branch[compaction_index + 1 :]:
+            if entry.get("id") and contributes(entry):
+                ids.append(entry["id"])
+        return ids
 
     def set_compaction_manager(self, manager: CompactionManager | None) -> None:
         self._compaction_manager = manager

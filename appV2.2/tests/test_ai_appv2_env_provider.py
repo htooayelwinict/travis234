@@ -33,6 +33,52 @@ def _model() -> Model:
     return Model(id="acme/x", name="X", api="openai-completions", provider="openrouter", base_url="")
 
 
+def _openrouter_provider() -> AppV2EnvProvider:
+    return AppV2EnvProvider(
+        ModelConfig(
+            enabled=True,
+            api_key="configured-key",
+            model="qwen/qwen3-coder-next",
+            base_url="https://openrouter.ai/api/v1",
+            timeout_seconds=60,
+            temperature=0,
+            top_p=None,
+            frequency_penalty=None,
+            presence_penalty=None,
+            seed=None,
+        )
+    )
+
+
+def _run_http_status_failure(monkeypatch, response: httpx.Response) -> AssistantMessage:
+    class FakeStream:
+        def __enter__(self):
+            raise httpx.HTTPStatusError(
+                f"Client error '{response.status_code} {response.reason_phrase}'",
+                request=response.request,
+                response=response,
+            )
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def stream(self, *args, **kwargs):
+            return FakeStream()
+
+    monkeypatch.setattr(appv2_env.httpx, "Client", FakeClient)
+    return _openrouter_provider().stream(_model(), Context(messages=[UserMessage(content="hi")])).result_sync()
+
+
 def test_appv2_env_provider_formats_openrouter_403_as_actionable_auth_error(monkeypatch) -> None:
     request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
     response = httpx.Response(
@@ -209,6 +255,104 @@ def test_appv2_env_provider_formats_unread_streaming_http_error_without_thread_c
     assert "OpenRouter authorization failed" in message.error_message
     assert "HTTP 403" in message.error_message
     assert "Provider message: Forbidden" in message.error_message
+
+
+def test_appv2_env_provider_formats_non_json_malformed_and_empty_error_bodies_safely(monkeypatch) -> None:
+    request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+    cases = [
+        b"Forbidden by provider policy",
+        b'{"error": {"message": "truncated"',
+        b"",
+    ]
+
+    for body in cases:
+        response = httpx.Response(403, request=request, content=body)
+
+        message = _run_http_status_failure(monkeypatch, response)
+
+        assert message.stop_reason == "error"
+        assert message.error_message is not None
+        assert "OpenRouter authorization failed" in message.error_message
+        assert "HTTP 403" in message.error_message
+        assert "qwen/qwen3-coder-next" in message.error_message
+        assert "Provider message:" in message.error_message
+        assert "JSONDecodeError" not in message.error_message
+
+
+def test_appv2_env_provider_truncates_huge_raw_error_body(monkeypatch) -> None:
+    request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+    huge_body = ("provider guardrail details " + ("x" * 5000)).encode()
+    response = httpx.Response(403, request=request, content=huge_body)
+
+    message = _run_http_status_failure(monkeypatch, response)
+
+    assert message.stop_reason == "error"
+    assert message.error_message is not None
+    assert "OpenRouter authorization failed" in message.error_message
+    assert "HTTP 403" in message.error_message
+    assert len(message.error_message) < 1200
+    assert "x" * 500 not in message.error_message
+
+
+def test_appv2_env_provider_handles_unavailable_streaming_error_body_without_secondary_error(monkeypatch) -> None:
+    request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+
+    class FailingBodyStream(httpx.SyncByteStream):
+        def __iter__(self):
+            raise RuntimeError("body unavailable")
+
+    response = httpx.Response(403, request=request, stream=FailingBodyStream())
+
+    message = _run_http_status_failure(monkeypatch, response)
+
+    assert message.stop_reason == "error"
+    assert message.error_message is not None
+    assert "OpenRouter authorization failed" in message.error_message
+    assert "HTTP 403" in message.error_message
+    assert "Provider message: Forbidden" in message.error_message
+    assert "ResponseNotRead" not in message.error_message
+    assert "body unavailable" not in message.error_message
+
+
+def test_appv2_env_provider_streaming_iteration_failure_terminates_with_one_error(monkeypatch) -> None:
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def iter_lines(self):
+            yield _sse({"choices": [{"delta": {"content": "partial"}}]})
+            raise RuntimeError("stream socket reset")
+
+    class FakeStream:
+        def __enter__(self):
+            return FakeResponse()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def stream(self, *args, **kwargs):
+            return FakeStream()
+
+    monkeypatch.setattr(appv2_env.httpx, "Client", FakeClient)
+
+    events = list(_openrouter_provider().stream(_model(), Context(messages=[UserMessage(content="hi")])))
+
+    assert [event.type for event in events] == ["start", "text_start", "text_delta", "error"]
+    assert events[-1].error.stop_reason == "error"
+    assert events[-1].error.error_message == "stream socket reset"
 
 
 def test_appv2_env_provider_runtime_max_tokens_overrides_env_config(monkeypatch) -> None:

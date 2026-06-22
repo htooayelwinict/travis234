@@ -11,7 +11,7 @@ from typing import Any, Callable
 from appv22.agent.types import AgentTool, AgentToolResult
 from appv22.ai.types import TextContent
 from appv22.coding_agent.tools.path_utils import is_ignored_by_gitignore, load_gitignore_rules, resolve_to_cwd
-from appv22.coding_agent.tools.truncate import DEFAULT_MAX_BYTES, format_size, truncate_head
+from appv22.coding_agent.tools.truncate import DEFAULT_MAX_BYTES, format_size, truncate_head, truncation_to_details
 from appv22.coding_agent.tools.types import ToolContext, ToolDefinition, wrap_tool_definition
 
 FIND_SCHEMA = {
@@ -131,7 +131,7 @@ def _execute_find(
         details["resultLimitReached"] = limit
     if truncation.truncated:
         notices.append(f"{format_size(DEFAULT_MAX_BYTES)} limit reached")
-        details["truncation"] = truncation
+        details["truncation"] = truncation_to_details(truncation)
     if notices:
         output += f"\n\n[{'. '.join(notices)}]"
     return AgentToolResult(content=[TextContent(text=output)], details=details or None)
