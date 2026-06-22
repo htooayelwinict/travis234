@@ -98,6 +98,7 @@ from appv22.ai.types import (
 )
 from appv22.ai.model_resolver import ScopedModel
 from appv22.app import CodingApp
+from appv22.compaction.timing import ManualCompressionStatus
 from appv22.coding_agent import BashResult
 from appv22.coding_agent.session_store import BashExecutionMessage, BranchSummaryMessage, CustomMessage
 from appv22.coding_agent.tools.bash import BashOperations
@@ -4023,7 +4024,7 @@ def test_interactive_mode_manual_compress_failure_resets_status(tmp_path) -> Non
     def fail_manual_compress(*args, **kwargs):
         raise RuntimeError("summary provider stuck")
 
-    app.compaction.compress_manual_with_status = fail_manual_compress
+    app.session.compact = fail_manual_compress
     mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
     mode.init()
 
@@ -4032,6 +4033,38 @@ def test_interactive_mode_manual_compress_failure_resets_status(tmp_path) -> Non
     rendered = "\n".join(app.tui.render(140))
     assert mode.status._message == "Idle"
     assert "compact: Compression failed: summary provider stuck" in rendered
+    assert "status: Compressing" not in rendered
+
+
+def test_interactive_mode_manual_compress_routes_aggressive_mode_through_session(tmp_path) -> None:
+    register_api_provider(create_faux_provider(lambda m, c: text_response_events(m, "unused")))
+    terminal = FakeTerminal(columns=140)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+    calls: list[tuple[str | None, bool]] = []
+
+    def fake_compact(focus=None, summarizer=None, aggressive=False):
+        calls.append((focus, aggressive))
+        return ManualCompressionStatus(
+            messages=app.messages,
+            compressed=False,
+            noop=True,
+            headline="No changes from compression: 0 messages",
+            token_line="Approx request size: ~0 tokens (unchanged)",
+            focus=focus,
+            aggressive=aggressive,
+        )
+
+    app.session.compact = fake_compact
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+    mode.init()
+
+    mode._run_manual_compress("/compress agressive code scan")
+    mode._run_manual_compress("/compress database schema")
+
+    rendered = "\n".join(app.tui.render(140))
+    assert calls == [("code scan", True), ("database schema", False)]
+    assert mode.status._message == "Idle"
+    assert "compact: No changes from compression: 0 messages" in rendered
     assert "status: Compressing" not in rendered
 
 

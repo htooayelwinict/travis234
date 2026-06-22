@@ -546,17 +546,16 @@ class InteractiveMode:
         )
 
     def _run_manual_compress(self, prompt: str) -> None:
-        focus = _manual_compression_focus(prompt)
+        focus, aggressive = _manual_compression_options(prompt)
         self.status.set_message("Compressing")
         self._refresh_footer()
         self.tui.request_render()
 
         try:
-            status = self.app.compaction.compress_manual_with_status(
-                self.app.messages,
+            status = self.app.session.compact(
                 focus=focus,
+                aggressive=aggressive,
             )
-            self.app.session.agent.state.messages = status.messages
             self.history.add(StatusLine(status.headline, kind="compact"))
             self.history.add(Text(status.token_line))
             if status.note:
@@ -1666,13 +1665,24 @@ def _create_extension_widget_component(content: object, tui, max_lines: int) -> 
 
 
 def _manual_compression_focus(prompt: str) -> str | None:
+    focus, _aggressive = _manual_compression_options(prompt)
+    return focus
+
+
+def _manual_compression_options(prompt: str) -> tuple[str | None, bool]:
     for command in ("/compress", "/compact"):
         if prompt == command:
-            return None
+            return None, False
         if prompt.startswith(f"{command} "):
             focus = prompt[len(command) :].strip()
-            return focus or None
-    return None
+            if not focus:
+                return None, False
+            parts = focus.split(maxsplit=1)
+            mode = parts[0].lower()
+            if mode in {"aggressive", "agressive"}:
+                return (parts[1].strip() if len(parts) > 1 and parts[1].strip() else None), True
+            return focus, False
+    return None, False
 
 
 def _extension_dialog_aborted(options: dict | None) -> bool:

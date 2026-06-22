@@ -96,6 +96,21 @@ def test_read_tool_with_offset_and_truncation(tmp_path: Path) -> None:
     assert "more lines in file" in result.content[0].text
 
 
+def test_read_tool_truncation_details_are_json_serializable_pi_shape(tmp_path: Path) -> None:
+    target = tmp_path / "large.txt"
+    target.write_text("\n".join(f"line{i}" for i in range(2005)), encoding="utf-8")
+    tool = create_tool("read", str(tmp_path))
+
+    result = tool.execute("c1", {"path": "large.txt"})
+
+    json.dumps(result.details)
+    truncation = result.details["truncation"]
+    assert truncation["truncated"] is True
+    assert truncation["truncatedBy"] == "lines"
+    assert truncation["totalLines"] == 2005
+    assert truncation["outputLines"] == 2000
+
+
 def test_read_tool_schema_and_execution_accept_pi_number_limits(tmp_path: Path) -> None:
     target = tmp_path / "f.txt"
     target.write_text("\n".join(f"line{i}" for i in range(1, 11)), encoding="utf-8")
@@ -481,14 +496,51 @@ def test_bash_tool_truncates_tail_and_persists_full_output(tmp_path: Path) -> No
     text = result.content[0].text
     assert "line0" not in text
     assert "line2004" in text
+    json.dumps(result.details)
     truncation = result.details["truncation"]
-    assert truncation.truncated is True
-    assert truncation.truncated_by == "lines"
+    assert truncation["truncated"] is True
+    assert truncation["truncatedBy"] == "lines"
     full_output_path = Path(result.details["fullOutputPath"])
     assert full_output_path.exists()
     full_output = full_output_path.read_text(encoding="utf-8")
     assert "line0" in full_output
     assert "line2004" in full_output
+
+
+def test_truncating_find_ls_and_grep_details_are_json_serializable_pi_shape(tmp_path: Path) -> None:
+    from appv22.coding_agent.tools.find import FindOperations, create_find_tool
+    from appv22.coding_agent.tools.grep import create_grep_tool
+    from appv22.coding_agent.tools.ls import LsOperations, create_ls_tool
+
+    long_names = [f"{index:04d}-{'x' * 80}.py" for index in range(1000)]
+    find_tool = create_find_tool(
+        str(tmp_path),
+        operations=FindOperations(exists=lambda _path: True, glob=lambda _pattern, _root, _options: long_names),
+    )
+    ls_tool = create_ls_tool(
+        str(tmp_path),
+        operations=LsOperations(
+            exists=lambda _path: True,
+            is_directory=lambda path: os.path.abspath(path) == str(tmp_path.resolve()),
+            readdir=lambda _path: long_names,
+        ),
+    )
+    grep_target = tmp_path / "large.txt"
+    grep_target.write_text("\n".join(f"needle {'x' * 500} {index}" for index in range(200)), encoding="utf-8")
+    grep_tool = create_grep_tool(str(tmp_path))
+
+    results = [
+        find_tool.execute("c1", {"pattern": "*.py", "limit": 1000}),
+        ls_tool.execute("c2", {"limit": 1000}),
+        grep_tool.execute("c3", {"pattern": "needle", "path": "large.txt", "literal": True, "limit": 200}),
+    ]
+
+    for result in results:
+        json.dumps(result.details)
+        truncation = result.details["truncation"]
+        assert truncation["truncated"] is True
+        assert truncation["truncatedBy"] in {"bytes", "lines"}
+        assert "totalLines" in truncation
 
 
 def test_bash_tool_uses_operations_prefix_spawn_hook_and_updates(tmp_path: Path) -> None:
@@ -5105,6 +5157,42 @@ def test_agent_session_manual_compaction_emits_start_and_end(tmp_path: Path) -> 
     assert compaction_events[1].errorMessage is None
     assert compaction_events[1].result is status
     assert session.messages == status.messages
+
+
+def test_agent_session_manual_compaction_persists_pi_first_kept_boundary(tmp_path: Path) -> None:
+    from appv22.compaction import CompactionManager, ContextCompressor, estimate_tokens
+
+    session_path = tmp_path / "session.jsonl"
+    compressor = ContextCompressor(context_length=40, protect_first_n=1, protect_last_n=1)
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        session_path=str(session_path),
+        compaction_manager=CompactionManager(
+            compressor,
+            summarizer=lambda prompt: "## Goal\nPi boundary summary.",
+        ),
+    )
+    messages = [
+        UserMessage(content=f"message {index} " + ("x" * 80), timestamp=now_ms() + index)
+        for index in range(12)
+    ]
+    session.agent.state.messages = list(messages)
+    entry_ids = [session._session_store.append_message(message) for message in messages]
+    before_tokens = estimate_tokens(messages)
+    expected_cut = compressor._find_tail_start(messages, compressor._protect_head_size(messages))
+
+    status = session.compact()
+
+    persisted = [json.loads(line) for line in session_path.read_text(encoding="utf-8").splitlines()]
+    compaction_entry = next(entry for entry in persisted if entry["type"] == "compaction")
+    assert status.first_kept_message_index == expected_cut
+    assert status.first_kept_entry_id == entry_ids[expected_cut]
+    assert compaction_entry["firstKeptEntryId"] == entry_ids[expected_cut]
+    assert compaction_entry["tokensBefore"] == before_tokens
+    assert compaction_entry["summary"] == "## Goal\nPi boundary summary."
+    assert getattr(session.messages[0], "role", None) == "compactionSummary"
+    assert _user_text(session.messages[1]) == _user_text(messages[expected_cut])
 
 
 def test_session_store_build_context_recreates_compaction_summary_message(tmp_path: Path) -> None:

@@ -328,6 +328,62 @@ def test_manual_compression_status_warns_when_compression_aborts() -> None:
     assert "No messages were dropped" in status.warning
 
 
+def test_manual_compression_status_surfaces_manager_level_failure() -> None:
+    class RaisingCompressor(ContextCompressor):
+        def compress(self, messages, summarizer=None, focus_topic=None, force=False):
+            raise RuntimeError("manager-level failure")
+
+    manager = CompactionManager(RaisingCompressor(), summarizer=_summarizer)
+
+    status = manager.compress_manual_with_status(_big_messages())
+
+    assert status.compressed is False
+    assert status.noop is True
+    assert status.headline.startswith("Compression failed:")
+    assert "No changes from compression" not in status.headline
+    assert status.warning is not None
+    assert "manager-level failure" in status.warning
+    assert "No messages were dropped" in status.warning
+
+
+def test_manual_compression_noop_reports_protected_recent_context() -> None:
+    compressor = ContextCompressor(
+        context_length=128_000,
+        threshold_percent=0.80,
+        protect_first_n=3,
+        protect_last_n=20,
+    )
+    manager = CompactionManager(compressor, summarizer=_summarizer)
+    messages = [UserMessage(content="latest huge only " + ("x" * 440_000), timestamp=now_ms())]
+    assert estimate_tokens(messages) > compressor.threshold_tokens
+
+    status = manager.compress_manual_with_status(messages)
+
+    assert status.compressed is False
+    assert status.noop is True
+    assert status.note == "No compactable history; recent context is protected."
+
+
+def test_manual_aggressive_compression_uses_tighter_tail_boundary() -> None:
+    messages = _big_messages(n=80, size=80)
+    normal = CompactionManager(
+        ContextCompressor(context_length=12_000, threshold_percent=0.5, protect_first_n=1, protect_last_n=20),
+        summarizer=_summarizer,
+    ).compress_manual_with_status(messages)
+    aggressive = CompactionManager(
+        ContextCompressor(context_length=12_000, threshold_percent=0.5, protect_first_n=1, protect_last_n=20),
+        summarizer=_summarizer,
+    ).compress_manual_with_status(messages, aggressive=True)
+
+    assert normal.compressed is True
+    assert aggressive.compressed is True
+    assert normal.aggressive is False
+    assert aggressive.aggressive is True
+    assert aggressive.first_kept_message_index > normal.first_kept_message_index
+    assert len(aggressive.messages) < len(normal.messages)
+    assert estimate_tokens(aggressive.messages) < estimate_tokens(normal.messages)
+
+
 def test_manual_compression_noops_when_existing_summary_has_no_new_middle_turns() -> None:
     compressor = ContextCompressor(
         context_length=30_000,

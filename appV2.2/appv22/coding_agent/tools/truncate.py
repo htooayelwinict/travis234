@@ -24,6 +24,22 @@ class TruncationResult:
     max_bytes: int = DEFAULT_MAX_BYTES
 
 
+def truncation_to_details(truncation: TruncationResult) -> dict[str, str | bool | int | None]:
+    return {
+        "content": truncation.content,
+        "truncated": truncation.truncated,
+        "truncatedBy": truncation.truncated_by,
+        "totalLines": truncation.total_lines,
+        "totalBytes": truncation.total_bytes,
+        "outputLines": truncation.output_lines,
+        "outputBytes": truncation.output_bytes,
+        "lastLinePartial": truncation.last_line_partial,
+        "firstLineExceedsLimit": truncation.first_line_exceeds_limit,
+        "maxLines": truncation.max_lines,
+        "maxBytes": truncation.max_bytes,
+    }
+
+
 def _split_lines_for_counting(content: str) -> list[str]:
     if content == "":
         return []

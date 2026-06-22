@@ -253,6 +253,9 @@ class CompressionResult:
     messages: list[Message]
     compressed: bool
     savings_pct: float
+    summary: str | None = None
+    tokens_before: int = 0
+    first_kept_message_index: int | None = None
 
 
 class ContextCompressor:
@@ -308,6 +311,7 @@ class ContextCompressor:
         self.awaiting_real_usage_after_compression = False
         self.last_compression_savings_pct = 0.0
         self.compression_count = 0
+        self._last_noop_reason: str | None = None
 
     @property
     def threshold_tokens(self) -> int:
@@ -1019,9 +1023,11 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         *,
         focus_topic: str | None = None,
         force: bool = False,
+        aggressive: bool = False,
     ) -> CompressionResult:
         summarizer = summarizer or self._summarizer
         before = estimate_tokens(messages)
+        self._last_noop_reason = None
         self._last_summary_error = None
         self._last_summary_dropped_count = 0
         self._last_summary_fallback_used = False
@@ -1034,13 +1040,19 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         pruned = self.prune_old_tool_results(messages)
         head_end = self._protect_head_size(pruned)
         head_end = self._align_boundary_forward(pruned, head_end)
-        tail_start = self._find_tail_start(pruned, head_end)
+        tail_start = self._find_tail_start(pruned, head_end, aggressive=aggressive)
 
         if tail_start <= head_end:
             emergency_window = self._oversized_protected_head_window(pruned, head_end, before, force=force)
             if emergency_window is None:
+                self._last_noop_reason = "protected_recent_context"
                 after = estimate_tokens(pruned)
-                return CompressionResult(messages=pruned, compressed=False, savings_pct=_savings(before, after))
+                return CompressionResult(
+                    messages=pruned,
+                    compressed=False,
+                    savings_pct=_savings(before, after),
+                    tokens_before=before,
+                )
             head_end, tail_start = emergency_window
 
         middle = pruned[head_end:tail_start]
@@ -1052,7 +1064,8 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             if not middle:
                 self.last_compression_savings_pct = 0.0
                 self._ineffective_compression_count += 1
-                return CompressionResult(messages=messages, compressed=False, savings_pct=0.0)
+                self._last_noop_reason = "protected_recent_context"
+                return CompressionResult(messages=messages, compressed=False, savings_pct=0.0, tokens_before=before)
         elif self._previous_summary:
             self._previous_summary = None
         try:
@@ -1063,13 +1076,23 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             if self.abort_on_summary_failure:
                 self._last_compress_aborted = True
                 after = estimate_tokens(pruned)
-                return CompressionResult(messages=pruned, compressed=False, savings_pct=_savings(before, after))
+                return CompressionResult(
+                    messages=pruned,
+                    compressed=False,
+                    savings_pct=_savings(before, after),
+                    tokens_before=before,
+                )
             summary_text = None
         if summary_text is None:
             if self.abort_on_summary_failure:
                 self._last_compress_aborted = True
                 after = estimate_tokens(pruned)
-                return CompressionResult(messages=pruned, compressed=False, savings_pct=_savings(before, after))
+                return CompressionResult(
+                    messages=pruned,
+                    compressed=False,
+                    savings_pct=_savings(before, after),
+                    tokens_before=before,
+                )
             self._last_summary_dropped_count = len(middle)
             self._last_summary_fallback_used = True
             summary_text = _redact_sensitive_text(
@@ -1088,15 +1111,24 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             self._ineffective_compression_count = 0
         self._previous_summary = summary_text
         self.compression_count += 1
-        return CompressionResult(messages=result, compressed=True, savings_pct=savings)
+        return CompressionResult(
+            messages=result,
+            compressed=True,
+            savings_pct=savings,
+            summary=summary_text,
+            tokens_before=before,
+            first_kept_message_index=tail_start,
+        )
 
-    def _find_tail_start(self, messages: list[Message], head_end: int) -> int:
+    def _find_tail_start(self, messages: list[Message], head_end: int, *, aggressive: bool = False) -> int:
         if head_end >= len(messages):
             return len(messages)
         budget = self.tail_token_budget
+        if aggressive:
+            budget = max(1024, int(budget * 0.25))
         total = len(messages)
         available_tail = max(0, total - head_end - 1)
-        min_tail_floor = max(3, min(self.protect_last_n, _MAX_TAIL_MESSAGE_FLOOR))
+        min_tail_floor = 3 if aggressive else max(3, min(self.protect_last_n, _MAX_TAIL_MESSAGE_FLOOR))
         compressible_tail_cap = max(3, available_tail - 2)
         min_tail = (
             min(min_tail_floor, compressible_tail_cap, available_tail)

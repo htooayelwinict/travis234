@@ -14,7 +14,12 @@ from typing import Callable
 from appv22.agent.types import AgentTool, AgentToolResult
 from appv22.ai.types import TextContent
 from appv22.coding_agent.tools.output_accumulator import OutputAccumulator, OutputSnapshot
-from appv22.coding_agent.tools.truncate import DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, format_size
+from appv22.coding_agent.tools.truncate import (
+    DEFAULT_MAX_BYTES,
+    DEFAULT_MAX_LINES,
+    format_size,
+    truncation_to_details,
+)
 from appv22.coding_agent.tools.types import ToolContext, ToolDefinition, wrap_tool_definition
 
 BASH_SCHEMA = {
@@ -169,7 +174,7 @@ def _format_output(output: OutputAccumulator, snapshot: OutputSnapshot, empty_te
     text = snapshot.content if snapshot.content else empty_text
     details = None
     if truncation.truncated:
-        details = {"truncation": truncation, "fullOutputPath": snapshot.full_output_path}
+        details = {"truncation": truncation_to_details(truncation), "fullOutputPath": snapshot.full_output_path}
         start_line = truncation.total_lines - truncation.output_lines + 1
         end_line = truncation.total_lines
         if truncation.last_line_partial:
@@ -222,7 +227,7 @@ def _execute_bash(
             AgentToolResult(
                 content=[TextContent(text=snapshot.content or "")],
                 details={
-                    "truncation": snapshot.truncation if snapshot.truncation.truncated else None,
+                    "truncation": truncation_to_details(snapshot.truncation) if snapshot.truncation.truncated else None,
                     "fullOutputPath": snapshot.full_output_path,
                 },
             )

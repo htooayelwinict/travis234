@@ -10,7 +10,13 @@ from typing import Callable
 from appv22.agent.types import AgentTool, AgentToolResult
 from appv22.ai.types import ImageContent, TextContent
 from appv22.coding_agent.tools.path_utils import format_path_relative_to_cwd, resolve_read_path, resolve_to_cwd
-from appv22.coding_agent.tools.truncate import DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, format_size, truncate_head
+from appv22.coding_agent.tools.truncate import (
+    DEFAULT_MAX_BYTES,
+    DEFAULT_MAX_LINES,
+    format_size,
+    truncate_head,
+    truncation_to_details,
+)
 from appv22.coding_agent.tools.types import ToolContext, ToolDefinition, wrap_tool_definition
 
 ReadFile = Callable[[str], bytes]
@@ -171,7 +177,7 @@ def _execute_read(
             f"[Line {start_line_display} is {first_size}, exceeds {format_size(DEFAULT_MAX_BYTES)} limit. "
             f"Use bash: sed -n '{start_line_display}p' {path} | head -c {DEFAULT_MAX_BYTES}]"
         )
-        details = {"truncation": truncation}
+        details = {"truncation": truncation_to_details(truncation)}
     elif truncation.truncated:
         end_line_display = start_line_display + truncation.output_lines - 1
         next_offset = end_line_display + 1
@@ -183,7 +189,7 @@ def _execute_read(
                 f"\n\n[Showing lines {start_line_display}-{end_line_display} of {total_file_lines} "
                 f"({format_size(DEFAULT_MAX_BYTES)} limit). Use offset={next_offset} to continue.]"
             )
-        details = {"truncation": truncation}
+        details = {"truncation": truncation_to_details(truncation)}
     elif user_limited_lines is not None and start_line + user_limited_lines < len(all_lines):
         remaining = len(all_lines) - (start_line + user_limited_lines)
         next_offset = start_line + user_limited_lines + 1

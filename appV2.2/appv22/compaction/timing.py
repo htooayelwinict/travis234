@@ -32,6 +32,11 @@ class ManualCompressionStatus:
     focus: str | None = None
     warning: str | None = None
     info: str | None = None
+    summary: str | None = None
+    tokens_before: int = 0
+    first_kept_message_index: int | None = None
+    first_kept_entry_id: str | None = None
+    aggressive: bool = False
 
 
 def summarize_manual_compression(
@@ -91,6 +96,8 @@ class CompactionManager:
         self.awaiting_real_usage_after_compression = False
         self.overflow_attempts = 0
         self._summary_failure_cooldown_until = 0.0
+        self._last_compression_error: str | None = None
+        self._last_compression_result = None
 
     def _in_cooldown(self) -> bool:
         return self._clock() < self._summary_failure_cooldown_until
@@ -124,16 +131,24 @@ class CompactionManager:
         force: bool,
         *,
         focus: str | None = None,
+        aggressive: bool = False,
     ) -> tuple[list[Message], bool]:
         summarizer = summarizer or self._summarizer
+        self._last_compression_error = None
+        self._last_compression_result = None
         if not force and self._in_cooldown():
             return messages, False
         before_tokens = estimate_tokens(messages)
         try:
-            result = self.compressor.compress(messages, summarizer=summarizer, focus_topic=focus, force=force)
-        except Exception:  # noqa: BLE001 - summary failure => cooldown, no crash
+            kwargs = {"summarizer": summarizer, "focus_topic": focus, "force": force}
+            if aggressive:
+                kwargs["aggressive"] = True
+            result = self.compressor.compress(messages, **kwargs)
+        except Exception as error:  # noqa: BLE001 - summary failure => cooldown, no crash
             self._summary_failure_cooldown_until = self._clock() + SUMMARY_FAILURE_COOLDOWN_SECONDS
+            self._last_compression_error = str(error) or error.__class__.__name__
             return messages, False
+        self._last_compression_result = result
         if force:
             self._summary_failure_cooldown_until = 0.0
         if result.compressed:
@@ -217,13 +232,27 @@ class CompactionManager:
         messages: list[Message],
         summarizer=None,
         focus: str | None = None,
+        aggressive: bool = False,
     ) -> ManualCompressionStatus:
         before_tokens = estimate_tokens(messages)
-        new_messages, compressed = self._run_compress(messages, summarizer, force=True, focus=focus)
+        new_messages, compressed = self._run_compress(
+            messages,
+            summarizer,
+            force=True,
+            focus=focus,
+            aggressive=aggressive,
+        )
         after_tokens = estimate_tokens(new_messages)
         summary = summarize_manual_compression(messages, new_messages, before_tokens, after_tokens)
         warning = None
-        if self.compressor._last_compress_aborted:
+        if self._last_compression_error:
+            warning = (
+                f"⚠️ Compression failed: {self._last_compression_error}. "
+                "No messages were dropped — conversation continues unchanged. "
+                "Run /compress to retry, or /new to start a fresh session."
+            )
+            summary["headline"] = f"Compression failed: {self._last_compression_error}"
+        elif self.compressor._last_compress_aborted:
             error = self.compressor._last_summary_error or "unknown error"
             warning = (
                 f"⚠️ Compression aborted: {error}. "
@@ -245,16 +274,29 @@ class CompactionManager:
                 "Check auxiliary.compression.model."
             )
 
+        note = summary["note"] if isinstance(summary["note"], str) else None
+        if (
+            not compressed
+            and not self._last_compression_error
+            and getattr(self.compressor, "_last_noop_reason", None) == "protected_recent_context"
+        ):
+            note = "No compactable history; recent context is protected."
+
+        result = self._last_compression_result
         return ManualCompressionStatus(
             messages=new_messages,
             compressed=compressed,
             noop=bool(summary["noop"]),
             headline=str(summary["headline"]),
             token_line=str(summary["token_line"]),
-            note=summary["note"] if isinstance(summary["note"], str) else None,
+            note=note,
             focus=focus,
             warning=warning,
             info=info,
+            summary=getattr(result, "summary", None),
+            tokens_before=int(getattr(result, "tokens_before", before_tokens) or before_tokens),
+            first_kept_message_index=getattr(result, "first_kept_message_index", None),
+            aggressive=aggressive,
         )
 
 
