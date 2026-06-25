@@ -2432,14 +2432,20 @@ class AgentSession:
                     "contextWindow": context_window,
                     "percent": (tokens / context_window) * 100,
                     "estimated": True,
+                    "confidence": "estimated_after_compaction",
                 }
 
         tokens = _estimate_context_tokens(self.messages)
-        return {
+        confidence = _context_usage_confidence(self.messages)
+        usage = {
             "tokens": tokens,
             "contextWindow": context_window,
             "percent": (tokens / context_window) * 100,
+            "confidence": confidence,
         }
+        if confidence != "provider_real":
+            usage["estimated"] = True
+        return usage
 
     getContextUsage = get_context_usage
 
@@ -2507,6 +2513,13 @@ def _estimate_context_tokens(messages: list[AgentMessage]) -> int:
 
     trailing_tokens = estimate_tokens(messages[usage_index + 1 :])
     return _calculate_context_tokens(usage) + trailing_tokens
+
+
+def _context_usage_confidence(messages: list[AgentMessage]) -> str:
+    for message in reversed(messages):
+        if _assistant_usage(message) is not None:
+            return "provider_real"
+    return "estimated_no_provider_usage"
 
 
 def _collect_entries_for_branch_summary(

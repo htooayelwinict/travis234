@@ -38,6 +38,24 @@ def test_preflight_compresses_over_threshold_then_defers() -> None:
     assert out2 is out
 
 
+def test_preflight_records_compression_ledger_entry() -> None:
+    manager = _manager()
+    messages = _big_messages()
+
+    out = manager.maybe_compress_preflight(messages)
+
+    entry = manager.compression_ledger[-1]
+    assert entry.trigger == "preflight"
+    assert entry.tokens_before == estimate_tokens(messages)
+    assert entry.tokens_after == estimate_tokens(out)
+    assert entry.compressed is True
+    assert entry.estimated_after is True
+    assert entry.summary_fallback is False
+    assert entry.stop_reason is None
+    assert entry.first_kept_message_index is not None
+    assert entry.error is None
+
+
 def test_preflight_compacts_once_and_preserves_latest_turn_for_next_call() -> None:
     calls: list[str] = []
 
@@ -366,6 +384,17 @@ def test_manual_compression_noop_reports_protected_recent_context() -> None:
     assert status.compressed is False
     assert status.noop is True
     assert status.note == "No compactable history; recent context is protected."
+
+    entry = manager.compression_ledger[-1]
+    assert entry.trigger == "manual"
+    assert entry.tokens_before == estimate_tokens(messages)
+    assert entry.tokens_after == estimate_tokens(status.messages)
+    assert entry.compressed is False
+    assert entry.estimated_after is False
+    assert entry.summary_fallback is False
+    assert entry.stop_reason == "protected_recent_context"
+    assert entry.first_kept_message_index is None
+    assert entry.error is None
 
 
 def test_manual_aggressive_compression_uses_tighter_tail_boundary() -> None:

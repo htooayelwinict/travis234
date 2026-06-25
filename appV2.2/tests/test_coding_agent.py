@@ -6644,6 +6644,7 @@ def test_agent_session_stats_and_context_usage_from_messages(tmp_path: Path) -> 
     assert context_usage["tokens"] >= 140
     assert context_usage["contextWindow"] == 1000
     assert context_usage["percent"] == (context_usage["tokens"] / 1000) * 100
+    assert context_usage["confidence"] == "provider_real"
     assert stats["contextUsage"] == context_usage
     assert session.getSessionStats() == stats
     assert session.getContextUsage() == context_usage
@@ -6672,6 +6673,8 @@ def test_agent_session_context_usage_uses_rough_estimate_when_provider_usage_is_
     assert context_usage["tokens"] > 0
     assert context_usage["contextWindow"] == 1000
     assert context_usage["percent"] == (context_usage["tokens"] / 1000) * 100
+    assert context_usage["estimated"] is True
+    assert context_usage["confidence"] == "estimated_no_provider_usage"
 
 
 def test_agent_session_context_usage_estimated_after_compaction_until_post_compaction_assistant(
@@ -6700,6 +6703,7 @@ def test_agent_session_context_usage_estimated_after_compaction_until_post_compa
     assert estimated_usage["contextWindow"] == 1000
     assert estimated_usage["percent"] == (estimated_usage["tokens"] / 1000) * 100
     assert estimated_usage["estimated"] is True
+    assert estimated_usage["confidence"] == "estimated_after_compaction"
 
     usage = Usage(input=20, output=5, cache_read=0, cache_write=0, total_tokens=25)
     post_compaction = AssistantMessage(
@@ -6720,6 +6724,7 @@ def test_agent_session_context_usage_estimated_after_compaction_until_post_compa
     assert context_usage["contextWindow"] == 1000
     assert context_usage["percent"] == (context_usage["tokens"] / 1000) * 100
     assert context_usage.get("estimated") is not True
+    assert context_usage["confidence"] == "provider_real"
 
 
 def test_agent_session_navigate_tree_writes_extension_summary_and_label(tmp_path: Path) -> None:

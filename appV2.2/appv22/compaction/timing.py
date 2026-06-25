@@ -46,6 +46,19 @@ class ManualCompressionStatus:
     target_tokens: int | None = None
 
 
+@dataclass(frozen=True)
+class CompactionLedgerEntry:
+    trigger: str
+    tokens_before: int
+    tokens_after: int
+    compressed: bool
+    estimated_after: bool
+    summary_fallback: bool
+    stop_reason: str | None = None
+    first_kept_message_index: int | None = None
+    error: str | None = None
+
+
 def summarize_manual_compression(
     before_messages: list[Message],
     after_messages: list[Message],
@@ -111,9 +124,17 @@ class CompactionManager:
         self._summary_failure_cooldown_until = 0.0
         self._last_compression_error: str | None = None
         self._last_compression_result = None
+        self._compression_ledger: list[CompactionLedgerEntry] = []
 
     def _in_cooldown(self) -> bool:
         return self._clock() < self._summary_failure_cooldown_until
+
+    @property
+    def compression_ledger(self) -> list[CompactionLedgerEntry]:
+        return list(self._compression_ledger)
+
+    def clear_compression_ledger(self) -> None:
+        self._compression_ledger.clear()
 
     @property
     def last_prompt_tokens(self) -> int:
@@ -137,6 +158,36 @@ class CompactionManager:
         self.compressor.last_completion_tokens = 0
         self.compressor.awaiting_real_usage_after_compression = True
 
+    def _record_compression_ledger(
+        self,
+        *,
+        trigger: str,
+        tokens_before: int,
+        tokens_after: int,
+        compressed: bool,
+        estimated_after: bool,
+        result=None,
+        stop_reason: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        summary_fallback = bool(getattr(self.compressor, "_last_summary_fallback_used", False))
+        first_kept_message_index = getattr(result, "first_kept_message_index", None)
+        if stop_reason is None and not compressed:
+            stop_reason = getattr(self.compressor, "_last_noop_reason", None) or "no_changes"
+        self._compression_ledger.append(
+            CompactionLedgerEntry(
+                trigger=trigger,
+                tokens_before=tokens_before,
+                tokens_after=tokens_after,
+                compressed=compressed,
+                estimated_after=bool(compressed and estimated_after),
+                summary_fallback=summary_fallback,
+                stop_reason=stop_reason,
+                first_kept_message_index=first_kept_message_index,
+                error=error,
+            )
+        )
+
     def _run_compress(
         self,
         messages: list[Message],
@@ -145,13 +196,23 @@ class CompactionManager:
         *,
         focus: str | None = None,
         aggressive: bool = False,
+        trigger: str = "unknown",
+        estimated_after: bool = False,
     ) -> tuple[list[Message], bool]:
         summarizer = summarizer or self._summarizer
         self._last_compression_error = None
         self._last_compression_result = None
-        if not force and self._in_cooldown():
-            return messages, False
         before_tokens = estimate_tokens(messages)
+        if not force and self._in_cooldown():
+            self._record_compression_ledger(
+                trigger=trigger,
+                tokens_before=before_tokens,
+                tokens_after=before_tokens,
+                compressed=False,
+                estimated_after=False,
+                stop_reason="cooldown",
+            )
+            return messages, False
         try:
             kwargs = {"summarizer": summarizer, "focus_topic": focus, "force": force}
             if aggressive:
@@ -160,13 +221,31 @@ class CompactionManager:
         except Exception as error:  # noqa: BLE001 - summary failure => cooldown, no crash
             self._summary_failure_cooldown_until = self._clock() + SUMMARY_FAILURE_COOLDOWN_SECONDS
             self._last_compression_error = str(error) or error.__class__.__name__
+            self._record_compression_ledger(
+                trigger=trigger,
+                tokens_before=before_tokens,
+                tokens_after=before_tokens,
+                compressed=False,
+                estimated_after=False,
+                stop_reason="failed",
+                error=self._last_compression_error,
+            )
             return messages, False
         self._last_compression_result = result
         if force:
             self._summary_failure_cooldown_until = 0.0
+        after_tokens = estimate_tokens(result.messages)
         if result.compressed:
             self.last_compression_before_tokens = before_tokens
-            self.last_compression_after_tokens = estimate_tokens(result.messages)
+            self.last_compression_after_tokens = after_tokens
+        self._record_compression_ledger(
+            trigger=trigger,
+            tokens_before=before_tokens,
+            tokens_after=after_tokens,
+            compressed=result.compressed,
+            estimated_after=estimated_after,
+            result=result,
+        )
         return result.messages, result.compressed
 
     # Phase 1: preflight (rough estimate before the call; defer right after compaction).
@@ -180,7 +259,13 @@ class CompactionManager:
             self.compressor.last_prompt_tokens = tokens
         if not self.compressor.should_compress(tokens):
             return messages
-        new_messages, compressed = self._run_compress(messages, summarizer, force=False)
+        new_messages, compressed = self._run_compress(
+            messages,
+            summarizer,
+            force=False,
+            trigger="preflight",
+            estimated_after=True,
+        )
         if compressed:
             self._mark_compressed(new_messages)
         return new_messages
@@ -195,7 +280,13 @@ class CompactionManager:
         })
         if not self.compressor.should_compress(real_tokens):
             return messages
-        new_messages, compressed = self._run_compress(messages, summarizer, force=False)
+        new_messages, compressed = self._run_compress(
+            messages,
+            summarizer,
+            force=False,
+            trigger="post_response",
+            estimated_after=True,
+        )
         if compressed:
             self._mark_compressed(new_messages)
         return new_messages
@@ -206,7 +297,13 @@ class CompactionManager:
         tokens = estimate_tokens(messages)
         if not self.compressor.should_compress(tokens):
             return messages
-        new_messages, compressed = self._run_compress(messages, summarizer, force=False)
+        new_messages, compressed = self._run_compress(
+            messages,
+            summarizer,
+            force=False,
+            trigger="error_context",
+            estimated_after=True,
+        )
         if compressed:
             self._mark_compressed(new_messages)
         return new_messages
@@ -214,7 +311,13 @@ class CompactionManager:
     # Provider guardrail failures are not size failures. Force compression so
     # the next prompt does not resend the same blocked tool-result payload.
     def force_compress_error_context(self, messages: list[Message], summarizer=None) -> list[Message]:
-        new_messages, compressed = self._run_compress(messages, summarizer, force=True)
+        new_messages, compressed = self._run_compress(
+            messages,
+            summarizer,
+            force=True,
+            trigger="guardrail_error",
+            estimated_after=True,
+        )
         if compressed:
             self._mark_compressed(new_messages)
         return new_messages
@@ -224,7 +327,12 @@ class CompactionManager:
         if self.overflow_attempts >= self.max_overflow_attempts:
             return messages, False
         self.overflow_attempts += 1
-        recovered_messages, compressed = self._run_compress(messages, summarizer, force=True)
+        recovered_messages, compressed = self._run_compress(
+            messages,
+            summarizer,
+            force=True,
+            trigger="overflow",
+        )
         if compressed:
             return recovered_messages, True
         already_compacted = any(
@@ -307,6 +415,7 @@ class CompactionManager:
                 force=True,
                 focus=focus,
                 aggressive=True,
+                trigger="manual",
             )
             passes = pass_index
             after_pass_tokens = estimate_tokens(new_messages)
@@ -396,6 +505,7 @@ class CompactionManager:
                 force=True,
                 focus=focus,
                 aggressive=False,
+                trigger="manual",
             )
         after_tokens = estimate_tokens(new_messages)
         summary = summarize_manual_compression(messages, new_messages, before_tokens, after_tokens)
