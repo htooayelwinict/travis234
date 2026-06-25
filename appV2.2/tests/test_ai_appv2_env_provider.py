@@ -314,6 +314,35 @@ def test_appv2_env_provider_handles_unavailable_streaming_error_body_without_sec
     assert "body unavailable" not in message.error_message
 
 
+def test_appv2_env_provider_extracts_nested_metadata_raw_error(monkeypatch) -> None:
+    request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+    nested = {
+        "error": {
+            "message": "upstream provider rejected the request",
+            "metadata": {"patterns": ["upstream_policy"]},
+        }
+    }
+    response = httpx.Response(
+        502,
+        request=request,
+        json={
+            "error": {
+                "message": "gateway failed",
+                "metadata": {"raw": json.dumps(nested)},
+            }
+        },
+    )
+
+    message = _run_http_status_failure(monkeypatch, response)
+
+    assert message.stop_reason == "error"
+    assert message.error_message is not None
+    assert "OpenRouter API error (HTTP 502 Bad Gateway)" in message.error_message
+    assert "Provider message: gateway failed" in message.error_message
+    assert "upstream provider rejected the request" in message.error_message
+    assert "Patterns: upstream_policy" in message.error_message
+
+
 def test_appv2_env_provider_streaming_iteration_failure_terminates_with_one_error(monkeypatch) -> None:
     class FakeResponse:
         status_code = 200
@@ -824,6 +853,61 @@ def test_parse_sse_captures_response_metadata_and_choice_usage() -> None:
     assert final.usage.input == 7
     assert final.usage.output == 3
     assert final.usage.total_tokens == 10
+
+
+def test_parse_sse_zero_usage_does_not_overwrite_nonzero_usage() -> None:
+    lines = [
+        _sse(
+            {
+                "choices": [{"delta": {"content": "Hi"}}],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 2, "total_tokens": 11},
+            }
+        ),
+        _sse(
+            {
+                "choices": [{"delta": {"content": " there"}}],
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            }
+        ),
+        _sse(
+            {
+                "choices": [
+                    {
+                        "delta": {},
+                        "finish_reason": "stop",
+                        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                    }
+                ]
+            }
+        ),
+        "data: [DONE]",
+    ]
+
+    events = list(parse_sse_chunks(lines, _model()))
+
+    final = events[-1].message
+    assert final.content[0].text == "Hi there"
+    assert final.usage.input == 9
+    assert final.usage.output == 2
+    assert final.usage.total_tokens == 11
+
+
+def test_parse_sse_skips_malformed_payload_and_continues_to_finish_reason() -> None:
+    lines = [
+        _sse({"choices": [{"delta": {"content": "before "}}]}),
+        'data: {"choices": [',
+        _sse({"choices": [{"delta": {"content": "after"}}]}),
+        _sse({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
+        "data: [DONE]",
+    ]
+
+    events = list(parse_sse_chunks(lines, _model()))
+
+    assert events[-1].type == "done"
+    final = events[-1].message
+    assert final.content[0].text == "before after"
+    assert final.stop_reason == "stop"
+    assert final.error_message is None
 
 
 def test_parse_sse_missing_finish_reason_returns_error_event() -> None:
