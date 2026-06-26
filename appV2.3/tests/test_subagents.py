@@ -252,6 +252,18 @@ def test_supervisor_rejects_malformed_constructor_options():
             raise AssertionError(f"Expected constructor options {kwargs!r} to fail")
 
 
+def test_callable_backend_rejects_malformed_name():
+    for name in ("", "bad/backend", 7):
+        try:
+            CallableSubagentBackend(name, lambda task: "done")
+        except ValueError as error:
+            assert "Unsupported subagent backend" in str(error)
+        except Exception as error:  # pragma: no cover - assertion path
+            raise AssertionError(f"Expected ValueError, got {type(error).__name__}") from error
+        else:  # pragma: no cover - assertion path
+            raise AssertionError(f"Expected backend name {name!r} to fail")
+
+
 def test_supervisor_rejects_unregistered_backend(tmp_path):
     supervisor = SubagentSupervisor(max_threads=1)
 
