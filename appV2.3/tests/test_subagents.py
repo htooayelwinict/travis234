@@ -72,6 +72,8 @@ def test_supervisor_wait_timeout_records_terminal_result(tmp_path):
     assert result.status == "timeout"
     assert result.summary == "Subagent timed out."
     assert result.task_id == task_id
+    assert result.started_at_ms > 0
+    assert result.ended_at_ms >= result.started_at_ms
     assert supervisor.get_result(task_id).status == "timeout"
 
     release.set()
@@ -104,6 +106,8 @@ def test_supervisor_cancel_records_terminal_result_and_event(tmp_path):
     assert result.status == "cancelled"
     assert result.summary == "Subagent cancelled."
     assert result.errors == ["user requested"]
+    assert result.started_at_ms > 0
+    assert result.ended_at_ms >= result.started_at_ms
     assert supervisor.get_result(task_id).status == "cancelled"
 
     release.set()

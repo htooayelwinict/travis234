@@ -378,6 +378,7 @@ class SubagentSupervisor:
         self._futures: dict[str, Future[SubagentResult]] = {}
         self._results: dict[str, SubagentResult] = {}
         self._statuses: dict[str, SubagentStatus] = {}
+        self._started_at_ms: dict[str, int] = {}
 
     def register_backend(self, backend: SubagentBackend) -> None:
         self._backends[backend.name] = backend
@@ -392,6 +393,7 @@ class SubagentSupervisor:
             raise RuntimeError(f"Subagent thread limit reached ({self.max_threads})")
         self._tasks[task.id] = task
         self._statuses[task.id] = "queued"
+        self._started_at_ms[task.id] = _now_ms()
         self._emit_start(task)
         future = self._executor.submit(self._run_backend, task)
         self._futures[task.id] = future
@@ -416,6 +418,7 @@ class SubagentSupervisor:
                 status="timeout",
                 summary="Subagent timed out.",
                 errors=[timeout_text],
+                started_at_ms=self._started_at_ms.get(task_id, ended),
                 ended_at_ms=ended,
             )
             self._statuses[task_id] = "timeout"
@@ -443,6 +446,7 @@ class SubagentSupervisor:
             status="cancelled",
             summary="Subagent cancelled.",
             errors=[reason] if reason else [],
+            started_at_ms=self._started_at_ms.get(task_id, ended),
             ended_at_ms=ended,
         )
         self._statuses[task_id] = "cancelled"
@@ -484,7 +488,7 @@ class SubagentSupervisor:
     def _run_backend(self, task: SubagentTask) -> SubagentResult:
         self._statuses[task.id] = "running"
         backend = self._backends[task.backend]
-        started = _now_ms()
+        started = self._started_at_ms.get(task.id, _now_ms())
         try:
             result = backend.run(task)
         except Exception as error:  # noqa: BLE001 - child failures must be data, not parent crashes.
