@@ -134,6 +134,12 @@ class SubagentResult:
             raise ValueError("Subagent timestamps must be non-negative")
         if self.started_at_ms and self.ended_at_ms and self.ended_at_ms < self.started_at_ms:
             raise ValueError("Subagent ended_at_ms cannot be before started_at_ms")
+        for field_name in ("files_changed", "artifacts", "errors"):
+            value = getattr(self, field_name)
+            if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+                raise ValueError(f"Subagent {field_name} must be a list of strings")
+        if not isinstance(self.usage, dict):
+            raise ValueError("Subagent usage must be a dict")
 
     @property
     def duration_ms(self) -> int:

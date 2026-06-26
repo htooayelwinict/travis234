@@ -146,6 +146,31 @@ def test_subagent_result_rejects_invalid_timestamps():
             raise AssertionError(f"Expected timestamps {overrides!r} to fail")
 
 
+def test_subagent_result_rejects_malformed_collection_fields():
+    cases = (
+        ({"files_changed": "app.py"}, "Subagent files_changed must be a list of strings"),
+        ({"artifacts": "report.md"}, "Subagent artifacts must be a list of strings"),
+        ({"errors": "boom"}, "Subagent errors must be a list of strings"),
+        ({"files_changed": ["app.py", 7]}, "Subagent files_changed must be a list of strings"),
+        ({"usage": [("input_tokens", 10)]}, "Subagent usage must be a dict"),
+    )
+    for overrides, message in cases:
+        payload = {
+            "task_id": "subagent-fixed",
+            "backend": "internal",
+            "role": "reviewer",
+            "status": "completed",
+            "summary": "done",
+            **overrides,
+        }
+        try:
+            SubagentResult(**payload)
+        except ValueError as error:
+            assert message in str(error)
+        else:  # pragma: no cover - assertion path
+            raise AssertionError(f"Expected collection fields {overrides!r} to fail")
+
+
 def test_supervisor_event_sink_failure_does_not_break_task(tmp_path):
     seen_event_types = []
 
