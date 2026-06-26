@@ -690,6 +690,23 @@ def test_supervisor_shutdown_cancels_running_tasks_and_rejects_new_spawns(tmp_pa
         raise AssertionError("Expected shutdown supervisor to reject new tasks")
 
 
+def test_supervisor_rejects_malformed_shutdown_options():
+    cases = (
+        ({"reason": 7}, "shutdown reason must be a string"),
+        ({"wait": "yes"}, "shutdown wait must be a bool"),
+    )
+    for kwargs, message in cases:
+        supervisor = SubagentSupervisor(max_threads=1)
+        try:
+            supervisor.shutdown(**kwargs)
+        except ValueError as error:
+            assert message in str(error)
+        except Exception as error:  # pragma: no cover - assertion path
+            raise AssertionError(f"Expected ValueError, got {type(error).__name__}") from error
+        else:  # pragma: no cover - assertion path
+            raise AssertionError(f"Expected shutdown options {kwargs!r} to fail")
+
+
 def test_codex_exec_backend_parses_jsonl_final_agent_message(tmp_path):
     calls = []
 

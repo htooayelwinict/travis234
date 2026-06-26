@@ -587,6 +587,10 @@ class SubagentSupervisor:
         return result
 
     def shutdown(self, *, wait: bool = True, reason: str = "Supervisor shutdown.") -> list[SubagentResult]:
+        if not isinstance(wait, bool):
+            raise ValueError("shutdown wait must be a bool")
+        if not isinstance(reason, str):
+            raise ValueError("shutdown reason must be a string")
         with self._lock:
             if self._shutdown:
                 return []
