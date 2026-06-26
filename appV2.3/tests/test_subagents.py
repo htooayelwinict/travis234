@@ -123,6 +123,29 @@ def test_subagent_result_rejects_unsafe_identity_fields():
             raise AssertionError(f"Expected {field}={value!r} to fail")
 
 
+def test_subagent_result_rejects_invalid_timestamps():
+    cases = (
+        ({"started_at_ms": -1, "ended_at_ms": 0}, "Subagent timestamps must be non-negative"),
+        ({"started_at_ms": 0, "ended_at_ms": -1}, "Subagent timestamps must be non-negative"),
+        ({"started_at_ms": 200, "ended_at_ms": 100}, "Subagent ended_at_ms cannot be before started_at_ms"),
+    )
+    for overrides, message in cases:
+        payload = {
+            "task_id": "subagent-fixed",
+            "backend": "internal",
+            "role": "reviewer",
+            "status": "completed",
+            "summary": "done",
+            **overrides,
+        }
+        try:
+            SubagentResult(**payload)
+        except ValueError as error:
+            assert message in str(error)
+        else:  # pragma: no cover - assertion path
+            raise AssertionError(f"Expected timestamps {overrides!r} to fail")
+
+
 def test_supervisor_event_sink_failure_does_not_break_task(tmp_path):
     seen_event_types = []
 

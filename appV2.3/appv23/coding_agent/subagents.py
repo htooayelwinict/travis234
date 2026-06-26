@@ -130,6 +130,10 @@ class SubagentResult:
             raise ValueError(f"Unsupported subagent role: {self.role}")
         if self.status not in _SUBAGENT_STATUSES:
             raise ValueError(f"Unsupported subagent status: {self.status}")
+        if self.started_at_ms < 0 or self.ended_at_ms < 0:
+            raise ValueError("Subagent timestamps must be non-negative")
+        if self.started_at_ms and self.ended_at_ms and self.ended_at_ms < self.started_at_ms:
+            raise ValueError("Subagent ended_at_ms cannot be before started_at_ms")
 
     @property
     def duration_ms(self) -> int:
