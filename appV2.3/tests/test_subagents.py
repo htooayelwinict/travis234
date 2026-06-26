@@ -214,6 +214,23 @@ def test_supervisor_event_sink_failure_does_not_break_task(tmp_path):
     assert seen_event_types == ["subagent_start", "subagent_stop"]
 
 
+def test_supervisor_rejects_malformed_constructor_options():
+    cases = (
+        ({"max_threads": "many"}, "max_threads must be at least 1"),
+        ({"max_depth": "deep"}, "max_depth must be at least 1"),
+        ({"event_sink": "not callable"}, "event_sink must be callable"),
+    )
+    for kwargs, message in cases:
+        try:
+            SubagentSupervisor(**kwargs)
+        except ValueError as error:
+            assert message in str(error)
+        except Exception as error:  # pragma: no cover - assertion path
+            raise AssertionError(f"Expected ValueError, got {type(error).__name__}") from error
+        else:  # pragma: no cover - assertion path
+            raise AssertionError(f"Expected constructor options {kwargs!r} to fail")
+
+
 def test_supervisor_rejects_unregistered_backend(tmp_path):
     supervisor = SubagentSupervisor(max_threads=1)
 
