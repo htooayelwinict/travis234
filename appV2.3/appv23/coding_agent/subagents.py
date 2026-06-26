@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
+import signal as signal_module
 import subprocess
 import threading
 import time
@@ -32,6 +34,7 @@ _SANDBOX_FLAGS: dict[str, str] = {
 }
 _REASONING_EFFORTS = {"off", "low", "medium", "high"}
 _TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+_SUBPROCESS_RUN = subprocess.run
 
 
 def _now_ms() -> int:
@@ -261,8 +264,89 @@ class CodexExecBackend:
         if log_dir is not None and not isinstance(log_dir, (str, Path)):
             raise ValueError("log_dir must be a path string or Path")
         self.codex_bin = codex_bin
-        self._runner = runner or subprocess.run
+        self._runner = runner if runner is not None else subprocess.run
+        self._uses_default_runner = runner is None and self._runner is _SUBPROCESS_RUN
         self._log_dir = Path(log_dir) if log_dir is not None else None
+        self._processes: dict[str, subprocess.Popen[str]] = {}
+        self._cancelled_tasks: set[str] = set()
+        self._process_lock = threading.RLock()
+
+    def cancel(self, task_id: str) -> None:
+        _validate_task_id_reference(task_id)
+        with self._process_lock:
+            self._cancelled_tasks.add(task_id)
+            process = self._processes.get(task_id)
+        if process is None or process.poll() is not None:
+            return
+        self._terminate_process(process)
+        try:
+            process.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            self._kill_process(process)
+            try:
+                process.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                return
+
+    @staticmethod
+    def _terminate_process(process: subprocess.Popen[str]) -> None:
+        try:
+            if os.name != "nt":
+                os.killpg(process.pid, signal_module.SIGTERM)
+            else:
+                process.terminate()
+        except ProcessLookupError:
+            return
+
+    @staticmethod
+    def _kill_process(process: subprocess.Popen[str]) -> None:
+        try:
+            if os.name != "nt":
+                os.killpg(process.pid, signal_module.SIGKILL)
+            else:
+                process.kill()
+        except ProcessLookupError:
+            return
+
+    def _run_command(self, task: SubagentTask, args: list[str]) -> subprocess.CompletedProcess[str]:
+        if not self._uses_default_runner:
+            return self._runner(
+                args,
+                cwd=task.cwd,
+                timeout=task.timeout_seconds,
+                text=True,
+                capture_output=True,
+            )
+        process = subprocess.Popen(
+            args,
+            cwd=task.cwd,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=(os.name != "nt"),
+        )
+        with self._process_lock:
+            self._processes[task.id] = process
+            cancelled = task.id in self._cancelled_tasks
+        if cancelled:
+            self._terminate_process(process)
+        try:
+            stdout, stderr = process.communicate(timeout=task.timeout_seconds)
+        except subprocess.TimeoutExpired as error:
+            self._kill_process(process)
+            stdout, stderr = process.communicate()
+            raise subprocess.TimeoutExpired(
+                error.cmd,
+                error.timeout,
+                output=stdout,
+                stderr=stderr,
+            ) from error
+        finally:
+            with self._process_lock:
+                if self._processes.get(task.id) is process:
+                    del self._processes[task.id]
+                self._cancelled_tasks.discard(task.id)
+        return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
 
     def _write_raw_log(
         self,
@@ -355,13 +439,7 @@ class CodexExecBackend:
         if task.reasoning and task.reasoning != "off":
             args[2:2] = ["-c", f'model_reasoning_effort="{task.reasoning}"']
         try:
-            completed = self._runner(
-                args,
-                cwd=task.cwd,
-                timeout=task.timeout_seconds,
-                text=True,
-                capture_output=True,
-            )
+            completed = self._run_command(task, args)
         except TimeoutError:
             ended = _now_ms()
             raw_log_path, log_errors = self._safe_write_raw_log(
@@ -559,17 +637,51 @@ class SubagentSupervisor:
             self._futures[task.id] = future
         return task.id
 
-    def wait(self, task_id: str, timeout: float | None = None) -> SubagentResult:
+    def wait(
+        self,
+        task_id: str,
+        timeout: float | None = None,
+        *,
+        signal: object | None = None,
+        cancel_reason: str = "Cancelled by parent abort.",
+    ) -> SubagentResult:
         _validate_task_id_reference(task_id)
         _validate_wait_timeout(timeout)
+        if not isinstance(cancel_reason, str):
+            raise ValueError("cancel reason must be a string")
         with self._lock:
             if task_id in self._results:
                 return self._results[task_id]
             future = self._futures.get(task_id)
             if future is None:
                 raise KeyError(f"Unknown subagent task: {task_id}")
+        started_wait = time.monotonic()
         try:
-            result = future.result(timeout=timeout)
+            while True:
+                with self._lock:
+                    if task_id in self._results:
+                        return self._results[task_id]
+                if future.done():
+                    result = future.result()
+                    break
+                if signal is not None and getattr(signal, "aborted", False):
+                    return self.cancel(task_id, reason=cancel_reason)
+                wait_timeout = timeout
+                if signal is not None:
+                    if timeout is None:
+                        wait_timeout = 0.05
+                    else:
+                        remaining = timeout - (time.monotonic() - started_wait)
+                        if remaining <= 0:
+                            raise TimeoutError()
+                        wait_timeout = min(0.05, remaining)
+                try:
+                    result = future.result(timeout=wait_timeout)
+                    break
+                except TimeoutError:
+                    if signal is not None:
+                        continue
+                    raise
         except TimeoutError:
             ended = _now_ms()
             timeout_text = f"Timed out after {timeout}s" if timeout is not None else "Timed out"
@@ -609,6 +721,7 @@ class SubagentSupervisor:
             future = self._futures.get(task_id)
             if future is not None:
                 future.cancel()
+            backend_cancel = getattr(self._backends.get(task.backend), "cancel", None)
             ended = _now_ms()
             result = SubagentResult(
                 task_id=task.id,
@@ -622,6 +735,11 @@ class SubagentSupervisor:
             )
             self._statuses[task_id] = "cancelled"
             self._results[task_id] = result
+        if callable(backend_cancel):
+            try:
+                backend_cancel(task_id)
+            except Exception as error:  # noqa: BLE001 - cancellation should not crash the parent.
+                self._observer_errors.append(f"backend cancel failed for {task_id}: {error}")
         self._emit_stop(task, result)
         return result
 

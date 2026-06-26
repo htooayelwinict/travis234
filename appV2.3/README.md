@@ -53,13 +53,25 @@ appv23 --cwd .
 
 ## Test
 
-From the repository root:
+From the package directory:
 
 ```bash
-PYTHONPATH=appV2.3 .venv/bin/python -m pytest appV2.3/tests -q
+cd appV2.3
+uv run --with pytest python -m pytest tests -q
 ```
 
-Expected current `appV2.3` suite: `656 passed`.
+Expected current `appV2.3` suite: `675 passed`.
+
+## Production verification gates
+
+Before calling appv23 production-ready, verify these current-state gates:
+
+1. Focused subagent skill smoke: the prompt explicitly invokes `subagent-delegation`, reads the skill, spawns one child, and reports `taskId`, `role`, `status`, and `summary`.
+2. Focused web-search skill smoke: the prompt explicitly invokes `web-search`, reads the skill, uses Google News RSS first, avoids the `curl | python3 <<'PY'` stdin trap, and returns at most five bounded `RESULT` rows or one concise blocker row.
+3. Runtime regression: run the focused tests for files touched in the current change set.
+4. Full suite: run `cd appV2.3 && uv run --with pytest python -m pytest tests -q`.
+5. Build: run `cd appV2.3 && uv build`.
+6. Gitops: inspect the final diff, commit only intended files, and push the active branch when Lewis asks.
 
 ## User-side subagent smoke
 
@@ -69,15 +81,18 @@ Start the app:
 npm run tui:v23
 ```
 
-Then ask:
+`/subagents` is a prompt-level trigger, not a required runtime slash command. The supported production contract is: explicitly ask for the `subagent-delegation` skill, then ask for the bounded child task.
+
+Then ask with explicit subagent wording so the `subagent-delegation` skill owns the workflow:
 
 ```text
-Spawn a reviewer subagent to inspect docs/report/appv22_qa_scan_2026-06-26.md. Show me the child task id, child role, child status, and child summary.
+Use the subagent-delegation skill. Spawn a reviewer subagent to inspect docs/report/appv22_qa_scan_2026-06-26.md. Show me the child task id, child role, child status, and child summary.
 ```
 
-Working output should include a `spawn_subagent` tool call plus child lifecycle evidence:
+Working output should first show the skill read, then a `spawn_subagent` tool call plus child lifecycle evidence:
 
 ```text
+[skill] subagent-delegation
 subagent_start
 child_subagent_id: subagent-...
 child_role: reviewer
@@ -87,6 +102,23 @@ summary: ...
 ```
 
 The `spawn_subagent` tool result should also include `taskId`, `role`, `status`, and `summary`.
+
+## User-side web-search skill smoke
+
+The `web-search` skill is a bounded Google News/current-facts lookup, not a general crawler. Start the app and ask:
+
+```text
+Use the web-search skill. Search Google News for worldcup 2026 results and show at most five source rows.
+```
+
+Working output should include:
+
+```text
+[skill] web_search
+RESULT  1  ...
+```
+
+It should not print raw HTML/XML, and if Google blocks or parsing fails it should report one concise `ERROR`, `NO_RESULTS`, or `NO_PARSE_RESULTS` row.
 
 ## Environment
 
@@ -108,6 +140,8 @@ APPV2_WORKER_LLM_BASE_URL=https://openrouter.ai/api/v1
 
 AppV2.3 includes a backend-agnostic subagent supervisor for delegating focused work from an active `AgentSession`.
 
+- Subagent tools are skill-governed. The main agent should act normally unless Lewis explicitly asks for subagents or invokes the `subagent-delegation` skill.
+- `/subagents` is treated as a prompt-level skill trigger. Use `/delegate` for the existing runtime slash command path.
 - `/agents` lists delegated workers and their current status.
 - `/delegate <role> <task>` runs an internal read-only AppV2.3 worker and returns its summary to the parent session.
 - `/delegate --backend codex <role> <task>` runs `codex exec --json` in a read-only sandbox when the Codex CLI is installed and authenticated. Model and non-`off` reasoning settings are forwarded to Codex when supplied.

@@ -35,6 +35,7 @@ _SYNC_END = "\x1b[?2026l"
 _KITTY_SEQUENCE_PREFIX = "\x1b_G"
 _CELL_SIZE_RESPONSE_RE = re.compile(r"^\x1b\[6;(\d+);(\d+)t$")
 _SGR_MOUSE_RE = re.compile(r"^\x1b\[<(\d+);(\d+);(\d+)([Mm])$")
+_RXVT_MOUSE_RE = re.compile(r"^\x1b\[(\d+);(\d+);(\d+)([Mm])$")
 _X10_MOUSE_RE = re.compile(r"^\x1b\[M(.)(.)(.)$")
 _PAGE_UP = "\x1b[5~"
 _PAGE_DOWN = "\x1b[6~"
@@ -348,6 +349,11 @@ class TUI(Container):
         mouse_match = _SGR_MOUSE_RE.match(data)
         if mouse_match is not None:
             button_code = int(mouse_match.group(1))
+            self._handle_mouse_button_code(button_code)
+            return True
+        rxvt_mouse_match = _RXVT_MOUSE_RE.match(data)
+        if rxvt_mouse_match is not None:
+            button_code = int(rxvt_mouse_match.group(1))
             self._handle_mouse_button_code(button_code)
             return True
         legacy_mouse_match = _X10_MOUSE_RE.match(data)

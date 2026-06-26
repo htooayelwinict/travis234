@@ -836,6 +836,11 @@ class Input(Component):
                     paste = data[index + 6 : end]
                     index = end + 6
                 self._insert_paste(paste)
+            elif mouse_match := re.match(
+                r"\x1b(?:\[<\d+;\d+;\d+[Mm]|\[\d+;\d+;\d+[Mm]|\[M...)",
+                data[index:],
+            ):
+                index += len(mouse_match.group(0))
             elif data.startswith("\x1b[A", index):
                 if self._history:
                     self._navigate_history(-1)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Callable
 
@@ -99,6 +100,8 @@ def _execute_read(
     operations: ReadOperations,
     auto_resize_images: bool,
     image_resizer: ResizeImage,
+    allowed_read_roots: Sequence[str] | None,
+    allowed_read_files: Sequence[str] | None,
     tool_call_id,
     args,
     signal=None,
@@ -109,7 +112,12 @@ def _execute_read(
     path = args["path"]
     offset = _number_arg(args.get("offset"))
     limit = _number_arg(args.get("limit"))
-    absolute_path = resolve_read_path(path, cwd)
+    absolute_path = resolve_read_path(
+        path,
+        cwd,
+        allowed_roots=allowed_read_roots,
+        allowed_files=allowed_read_files,
+    )
     _check_aborted(signal)
     operations.access(absolute_path)
     _check_aborted(signal)
@@ -238,16 +246,31 @@ def _to_posix_path(path: str) -> str:
     return path.replace(os.sep, "/")
 
 
-def _compact_read_classification(args, cwd: str) -> tuple[str, str] | None:
+def _compact_read_classification(
+    args,
+    cwd: str,
+    allowed_read_roots: Sequence[str] | None = None,
+    allowed_read_files: Sequence[str] | None = None,
+) -> tuple[str, str] | None:
     if not args:
         return None
     raw_path = args.get("file_path") or args.get("path") or ""
     if not raw_path:
         return None
-    absolute_path = resolve_to_cwd(raw_path, cwd)
+    try:
+        absolute_path = resolve_read_path(
+            raw_path,
+            cwd,
+            allowed_roots=allowed_read_roots,
+            allowed_files=allowed_read_files,
+        )
+    except PermissionError:
+        return None
     file_name = os.path.basename(absolute_path)
     if file_name == "SKILL.md":
         return ("skill", os.path.basename(os.path.dirname(absolute_path)) or file_name)
+    if absolute_path in {os.path.abspath(str(path)) for path in (allowed_read_files or ())}:
+        return ("skill", os.path.splitext(file_name)[0] or file_name)
     label = _to_posix_path(format_path_relative_to_cwd(absolute_path, cwd))
     if label == "README.md" or label.startswith("docs/") or label.startswith("examples/"):
         return ("docs", label)
@@ -256,10 +279,19 @@ def _compact_read_classification(args, cwd: str) -> tuple[str, str] | None:
     return None
 
 
-def _render_read_call(args, ctx=None) -> str:
+def _render_read_call(
+    args,
+    ctx=None,
+    allowed_read_roots: Sequence[str] | None = None,
+    allowed_read_files: Sequence[str] | None = None,
+) -> str:
     cwd = _ctx_value(ctx, "cwd", "")
     expanded = _ctx_value(ctx, "expanded", False)
-    classification = None if expanded else _compact_read_classification(args, cwd)
+    classification = (
+        None
+        if expanded
+        else _compact_read_classification(args, cwd, allowed_read_roots, allowed_read_files)
+    )
     line_range = _format_read_line_range(args)
     if classification:
         kind, label = classification
@@ -267,7 +299,21 @@ def _render_read_call(args, ctx=None) -> str:
             return f"[skill] {label}{line_range} (to expand)"
         return f"read {kind} {label}{line_range} (to expand)"
     path = (args or {}).get("file_path") or (args or {}).get("path") or ""
-    display = format_path_relative_to_cwd(resolve_to_cwd(path, cwd), cwd) if cwd and path else path
+    if cwd and path:
+        try:
+            display = format_path_relative_to_cwd(
+                resolve_read_path(
+                    path,
+                    cwd,
+                    allowed_roots=allowed_read_roots,
+                    allowed_files=allowed_read_files,
+                ),
+                cwd,
+            )
+        except PermissionError:
+            display = path
+    else:
+        display = path
     return f"read {display}{line_range}"
 
 
@@ -300,6 +346,8 @@ def create_read_tool_definition(
     operations: ReadOperations | None = None,
     auto_resize_images: bool = True,
     image_resizer: ResizeImage | None = None,
+    allowed_read_roots: Sequence[str] | None = None,
+    allowed_read_files: Sequence[str] | None = None,
 ) -> ToolDefinition:
     ops = operations or ReadOperations(
         read_file=_default_read_file,
@@ -320,9 +368,9 @@ def create_read_tool_definition(
         prompt_snippet="Read file contents",
         prompt_guidelines=["Use read to examine files instead of cat or sed."],
         execute=lambda tid, args, signal=None, on_update=None, ctx=None: _execute_read(
-            cwd, ops, auto_resize_images, resize, tid, args, signal, on_update, ctx
+            cwd, ops, auto_resize_images, resize, allowed_read_roots, allowed_read_files, tid, args, signal, on_update, ctx
         ),
-        render_call=_render_read_call,
+        render_call=lambda args, ctx=None: _render_read_call(args, ctx, allowed_read_roots, allowed_read_files),
         render_result=_render_read_result,
     )
 
@@ -333,6 +381,8 @@ def create_read_tool(
     operations: ReadOperations | None = None,
     auto_resize_images: bool = True,
     image_resizer: ResizeImage | None = None,
+    allowed_read_roots: Sequence[str] | None = None,
+    allowed_read_files: Sequence[str] | None = None,
     model=None,
 ) -> AgentTool:
     return wrap_tool_definition(
@@ -341,6 +391,8 @@ def create_read_tool(
             operations=operations,
             auto_resize_images=auto_resize_images,
             image_resizer=image_resizer,
+            allowed_read_roots=allowed_read_roots,
+            allowed_read_files=allowed_read_files,
         ),
         lambda: ToolContext(cwd=cwd, model=model),
     )

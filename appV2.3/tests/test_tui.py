@@ -964,6 +964,44 @@ def test_tui_mouse_wheel_scrolls_transcript_before_focused_input() -> None:
     assert tui.last_render.lines == ["line 5", "line 6", "line 7", "prompt"]
 
 
+def test_tui_rxvt_mouse_wheel_scrolls_transcript_before_focused_input() -> None:
+    class InputRecorder(Container):
+        def __init__(self) -> None:
+            super().__init__()
+            self.inputs: list[str] = []
+
+        def render(self, width: int) -> list[str]:
+            return ["prompt"]
+
+        def handle_input(self, data: str) -> None:
+            self.inputs.append(data)
+
+    terminal = FakeTerminal(columns=40, rows=4)
+    tui = TUI(terminal)
+    for index in range(8):
+        tui.add(Text(f"line {index}"))
+    input_recorder = InputRecorder()
+    tui.add(input_recorder)
+    tui.set_focus(input_recorder)
+    tui.start()
+
+    assert terminal.input_handler is not None
+    assert tui.last_render is not None
+    assert tui.last_render.lines == ["line 5", "line 6", "line 7", "prompt"]
+
+    terminal.input_handler("\x1b[64;1;1M")
+
+    assert input_recorder.inputs == []
+    assert tui.last_render is not None
+    assert tui.last_render.lines == ["line 2", "line 3", "line 4", "line 5"]
+
+    terminal.input_handler("\x1b[65;1;1M")
+
+    assert input_recorder.inputs == []
+    assert tui.last_render is not None
+    assert tui.last_render.lines == ["line 5", "line 6", "line 7", "prompt"]
+
+
 def test_tui_legacy_x10_mouse_wheel_scrolls_transcript_before_focused_input() -> None:
     class InputRecorder(Container):
         def __init__(self) -> None:
@@ -2396,6 +2434,18 @@ def test_input_ports_pi_up_down_prompt_history_navigation() -> None:
     assert input_component.cursor == len("draft")
 
 
+def test_input_ignores_mouse_reports_that_reach_prompt_editor() -> None:
+    input_component = Input(value="draft")
+    input_component.cursor = len("draft")
+
+    input_component.handle_input("\x1b[<64;1;1M\x1b[<64;1;1m")
+    input_component.handle_input("\x1b[64;1;1M")
+    input_component.handle_input("\x1b[M`!!")
+
+    assert input_component.get_value() == "draft"
+    assert input_component.cursor == len("draft")
+
+
 def test_input_ports_pi_alt_d_delete_word_forward_keybinding() -> None:
     input_component = Input()
     input_component.set_value("hello world")
@@ -2887,6 +2937,80 @@ def test_interactive_mode_uses_extension_custom_message_renderer(tmp_path) -> No
     rendered = "\n".join(app.tui.render(120))
     assert "custom rendered: Extension-provided context" in rendered
     assert "[context]" not in rendered
+
+
+def test_interactive_mode_renders_live_custom_message_with_extension_renderer(tmp_path) -> None:
+    register_api_provider(create_faux_provider(lambda m, c: text_response_events(m, "unused")))
+    terminal = FakeTerminal(columns=120, rows=40)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+    app.session.extension_runner.register_message_renderer(
+        "context",
+        lambda message, options=None, theme=None: Text(f"live custom rendered: {message.content}"),
+    )
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+
+    mode.init()
+    app.session.send_custom_message({"customType": "context", "content": "Fresh extension context", "display": True})
+
+    rendered = strip_ansi("\n".join(app.tui.render(120)))
+    assert "live custom rendered: Fresh extension context" in rendered
+    assert "[context]" not in rendered
+
+
+def test_interactive_mode_runs_agents_command_without_model_turn(tmp_path) -> None:
+    calls = {"model": 0}
+
+    def script(model, context):
+        calls["model"] += 1
+        return text_response_events(model, "model should not run")
+
+    register_api_provider(create_faux_provider(script))
+    terminal = FakeTerminal(columns=120, rows=40)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+    inputs = iter(["/agents", "/exit"])
+    mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
+
+    mode.run()
+
+    rendered = strip_ansi("\n".join(app.tui.render(120)))
+    assert calls["model"] == 0
+    assert "No subagents have been spawned" in rendered
+
+
+def test_interactive_mode_does_not_run_delegate_command_on_input_thread(tmp_path) -> None:
+    register_api_provider(create_faux_provider(lambda m, c: text_response_events(m, "unused")))
+    terminal = FakeTerminal(columns=120, rows=40)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+
+    mode.init()
+
+    assert mode._dispatch_extension_command("/delegate reviewer inspect package.json") is False
+
+
+def test_interactive_mode_runs_agents_command_during_active_turn_without_queueing(tmp_path) -> None:
+    register_api_provider(create_faux_provider(lambda m, c: text_response_events(m, "unused")))
+    terminal = FakeTerminal(columns=120, rows=40)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+    stop = threading.Event()
+    active_turn = threading.Thread(target=stop.wait)
+
+    mode.init()
+    active_turn.start()
+    try:
+        with mode._turn_lock:
+            mode._turn_thread = active_turn
+
+        assert mode._handle_active_turn_prompt("/agents") is True
+
+        rendered = strip_ansi("\n".join(app.tui.render(120)))
+        assert "No subagents have been spawned" in rendered
+        assert "Queued message for after current turn" not in rendered
+        assert mode._queued_after_turn == []
+    finally:
+        stop.set()
+        active_turn.join(timeout=1)
 
 
 def test_interactive_mode_dispatches_extension_shortcut_without_model_turn(tmp_path) -> None:

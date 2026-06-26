@@ -734,6 +734,27 @@ def test_file_tools_reject_paths_outside_cwd(tmp_path: Path) -> None:
             raise AssertionError(f"Expected {tool_name} to reject path outside cwd")
 
 
+def test_read_tool_allows_explicit_skill_file_outside_cwd(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    skill_file = tmp_path / "home" / ".agents" / "skills" / "web_search.md"
+    project.mkdir()
+    skill_file.parent.mkdir(parents=True)
+    skill_file.write_text("Use curl for bounded search.\n", encoding="utf-8")
+
+    blocked = create_tool_definition("read", str(project))
+    try:
+        blocked.execute("call-1", {"path": str(skill_file)})
+    except PermissionError as error:
+        assert "outside working directory" in str(error)
+    else:  # pragma: no cover - assertion path
+        raise AssertionError("Expected skill file read outside cwd to fail without explicit allowlist")
+
+    allowed = create_tool_definition("read", str(project), {"read": {"allowed_read_files": [str(skill_file)]}})
+    result = allowed.execute("call-2", {"path": str(skill_file)})
+
+    assert "Use curl for bounded search." in result.content[0].text
+
+
 def test_find_tool_matches_path_globs_and_limit_notice(tmp_path: Path) -> None:
     nested = tmp_path / "src" / "foo" / "bar"
     nested.mkdir(parents=True)
@@ -1741,6 +1762,70 @@ def test_default_resource_loader_loads_user_agents_skills_like_pi(tmp_path: Path
     assert skills[0].sourceInfo.scope == "user"
     assert skills[0].sourceInfo.baseDir == str(home / ".agents")
     assert str(user_skill_dir / "SKILL.md") in format_skills_for_prompt(skills)
+
+
+def test_agent_session_read_tool_can_load_discovered_user_skill_outside_cwd(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    project = home / "repo"
+    agent_dir = home / ".pi" / "agent"
+    user_skill_dir = home / ".agents" / "skills"
+    skill_file = user_skill_dir / "web_search.md"
+    project.mkdir(parents=True)
+    agent_dir.mkdir(parents=True)
+    user_skill_dir.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    skill_file.write_text(
+        "---\nname: web-search\ndescription: Use curl for public web search\n---\nUse curl only.\n",
+        encoding="utf-8",
+    )
+
+    session = AgentSession(cwd=str(project), model=faux_model(), agent_dir=str(agent_dir))
+    try:
+        definition = session.get_tool_definition("read")
+        assert definition is not None
+
+        result = definition.execute("call-1", {"path": str(skill_file)})
+
+        assert "Use curl only." in result.content[0].text
+        assert "web-search" in session.system_prompt
+    finally:
+        session.shutdown()
+
+
+def test_web_search_skill_allowed_tools_profile_enables_bash_for_child(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    project = home / "repo"
+    agent_dir = home / ".pi" / "agent"
+    user_skill_dir = home / ".agents" / "skills"
+    skill_file = user_skill_dir / "web_search.md"
+    project.mkdir(parents=True)
+    agent_dir.mkdir(parents=True)
+    user_skill_dir.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    skill_file.write_text(
+        "---\n"
+        "name: web-search\n"
+        "description: Use curl for public web search\n"
+        "allowed-tools: read bash\n"
+        "---\n"
+        "Use curl only.\n",
+        encoding="utf-8",
+    )
+
+    session = AgentSession(cwd=str(project), model=faux_model(), agent_dir=str(agent_dir))
+    try:
+        task = session._build_subagent_task("web-search", "search latest result", None)
+
+        assert task.allowed_tools == ("read", "bash")
+        assert task.sandbox == "read_only"
+    finally:
+        session.shutdown()
 
 
 def test_create_agent_session_services_ports_pi_settings_resource_wiring(

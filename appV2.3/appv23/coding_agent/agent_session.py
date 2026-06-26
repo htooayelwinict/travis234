@@ -81,6 +81,8 @@ _SUBAGENT_TOOL_NAMES = [
     "get_subagent_result",
     "cancel_subagent",
 ]
+_DEFAULT_SUBAGENT_ALLOWED_TOOLS = ("read", "grep", "find", "ls")
+_SKILL_SUBAGENT_ALLOWED_TOOL_NAMES = {"read", "grep", "find", "ls", "bash"}
 _MODEL_SUBAGENT_TIMEOUT_SECONDS_DEFAULT = 300
 _MODEL_SUBAGENT_TIMEOUT_SECONDS_MAX = 300
 _DEFAULT_ACTIVE_TOOL_NAMES = ["read", "bash", "edit", "write", *_SUBAGENT_TOOL_NAMES]
@@ -312,6 +314,7 @@ class ExtensionCommandContext:
     _set_label: Callable[[str, str | None], None]
     _exec: Callable[[str, list[str], dict | None], dict]
     _wait_for_idle: Callable[[], None]
+    _get_signal: Callable[[], AbortSignal]
     _compact: Callable[[dict | None], ExtensionCompactionResult | None]
     _spawn_subagent: Callable[[str, str, dict | None], dict]
     _list_subagents: Callable[[], list[dict]]
@@ -404,6 +407,11 @@ class ExtensionCommandContext:
         self._wait_for_idle()
 
     waitForIdle = wait_for_idle
+
+    def get_signal(self) -> AbortSignal:
+        return self._get_signal()
+
+    getSignal = get_signal
 
     def compact(self, options: dict | None = None) -> ExtensionCompactionResult | None:
         return self._compact(options)
@@ -625,6 +633,7 @@ class AgentSession:
         self._pending_next_turn_messages: list[AgentMessage] = []
         self._pending_bash_messages: list[BashExecutionMessage] = []
         self._bash_signal: AbortSignal | None = None
+        self._command_signal: AbortSignal | None = None
         self._tool_guardrails = ToolCallGuardrailController(
             _coerce_tool_guardrail_config(tool_loop_guardrails),
             cwd=self.cwd,
@@ -781,6 +790,22 @@ class AgentSession:
             "shell_path",
         )
 
+    def _skill_read_access(self) -> dict[str, list[str]]:
+        if self._resource_loader is None:
+            return {"roots": [], "files": []}
+        roots: list[str] = []
+        files: list[str] = []
+        for skill in self._resource_loader.get_skills()["skills"]:
+            file_path = getattr(skill, "file_path", None) or getattr(skill, "filePath", None)
+            base_dir = getattr(skill, "base_dir", None) or getattr(skill, "baseDir", None)
+            if not isinstance(file_path, str) or not file_path:
+                continue
+            if os.path.basename(file_path) == "SKILL.md" and isinstance(base_dir, str) and base_dir:
+                roots.append(base_dir)
+            else:
+                files.append(file_path)
+        return {"roots": roots, "files": files}
+
     def _builtin_tool_options(self) -> dict[str, dict[str, object]]:
         auto_resize_images = _settings_value(
             self.settings_manager,
@@ -789,8 +814,13 @@ class AgentSession:
             "imageAutoResize",
             "image_auto_resize",
         )
+        skill_read_access = self._skill_read_access()
         return {
-            "read": {"auto_resize_images": True if auto_resize_images is None else bool(auto_resize_images)},
+            "read": {
+                "auto_resize_images": True if auto_resize_images is None else bool(auto_resize_images),
+                "allowed_read_roots": skill_read_access["roots"],
+                "allowed_read_files": skill_read_access["files"],
+            },
             "bash": {
                 "command_prefix": self._settings_shell_command_prefix(),
                 "shell_path": self._settings_shell_path(),
@@ -1030,10 +1060,13 @@ class AgentSession:
         if parsed is None:
             return None
         command, args = parsed
-        try:
-            result = command.handler(args, self._extension_command_context())
-        except TypeError:
-            result = command.handler(args)
+        def run_command(_signal: AbortSignal):
+            try:
+                return command.handler(args, self._extension_command_context())
+            except TypeError:
+                return command.handler(args)
+
+        result = self._with_command_abort_signal(run_command)
         return result if isinstance(result, list) else []
 
     def _parse_extension_command(self, text: str):
@@ -1077,6 +1110,7 @@ class AgentSession:
             _set_label=self.set_label,
             _exec=self._extension_exec,
             _wait_for_idle=self._extension_wait_for_idle,
+            _get_signal=self._current_abort_signal,
             _compact=self._extension_compact,
             _spawn_subagent=self._extension_spawn_subagent,
             _list_subagents=lambda: self.subagents.list_tasks(),
@@ -1148,7 +1182,14 @@ class AgentSession:
                     "display": True,
                 }
             )
-        result = self._spawn_and_wait_for_subagent(role.strip(), goal.strip(), {"backend": backend})
+        result = self._with_command_abort_signal(
+            lambda signal: self._spawn_and_wait_for_subagent(
+                role.strip(),
+                goal.strip(),
+                {"backend": backend},
+                signal=signal,
+            )
+        )
         return self.send_custom_message(
             {
                 "customType": "subagent",
@@ -1214,7 +1255,7 @@ class AgentSession:
                 "getModel": lambda: self.model,
                 "isIdle": lambda: not self.is_streaming,
                 "isProjectTrusted": lambda: True,
-                "getSignal": lambda: self.agent.signal if self.is_streaming else None,
+                "getSignal": self._current_abort_signal,
                 "abort": self._extension_abort,
                 "hasPendingMessages": lambda: self.pending_message_count > 0,
                 "shutdown": self._extension_shutdown,
@@ -1226,7 +1267,25 @@ class AgentSession:
         )
 
     def _extension_spawn_subagent(self, role: str, goal: str, options: dict | None = None) -> dict:
-        return self._spawn_and_wait_for_subagent(role, goal, options).as_dict()
+        return self._with_command_abort_signal(
+            lambda signal: self._spawn_and_wait_for_subagent(role, goal, options, signal=signal).as_dict()
+        )
+
+    def _current_abort_signal(self) -> AbortSignal:
+        if self.is_streaming or self._command_signal is not None:
+            return self.agent.signal
+        return self.agent.reset_abort_signal()
+
+    def _with_command_abort_signal(self, callback: Callable[[AbortSignal], object]):
+        signal = self._current_abort_signal()
+        owns_signal = not self.is_streaming and self._command_signal is None
+        if owns_signal:
+            self._command_signal = signal
+        try:
+            return callback(signal)
+        finally:
+            if owns_signal and self._command_signal is signal:
+                self._command_signal = None
 
     def _extension_get_subagent_result(self, task_id: str) -> dict | None:
         result = self.subagents.get_result(task_id)
@@ -1234,6 +1293,24 @@ class AgentSession:
 
     def _extension_cancel_subagent(self, task_id: str, reason: str | None = None) -> dict:
         return self.subagents.cancel(task_id, reason or "Cancelled by user.").as_dict()
+
+    def _subagent_allowed_tools_for_role(self, role: str) -> tuple[str, ...]:
+        if self._resource_loader is None:
+            return _DEFAULT_SUBAGENT_ALLOWED_TOOLS
+        for skill in self._resource_loader.get_skills()["skills"]:
+            if getattr(skill, "name", None) != role:
+                continue
+            raw_allowed_tools = getattr(skill, "allowed_tools", None) or getattr(skill, "allowedTools", None) or ()
+            tools: list[str] = []
+            for tool in raw_allowed_tools:
+                if tool not in _SKILL_SUBAGENT_ALLOWED_TOOL_NAMES or tool in tools:
+                    continue
+                tools.append(tool)
+            if tools:
+                if "read" not in tools:
+                    tools.insert(0, "read")
+                return tuple(tools)
+        return _DEFAULT_SUBAGENT_ALLOWED_TOOLS
 
     def _build_subagent_task(self, role: str, goal: str, options: dict | None = None) -> SubagentTask:
         options = options or {}
@@ -1243,7 +1320,7 @@ class AgentSession:
         if sandbox is not None and sandbox != "read_only":
             raise ValueError("Subagent safety overrides are not supported: sandbox")
         allowed_tools = options.get("allowedTools", options.get("allowed_tools"))
-        if allowed_tools is not None and tuple(allowed_tools) != ("read", "grep", "find", "ls"):
+        if allowed_tools is not None and tuple(allowed_tools) != _DEFAULT_SUBAGENT_ALLOWED_TOOLS:
             raise ValueError("Subagent safety overrides are not supported: allowedTools")
         timeout_value = options.get("timeoutSeconds", options.get("timeout_seconds"))
         task_options = {
@@ -1256,11 +1333,10 @@ class AgentSession:
             "reasoning": options.get("reasoning", self.thinking_level),
             "context_pack": str(options.get("contextPack", options.get("context_pack", "")) or ""),
             "timeout_seconds": _coerce_subagent_timeout_seconds(timeout_value, default=1800),
+            "allowed_tools": tuple(allowed_tools) if allowed_tools is not None else self._subagent_allowed_tools_for_role(role),
             "parent_session_id": self.session_id,
             "parent_turn_id": options.get("parentTurnId", options.get("parent_turn_id")),
         }
-        if allowed_tools is not None:
-            task_options["allowed_tools"] = tuple(allowed_tools)
         return SubagentTask(**task_options)
 
     def _spawn_subagent_task(self, role: str, goal: str, options: dict | None = None) -> tuple[str, SubagentTask]:
@@ -1268,9 +1344,21 @@ class AgentSession:
         task_id = self.subagents.spawn(task)
         return task_id, task
 
-    def _spawn_and_wait_for_subagent(self, role: str, goal: str, options: dict | None = None) -> SubagentResult:
+    def _spawn_and_wait_for_subagent(
+        self,
+        role: str,
+        goal: str,
+        options: dict | None = None,
+        *,
+        signal: AbortSignal | None = None,
+    ) -> SubagentResult:
         task_id, task = self._spawn_subagent_task(role, goal, options)
-        return self.subagents.wait(task_id, timeout=task.timeout_seconds + 1)
+        return self.subagents.wait(
+            task_id,
+            timeout=task.timeout_seconds + 1,
+            signal=signal,
+            cancel_reason="Cancelled by parent abort.",
+        )
 
     def _create_subagent_tool_definitions(self) -> list[ToolDefinition]:
         return [
@@ -1351,7 +1439,12 @@ class AgentSession:
             options["contextPack"] = context_pack
         task_id, task = self._spawn_subagent_task(role, goal, options)
         if wait_for_result:
-            result = self.subagents.wait(task_id, timeout=task.timeout_seconds + 1)
+            result = self.subagents.wait(
+                task_id,
+                timeout=task.timeout_seconds + 1,
+                signal=signal,
+                cancel_reason="Cancelled by parent abort.",
+            )
             return self._subagent_tool_result(self._format_subagent_result(result), result.as_dict())
         details = {
             "taskId": task_id,
@@ -1390,7 +1483,12 @@ class AgentSession:
     def _execute_wait_subagent_tool(self, _tool_call_id, args, signal=None, on_update=None, ctx=None) -> AgentToolResult:
         task_id = _task_id_arg(args)
         timeout = _optional_timeout_arg(args)
-        result = self.subagents.wait(task_id, timeout=timeout)
+        result = self.subagents.wait(
+            task_id,
+            timeout=timeout,
+            signal=signal,
+            cancel_reason="Cancelled by parent abort.",
+        )
         return self._subagent_tool_result(self._format_subagent_result(result), result.as_dict())
 
     def _execute_list_subagents_tool(self, _tool_call_id, args, signal=None, on_update=None, ctx=None) -> AgentToolResult:

@@ -50,6 +50,7 @@ class Skill:
     base_dir: str
     source_info: SourceInfo
     disable_model_invocation: bool = False
+    allowed_tools: tuple[str, ...] = ()
 
     @property
     def filePath(self) -> str:
@@ -66,6 +67,10 @@ class Skill:
     @property
     def disableModelInvocation(self) -> bool:
         return self.disable_model_invocation
+
+    @property
+    def allowedTools(self) -> tuple[str, ...]:
+        return self.allowed_tools
 
 
 @dataclass
@@ -722,9 +727,28 @@ def _load_skill_from_file(
             base_dir=str(file_path.parent),
             source_info=_source_info_for_path(file_path, metadata_by_path),
             disable_model_invocation=frontmatter.get("disable-model-invocation") is True,
+            allowed_tools=_parse_allowed_tools(frontmatter.get("allowed-tools")),
         ),
         diagnostics,
     )
+
+
+def _parse_allowed_tools(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        raw_tools = value.replace(",", " ").split()
+    elif isinstance(value, list):
+        raw_tools = [item for item in value if isinstance(item, str)]
+    else:
+        return ()
+    allowed_tools: list[str] = []
+    seen: set[str] = set()
+    for raw_tool in raw_tools:
+        tool = raw_tool.strip()
+        if not tool or tool in seen:
+            continue
+        seen.add(tool)
+        allowed_tools.append(tool)
+    return tuple(allowed_tools)
 
 
 def format_skills_for_prompt(skills: list[Skill]) -> str:

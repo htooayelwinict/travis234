@@ -6,6 +6,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from appv23.agent.types import AbortSignal
 from appv23.ai.types import Model
 from appv23.coding_agent.config import ENV_AGENT_DIR
 from appv23.coding_agent.agent_session import AgentSession
@@ -1177,6 +1178,239 @@ def test_agent_session_cancel_agent_command_cancels_subagent(tmp_path):
     rendered = "\n".join(str(getattr(message, "content", "")) for message in messages)
     assert "cancelled" in rendered
     assert session.subagents.get_result(task_id).status == "cancelled"
+
+
+def test_supervisor_cancel_invokes_backend_cancel_hook(tmp_path):
+    started = threading.Event()
+    release = threading.Event()
+    cancelled_task_ids: list[str] = []
+
+    class CancellableBackend:
+        name = "cancellable"
+
+        def run(self, task):
+            started.set()
+            release.wait(1)
+            return SubagentResult(
+                task_id=task.id,
+                backend=task.backend,
+                role=task.role,
+                status="completed",
+                summary="late summary",
+            )
+
+        def cancel(self, task_id: str) -> None:
+            cancelled_task_ids.append(task_id)
+            release.set()
+
+    supervisor = SubagentSupervisor()
+    supervisor.register_backend(CancellableBackend())
+    task_id = supervisor.spawn(SubagentTask(role="reviewer", goal="review", cwd=str(tmp_path), backend="cancellable"))
+    assert started.wait(1)
+
+    result = supervisor.cancel(task_id, reason="not needed")
+
+    assert result.status == "cancelled"
+    assert cancelled_task_ids == [task_id]
+
+
+def test_codex_backend_honors_cancel_requested_before_process_registration(tmp_path, monkeypatch):
+    terminated: list[tuple[int, object]] = []
+
+    class FakeProcess:
+        pid = 4242
+        returncode = -15
+
+        def poll(self):
+            return None
+
+        def communicate(self, timeout=None):
+            return "", ""
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    monkeypatch.setattr(
+        "appv23.coding_agent.subagents.subprocess.Popen",
+        lambda *args, **kwargs: FakeProcess(),
+    )
+    monkeypatch.setattr(
+        "appv23.coding_agent.subagents.os.killpg",
+        lambda pid, signal: terminated.append((pid, signal)),
+    )
+
+    backend = CodexExecBackend(codex_bin="codex")
+    task = SubagentTask(role="reviewer", goal="review", cwd=str(tmp_path), backend="codex")
+
+    backend.cancel(task.id)
+    backend.run(task)
+
+    assert terminated
+    assert terminated[0][0] == 4242
+
+
+def test_agent_session_spawn_subagent_tool_cancels_wait_on_parent_abort(tmp_path):
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_backend(task):
+        started.set()
+        release.wait(1)
+        return "late summary"
+
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+    session.subagents.register_backend(CallableSubagentBackend("internal", slow_backend))
+    signal = AbortSignal()
+    result_holder: dict[str, object] = {}
+    errors: list[BaseException] = []
+
+    def run_tool() -> None:
+        try:
+            result_holder["result"] = session._execute_spawn_subagent_tool(
+                "tool-call",
+                {"role": "reviewer", "goal": "review", "wait": True, "timeoutSeconds": 30},
+                signal=signal,
+            )
+        except BaseException as error:  # noqa: BLE001 - surfaced below for regression clarity.
+            errors.append(error)
+
+    thread = threading.Thread(target=run_tool)
+    thread.start()
+    assert started.wait(1)
+    signal.abort()
+    thread.join(timeout=2)
+    release.set()
+
+    assert not thread.is_alive()
+    assert errors == []
+    result = result_holder["result"]
+    assert result.details["status"] == "cancelled"
+    assert result.details["errors"] == ["Cancelled by parent abort."]
+    assert session.subagents.get_result(str(result.details["taskId"])).status == "cancelled"
+
+
+def test_agent_session_wait_subagent_tool_cancels_wait_on_parent_abort(tmp_path):
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_backend(task):
+        started.set()
+        release.wait(1)
+        return "late summary"
+
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+    session.subagents.register_backend(CallableSubagentBackend("internal", slow_backend))
+    task_id = session.subagents.spawn(SubagentTask(role="reviewer", goal="review", cwd=str(tmp_path)))
+    assert started.wait(1)
+
+    signal = AbortSignal()
+    signal.abort()
+    result = session._execute_wait_subagent_tool("tool-call", {"taskId": task_id}, signal=signal)
+    release.set()
+
+    assert result.details["status"] == "cancelled"
+    assert result.details["errors"] == ["Cancelled by parent abort."]
+    assert session.subagents.get_result(task_id).status == "cancelled"
+
+
+def test_agent_session_delegate_command_cancels_wait_on_parent_abort(tmp_path):
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_backend(task):
+        started.set()
+        release.wait(1)
+        return "late summary"
+
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+    session.subagents.register_backend(CallableSubagentBackend("internal", slow_backend))
+    messages_holder: dict[str, list[object]] = {}
+    errors: list[BaseException] = []
+
+    def run_command() -> None:
+        try:
+            messages_holder["messages"] = session.prompt("/delegate reviewer review")
+        except BaseException as error:  # noqa: BLE001 - surfaced below for regression clarity.
+            errors.append(error)
+
+    thread = threading.Thread(target=run_command)
+    thread.start()
+    assert started.wait(1)
+    session.agent.abort()
+    thread.join(timeout=2)
+    release.set()
+
+    assert not thread.is_alive()
+    assert errors == []
+    rendered = "\n".join(str(getattr(message, "content", "")) for message in messages_holder["messages"])
+    assert "cancelled" in rendered
+    assert session.subagents.list_results()[0].status == "cancelled"
+
+
+def test_agent_session_delegate_command_uses_fresh_abort_signal_after_previous_abort(tmp_path):
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+    session.subagents.register_backend(CallableSubagentBackend("internal", lambda task: "done"))
+    session.agent.abort()
+
+    messages = session.prompt("/delegate reviewer review")
+
+    rendered = "\n".join(str(getattr(message, "content", "")) for message in messages)
+    assert "completed" in rendered
+    assert session.subagents.list_results()[0].status == "completed"
+
+
+def test_agent_session_extension_context_get_signal_refreshes_idle_abort_signal(tmp_path):
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+    session.agent.abort()
+
+    signal = session.create_replaced_session_context().getSignal()
+
+    assert signal is session.agent.signal
+    assert signal.aborted is False
+
+
+def test_agent_session_extension_context_get_signal_preserves_fresh_idle_signal(tmp_path):
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+
+    first = session.create_replaced_session_context().getSignal()
+    second = session.create_replaced_session_context().getSignal()
+
+    assert first is second
+    assert second is session.agent.signal
+    assert second.aborted is False
+
+
+def test_agent_session_extension_context_get_signal_preserves_active_command_signal(tmp_path):
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+
+    def inspect_signal(active_signal):
+        context_signal = session.create_replaced_session_context().getSignal()
+        return active_signal, context_signal, session.agent.signal
+
+    active_signal, context_signal, agent_signal = session._with_command_abort_signal(inspect_signal)
+
+    assert active_signal is context_signal
+    assert context_signal is agent_signal
+    assert context_signal.aborted is False
+
+
+def test_agent_session_extension_command_get_signal_is_stable_while_command_runs(tmp_path):
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+    seen_signals: list[object] = []
+
+    def handler(_args, ctx):
+        seen_signals.append(ctx.getSignal())
+        seen_signals.append(ctx.getSignal())
+        seen_signals.append(session.agent.signal)
+        return []
+
+    session.extension_runner.register_command("signal", {"description": "Inspect signal", "handler": handler})
+
+    session.prompt("/signal")
+
+    assert len(seen_signals) == 3
+    assert seen_signals[0] is seen_signals[1]
+    assert seen_signals[1] is seen_signals[2]
 
 
 def test_agent_session_extension_context_can_cancel_subagent(tmp_path):

@@ -177,6 +177,15 @@ class Agent:
     def abort(self) -> None:
         self._signal.abort()
 
+    def reset_abort_signal(self) -> AbortSignal:
+        if self._state.is_streaming:
+            return self._signal
+        if self._signal.aborted:
+            self._signal = AbortSignal()
+        return self._signal
+
+    resetAbortSignal = reset_abort_signal
+
     def wait_for_idle(self, timeout: float | None = None) -> bool:
         return self._idle_event.wait(timeout)
 

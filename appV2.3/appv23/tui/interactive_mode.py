@@ -56,6 +56,7 @@ class InteractiveMode:
     """Owns the real user-facing TUI loop for a CodingApp."""
 
     MAX_WIDGET_LINES = 10
+    IMMEDIATE_EXTENSION_COMMANDS = {"agents", "cancel-agent"}
 
     def __init__(
         self,
@@ -310,6 +311,10 @@ class InteractiveMode:
                 if auth_command:
                     self._run_auth_command(auth_command[0], auth_command[1])
                     continue
+                if self._dispatch_extension_command(prompt):
+                    self._refresh_footer()
+                    self.tui.request_render()
+                    continue
                 if self._handle_active_turn_prompt(prompt):
                     continue
                 self.status.set_message("Running")
@@ -379,6 +384,19 @@ class InteractiveMode:
             self._refresh_footer()
             self.tui.request_render()
             return
+        if event.type == "message_end":
+            message = getattr(event, "message", None)
+            if getattr(message, "role", None) == "custom":
+                component = message_to_component(
+                    message,
+                    self._custom_message_renderers(),
+                    hide_thinking_block=self.hide_thinking_block,
+                    hidden_thinking_label=self.hidden_thinking_label,
+                )
+                if component is not None:
+                    self.history.add(component)
+                self.tui.request_render()
+                return
         if event.type == "session_info_changed":
             self._refresh_footer()
             self.tui.request_render()
@@ -448,6 +466,10 @@ class InteractiveMode:
     def _handle_active_turn_prompt(self, prompt: str) -> bool:
         if not self._is_turn_active():
             return False
+        if self._dispatch_extension_command(prompt):
+            self._refresh_footer()
+            self.tui.request_render()
+            return True
         if self.app.session.is_streaming:
             try:
                 self.app.session.prompt(prompt, streaming_behavior="steer")
@@ -508,6 +530,23 @@ class InteractiveMode:
                 asyncio.run(result)
         except Exception as error:  # noqa: BLE001 - extension shortcut failures should not crash the TUI
             self.history.add(Text(f"Shortcut handler error: {error}"))
+        return True
+
+    def _dispatch_extension_command(self, prompt: str) -> bool:
+        parse_command = getattr(self.app.session, "_parse_extension_command", None)
+        execute_command = getattr(self.app.session, "_try_execute_extension_command", None)
+        if not callable(parse_command) or not callable(execute_command):
+            return False
+        parsed = parse_command(prompt)
+        if parsed is None:
+            return False
+        command, _args = parsed
+        if getattr(command, "name", "") not in self.IMMEDIATE_EXTENSION_COMMANDS:
+            return False
+        try:
+            execute_command(prompt)
+        except Exception as error:  # noqa: BLE001 - command failures should render, not crash the TUI
+            self.history.add(StatusLine(f"Command failed: {error}", kind="error"))
         return True
 
     def _extension_shortcut_context(self) -> dict[str, object]:

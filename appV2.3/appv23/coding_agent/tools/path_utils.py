@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 
@@ -67,8 +68,42 @@ def resolve_to_cwd(path: str, cwd: str) -> str:
     return resolved
 
 
-def resolve_read_path(path: str, cwd: str) -> str:
-    resolved = resolve_to_cwd(path, cwd)
+def resolve_to_cwd_or_allowed(
+    path: str,
+    cwd: str,
+    *,
+    allowed_roots: Sequence[str] | None = None,
+    allowed_files: Sequence[str] | None = None,
+) -> str:
+    try:
+        return resolve_to_cwd(path, cwd)
+    except PermissionError as error:
+        expanded = expand_path(path)
+        if not os.path.isabs(expanded):
+            raise
+        resolved = os.path.abspath(expanded)
+        for file_path in allowed_files or ():
+            if resolved == os.path.abspath(expand_path(str(file_path))):
+                return resolved
+        for root in allowed_roots or ():
+            root_path = os.path.abspath(expand_path(str(root)))
+            try:
+                common = os.path.commonpath([resolved, root_path])
+            except ValueError:
+                continue
+            if common == root_path:
+                return resolved
+        raise error
+
+
+def resolve_read_path(
+    path: str,
+    cwd: str,
+    *,
+    allowed_roots: Sequence[str] | None = None,
+    allowed_files: Sequence[str] | None = None,
+) -> str:
+    resolved = resolve_to_cwd_or_allowed(path, cwd, allowed_roots=allowed_roots, allowed_files=allowed_files)
     if _file_exists(resolved):
         return resolved
 
