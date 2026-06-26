@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import appv23.cli as cli
 from appv23.app import CodingApp
 from appv23.ai.models import register_model, reset_models
@@ -186,6 +188,100 @@ def test_cli_passes_hermes_loop_runtime_options(monkeypatch, tmp_path) -> None:
     assert app.max_iterations == 7
     assert app.tool_loop_guardrails == {"hard_stop_enabled": True}
     assert created["prompt"] == "inspect"
+
+
+def test_cli_default_dotenv_searches_parent_dirs_for_npm_prefix_cwd(monkeypatch, tmp_path) -> None:
+    repo = tmp_path / "repo"
+    app_dir = repo / "appV2.3"
+    app_dir.mkdir(parents=True)
+    project = repo / "project"
+    project.mkdir()
+    env_path = repo / ".env"
+    env_path.write_text(
+        "APPV2_WORKER_LLM_ENABLED=true\nOPENROUTER_API_KEY=test-key\n",
+        encoding="utf-8",
+    )
+    (app_dir / ".env").write_text(
+        "APPV2_WORKER_LLM_ENABLED=true\nOPENROUTER_API_KEY=wrong-prefix-key\n",
+        encoding="utf-8",
+    )
+    observed: dict[str, object] = {}
+
+    class FakeApp:
+        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models, **kwargs):
+            self.cwd = cwd
+            self.model = model
+            self.enable_tui = enable_tui
+            self.thinking_level = thinking_level
+            self.scoped_models = scoped_models
+            self.messages = []
+            observed["app"] = self
+
+        def run_turn(self, prompt):
+            observed["prompt"] = prompt
+
+    def record_provider_registration(dotenv_path):
+        observed["registered_dotenv"] = Path(dotenv_path)
+
+    def record_startup(dotenv_path, **kwargs):
+        observed["startup_dotenv"] = Path(dotenv_path)
+        return cli._StartupModelSelection(
+            model=Model(id="m", name="m", api="faux", provider="faux", base_url="")
+        )
+
+    monkeypatch.chdir(app_dir)
+    monkeypatch.setenv("INIT_CWD", str(repo))
+    monkeypatch.setenv("npm_lifecycle_event", "tui")
+    monkeypatch.setattr(cli, "register_builtin_providers", record_provider_registration)
+    monkeypatch.setattr(cli, "_startup_model_from_env", record_startup)
+    monkeypatch.setattr(cli, "CodingApp", FakeApp)
+
+    exit_code = cli.main(["--cwd", str(project), "--plain", "inspect"])
+
+    assert exit_code == 0
+    assert observed["prompt"] == "inspect"
+    assert observed["registered_dotenv"] == env_path
+    assert observed["startup_dotenv"] == env_path
+
+
+def test_cli_default_cwd_uses_npm_initial_cwd_for_prefix_wrapper(monkeypatch, tmp_path) -> None:
+    repo = tmp_path / "repo"
+    app_dir = repo / "appV2.3"
+    app_dir.mkdir(parents=True)
+    observed: dict[str, object] = {}
+
+    class FakeApp:
+        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models, **kwargs):
+            self.cwd = cwd
+            self.model = model
+            self.enable_tui = enable_tui
+            self.thinking_level = thinking_level
+            self.scoped_models = scoped_models
+            self.messages = []
+            observed["app"] = self
+
+        def run_turn(self, prompt):
+            observed["prompt"] = prompt
+
+    monkeypatch.chdir(app_dir)
+    monkeypatch.setenv("INIT_CWD", str(repo))
+    monkeypatch.setenv("npm_lifecycle_event", "tui")
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path: None)
+    monkeypatch.setattr(
+        cli,
+        "_startup_model_from_env",
+        lambda dotenv_path, **kwargs: cli._StartupModelSelection(
+            model=Model(id="m", name="m", api="faux", provider="faux", base_url="")
+        ),
+    )
+    monkeypatch.setattr(cli, "CodingApp", FakeApp)
+
+    exit_code = cli.main(["--plain", "inspect"])
+
+    app = observed["app"]
+    assert exit_code == 0
+    assert observed["prompt"] == "inspect"
+    assert app.cwd == str(repo.resolve())
 
 
 def test_cli_model_thinking_suffix_sets_initial_thinking_level(monkeypatch, tmp_path) -> None:

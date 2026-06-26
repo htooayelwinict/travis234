@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from dataclasses import field
+import os
 from pathlib import Path
 import sys
 
@@ -57,6 +58,34 @@ def _positive_int_arg(value: str) -> int:
     if parsed <= 0:
         raise argparse.ArgumentTypeError("must be a positive integer")
     return parsed
+
+
+def _resolve_dotenv_path(dotenv_arg: str | None, *, search_start: Path | None = None) -> Path:
+    if dotenv_arg is not None:
+        return Path(dotenv_arg).expanduser()
+    current = (search_start or Path.cwd()).resolve()
+    for directory in (current, *current.parents):
+        candidate = directory / ".env"
+        if candidate.exists():
+            return candidate
+    return Path(".env")
+
+
+def _resolve_cwd_path(cwd_arg: str) -> Path:
+    cwd_path = Path(cwd_arg).expanduser()
+    if cwd_path.is_absolute():
+        return cwd_path.resolve()
+    npm_initial_cwd = _npm_initial_cwd()
+    if npm_initial_cwd is not None:
+        return (npm_initial_cwd / cwd_path).resolve()
+    return cwd_path.resolve()
+
+
+def _npm_initial_cwd() -> Path | None:
+    initial_cwd = os.environ.get("INIT_CWD")
+    if not initial_cwd or not os.environ.get("npm_lifecycle_event"):
+        return None
+    return Path(initial_cwd).expanduser().resolve()
 
 
 @dataclass(frozen=True)
@@ -145,7 +174,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the appv23 pi+hermes coding app")
     parser.add_argument("prompt", nargs="*", help="Prompt to run. If omitted, starts the interactive TUI.")
     parser.add_argument("--cwd", default=".", help="Working directory for tools")
-    parser.add_argument("--dotenv", default=".env", help="Dotenv file for APPV2_WORKER_LLM/OpenRouter settings")
+    parser.add_argument(
+        "--dotenv",
+        default=None,
+        help="Dotenv file for APPV2_WORKER_LLM/OpenRouter settings; defaults to nearest .env in --cwd or parents",
+    )
     parser.add_argument("--provider", help="Provider name for --model resolution")
     parser.add_argument("--model", help='Model pattern or ID, including optional "provider/id" form')
     parser.add_argument("--models", help="Comma-separated model patterns for scoped cycling")
@@ -175,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Exported to: {exported_path}")
         return 0
 
-    cwd_path = Path(args.cwd).expanduser().resolve()
+    cwd_path = _resolve_cwd_path(args.cwd)
     if not cwd_path.exists():
         print(f"Error: working directory does not exist: {cwd_path}", file=sys.stderr)
         return 1
@@ -191,10 +224,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         args.thinking = None
 
-    register_builtin_providers(dotenv_path=args.dotenv)
+    dotenv_path = _resolve_dotenv_path(args.dotenv, search_start=cwd_path)
+    register_builtin_providers(dotenv_path=dotenv_path)
     try:
         startup = _startup_model_from_env(
-            args.dotenv,
+            dotenv_path,
             cli_provider=args.provider,
             cli_model=args.model,
             cli_thinking=args.thinking,

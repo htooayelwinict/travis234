@@ -19,21 +19,24 @@ This initial scaffold intentionally preserves the `APPV2_*` environment variable
 ## Run from the repository
 
 ```bash
-uv run python appV2.3/scripts/appv23_tui.py --dotenv .env --cwd .
+uv run python appV2.3/scripts/appv23_tui.py --cwd .
 ```
 
 Or use the root npm wrapper:
 
 ```bash
-npm run tui -- --dotenv .env --cwd .
+npm run tui -- --cwd .
 ```
 
 Version-specific wrappers are also available:
 
 ```bash
-npm run tui:v22 -- --dotenv .env --cwd .
-npm run tui:v23 -- --dotenv .env --cwd .
+npm run tui:v22 -- --dotenv ../.env --cwd ..
+npm run tui:v23 -- --cwd .
 ```
+
+When `--dotenv` is omitted, `appv23` searches the working directory (`--cwd`) and parent directories for `.env`, so the root `.env` works even when the npm wrapper runs from `appV2.3/`. Pass `--dotenv path/to/.env` to force a specific file.
+The sealed `appV2.2` wrapper does not use the appv23 resolver, so its example keeps explicit parent paths.
 
 ## Install locally from a wheel
 
@@ -44,7 +47,7 @@ uv tool install dist/appv23-*.whl
 Then run:
 
 ```bash
-appv23 --cwd . --dotenv .env
+appv23 --cwd .
 ```
 
 ## Test
@@ -55,7 +58,7 @@ From the repository root:
 PYTHONPATH=appV2.3 .venv/bin/python -m pytest appV2.3/tests -q
 ```
 
-Expected current `appV2.3` suite: `644 passed`.
+Expected current `appV2.3` suite: `646 passed`.
 
 ## User-side subagent smoke
 
