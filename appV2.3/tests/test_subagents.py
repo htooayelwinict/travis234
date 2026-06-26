@@ -106,6 +106,21 @@ def test_supervisor_rejects_mismatched_backend_result_identity(tmp_path):
     assert any("mismatched task_id" in error for error in result.errors)
 
 
+def test_supervisor_backend_exception_reports_backend_failure(tmp_path):
+    def backend(task):
+        raise RuntimeError("boom")
+
+    supervisor = SubagentSupervisor(max_threads=1)
+    supervisor.register_backend(CallableSubagentBackend("internal", backend))
+
+    task_id = supervisor.spawn(SubagentTask(role="reviewer", goal="inspect", cwd=str(tmp_path)))
+    result = supervisor.wait(task_id, timeout=2)
+
+    assert result.status == "failed"
+    assert result.summary == "Subagent backend failed: boom"
+    assert result.errors == ["Subagent backend failed: boom"]
+
+
 def test_subagent_result_rejects_unsupported_status():
     try:
         SubagentResult(

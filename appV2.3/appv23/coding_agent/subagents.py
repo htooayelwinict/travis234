@@ -672,13 +672,14 @@ class SubagentSupervisor:
                 raise ValueError(f"Subagent backend returned mismatched role: {result.role}")
         except Exception as error:  # noqa: BLE001 - child failures must be data, not parent crashes.
             ended = _now_ms()
+            error_text = f"Subagent backend failed: {error}"
             result = SubagentResult(
                 task_id=task.id,
                 backend=task.backend,
                 role=task.role,
                 status="failed",
-                summary=str(error),
-                errors=[str(error)],
+                summary=error_text,
+                errors=[error_text],
                 started_at_ms=started,
                 ended_at_ms=ended,
             )
