@@ -111,6 +111,10 @@ class SubagentTask:
             raise ValueError("Subagent context_pack must be a string")
         if not isinstance(self.return_contract, str) or not self.return_contract.strip():
             raise ValueError("Subagent return_contract is required")
+        if self.parent_session_id is not None and not isinstance(self.parent_session_id, str):
+            raise ValueError("Subagent parent_session_id must be a string when set")
+        if self.parent_turn_id is not None and not isinstance(self.parent_turn_id, str):
+            raise ValueError("Subagent parent_turn_id must be a string when set")
 
     def prompt(self) -> str:
         parts = [

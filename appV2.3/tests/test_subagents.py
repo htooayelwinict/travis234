@@ -321,6 +321,20 @@ def test_subagent_task_rejects_malformed_allowed_tools_container(tmp_path):
             raise AssertionError(f"Expected allowed_tools {allowed_tools!r} to fail")
 
 
+def test_subagent_task_rejects_malformed_parent_metadata(tmp_path):
+    cases = (
+        ({"parent_session_id": 7}, "Subagent parent_session_id must be a string when set"),
+        ({"parent_turn_id": 7}, "Subagent parent_turn_id must be a string when set"),
+    )
+    for kwargs, message in cases:
+        try:
+            SubagentTask(role="reviewer", goal="review", cwd=str(tmp_path), **kwargs)
+        except ValueError as error:
+            assert message in str(error)
+        else:  # pragma: no cover - assertion path
+            raise AssertionError(f"Expected parent metadata {kwargs!r} to fail")
+
+
 def test_supervisor_rejects_unregistered_backend(tmp_path):
     supervisor = SubagentSupervisor(max_threads=1)
 
