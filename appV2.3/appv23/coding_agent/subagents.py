@@ -82,7 +82,7 @@ class SubagentTask:
             raise ValueError(f"Unsupported subagent backend: {self.backend}")
         if not isinstance(self.id, str) or not self.id.strip() or not _TASK_ID_PATTERN.fullmatch(self.id):
             raise ValueError(f"Unsupported subagent task id: {self.id}")
-        if self.sandbox not in _SANDBOX_FLAGS:
+        if not isinstance(self.sandbox, str) or self.sandbox not in _SANDBOX_FLAGS:
             raise ValueError(f"Unsupported subagent sandbox: {self.sandbox}")
         if isinstance(self.timeout_seconds, bool) or not isinstance(self.timeout_seconds, int) or self.timeout_seconds <= 0:
             raise ValueError("Subagent timeout_seconds must be positive")

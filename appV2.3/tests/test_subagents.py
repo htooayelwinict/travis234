@@ -412,6 +412,18 @@ def test_subagent_task_rejects_unsafe_backend_name(tmp_path):
             raise AssertionError(f"Expected backend {backend!r} to fail")
 
 
+def test_subagent_task_rejects_malformed_sandbox(tmp_path):
+    for sandbox in ("root", ["read_only"]):
+        try:
+            SubagentTask(role="reviewer", goal="review", cwd=str(tmp_path), sandbox=sandbox)
+        except ValueError as error:
+            assert "Unsupported subagent sandbox" in str(error)
+        except Exception as error:  # pragma: no cover - assertion path
+            raise AssertionError(f"Expected ValueError, got {type(error).__name__}") from error
+        else:  # pragma: no cover - assertion path
+            raise AssertionError(f"Expected sandbox {sandbox!r} to fail")
+
+
 def test_subagent_task_rejects_unsafe_allowed_tools(tmp_path):
     for tool in ("", "   ", "../read", "bad/tool", "bad\\tool", "bad tool", "bad;tool", "read\nignore safety"):
         try:
