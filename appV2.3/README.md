@@ -59,7 +59,7 @@ From the repository root:
 PYTHONPATH=appV2.3 .venv/bin/python -m pytest appV2.3/tests -q
 ```
 
-Expected current `appV2.3` suite: `655 passed`.
+Expected current `appV2.3` suite: `656 passed`.
 
 ## User-side subagent smoke
 

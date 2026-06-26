@@ -1467,7 +1467,9 @@ class AgentSession:
 
     def _format_subagent_result(self, result: SubagentResult) -> str:
         heading = f"Subagent {result.task_id} {result.role} [{result.backend}] {result.status}"
-        return f"{heading}\n{result.summary}".strip()
+        files_changed = ", ".join(result.files_changed) if result.files_changed else "none"
+        errors = "; ".join(result.errors) if result.errors else "none"
+        return f"{heading}\n{result.summary}\nfilesChanged: {files_changed}\nerrors: {errors}".strip()
 
     def _handle_subagent_event(self, event: dict[str, object]) -> None:
         self._emit(event)

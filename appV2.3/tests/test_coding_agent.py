@@ -57,6 +57,7 @@ from appv23.ai.stream import register_api_provider, reset_api_providers
 from appv23.coding_agent.resource_loader import Skill
 from appv23.coding_agent.session_store import BashExecutionMessage, SessionStore
 from appv23.coding_agent.source_info import create_synthetic_source_info
+from appv23.coding_agent.subagents import SubagentResult
 
 
 def setup_function() -> None:
@@ -992,6 +993,25 @@ def test_agent_session_records_extension_subagent_observer_errors(tmp_path: Path
         assert session.subagent_observer_errors() == [
             "extension observer failed for subagent_start: broken observer for subagent_start"
         ]
+    finally:
+        session.shutdown()
+
+
+def test_subagent_result_format_reports_empty_files_changed_and_errors(tmp_path: Path) -> None:
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+    try:
+        result = SubagentResult(
+            task_id="subagent-fixed",
+            backend="internal",
+            role="reviewer",
+            status="completed",
+            summary="Reviewed report that mentions appV2.2/tests/test_tui.py.",
+        )
+
+        formatted = session._format_subagent_result(result)
+
+        assert "filesChanged: none" in formatted
+        assert "errors: none" in formatted
     finally:
         session.shutdown()
 
