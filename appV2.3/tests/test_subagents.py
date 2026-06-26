@@ -85,6 +85,24 @@ def test_supervisor_stop_event_includes_result_observability_fields(tmp_path):
     assert stop_event["ended_at_ms"] == 160
 
 
+def test_supervisor_event_sink_failure_does_not_break_task(tmp_path):
+    seen_event_types = []
+
+    def failing_event_sink(event):
+        seen_event_types.append(event["type"])
+        raise RuntimeError("observer failed")
+
+    supervisor = SubagentSupervisor(max_threads=1, event_sink=failing_event_sink)
+    supervisor.register_backend(CallableSubagentBackend("internal", lambda task: "done"))
+
+    task_id = supervisor.spawn(SubagentTask(role="reviewer", goal="inspect", cwd=str(tmp_path)))
+    result = supervisor.wait(task_id, timeout=2)
+
+    assert result.status == "completed"
+    assert result.summary == "done"
+    assert seen_event_types == ["subagent_start", "subagent_stop"]
+
+
 def test_supervisor_rejects_unregistered_backend(tmp_path):
     supervisor = SubagentSupervisor(max_threads=1)
 

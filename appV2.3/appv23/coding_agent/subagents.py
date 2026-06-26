@@ -632,4 +632,7 @@ class SubagentSupervisor:
 
     def _emit(self, event: dict[str, object]) -> None:
         if self._event_sink is not None:
-            self._event_sink(event)
+            try:
+                self._event_sink(event)
+            except Exception:
+                pass
