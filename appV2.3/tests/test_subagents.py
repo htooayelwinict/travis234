@@ -311,6 +311,31 @@ def test_subagent_task_rejects_malformed_return_contract(tmp_path):
             raise AssertionError(f"Expected return_contract {return_contract!r} to fail")
 
 
+def test_subagent_task_rejects_non_string_fields(tmp_path):
+    cases = (
+        ("role", 7, "Subagent role is required"),
+        ("goal", 7, "Subagent goal is required"),
+        ("cwd", 7, "Subagent cwd is required"),
+        ("backend", 7, "Unsupported subagent backend"),
+        ("id", 7, "Unsupported subagent task id"),
+    )
+    for field, value, message in cases:
+        payload = {
+            "role": "reviewer",
+            "goal": "review",
+            "cwd": str(tmp_path),
+        }
+        payload[field] = value
+        try:
+            SubagentTask(**payload)
+        except ValueError as error:
+            assert message in str(error)
+        except Exception as error:  # pragma: no cover - assertion path
+            raise AssertionError(f"Expected ValueError for {field}={value!r}, got {type(error).__name__}") from error
+        else:  # pragma: no cover - assertion path
+            raise AssertionError(f"Expected {field}={value!r} to fail")
+
+
 def test_supervisor_rejects_unsafe_registered_backend_name():
     supervisor = SubagentSupervisor(max_threads=1)
 

@@ -60,19 +60,19 @@ class SubagentTask:
     depth: int = 1
 
     def __post_init__(self) -> None:
-        if not self.role.strip():
+        if not isinstance(self.role, str) or not self.role.strip():
             raise ValueError("Subagent role is required")
         if not _TASK_ID_PATTERN.fullmatch(self.role):
             raise ValueError(f"Unsupported subagent role: {self.role}")
-        if not self.goal.strip():
+        if not isinstance(self.goal, str) or not self.goal.strip():
             raise ValueError("Subagent goal is required")
-        if not self.cwd.strip():
+        if not isinstance(self.cwd, str) or not self.cwd.strip():
             raise ValueError("Subagent cwd is required")
         if not Path(self.cwd).is_dir():
             raise ValueError(f"Subagent cwd must be an existing directory: {self.cwd}")
-        if not self.backend.strip() or not _TASK_ID_PATTERN.fullmatch(self.backend):
+        if not isinstance(self.backend, str) or not self.backend.strip() or not _TASK_ID_PATTERN.fullmatch(self.backend):
             raise ValueError(f"Unsupported subagent backend: {self.backend}")
-        if not self.id.strip() or not _TASK_ID_PATTERN.fullmatch(self.id):
+        if not isinstance(self.id, str) or not self.id.strip() or not _TASK_ID_PATTERN.fullmatch(self.id):
             raise ValueError(f"Unsupported subagent task id: {self.id}")
         if self.sandbox not in _SANDBOX_FLAGS:
             raise ValueError(f"Unsupported subagent sandbox: {self.sandbox}")
