@@ -118,6 +118,33 @@ def test_supervisor_cancel_records_terminal_result_and_event(tmp_path):
     assert events[-1]["status"] == "cancelled"
 
 
+def test_supervisor_shutdown_cancels_running_tasks_and_rejects_new_spawns(tmp_path):
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_backend(task):
+        started.set()
+        release.wait(1)
+        return "late summary"
+
+    supervisor = SubagentSupervisor(max_threads=1)
+    supervisor.register_backend(CallableSubagentBackend("internal", slow_backend))
+    task_id = supervisor.spawn(SubagentTask(role="reviewer", goal="review slowly", cwd=str(tmp_path)))
+    assert started.wait(1)
+
+    results = supervisor.shutdown(wait=False, reason="session shutdown")
+    release.set()
+
+    assert [result.status for result in results] == ["cancelled"]
+    assert supervisor.get_result(task_id).status == "cancelled"
+    try:
+        supervisor.spawn(SubagentTask(role="reviewer", goal="next", cwd=str(tmp_path)))
+    except RuntimeError as error:
+        assert "shut down" in str(error)
+    else:  # pragma: no cover - assertion path
+        raise AssertionError("Expected shutdown supervisor to reject new tasks")
+
+
 def test_codex_exec_backend_parses_jsonl_final_agent_message(tmp_path):
     calls = []
 
@@ -330,3 +357,23 @@ def test_agent_session_extension_context_can_cancel_subagent(tmp_path):
 
     assert result["status"] == "cancelled"
     assert result["errors"] == ["not needed"]
+
+
+def test_agent_session_shutdown_cancels_subagent_supervisor(tmp_path):
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_backend(task):
+        started.set()
+        release.wait(1)
+        return "late summary"
+
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+    session.subagents.register_backend(CallableSubagentBackend("internal", slow_backend))
+    task_id = session.subagents.spawn(SubagentTask(role="reviewer", goal="review", cwd=str(tmp_path)))
+    assert started.wait(1)
+
+    session.shutdown()
+    release.set()
+
+    assert session.subagents.get_result(task_id).status == "cancelled"

@@ -1273,6 +1273,16 @@ class AgentSession:
         if self._extension_shutdown_handler is not None:
             self._extension_shutdown_handler()
 
+    def shutdown(self, reason: str = "quit", target_session_file: str | None = None) -> None:
+        self.subagents.shutdown(wait=False, reason="Session shutdown.")
+        event: dict[str, object] = {"type": "session_shutdown", "reason": reason}
+        if target_session_file is not None:
+            event["targetSessionFile"] = target_session_file
+        emit_session_shutdown_event(self._extension_runner, event)
+        if self._extension_error_unsubscribe is not None:
+            self._extension_error_unsubscribe()
+            self._extension_error_unsubscribe = None
+
     def set_label(self, entry_id: str, label: str | None) -> None:
         if self._session_store is None:
             return

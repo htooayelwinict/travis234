@@ -381,11 +381,14 @@ class SubagentSupervisor:
         self._results: dict[str, SubagentResult] = {}
         self._statuses: dict[str, SubagentStatus] = {}
         self._started_at_ms: dict[str, int] = {}
+        self._shutdown = False
 
     def register_backend(self, backend: SubagentBackend) -> None:
         self._backends[backend.name] = backend
 
     def spawn(self, task: SubagentTask) -> str:
+        if self._shutdown:
+            raise RuntimeError("Subagent supervisor has been shut down")
         if task.backend not in self._backends:
             raise ValueError(f"No subagent backend registered for '{task.backend}'")
         if task.depth > self.max_depth:
@@ -455,6 +458,17 @@ class SubagentSupervisor:
         self._results[task_id] = result
         self._emit_stop(task, result)
         return result
+
+    def shutdown(self, *, wait: bool = True, reason: str = "Supervisor shutdown.") -> list[SubagentResult]:
+        if self._shutdown:
+            return []
+        results: list[SubagentResult] = []
+        for task_id, status in list(self._statuses.items()):
+            if status in {"queued", "running"} and task_id not in self._results:
+                results.append(self.cancel(task_id, reason=reason))
+        self._shutdown = True
+        self._executor.shutdown(wait=wait, cancel_futures=True)
+        return results
 
     def wait_all(self, task_ids: Sequence[str] | None = None, timeout: float | None = None) -> list[SubagentResult]:
         ids = list(task_ids or self._tasks.keys())
