@@ -1163,7 +1163,7 @@ class AgentSession:
                     f"- {task['taskId']} [{task['backend']}] {task['role']}: {task['status']} - {task['goal']}"
                 )
             content = "\n".join(lines)
-        return self.send_custom_message({"customType": "subagent", "content": content, "display": True})
+        return self.send_custom_message({"customType": "subagent", "content": content, "display": True}, {"transient": True})
 
     def _delegate_command(self, args: str = "", _ctx: object | None = None) -> list[AgentMessage]:
         backend = "internal"
@@ -1207,7 +1207,8 @@ class AgentSession:
                     "customType": "subagent",
                     "content": "Usage: /cancel-agent <task-id> [reason]",
                     "display": True,
-                }
+                },
+                {"transient": True},
             )
         try:
             result = self.subagents.cancel(task_id, reason.strip() or "Cancelled by user.")
@@ -1217,7 +1218,8 @@ class AgentSession:
                     "customType": "subagent",
                     "content": str(error),
                     "display": True,
-                }
+                },
+                {"transient": True},
             )
         return self.send_custom_message(
             {
@@ -1225,7 +1227,8 @@ class AgentSession:
                 "content": self._format_subagent_result(result),
                 "display": True,
                 "details": result.as_dict(),
-            }
+            },
+            {"transient": True},
         )
 
     def _bind_extension_core(self) -> None:
@@ -1768,6 +1771,10 @@ class AgentSession:
             timestamp=int(time.time() * 1000),
         )
         deliver_as = options.get("deliverAs", options.get("deliver_as"))
+        if options.get("transient", options.get("local_only", False)):
+            self._emit(MessageStartEvent(message=app_message))
+            self._emit(MessageEndEvent(message=app_message))
+            return [app_message]
         if deliver_as == "nextTurn":
             self._pending_next_turn_messages.append(app_message)
             return []

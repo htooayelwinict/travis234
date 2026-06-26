@@ -3031,9 +3031,21 @@ def test_interactive_mode_runs_agents_command_while_subagent_tool_waits(tmp_path
     started = threading.Event()
     release = threading.Event()
     provider_calls = {"n": 0}
+    provider_context_texts: list[str] = []
 
     def script(model, context):
         provider_calls["n"] += 1
+        context_text_parts: list[str] = []
+        for message in context.messages:
+            content = getattr(message, "content", [])
+            if isinstance(content, str):
+                context_text_parts.append(content)
+                continue
+            for block in content:
+                text = getattr(block, "text", None)
+                if text:
+                    context_text_parts.append(str(text))
+        provider_context_texts.append("\n".join(context_text_parts))
         if provider_calls["n"] == 1:
             return tool_call_response_events(
                 model,
@@ -3074,6 +3086,7 @@ def test_interactive_mode_runs_agents_command_while_subagent_tool_waits(tmp_path
     assert "running - slow review" in rendered
     assert "Queued message for after current turn" not in rendered
     assert "parent done" in rendered
+    assert all("Subagents:" not in text for text in provider_context_texts)
 
 
 def test_interactive_mode_dispatches_extension_shortcut_without_model_turn(tmp_path) -> None:
