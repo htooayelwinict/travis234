@@ -7,7 +7,13 @@ from pathlib import Path
 from appv23.ai.types import Model
 from appv23.coding_agent.config import ENV_AGENT_DIR
 from appv23.coding_agent.agent_session import AgentSession
-from appv23.coding_agent.subagents import CallableSubagentBackend, CodexExecBackend, SubagentSupervisor, SubagentTask
+from appv23.coding_agent.subagents import (
+    CallableSubagentBackend,
+    CodexExecBackend,
+    SubagentResult,
+    SubagentSupervisor,
+    SubagentTask,
+)
 
 
 def faux_model() -> Model:
@@ -37,6 +43,44 @@ def test_supervisor_runs_callable_backend_and_records_lifecycle_events(tmp_path)
     assert [event["type"] for event in events] == ["subagent_start", "subagent_stop"]
     assert events[0]["child_role"] == "researcher"
     assert events[1]["status"] == "completed"
+
+
+def test_supervisor_stop_event_includes_result_observability_fields(tmp_path):
+    events = []
+    raw_log_path = str(tmp_path / "raw.json")
+
+    def backend(task):
+        return SubagentResult(
+            task_id=task.id,
+            backend=task.backend,
+            role=task.role,
+            status="failed",
+            summary="blocked",
+            final_response="full details",
+            files_changed=["app.py"],
+            artifacts=["report.md"],
+            errors=["boom"],
+            usage={"input_tokens": 10},
+            raw_log_path=raw_log_path,
+            started_at_ms=100,
+            ended_at_ms=160,
+        )
+
+    supervisor = SubagentSupervisor(max_threads=1, event_sink=events.append)
+    supervisor.register_backend(CallableSubagentBackend("internal", backend))
+
+    task_id = supervisor.spawn(SubagentTask(role="reviewer", goal="inspect", cwd=str(tmp_path)))
+    supervisor.wait(task_id, timeout=2)
+
+    stop_event = events[-1]
+    assert stop_event["type"] == "subagent_stop"
+    assert stop_event["raw_log_path"] == raw_log_path
+    assert stop_event["files_changed"] == ["app.py"]
+    assert stop_event["artifacts"] == ["report.md"]
+    assert stop_event["errors"] == ["boom"]
+    assert stop_event["usage"] == {"input_tokens": 10}
+    assert stop_event["started_at_ms"] == 100
+    assert stop_event["ended_at_ms"] == 160
 
 
 def test_supervisor_rejects_unregistered_backend(tmp_path):

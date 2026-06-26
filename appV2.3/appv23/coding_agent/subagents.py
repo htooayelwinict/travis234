@@ -560,6 +560,13 @@ class SubagentSupervisor:
                 "status": result.status,
                 "child_summary": result.summary,
                 "duration_ms": result.duration_ms,
+                "started_at_ms": result.started_at_ms,
+                "ended_at_ms": result.ended_at_ms,
+                "raw_log_path": result.raw_log_path,
+                "files_changed": list(result.files_changed),
+                "artifacts": list(result.artifacts),
+                "errors": list(result.errors),
+                "usage": dict(result.usage),
                 "backend": task.backend,
             }
         )
