@@ -159,7 +159,8 @@ class DefaultPackageManager:
             pairs.append((project_base, "project", "auto"))
         for base, scope, source in pairs:
             metadata = {"source": source, "scope": scope, "origin": "top-level", "baseDir": str(base)}
-            for resource_type in ("skills", "prompts", "themes"):
+            resource_types = ("prompts", "themes") if base == global_base else ("skills", "prompts", "themes")
+            for resource_type in resource_types:
                 paths = _collect_resource_files(base / resource_type, resource_type)
                 target = getattr(resolved, resource_type)
                 for path in paths:

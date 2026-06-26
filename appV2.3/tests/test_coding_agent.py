@@ -1764,6 +1764,35 @@ def test_default_resource_loader_loads_user_agents_skills_like_pi(tmp_path: Path
     assert str(user_skill_dir / "SKILL.md") in format_skills_for_prompt(skills)
 
 
+def test_default_resource_loader_blocks_legacy_pi_agent_skills(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from appv23.coding_agent import DefaultResourceLoader
+
+    home = tmp_path / "home"
+    project = home / "repo"
+    agent_dir = home / ".pi" / "agent"
+    pi_skill_dir = agent_dir / "skills" / "legacy-pi"
+    agents_skill_dir = home / ".agents" / "skills" / "active-agents"
+    project.mkdir(parents=True)
+    pi_skill_dir.mkdir(parents=True)
+    agents_skill_dir.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    (pi_skill_dir / "SKILL.md").write_text(
+        "---\nname: legacy-pi\ndescription: Use legacy pi skill\n---\nlegacy\n",
+        encoding="utf-8",
+    )
+    (agents_skill_dir / "SKILL.md").write_text(
+        "---\nname: active-agents\ndescription: Use active agents skill\n---\nactive\n",
+        encoding="utf-8",
+    )
+
+    loader = DefaultResourceLoader(cwd=str(project), agent_dir=str(agent_dir), project_trusted=False)
+    loader.reload()
+
+    skill_names = [skill.name for skill in loader.get_skills()["skills"]]
+    assert "active-agents" in skill_names
+    assert "legacy-pi" not in skill_names
+
+
 def test_agent_session_read_tool_can_load_discovered_user_skill_outside_cwd(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
