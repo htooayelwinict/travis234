@@ -97,7 +97,12 @@ class SubagentTask:
             if reasoning not in _REASONING_EFFORTS:
                 raise ValueError(f"Unsupported subagent reasoning effort: {self.reasoning}")
             object.__setattr__(self, "reasoning", reasoning)
-        allowed_tools = tuple(self.allowed_tools or ())
+        if isinstance(self.allowed_tools, str):
+            raise ValueError("Subagent allowed_tools must be a sequence of strings")
+        try:
+            allowed_tools = tuple(self.allowed_tools or ())
+        except TypeError as error:
+            raise ValueError("Subagent allowed_tools must be a sequence of strings") from error
         for tool in allowed_tools:
             if not isinstance(tool, str) or not tool.strip() or not _TASK_ID_PATTERN.fullmatch(tool):
                 raise ValueError(f"Unsupported subagent allowed tool: {tool}")

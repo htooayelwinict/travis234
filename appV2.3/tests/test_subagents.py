@@ -280,6 +280,18 @@ def test_subagent_task_rejects_boolean_runtime_options(tmp_path):
             raise AssertionError(f"Expected runtime options {kwargs!r} to fail")
 
 
+def test_subagent_task_rejects_malformed_allowed_tools_container(tmp_path):
+    for allowed_tools in ("read", 7):
+        try:
+            SubagentTask(role="reviewer", goal="review", cwd=str(tmp_path), allowed_tools=allowed_tools)
+        except ValueError as error:
+            assert "Subagent allowed_tools must be a sequence of strings" in str(error)
+        except Exception as error:  # pragma: no cover - assertion path
+            raise AssertionError(f"Expected ValueError, got {type(error).__name__}") from error
+        else:  # pragma: no cover - assertion path
+            raise AssertionError(f"Expected allowed_tools {allowed_tools!r} to fail")
+
+
 def test_supervisor_rejects_unregistered_backend(tmp_path):
     supervisor = SubagentSupervisor(max_threads=1)
 
