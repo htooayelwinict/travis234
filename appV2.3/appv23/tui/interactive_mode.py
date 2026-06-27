@@ -8,6 +8,8 @@ agent session while live agent events update the TUI.
 from __future__ import annotations
 
 import inspect
+import json
+import os
 import queue
 import signal as signal_module
 import subprocess
@@ -31,6 +33,7 @@ from appv23.ai import (
     logout_provider,
     set_auth_credential,
 )
+from appv23.coding_agent.config import get_agent_dir
 from appv23.compaction import estimate_tokens
 from appv23.tui.component import (
     CombinedAutocompleteProvider,
@@ -61,6 +64,40 @@ OPENROUTER_MODEL_PICKER_CONTEXT_RESERVE_TOKENS = 2_048
 LATE_ABORT_GRACE_SECONDS = 1.0
 IDLE_CTRL_C_EXIT_WINDOW_SECONDS = 1.5
 _SIGINT_HANDLER_UNCHANGED = object()
+
+
+def _auth_json_path() -> Path:
+    return Path(get_agent_dir()).expanduser().resolve() / "auth.json"
+
+
+def _read_auth_json(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {}
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _persist_auth_credential(provider: str, credential: dict[str, object]) -> None:
+    path = _auth_json_path()
+    path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    data = _read_auth_json(path)
+    data[provider] = dict(credential)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.chmod(path, 0o600)
+
+
+def _remove_persisted_auth_credential(provider: str) -> None:
+    path = _auth_json_path()
+    if not path.exists():
+        return
+    data = _read_auth_json(path)
+    data.pop(provider, None)
+    path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.chmod(path, 0o600)
 
 
 class InteractiveMode:
@@ -888,6 +925,9 @@ class InteractiveMode:
             return
         try:
             login_oauth_provider(provider["id"], self._oauth_login_callbacks())
+            credential = get_auth_credential(provider["id"])
+            if credential is not None:
+                _persist_auth_credential(provider["id"], credential)
         except Exception as error:  # noqa: BLE001 - local auth command should render errors, not crash the TUI
             self._show_status(f"Failed to login to {provider['name']}: {error}", kind="error")
             return
@@ -908,7 +948,9 @@ class InteractiveMode:
         if not api_key or not api_key.strip():
             self._show_status(f"Failed to save API key for {provider['name']}: API key cannot be empty.", kind="error")
             return
-        set_auth_credential(provider["id"], {"type": "api_key", "key": api_key.strip()})
+        credential = {"type": "api_key", "key": api_key.strip()}
+        set_auth_credential(provider["id"], credential)
+        _persist_auth_credential(provider["id"], credential)
         self._show_status(f"Saved API key for {provider['name']}", kind="auth")
         self._refresh_footer()
         self.tui.request_render()
@@ -927,6 +969,7 @@ class InteractiveMode:
             return
         try:
             logout_provider(provider["id"])
+            _remove_persisted_auth_credential(provider["id"])
         except Exception as error:  # noqa: BLE001
             self._show_status(f"Logout failed: {error}", kind="error")
             return
