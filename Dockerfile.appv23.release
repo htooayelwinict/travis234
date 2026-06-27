@@ -17,14 +17,11 @@ RUN apt-get update \
         ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /opt
-
-RUN git clone --depth 1 --branch "${APPV23_REF}" "${APPV23_REPO}" /opt/allthebest
-
-WORKDIR /opt/allthebest/appV2.3
-
 RUN python -m pip install --no-cache-dir --upgrade pip \
-    && python -m pip install --no-cache-dir .
+    && git clone --depth 1 --filter=blob:none --sparse --branch "${APPV23_REF}" "${APPV23_REPO}" /tmp/allthebest \
+    && git -C /tmp/allthebest sparse-checkout set appV2.3 \
+    && python -m pip install --no-cache-dir /tmp/allthebest/appV2.3 \
+    && rm -rf /tmp/allthebest
 
 WORKDIR /workspace
 

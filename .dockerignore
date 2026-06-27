@@ -1,0 +1,11 @@
+.git
+.venv
+**/.venv
+**/__pycache__
+**/*.pyc
+node_modules
+**/node_modules
+.superpowers
+docs
+*.tgz
+.DS_Store
