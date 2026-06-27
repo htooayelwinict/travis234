@@ -577,7 +577,11 @@ class InteractiveRenderer:
         self.output_container.add(component)
 
     def handle_event(self, event: Any) -> None:
-        etype = event.type
+        if isinstance(event, dict):
+            return
+        etype = getattr(event, "type", None)
+        if etype is None:
+            return
         needs_render = False
         if etype == "message_start" and getattr(event.message, "role", None) == "assistant":
             self._current_assistant = AssistantMessageComponent(

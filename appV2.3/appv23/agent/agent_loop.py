@@ -15,7 +15,16 @@ from typing import Any, Callable, Optional, Union
 
 from appv23.ai.event_stream import EventStream
 from appv23.ai.stream import stream_simple as default_stream_simple
-from appv23.ai.types import AssistantMessage, Context, SimpleStreamOptions, ToolResultMessage, UserMessage, now_ms
+from appv23.ai.types import (
+    AssistantMessage,
+    Context,
+    SimpleStreamOptions,
+    TextContent,
+    ToolResultMessage,
+    UserMessage,
+    empty_usage,
+    now_ms,
+)
 from appv23.ai.validation import validate_tool_arguments
 from appv23.agent.types import (
     AbortSignal,
@@ -315,19 +324,31 @@ def _stream_assistant_response(
     response = stream_function(config.model, llm_context, options)
 
     partial_added = False
-    for event in response:
+    last_partial_snapshot: AssistantMessage | None = None
+    for event in _iter_response_events(response, signal):
+        if signal and signal.aborted:
+            _close_response(response)
+            return _finalize_aborted_stream_response(
+                context,
+                config,
+                emit,
+                partial_added=partial_added,
+                partial_snapshot=last_partial_snapshot,
+            )
         if event.type == "start":
-            context.messages.append(event.partial)
+            last_partial_snapshot = copy.deepcopy(event.partial)
+            context.messages.append(last_partial_snapshot)
             partial_added = True
-            _emit_event(emit, MessageStartEvent(message=copy.copy(event.partial)))
+            _emit_event(emit, MessageStartEvent(message=copy.copy(last_partial_snapshot)))
         elif event.type in (
             "text_start", "text_delta", "text_end",
             "thinking_start", "thinking_delta", "thinking_end",
             "toolcall_start", "toolcall_delta", "toolcall_end",
         ):
             if partial_added:
-                context.messages[-1] = event.partial
-                _emit_event(emit, MessageUpdateEvent(message=copy.copy(event.partial), assistant_message_event=event))
+                last_partial_snapshot = copy.deepcopy(event.partial)
+                context.messages[-1] = last_partial_snapshot
+                _emit_event(emit, MessageUpdateEvent(message=copy.copy(last_partial_snapshot), assistant_message_event=event))
         elif event.type in ("done", "error"):
             final_message = response.result_sync()
             _deduplicate_tool_calls(final_message)
@@ -338,6 +359,25 @@ def _stream_assistant_response(
                 _emit_event(emit, MessageStartEvent(message=copy.copy(final_message)))
             _emit_event(emit, MessageEndEvent(message=final_message))
             return final_message
+        if signal and signal.aborted:
+            _close_response(response)
+            return _finalize_aborted_stream_response(
+                context,
+                config,
+                emit,
+                partial_added=partial_added,
+                partial_snapshot=last_partial_snapshot,
+            )
+
+    if signal and signal.aborted:
+        _close_response(response)
+        return _finalize_aborted_stream_response(
+            context,
+            config,
+            emit,
+            partial_added=partial_added,
+            partial_snapshot=last_partial_snapshot,
+        )
 
     final_message = response.result_sync()
     _deduplicate_tool_calls(final_message)
@@ -348,6 +388,56 @@ def _stream_assistant_response(
         _emit_event(emit, MessageStartEvent(message=copy.copy(final_message)))
     _emit_event(emit, MessageEndEvent(message=final_message))
     return final_message
+
+
+def _iter_response_events(response: object, signal: Optional[AbortSignal]):
+    iter_until = getattr(response, "iter_until", None)
+    if callable(iter_until):
+        return iter_until(lambda: bool(signal and signal.aborted))
+    return iter(response)
+
+
+def _finalize_aborted_stream_response(
+    context: AgentContext,
+    config: AgentLoopConfig,
+    emit: AgentEventSink,
+    *,
+    partial_added: bool,
+    partial_snapshot: AssistantMessage | None,
+) -> AssistantMessage:
+    if partial_added and partial_snapshot is not None:
+        final_message = replace(
+            partial_snapshot,
+            stop_reason="aborted",
+            error_message="Operation aborted",
+            timestamp=now_ms(),
+        )
+        context.messages[-1] = final_message
+    else:
+        final_message = AssistantMessage(
+            content=[TextContent(text="")],
+            api=config.model.api,
+            provider=config.model.provider,
+            model=config.model.id,
+            usage=empty_usage(),
+            stop_reason="aborted",
+            error_message="Operation aborted",
+            timestamp=now_ms(),
+        )
+        context.messages.append(final_message)
+        _emit_event(emit, MessageStartEvent(message=copy.copy(final_message)))
+    _emit_event(emit, MessageEndEvent(message=final_message))
+    return final_message
+
+
+def _close_response(response: object) -> None:
+    close = getattr(response, "close", None)
+    if not callable(close):
+        return
+    try:
+        close()
+    except Exception:
+        return
 
 
 def _deduplicate_tool_calls(message: AssistantMessage) -> None:

@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import inspect
 import queue
+import signal as signal_module
 import subprocess
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
+
+import httpx
 
 from appv23.ai import (
     get_auth_credential,
@@ -50,6 +53,14 @@ from appv23.tui.interactive import (
 
 
 InputFn = Callable[[str], str]
+OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+OPENROUTER_MODEL_CACHE_TTL_SECONDS = 300
+OPENROUTER_MODEL_PICKER_LIMIT = 50
+OPENROUTER_MODEL_PICKER_MAX_COMPLETION_TOKENS = 16_384
+OPENROUTER_MODEL_PICKER_CONTEXT_RESERVE_TOKENS = 2_048
+LATE_ABORT_GRACE_SECONDS = 1.0
+IDLE_CTRL_C_EXIT_WINDOW_SECONDS = 1.5
+_SIGINT_HANDLER_UNCHANGED = object()
 
 
 class InteractiveMode:
@@ -118,6 +129,10 @@ class InteractiveMode:
         self._initialized = False
         self._history_populated = False
         self._shutdown_requested = False
+        self._openrouter_model_cache: tuple[float, list[object]] | None = None
+        self._last_openrouter_model_fetch_error: Exception | None = None
+        self._last_turn_finished_at = 0.0
+        self._last_idle_ctrl_c_at = 0.0
         self.setup_autocomplete_provider()
 
     def init(self) -> None:
@@ -174,11 +189,14 @@ class InteractiveMode:
 
     def create_base_autocomplete_provider(self) -> CombinedAutocompleteProvider:
         commands = [
-            {"name": "compact", "description": "Compress conversation context"},
-            {"name": "compress", "description": "Compress conversation context"},
+            {"name": "compact", "description": "Compress conversation context; use 'deep' for near-baseline cleanup"},
+            {"name": "compress", "description": "Compress conversation context; use 'deep' for near-baseline cleanup"},
             {"name": "exit", "description": "Exit the interactive session"},
+            {"name": "help", "description": "Show TUI commands"},
             {"name": "login", "description": "Configure provider authentication"},
             {"name": "logout", "description": "Remove provider authentication"},
+            {"name": "model", "description": "Switch model"},
+            {"name": "models", "description": "List available models"},
             {"name": "quit", "description": "Exit the interactive session"},
         ]
         runner = getattr(self.app.session, "extension_runner", None)
@@ -230,6 +248,7 @@ class InteractiveMode:
 
     def run(self) -> int:
         self.init()
+        previous_sigint_handler = self._install_sigint_handler()
         try:
             while True:
                 submitted: list[str] = []
@@ -301,6 +320,9 @@ class InteractiveMode:
                 if not prompt:
                     continue
                 prompt_component.add_to_history(prompt)
+                if _is_help_command(prompt):
+                    self._run_help_command()
+                    continue
                 bash_command = _parse_bash_command(prompt)
                 if bash_command:
                     self._run_bash_command(bash_command[0], exclude_from_context=bash_command[1])
@@ -312,9 +334,16 @@ class InteractiveMode:
                 if auth_command:
                     self._run_auth_command(auth_command[0], auth_command[1])
                     continue
+                model_command = _parse_model_command(prompt)
+                if model_command:
+                    self._run_model_command(model_command[0], model_command[1])
+                    continue
                 if self._dispatch_extension_command(prompt):
                     self._refresh_footer()
                     self.tui.request_render()
+                    continue
+                if _is_command_like_slash_prompt(prompt) and not self._is_registered_extension_command(prompt):
+                    self._run_unknown_command(prompt)
                     continue
                 if self._handle_active_turn_prompt(prompt):
                     continue
@@ -341,6 +370,7 @@ class InteractiveMode:
                 self._unsubscribe_tui_scroll_change = None
             self.footer_data_provider.dispose()
             self.tui.stop()
+            self._restore_sigint_handler(previous_sigint_handler)
 
     def _read_prompt_from_tui(self, submitted_queue: "queue.Queue[str]") -> str | None:
         while not self._shutdown_requested:
@@ -352,13 +382,7 @@ class InteractiveMode:
 
     def _handle_tui_terminal_input(self, data: str):
         if data == "\x03":
-            if self._is_turn_active() or self.app.session.is_streaming or self.app.session.is_bash_running:
-                self._handle_editor_escape()
-            else:
-                self._shutdown_requested = True
-                self.status.set_message("Exiting")
-                self._refresh_footer()
-                self.tui.request_render()
+            self._handle_sigint(None, None)
             return {"consume": True}
         consumed, current = self._dispatch_terminal_input(data)
         if consumed:
@@ -367,8 +391,60 @@ class InteractiveMode:
             return {"data": current}
         return None
 
+    def _install_sigint_handler(self):
+        if threading.current_thread() is not threading.main_thread():
+            return _SIGINT_HANDLER_UNCHANGED
+        try:
+            previous = signal_module.getsignal(signal_module.SIGINT)
+            signal_module.signal(signal_module.SIGINT, self._handle_sigint)
+            return previous
+        except (AttributeError, OSError, ValueError):
+            return _SIGINT_HANDLER_UNCHANGED
+
+    def _restore_sigint_handler(self, previous_handler) -> None:
+        if previous_handler is _SIGINT_HANDLER_UNCHANGED:
+            return
+        if threading.current_thread() is not threading.main_thread():
+            return
+        try:
+            signal_module.signal(signal_module.SIGINT, previous_handler)
+        except (AttributeError, OSError, ValueError):
+            pass
+
+    def _handle_sigint(self, _signum, _frame) -> None:
+        if self._is_turn_active() or self.app.session.is_streaming or self.app.session.is_bash_running:
+            self._last_idle_ctrl_c_at = 0.0
+            self._handle_editor_escape()
+            return
+        if self._is_recently_finished_turn():
+            self._last_idle_ctrl_c_at = time.monotonic()
+            self.status.set_message("Idle")
+            self._refresh_footer()
+            self.tui.request_render()
+            return
+        now = time.monotonic()
+        if now - self._last_idle_ctrl_c_at > IDLE_CTRL_C_EXIT_WINDOW_SECONDS:
+            self._last_idle_ctrl_c_at = now
+            self.status.set_message("Press Ctrl-C again to exit")
+            self._refresh_footer()
+            self.tui.request_render()
+            return
+        self._shutdown_requested = True
+        self.status.set_message("Exiting")
+        self._refresh_footer()
+        self.tui.request_render()
+
+    def _is_recently_finished_turn(self) -> bool:
+        if self._last_turn_finished_at <= 0:
+            return False
+        return time.monotonic() - self._last_turn_finished_at <= LATE_ABORT_GRACE_SECONDS
+
     def _handle_session_event(self, event) -> None:
-        if event.type == "auto_retry_start":
+        event_type = event.get("type") if isinstance(event, dict) else getattr(event, "type", None)
+        if event_type in {"subagent_tool_start", "subagent_tool_end", "subagent_tool_guardrail"}:
+            self._render_subagent_tool_event(event)
+            return
+        if event_type == "auto_retry_start":
             delay_ms = int(getattr(event, "delay_ms", getattr(event, "delayMs", 0)) or 0)
             seconds = max(0, (delay_ms + 999) // 1000)
             attempt = getattr(event, "attempt", 0)
@@ -377,7 +453,7 @@ class InteractiveMode:
             self._refresh_footer()
             self.tui.request_render()
             return
-        if event.type == "auto_retry_end":
+        if event_type == "auto_retry_end":
             if not getattr(event, "success", False):
                 final_error = getattr(event, "final_error", getattr(event, "finalError", None)) or "Unknown error"
                 self.history.add(StatusLine(f"Retry failed after {event.attempt} attempts: {final_error}", kind="error"))
@@ -385,7 +461,7 @@ class InteractiveMode:
             self._refresh_footer()
             self.tui.request_render()
             return
-        if event.type == "message_end":
+        if event_type == "message_end":
             message = getattr(event, "message", None)
             if getattr(message, "role", None) == "custom":
                 component = message_to_component(
@@ -398,19 +474,69 @@ class InteractiveMode:
                     self.history.add(component)
                 self.tui.request_render()
                 return
-        if event.type == "session_info_changed":
+        if event_type == "session_info_changed":
             self._refresh_footer()
             self.tui.request_render()
+
+    def _render_subagent_tool_event(self, event) -> None:
+        get = event.get if isinstance(event, dict) else lambda key, default=None: getattr(event, key, default)
+        role = str(get("role", "subagent") or "subagent")
+        tool = str(get("toolName", get("tool_name", "tool")) or "tool")
+        status = str(get("status", "") or "").strip() or (
+            "started" if get("type") == "subagent_tool_start" else "ok"
+        )
+        args_preview = str(get("argsPreview", get("args_preview", "")) or "").strip()
+        result_preview = str(get("resultPreview", get("result_preview", "")) or "").strip()
+        guardrail_code = str(get("guardrailCode", get("guardrail_code", "")) or "").strip()
+        line = f"subagent {role} {tool} {status}"
+        if guardrail_code:
+            line = f"{line} {guardrail_code}"
+        if args_preview:
+            line = f"{line} {args_preview}"
+        if result_preview:
+            line = f"{line} => {result_preview}"
+        kind = "warning" if status.startswith("guardrail") or status == "error" else "info"
+        self.history.add(StatusLine(line, kind=kind))
+        self._refresh_footer()
+        self.tui.request_render()
 
     def _handle_footer_branch_change(self) -> None:
         self._refresh_footer()
         self.tui.request_render()
 
-    def _get_model_candidates(self):
+    def _get_model_candidates(self, *, fetch_remote: bool = False, query: str | None = None):
         scoped_models = getattr(self.app.session, "scoped_models", [])
         if scoped_models:
-            return [scoped.model for scoped in scoped_models]
-        return [model for provider in get_providers() for model in get_models(provider)]
+            return _filter_model_candidates([scoped.model for scoped in scoped_models], query)
+        models = _models_with_active_fallback(self.app.session.model)
+        self._last_openrouter_model_fetch_error = None
+        if fetch_remote:
+            remote_models, error = self._openrouter_model_candidates()
+            self._last_openrouter_model_fetch_error = error
+            models = _dedupe_models([*remote_models, *models])
+        return _filter_model_candidates(models, query)
+
+    def _openrouter_model_candidates(self):
+        active_model = self.app.session.model
+        if not _is_openrouter_model(active_model):
+            return [], None
+        now = time.monotonic()
+        if (
+            self._openrouter_model_cache is not None
+            and now - self._openrouter_model_cache[0] < OPENROUTER_MODEL_CACHE_TTL_SECONDS
+        ):
+            return list(self._openrouter_model_cache[1]), None
+        try:
+            items = _fetch_openrouter_model_catalog(active_model)
+            models = [
+                model
+                for item in items
+                if (model := _openrouter_catalog_item_to_model(item, active_model)) is not None
+            ]
+        except Exception as error:  # noqa: BLE001 - model picker should fall back to local models.
+            return [], error
+        self._openrouter_model_cache = (now, models)
+        return list(models), None
 
     def _update_available_provider_count(self) -> None:
         providers = {model.provider for model in self._get_model_candidates() if getattr(model, "provider", None)}
@@ -460,6 +586,7 @@ class InteractiveMode:
             self.tui.request_render()
             self._start_turn_thread(next_prompt, next_before_compressions, next_before_tokens)
             return
+        self._last_turn_finished_at = time.monotonic()
         self.status.set_message("Idle")
         self._refresh_footer()
         self.tui.request_render()
@@ -550,6 +677,12 @@ class InteractiveMode:
             self.history.add(StatusLine(f"Command failed: {error}", kind="error"))
         return True
 
+    def _is_registered_extension_command(self, prompt: str) -> bool:
+        parse_command = getattr(self.app.session, "_parse_extension_command", None)
+        if not callable(parse_command):
+            return False
+        return parse_command(prompt) is not None
+
     def _extension_shortcut_context(self) -> dict[str, object]:
         return {
             "ui": _ExtensionShortcutUI(self),
@@ -591,8 +724,41 @@ class InteractiveMode:
             "Type /exit or /quit to leave."
         )
 
+    def _run_help_command(self) -> None:
+        self.history.add(StatusLine("TUI commands", kind="help"))
+        for line in (
+            "/help - Show this help.",
+            "/model - Switch model.",
+            "/models - List available models.",
+            "/login - Configure provider authentication.",
+            "/logout - Remove provider authentication.",
+            "/compact or /compress - Safely compress conversation context.",
+            "/compact deep [focus] - Run bounded multi-pass compaction toward a fresh-session baseline.",
+            "/agents - List delegated subagents.",
+            "/delegate <role> <task> - Spawn a subagent for explicit multi-agent work.",
+            "/cancel-agent <task-id> [reason] - Cancel a delegated subagent.",
+            "/exit or /quit - Exit the interactive session.",
+            "!<command> - Run a shell command outside model context.",
+        ):
+            self.history.add(Text(line))
+        self.status.set_message("Idle")
+        self._refresh_footer()
+        self.tui.request_render()
+
+    def _run_unknown_command(self, prompt: str) -> None:
+        command_name = prompt[1:].partition(" ")[0]
+        self.history.add(
+            StatusLine(
+                f"Unknown command: /{command_name}. Type /help for available commands.",
+                kind="error",
+            )
+        )
+        self.status.set_message("Idle")
+        self._refresh_footer()
+        self.tui.request_render()
+
     def _run_manual_compress(self, prompt: str) -> None:
-        focus, aggressive = _manual_compression_options(prompt)
+        focus, deep = _manual_compression_options(prompt)
         self.status.set_message("Compressing")
         self._refresh_footer()
         self.tui.request_render()
@@ -600,7 +766,7 @@ class InteractiveMode:
         try:
             status = self.app.session.compact(
                 focus=focus,
-                aggressive=aggressive,
+                deep=deep,
             )
             self.history.add(StatusLine(status.headline, kind="compact"))
             self.history.add(Text(status.token_line))
@@ -622,6 +788,78 @@ class InteractiveMode:
             self._run_login(provider_query)
         else:
             self._run_logout(provider_query)
+
+    def _run_model_command(self, command: str, query: str | None) -> None:
+        local_candidates = self._get_model_candidates()
+        if command == "list":
+            candidates = self._get_model_candidates(fetch_remote=True)
+            if self._last_openrouter_model_fetch_error is not None:
+                self._show_status("Could not fetch OpenRouter models; showing local models only.", kind="model")
+            self._show_model_list(candidates)
+            return
+        query = (query or "").strip()
+        if query.lower() in {"list", "ls"}:
+            candidates = self._get_model_candidates(fetch_remote=True)
+            if self._last_openrouter_model_fetch_error is not None:
+                self._show_status("Could not fetch OpenRouter models; showing local models only.", kind="model")
+            self._show_model_list(candidates)
+            return
+        if query.lower() in {"next", "forward"}:
+            self._cycle_model("forward")
+            return
+        if query.lower() in {"previous", "prev", "back", "backward"}:
+            self._cycle_model("backward")
+            return
+        if query:
+            model = _resolve_model_query(query, local_candidates, self.app.session.model)
+            if model is None:
+                candidates = self._get_model_candidates(fetch_remote=True, query=query)
+                if self._last_openrouter_model_fetch_error is not None:
+                    self._show_status("Could not fetch OpenRouter models; showing local models only.", kind="model")
+            else:
+                self._switch_model(model)
+                return
+        else:
+            candidates = self._get_model_candidates(fetch_remote=True)
+            if self._last_openrouter_model_fetch_error is not None:
+                self._show_status("Could not fetch OpenRouter models; showing local models only.", kind="model")
+        if not candidates:
+            self._show_status("No models available. Configure APPV2_WORKER_LLM_MODEL or models.json.", kind="error")
+            return
+        labels = [_model_label(model, self.app.session.model) for model in candidates]
+        selected = self.prompt_extension_select("Select model:", labels, kind="model")
+        if selected is None:
+            return
+        label_to_model = dict(zip(labels, candidates))
+        model = label_to_model.get(selected)
+        if model is not None:
+            self._switch_model(model)
+
+    def _show_model_list(self, models) -> None:
+        if not models:
+            self._show_status("No models available. Configure APPV2_WORKER_LLM_MODEL or models.json.", kind="error")
+            return
+        self.history.add(StatusLine("Available models", kind="model"))
+        for model in models:
+            self.history.add(Text(_model_label(model, self.app.session.model)))
+        self.tui.request_render()
+
+    def _cycle_model(self, direction: str) -> None:
+        result = self.app.session.cycle_model(direction)
+        if result is None:
+            self._show_status("No alternate models available. Configure --models or models.json to enable switching.", kind="model")
+            return
+        self._show_model_switched(result.model)
+
+    def _switch_model(self, model) -> None:
+        self.app.session.set_model(model)
+        self._show_model_switched(model)
+
+    def _show_model_switched(self, model) -> None:
+        self._show_status(f"Switched model to {model.provider}/{model.id}", kind="model")
+        self._update_available_provider_count()
+        self._refresh_footer()
+        self.tui.request_render()
 
     def _run_login(self, provider_query: str | None) -> None:
         if provider_query:
@@ -660,13 +898,13 @@ class InteractiveMode:
     def _run_api_key_login(self, provider_query: str | None) -> None:
         provider = self._select_oauth_provider(
             "Select provider to configure:",
-            _api_key_provider_options(),
+            self._api_key_provider_options(),
             provider_query,
             empty_message="No API key providers available.",
         )
         if provider is None:
             return
-        api_key = self.prompt_extension_input("Enter API key")
+        api_key = self.prompt_extension_input("Enter API key", options={"secret": True})
         if not api_key or not api_key.strip():
             self._show_status(f"Failed to save API key for {provider['name']}: API key cannot be empty.", kind="error")
             return
@@ -725,6 +963,15 @@ class InteractiveMode:
         if selected is None:
             return None
         return next((provider for provider in providers if provider["name"] == selected), None)
+
+    def _api_key_provider_options(self) -> list[dict[str, str]]:
+        providers = _api_key_provider_options()
+        seen = {provider["id"] for provider in providers}
+        oauth_provider_ids = {provider["id"] for provider in _oauth_provider_options()}
+        active_provider = str(getattr(self.app.session.model, "provider", "") or "")
+        if active_provider and active_provider not in seen and active_provider not in oauth_provider_ids:
+            providers.append({"id": active_provider, "name": _provider_display_name(active_provider)})
+        return providers
 
     def _oauth_login_callbacks(self) -> dict[str, object]:
         return {
@@ -1046,18 +1293,22 @@ class InteractiveMode:
     ) -> str | None:
         if _extension_dialog_aborted(options):
             return None
+        is_secret = _extension_dialog_secret(options)
         clean_title = _extension_dialog_label(title)
         prompt = f"{clean_title} ({placeholder}): " if placeholder else f"{clean_title}: "
         self.history.add(StatusLine(clean_title, kind="input"))
         self.tui.request_render()
-        try:
-            value = self.input_fn(prompt)
-        except EOFError:
-            return None
+        if self._line_input_mode:
+            try:
+                value = self.input_fn(prompt)
+            except EOFError:
+                return None
+        else:
+            value = self._prompt_tui_value(prompt, mask=is_secret)
         if value is None:
             return None
         text = str(value)
-        self.history.add(Text(text))
+        self.history.add(Text("[redacted]" if is_secret else text))
         self.tui.request_render()
         return text
 
@@ -1097,17 +1348,56 @@ class InteractiveMode:
         for index, choice in enumerate(normalized_choices, start=1):
             self.history.add(Text(f"{index}. {choice}"))
         self.tui.request_render()
-        try:
-            value = self.input_fn(f"{clean_title} [1-{len(normalized_choices)}]: ")
-        except EOFError:
-            return None
+        if self._line_input_mode:
+            try:
+                value = self.input_fn(f"{clean_title} [1-{len(normalized_choices)}]: ")
+            except EOFError:
+                return None
+        else:
+            value = self._prompt_tui_value(f"{clean_title} [1-{len(normalized_choices)}]: ")
         if value is None:
             return None
-        selected = _resolve_extension_select_choice(str(value), normalized_choices)
+        raw_value = str(value)
+        selected = _resolve_extension_select_choice(raw_value, normalized_choices)
         if selected is not None:
             self.history.add(Text(selected))
             self.tui.request_render()
+            return selected
+        if not raw_value.strip():
+            self.history.add(StatusLine("Selection cancelled.", kind=kind))
+        else:
+            clean_value = _extension_dialog_label(raw_value)
+            self.history.add(
+                StatusLine(
+                    f"Invalid selection: {clean_value}. Enter a number from 1 to {len(normalized_choices)}.",
+                    kind="error",
+                )
+            )
+        self.tui.request_render()
         return selected
+
+    def _prompt_tui_value(self, prompt: str, *, mask: bool = False) -> str | None:
+        submitted_queue: queue.Queue[str] = queue.Queue()
+        prompt_component = Input(prompt=prompt, on_submit=lambda value: submitted_queue.put(value), mask=mask)
+        previous_focus = self.tui.focused_component
+        self.active_editor = prompt_component
+        self.editor_container.add(prompt_component)
+        self.tui.set_focus(prompt_component)
+        self.tui.request_render()
+        try:
+            while not self._shutdown_requested:
+                try:
+                    return submitted_queue.get(timeout=0.05)
+                except queue.Empty:
+                    continue
+            return None
+        finally:
+            if prompt_component in self.editor_container.children:
+                self.editor_container.remove(prompt_component)
+            if self.active_editor is prompt_component:
+                self.active_editor = None
+            self.tui.set_focus(previous_focus)
+            self.tui.request_render()
 
     def prompt_extension_confirm(
         self,
@@ -1316,11 +1606,32 @@ def _is_manual_compression_command(prompt: str) -> bool:
     return prompt in {"/compress", "/compact"} or prompt.startswith("/compress ") or prompt.startswith("/compact ")
 
 
+def _is_command_like_slash_prompt(prompt: str) -> bool:
+    if not prompt.startswith("/"):
+        return False
+    command_name = prompt[1:].partition(" ")[0]
+    return bool(command_name) and "/" not in command_name
+
+
+def _is_help_command(prompt: str) -> bool:
+    return prompt == "/help" or prompt.startswith("/help ")
+
+
 def _parse_auth_command(prompt: str) -> tuple[str, str | None] | None:
     if prompt == "/login":
         return "login", None
     if prompt == "/logout":
         return "logout", None
+    return None
+
+
+def _parse_model_command(prompt: str) -> tuple[str, str | None] | None:
+    if prompt == "/models":
+        return "list", None
+    if prompt == "/model":
+        return "select", None
+    if prompt.startswith("/model "):
+        return "select", prompt[len("/model ") :].strip()
     return None
 
 
@@ -1357,6 +1668,148 @@ def _stored_auth_provider_options() -> list[dict[str, str]]:
             }
         )
     return sorted(providers, key=lambda provider: provider["name"].lower())
+
+
+def _models_with_active_fallback(active_model):
+    models = [model for provider in get_providers() for model in get_models(provider)]
+    active_provider = getattr(active_model, "provider", None)
+    active_id = getattr(active_model, "id", None)
+    if active_provider and active_id and not any(
+        model.provider == active_provider and model.id == active_id for model in models
+    ):
+        models.append(active_model)
+    return models
+
+
+def _is_openrouter_model(model) -> bool:
+    return getattr(model, "provider", "") == "openrouter" or "openrouter.ai" in str(getattr(model, "base_url", ""))
+
+
+def _fetch_openrouter_model_catalog(base_model) -> list[dict]:
+    response = httpx.get(
+        OPENROUTER_MODELS_URL,
+        headers={"Accept": "application/json"},
+        timeout=10.0,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    data = payload.get("data") if isinstance(payload, dict) else payload
+    if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, dict)]
+
+
+def _openrouter_catalog_item_to_model(item: dict, base_model):
+    model_id = str(item.get("id") or "").strip()
+    if not model_id:
+        return None
+    architecture = item.get("architecture") if isinstance(item.get("architecture"), dict) else {}
+    top_provider = item.get("top_provider") if isinstance(item.get("top_provider"), dict) else {}
+    modalities = architecture.get("input_modalities", architecture.get("inputModalities", []))
+    input_types = ["text"]
+    if isinstance(modalities, list) and any(str(value).lower() == "image" for value in modalities):
+        input_types.append("image")
+    supported_parameters = item.get("supported_parameters", item.get("supportedParameters", []))
+    reasoning = bool(getattr(base_model, "reasoning", False) or item.get("reasoning"))
+    if isinstance(supported_parameters, list) and any("reason" in str(value).lower() for value in supported_parameters):
+        reasoning = True
+    context_window = _positive_int_or(item.get("context_length", item.get("contextLength")), base_model.context_window)
+    max_completion_tokens = _safe_openrouter_completion_tokens(
+        top_provider.get("max_completion_tokens", top_provider.get("maxCompletionTokens")),
+        context_window,
+        base_model.max_tokens,
+    )
+    return replace(
+        base_model,
+        id=model_id,
+        name=str(item.get("name") or model_id),
+        provider="openrouter",
+        context_window=context_window,
+        max_tokens=max_completion_tokens,
+        reasoning=reasoning,
+        input=input_types,
+    )
+
+
+def _safe_openrouter_completion_tokens(value, context_window: int, fallback: int) -> int:
+    parsed = _positive_int_or(value, fallback)
+    if parsed <= 0:
+        return fallback
+    capped = min(parsed, OPENROUTER_MODEL_PICKER_MAX_COMPLETION_TOKENS)
+    if context_window > OPENROUTER_MODEL_PICKER_CONTEXT_RESERVE_TOKENS:
+        capped = min(capped, context_window - OPENROUTER_MODEL_PICKER_CONTEXT_RESERVE_TOKENS)
+    elif context_window > 0:
+        capped = min(capped, max(1, context_window // 2))
+    return max(1, capped)
+
+
+def _positive_int_or(value, fallback: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return parsed if parsed > 0 else fallback
+
+
+def _dedupe_models(models) -> list:
+    seen: set[tuple[str, str]] = set()
+    result = []
+    for model in models:
+        key = (str(getattr(model, "provider", "")), str(getattr(model, "id", "")))
+        if not key[0] or not key[1] or key in seen:
+            continue
+        seen.add(key)
+        result.append(model)
+    return result
+
+
+def _filter_model_candidates(models, query: str | None = None) -> list:
+    if query:
+        normalized = query.strip().lower()
+        models = [
+            model
+            for model in models
+            if normalized in f"{model.provider}/{model.id}".lower()
+            or normalized in model.id.lower()
+            or normalized in model.name.lower()
+        ]
+    return list(models[:OPENROUTER_MODEL_PICKER_LIMIT])
+
+
+def _model_label(model, active_model=None) -> str:
+    label = f"{model.provider}/{model.id}"
+    if (
+        active_model is not None
+        and getattr(model, "provider", None) == getattr(active_model, "provider", None)
+        and getattr(model, "id", None) == getattr(active_model, "id", None)
+    ):
+        return f"{label} (current)"
+    return label
+
+
+def _resolve_model_query(query: str, candidates, active_model):
+    normalized = query.strip()
+    normalized_lower = normalized.lower()
+    for model in candidates:
+        label = f"{model.provider}/{model.id}"
+        if normalized_lower in {label.lower(), model.id.lower(), model.name.lower()}:
+            return model
+    active_provider = getattr(active_model, "provider", "")
+    if not active_provider:
+        return None
+    if "/" not in normalized:
+        return None
+    candidate_providers = {getattr(model, "provider", "") for model in candidates}
+    model_id = normalized
+    provider = active_provider
+    if "/" in normalized:
+        possible_provider, possible_model_id = normalized.split("/", 1)
+        if possible_provider in candidate_providers or possible_provider == active_provider:
+            provider = possible_provider
+            model_id = possible_model_id
+    if provider != active_provider or not model_id:
+        return None
+    return replace(active_model, id=model_id, name=model_id)
 
 
 def _provider_display_name(provider_id: str) -> str:
@@ -1723,7 +2176,7 @@ def _create_extension_widget_component(content: object, tui, max_lines: int) -> 
 
 
 def _manual_compression_focus(prompt: str) -> str | None:
-    focus, _aggressive = _manual_compression_options(prompt)
+    focus, _deep = _manual_compression_options(prompt)
     return focus
 
 
@@ -1737,7 +2190,7 @@ def _manual_compression_options(prompt: str) -> tuple[str | None, bool]:
                 return None, False
             parts = focus.split(maxsplit=1)
             mode = parts[0].lower()
-            if mode in {"aggressive", "agressive"}:
+            if mode == "deep":
                 return (parts[1].strip() if len(parts) > 1 and parts[1].strip() else None), True
             return focus, False
     return None, False
@@ -1750,6 +2203,12 @@ def _extension_dialog_aborted(options: dict | None) -> bool:
     if isinstance(signal, dict):
         return bool(signal.get("aborted"))
     return bool(getattr(signal, "aborted", False))
+
+
+def _extension_dialog_secret(options: dict | None) -> bool:
+    if not isinstance(options, dict):
+        return False
+    return bool(options.get("secret") or options.get("password") or options.get("mask"))
 
 
 def _extension_dialog_label(value: object) -> str:

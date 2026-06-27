@@ -183,6 +183,7 @@ class ProcessTerminal:
         try:
             self._saved_termios = termios.tcgetattr(self._stdin_fd)
             tty.setraw(self._stdin_fd)
+            self._enable_interrupt_signal()
         except Exception:
             self._saved_termios = None
             self._stdin_fd = None
@@ -212,6 +213,16 @@ class ProcessTerminal:
         self._stdin_fd = None
         self._saved_termios = None
         self._reset_stdin_decoder()
+
+    def _enable_interrupt_signal(self) -> None:  # pragma: no cover - real IO
+        if self._stdin_fd is None:
+            return
+        try:
+            attrs = termios.tcgetattr(self._stdin_fd)
+            attrs[3] |= termios.ISIG
+            termios.tcsetattr(self._stdin_fd, termios.TCSADRAIN, attrs)
+        except Exception:
+            pass
 
     def _read_stdin_loop(self) -> None:  # pragma: no cover - real IO
         fd = self._stdin_fd

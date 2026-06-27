@@ -372,7 +372,7 @@ def _format_http_status_error(error: httpx.HTTPStatusError, model: Model, config
     status = response.status_code
     reason = response.reason_phrase
     provider = _provider_label(model.provider)
-    requested_model = configured_model or model.id
+    requested_model = model.id or configured_model or "unknown"
     detail = _extract_response_error_message(response) or reason or str(error)
     lower_detail = detail.lower()
     display_detail = _truncate_provider_error_detail(detail)
@@ -781,6 +781,7 @@ def parse_sse_chunks(
     *,
     data_idle_timeout_seconds: float | None = None,
     clock: Callable[[], float] = time.monotonic,
+    include_reasoning: bool = True,
 ) -> Iterator:
     """Pure transform: decoded SSE lines -> AssistantMessageEvent stream."""
     message = _blank(model)
@@ -856,6 +857,7 @@ def parse_sse_chunks(
                     "content_index_of": content_index_of,
                     "ensure_start": ensure_start,
                 },
+                include_reasoning=include_reasoning,
             )
             usage = usage_ref["usage"]
             started = state["started"]
@@ -877,7 +879,15 @@ def parse_sse_chunks(
     yield from final_events()
 
 
-def _parse_sse_payload(payload: str, model: Model, message: AssistantMessage, usage_ref: dict, state: dict) -> Iterator:
+def _parse_sse_payload(
+    payload: str,
+    model: Model,
+    message: AssistantMessage,
+    usage_ref: dict,
+    state: dict,
+    *,
+    include_reasoning: bool = True,
+) -> Iterator:
     try:
         chunk = json.loads(payload)
     except json.JSONDecodeError:
@@ -919,7 +929,7 @@ def _parse_sse_payload(payload: str, model: Model, message: AssistantMessage, us
             found_reasoning_field = field
             break
 
-    if found_reasoning_field:
+    if found_reasoning_field and include_reasoning:
         reasoning = delta[found_reasoning_field]
         thinking_signature = (
             "reasoning_content"
@@ -1031,7 +1041,7 @@ class AppV2EnvProvider:
         try:
             messages, tools = convert_messages(context, model)
             body: dict = {
-                "model": self.config.model or model.id,
+                "model": model.id or self.config.model,
                 "messages": messages,
                 "stream": True,
                 "temperature": self.config.temperature,
@@ -1045,7 +1055,13 @@ class AppV2EnvProvider:
                 body["max_tokens"] = max_tokens
             if self.config.provider_sort:
                 body["provider"] = {"sort": self.config.provider_sort, "allow_fallbacks": True}
-            headers = {"Authorization": f"Bearer {self.config.api_key}", "Content-Type": "application/json"}
+            option_headers = getattr(options, "headers", None) if options is not None else None
+            headers = {str(key): str(value) for key, value in option_headers.items()} if isinstance(option_headers, dict) else {}
+            option_api_key = getattr(options, "api_key", None) if options is not None else None
+            api_key = option_api_key if isinstance(option_api_key, str) and option_api_key.strip() else self.config.api_key
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            headers.setdefault("Content-Type", "application/json")
             url = self.config.base_url.rstrip("/") + "/chat/completions"
             with httpx.Client(timeout=self.config.timeout_seconds) as client:
                 with client.stream("POST", url, json=body, headers=headers) as response:
@@ -1054,6 +1070,7 @@ class AppV2EnvProvider:
                         response.iter_lines(),
                         model,
                         data_idle_timeout_seconds=self.config.timeout_seconds,
+                        include_reasoning=bool(getattr(options, "reasoning", None)),
                     ):
                         s.push(event)
         except Exception as exc:  # encode failure as an error event, never raise
@@ -1079,5 +1096,5 @@ class NullProvider:
 
 def create_appv2_env_provider(prefix: str = "APPV2_WORKER_LLM", dotenv_path: "str" = ".env") -> ApiProvider:
     config = load_model_config(prefix, dotenv_path)
-    impl = AppV2EnvProvider(config) if (config.enabled and config.api_key) else NullProvider()
+    impl = AppV2EnvProvider(config) if config.enabled else NullProvider()
     return ApiProvider(api=PROVIDER_API, stream=impl.stream, stream_simple=impl.stream_simple)

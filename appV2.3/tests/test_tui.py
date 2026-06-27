@@ -7,6 +7,7 @@ import select
 import threading
 import time
 
+import appv23.tui.interactive_mode as interactive_mode
 from appv23.tui import (
     Image,
     Component,
@@ -83,13 +84,19 @@ from appv23.agent.types import (
 )
 from appv23.agent.types import AgentTool, AgentToolResult
 from appv23.ai.providers.faux import create_faux_provider, faux_model, text_response_events, tool_call_response_events
-from appv23.ai.models import get_api_key_for_provider, get_provider_auth_status, reset_models
+from appv23.ai.models import get_api_key_for_provider, get_provider_auth_status, register_model, reset_models
 from appv23.ai.stream import register_api_provider, reset_api_providers
 from appv23.ai.types import (
     AssistantMessage,
     Cost,
+    DoneEvent,
     ErrorEvent,
+    Model,
+    StartEvent,
     TextContent,
+    TextDeltaEvent,
+    TextEndEvent,
+    TextStartEvent,
     ThinkingContent,
     Usage,
     UserMessage,
@@ -1554,6 +1561,107 @@ def test_interactive_mode_escape_aborted_tool_turn_returns_to_idle(tmp_path) -> 
     assert mode.status._message == "Idle"
 
 
+def test_interactive_mode_escape_aborts_streaming_text_turn_before_done(tmp_path) -> None:
+    started = threading.Event()
+    send_after_abort = threading.Event()
+    allow_finish = threading.Event()
+    provider_finished = threading.Event()
+
+    def stream_fn(model, context, options=None):
+        stream = create_assistant_message_event_stream()
+
+        def produce() -> None:
+            partial = AssistantMessage(
+                content=[TextContent(type="text", text="")],
+                api=model.api,
+                provider=model.provider,
+                model=model.id,
+                usage=empty_usage(),
+                stop_reason="stop",
+                timestamp=now_ms(),
+            )
+            stream.push(StartEvent(partial=partial))
+            stream.push(TextStartEvent(content_index=0, partial=partial))
+            partial.content[0].text += "before-abort"
+            stream.push(TextDeltaEvent(content_index=0, delta="before-abort", partial=partial))
+            started.set()
+
+            if send_after_abort.wait(timeout=2):
+                partial.content[0].text += "after-abort"
+                stream.push(TextDeltaEvent(content_index=0, delta="after-abort", partial=partial))
+
+            allow_finish.wait(timeout=2)
+            final = AssistantMessage(
+                content=[TextContent(type="text", text=partial.content[0].text)],
+                api=model.api,
+                provider=model.provider,
+                model=model.id,
+                usage=empty_usage(),
+                stop_reason="stop",
+                timestamp=now_ms(),
+            )
+            stream.push(TextEndEvent(content_index=0, content=final.content[0].text, partial=partial))
+            stream.push(DoneEvent(reason="stop", message=final))
+            provider_finished.set()
+
+        threading.Thread(target=produce, daemon=True).start()
+        return stream
+
+    register_api_provider(ApiProvider(api="faux", stream=stream_fn, stream_simple=stream_fn))
+    terminal = FakeTerminal(columns=120)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+    mode.init()
+
+    mode.status.set_message("Running")
+    mode._start_turn_thread("stream text", 0, 0)
+    assert started.wait(timeout=2)
+
+    try:
+        mode._handle_editor_escape()
+        send_after_abort.set()
+        stopped = _wait_until(lambda: not mode._is_turn_active() and mode.status._message == "Idle", timeout=1)
+        rendered = strip_ansi("\n".join(app.tui.render(120)))
+    finally:
+        allow_finish.set()
+        mode._wait_for_active_turn()
+
+    assert stopped is True
+    assert provider_finished.is_set() is False
+    assert "after-abort" not in rendered
+    assert mode.status._message == "Idle"
+
+
+def test_interactive_mode_escape_aborts_turn_waiting_for_first_stream_event(tmp_path) -> None:
+    stream_started = threading.Event()
+    captured_signal = {}
+
+    def stream_fn(model, context, options=None):
+        captured_signal["signal"] = getattr(options, "signal", None)
+        stream_started.set()
+        return create_assistant_message_event_stream()
+
+    register_api_provider(ApiProvider(api="faux", stream=stream_fn, stream_simple=stream_fn))
+    terminal = FakeTerminal(columns=140)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+    mode = InteractiveMode(app)
+    mode.init()
+
+    try:
+        mode.status.set_message("Running")
+        mode._start_turn_thread("hang before first token", 0, 0)
+        assert stream_started.wait(timeout=1)
+
+        mode._handle_editor_escape()
+
+        stopped = _wait_until(lambda: not mode._is_turn_active(), timeout=1)
+    finally:
+        app.tui.stop()
+
+    assert getattr(captured_signal["signal"], "aborted") is True
+    assert stopped is True
+
+
 def test_interactive_mode_ctrl_c_aborts_active_turn_and_accepts_followup_prompt(tmp_path) -> None:
     started = threading.Event()
     aborted = threading.Event()
@@ -1686,7 +1794,7 @@ def test_interactive_mode_turn_failure_resets_status_and_accepts_followup_prompt
     assert "status: Running" not in rendered_after_followup
 
 
-def test_interactive_mode_ctrl_c_exits_idle_tui(tmp_path) -> None:
+def test_interactive_mode_ctrl_c_requires_second_press_to_exit_idle_tui(tmp_path) -> None:
     calls = {"n": 0}
 
     def script(model, context):
@@ -1707,11 +1815,15 @@ def test_interactive_mode_ctrl_c_exits_idle_tui(tmp_path) -> None:
 
     thread = threading.Thread(target=run_mode)
     thread.start()
-    exited_after_ctrl_c = False
+    exited_after_first_ctrl_c = False
+    exited_after_second_ctrl_c = False
     try:
         assert _wait_until(lambda: terminal.input_handler is not None and mode.active_editor is not None)
         terminal.input_handler("\x03")
-        exited_after_ctrl_c = _wait_until(lambda: not thread.is_alive(), timeout=0.5)
+        exited_after_first_ctrl_c = _wait_until(lambda: not thread.is_alive(), timeout=0.2)
+        if thread.is_alive():
+            terminal.input_handler("\x03")
+            exited_after_second_ctrl_c = _wait_until(lambda: not thread.is_alive(), timeout=0.5)
     finally:
         if thread.is_alive():
             mode._shutdown_requested = True
@@ -1721,7 +1833,8 @@ def test_interactive_mode_ctrl_c_exits_idle_tui(tmp_path) -> None:
 
     assert not thread.is_alive()
     assert "error" not in outcome
-    assert exited_after_ctrl_c is True
+    assert exited_after_first_ctrl_c is False
+    assert exited_after_second_ctrl_c is True
     assert outcome["code"] == 0
     assert calls["n"] == 0
 
@@ -1813,6 +1926,71 @@ def test_interactive_mode_run_ctrl_c_aborts_active_turn_and_recovers_prompt(tmp_
     assert not thread.is_alive()
     assert "error" not in outcome
     assert outcome["code"] == 0
+
+
+def test_interactive_mode_sigint_aborts_active_turn_without_shutdown(tmp_path) -> None:
+    started = threading.Event()
+    aborted = threading.Event()
+
+    def script(model, context):
+        return tool_call_response_events(model, "aborter", {})
+
+    register_api_provider(create_faux_provider(script))
+    terminal = FakeTerminal(columns=120)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+
+    def aborter_execute(tool_call_id, args, signal=None, on_update=None):
+        started.set()
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            if signal and signal.aborted:
+                aborted.set()
+                raise RuntimeError("Operation aborted")
+            time.sleep(0.005)
+        raise RuntimeError("abort signal was not delivered")
+
+    app.session.agent.state.tools = [
+        AgentTool(
+            name="aborter",
+            description="aborter",
+            parameters={"type": "object", "properties": {}},
+            label="Aborter",
+            execute=aborter_execute,
+        )
+    ]
+    mode = InteractiveMode(app)
+    mode.init()
+
+    mode.status.set_message("Running")
+    mode._start_turn_thread("run aborter", 0, 0)
+    assert started.wait(timeout=2)
+
+    mode._handle_sigint(None, None)
+
+    assert mode._shutdown_requested is False
+    assert mode.status._message == "Aborting"
+    mode._wait_for_active_turn()
+    assert aborted.is_set()
+    assert mode.status._message == "Idle"
+    assert not mode._is_turn_active()
+
+
+def test_interactive_mode_late_ctrl_c_after_turn_finish_does_not_exit(tmp_path) -> None:
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "quick done")))
+    terminal = FakeTerminal(columns=120)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+    mode = InteractiveMode(app)
+    mode.init()
+
+    mode.status.set_message("Running")
+    mode._start_turn_thread("quick", 0, 0)
+    mode._wait_for_active_turn()
+    assert mode.status._message == "Idle"
+
+    mode._handle_sigint(None, None)
+
+    assert mode._shutdown_requested is False
+    assert mode.status._message == "Idle"
 
 
 def test_tui_ports_pi_input_listener_transform_consume_and_unsubscribe() -> None:
@@ -2051,6 +2229,31 @@ def test_interactive_renderer_skips_non_visual_turn_events() -> None:
     renderer.handle_event(AgentEndEvent(messages=[message]))
 
     assert render_calls["n"] == calls_after_visible_reply
+
+
+def test_interactive_renderer_ignores_dict_subagent_events() -> None:
+    terminal = FakeTerminal()
+    tui = TUI(terminal)
+    renderer = InteractiveRenderer(tui)
+    render_calls = {"n": 0}
+    original_request_render = tui.request_render
+
+    def counting_request_render(*args, **kwargs):
+        render_calls["n"] += 1
+        return original_request_render(*args, **kwargs)
+
+    tui.request_render = counting_request_render
+
+    renderer.handle_event(
+        {
+            "type": "subagent_tool_start",
+            "role": "reviewer",
+            "toolName": "read",
+            "status": "started",
+        }
+    )
+
+    assert render_calls["n"] == 0
 
 
 def test_markdown_input_select_and_footer_components() -> None:
@@ -2490,6 +2693,18 @@ def test_input_buffers_incremental_leaked_mouse_report_fragments() -> None:
 
     assert input_component.get_value() == "draftclean"
     assert input_component.cursor == len("draftclean")
+
+
+def test_input_mask_hides_value_during_render_but_preserves_submitted_value() -> None:
+    input_component = Input(prompt="Enter API key: ", mask=True)
+    input_component.focused = True
+
+    input_component.handle_input("typed-secret")
+
+    rendered = strip_ansi("".join(input_component.render(80)))
+    assert input_component.get_value() == "typed-secret"
+    assert "typed-secret" not in rendered
+    assert "*" * len("typed-secret") in rendered
 
 
 def test_input_ports_pi_alt_d_delete_word_forward_keybinding() -> None:
@@ -3023,6 +3238,76 @@ def test_interactive_mode_runs_agents_command_without_model_turn(tmp_path) -> No
     assert "No subagents have been spawned" in rendered
 
 
+def test_interactive_mode_runs_help_command_without_model_turn(tmp_path) -> None:
+    calls = {"model": 0}
+
+    def script(model, context):
+        calls["model"] += 1
+        return text_response_events(model, "model should not run")
+
+    register_api_provider(create_faux_provider(script))
+    terminal = FakeTerminal(columns=120, rows=40)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+    inputs = iter(["/help", "/exit"])
+    mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
+
+    mode.run()
+
+    rendered = strip_ansi("\n".join(app.tui.render(120)))
+    assert calls["model"] == 0
+    assert "TUI commands" in rendered
+    assert "/model" in rendered
+    assert "model should not run" not in rendered
+
+
+def test_interactive_mode_reports_unknown_slash_command_without_model_turn(tmp_path) -> None:
+    calls = {"model": 0}
+
+    def script(model, context):
+        calls["model"] += 1
+        return text_response_events(model, "model should not run")
+
+    register_api_provider(create_faux_provider(script))
+    terminal = FakeTerminal(columns=120, rows=40)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+    inputs = iter(["/does-not-exist", "/exit"])
+    mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
+
+    mode.run()
+
+    rendered = strip_ansi("\n".join(app.tui.render(120)))
+    assert calls["model"] == 0
+    assert "Unknown command: /does-not-exist" in rendered
+    assert "Type /help for available commands." in rendered
+    assert "model should not run" not in rendered
+
+
+def test_interactive_mode_runs_delegate_command_through_turn_thread(tmp_path) -> None:
+    calls = {"model": 0}
+
+    def script(model, context):
+        calls["model"] += 1
+        return text_response_events(model, "model should not run")
+
+    def backend(task):
+        return "delegate command ok"
+
+    register_api_provider(create_faux_provider(script))
+    terminal = FakeTerminal(columns=140, rows=40)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+    app.session.subagents.register_backend(CallableSubagentBackend("test", backend))
+    inputs = iter(["/delegate --backend test reviewer inspect package.json", "/exit"])
+    mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
+
+    mode.run()
+
+    rendered = strip_ansi("\n".join(app.tui.render(140)))
+    assert calls["model"] == 0
+    assert "delegate command ok" in rendered
+    assert "Unknown command: /delegate" not in rendered
+    assert "model should not run" not in rendered
+
+
 def test_interactive_mode_does_not_run_delegate_command_on_input_thread(tmp_path) -> None:
     register_api_provider(create_faux_provider(lambda m, c: text_response_events(m, "unused")))
     terminal = FakeTerminal(columns=120, rows=40)
@@ -3119,6 +3404,170 @@ def test_interactive_mode_runs_agents_command_while_subagent_tool_waits(tmp_path
     assert "Queued message for after current turn" not in rendered
     assert "parent done" in rendered
     assert all("Subagents:" not in text for text in provider_context_texts)
+
+
+def test_interactive_mode_live_terminal_runs_agents_command_while_subagent_tool_waits(tmp_path) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    provider_calls = {"n": 0}
+
+    def script(model, context):
+        provider_calls["n"] += 1
+        if provider_calls["n"] == 1:
+            return tool_call_response_events(
+                model,
+                "spawn_subagent",
+                {"role": "reviewer", "goal": "slow review", "wait": True, "timeoutSeconds": 30},
+            )
+        return text_response_events(model, "parent done")
+
+    def slow_backend(task):
+        started.set()
+        release.wait(2)
+        return "child done"
+
+    register_api_provider(create_faux_provider(script))
+    terminal = FakeTerminal(columns=140, rows=40)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+    app.session.subagents.register_backend(CallableSubagentBackend("internal", slow_backend))
+    mode = InteractiveMode(app)
+    outcome: dict[str, object] = {}
+
+    def run_mode() -> None:
+        try:
+            outcome["code"] = mode.run()
+        except BaseException as error:  # noqa: BLE001 - test thread must surface failures.
+            outcome["error"] = error
+
+    thread = threading.Thread(target=run_mode)
+    thread.start()
+    try:
+        assert _wait_until(lambda: terminal.input_handler is not None and mode.active_editor is not None)
+        assert terminal.input_handler is not None
+
+        terminal.input_handler("spawn a slow reviewer subagent\r")
+        assert started.wait(timeout=2)
+        assert mode._is_turn_active()
+
+        terminal.input_handler("/agents\r")
+
+        assert _wait_until(
+            lambda: "Subagents:" in strip_ansi(terminal.output)
+            and "running - slow review" in strip_ansi(terminal.output),
+            timeout=0.5,
+        )
+
+        release.set()
+        assert _wait_until(lambda: not mode._is_turn_active() and mode.active_editor is not None, timeout=2)
+        terminal.input_handler("/exit\r")
+        thread.join(timeout=2)
+    finally:
+        release.set()
+        if thread.is_alive():
+            mode._shutdown_requested = True
+            if terminal.input_handler is not None:
+                terminal.input_handler("/exit\r")
+            thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert "error" not in outcome
+    assert outcome["code"] == 0
+    assert provider_calls["n"] == 2
+
+
+def test_interactive_mode_live_terminal_ctrl_c_cancels_waiting_subagent_tool(tmp_path) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    provider_calls = {"n": 0}
+
+    def script(model, context):
+        provider_calls["n"] += 1
+        return tool_call_response_events(
+            model,
+            "spawn_subagent",
+            {"role": "reviewer", "goal": "slow review", "wait": True, "timeoutSeconds": 30},
+        )
+
+    def slow_backend(task):
+        started.set()
+        release.wait(2)
+        return "late summary"
+
+    register_api_provider(create_faux_provider(script))
+    terminal = FakeTerminal(columns=140, rows=40)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+    app.session.subagents.register_backend(CallableSubagentBackend("internal", slow_backend))
+    mode = InteractiveMode(app)
+    outcome: dict[str, object] = {}
+
+    def run_mode() -> None:
+        try:
+            outcome["code"] = mode.run()
+        except BaseException as error:  # noqa: BLE001 - test thread must surface failures.
+            outcome["error"] = error
+
+    thread = threading.Thread(target=run_mode)
+    thread.start()
+    try:
+        assert _wait_until(lambda: terminal.input_handler is not None and mode.active_editor is not None)
+        assert terminal.input_handler is not None
+
+        terminal.input_handler("spawn a slow reviewer subagent\r")
+        assert started.wait(timeout=2)
+        assert mode._is_turn_active()
+
+        terminal.input_handler("\x03")
+
+        assert _wait_until(
+            lambda: not mode._is_turn_active()
+            and mode.status._message == "Idle"
+            and mode.active_editor is not None,
+            timeout=2,
+        )
+        results = app.session.subagents.list_results()
+        assert len(results) == 1
+        assert results[0].status == "cancelled"
+        assert results[0].errors == ["Cancelled by parent abort."]
+
+        release.set()
+        terminal.input_handler("/exit\r")
+        thread.join(timeout=2)
+    finally:
+        release.set()
+        if thread.is_alive():
+            mode._shutdown_requested = True
+            if terminal.input_handler is not None:
+                terminal.input_handler("/exit\r")
+            thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert "error" not in outcome
+    assert outcome["code"] == 0
+    assert provider_calls["n"] == 1
+
+
+def test_interactive_mode_renders_subagent_tool_trace_event(tmp_path) -> None:
+    register_api_provider(create_faux_provider(lambda m, c: text_response_events(m, "unused")))
+    terminal = FakeTerminal(columns=140, rows=40)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+    mode.init()
+
+    mode._handle_session_event(
+        {
+            "type": "subagent_tool_end",
+            "taskId": "subagent-fixed",
+            "role": "reviewer",
+            "toolName": "read",
+            "status": "ok",
+            "argsPreview": "path=child.md",
+            "resultPreview": "child trace body",
+        }
+    )
+
+    rendered = strip_ansi("\n".join(app.tui.render(140)))
+    assert "subagent reviewer read ok path=child.md" in rendered
+    assert "child trace body" in rendered
 
 
 def test_interactive_mode_dispatches_extension_shortcut_without_model_turn(tmp_path) -> None:
@@ -4510,14 +4959,14 @@ def test_interactive_mode_manual_compress_failure_resets_status(tmp_path) -> Non
     assert "status: Compressing" not in rendered
 
 
-def test_interactive_mode_manual_compress_routes_aggressive_mode_through_session(tmp_path) -> None:
+def test_interactive_mode_manual_compress_routes_deep_mode_through_session(tmp_path) -> None:
     register_api_provider(create_faux_provider(lambda m, c: text_response_events(m, "unused")))
     terminal = FakeTerminal(columns=140)
     app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
     calls: list[tuple[str | None, bool]] = []
 
-    def fake_compact(focus=None, summarizer=None, aggressive=False):
-        calls.append((focus, aggressive))
+    def fake_compact(focus=None, summarizer=None, deep=False):
+        calls.append((focus, deep))
         return ManualCompressionStatus(
             messages=app.messages,
             compressed=False,
@@ -4525,21 +4974,59 @@ def test_interactive_mode_manual_compress_routes_aggressive_mode_through_session
             headline="No changes from compression: 0 messages",
             token_line="Approx request size: ~0 tokens (unchanged)",
             focus=focus,
-            aggressive=aggressive,
+            deep=deep,
         )
 
     app.session.compact = fake_compact
     mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
     mode.init()
 
-    mode._run_manual_compress("/compress agressive code scan")
-    mode._run_manual_compress("/compress database schema")
+    mode._run_manual_compress("/compress deep code scan")
+    mode._run_manual_compress("/compress aggressive database schema")
 
     rendered = "\n".join(app.tui.render(140))
-    assert calls == [("code scan", True), ("database schema", False)]
+    assert calls == [("code scan", True), ("aggressive database schema", False)]
     assert mode.status._message == "Idle"
     assert "compact: No changes from compression: 0 messages" in rendered
     assert "status: Compressing" not in rendered
+
+
+def test_status_line_uses_signal_glass_theme_for_known_kinds(monkeypatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    line = StatusLine("Compression complete", kind="compact")
+
+    rendered = "\n".join(line.render(80))
+
+    assert "\x1b[38;2;86;240;182m" in rendered
+    assert strip_ansi(rendered) == "compact: Compression complete"
+
+
+def test_status_line_respects_no_color(monkeypatch) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    line = StatusLine("Compression complete", kind="compact")
+
+    rendered = "\n".join(line.render(80))
+
+    assert "\x1b[" not in rendered
+    assert rendered == "compact: Compression complete"
+
+
+def test_footer_uses_signal_glass_theme_without_changing_text(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    footer = FooterComponent(
+        cwd=str(tmp_path),
+        model="faux-model",
+        provider="faux",
+        context_window=128_000,
+        context_percent=3.5,
+    )
+
+    rendered = "\n".join(footer.render(120))
+
+    assert "\x1b[38;2;120;255;208m" in rendered
+    plain = strip_ansi(rendered)
+    assert "faux-model" in plain
+    assert "3.5%/128k" in plain
 
 
 def test_interactive_mode_compact_alias_is_local_and_does_not_call_model(tmp_path) -> None:
@@ -4669,9 +5156,344 @@ def test_interactive_mode_login_api_key_is_local_tui_command(tmp_path) -> None:
     assert calls == []
     assert "Saved API key for Proxy AI" in rendered
     assert "Removed stored API key for Proxy AI" in rendered
+    assert "typed-secret" not in rendered
     assert get_provider_auth_status("proxy") == {"configured": False}
     assert get_api_key_for_provider("proxy") is None
     assert "model should not run" not in rendered
+
+
+def test_interactive_mode_login_api_key_offers_active_provider_without_registered_model(tmp_path) -> None:
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
+    terminal = FakeTerminal(columns=140)
+    model = Model(
+        id="qwen/qwen3.6-flash",
+        name="qwen/qwen3.6-flash",
+        api="faux",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        context_window=128000,
+        max_tokens=8192,
+    )
+    app = CodingApp(cwd=str(tmp_path), model=model, terminal=terminal, enable_tui=True)
+    inputs = iter(["/login", "2", "1", "typed-secret", "/exit"])
+    mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
+
+    mode.run()
+
+    rendered = strip_ansi("\n".join(app.tui.render(140)))
+    assert "Saved API key for OpenRouter" in rendered
+    assert "typed-secret" not in rendered
+    assert get_provider_auth_status("openrouter") == {"configured": True, "source": "stored"}
+    assert get_api_key_for_provider("openrouter") == "typed-secret"
+    assert "model should not run" not in rendered
+
+
+def test_interactive_mode_footer_counts_active_provider_without_registered_model(tmp_path) -> None:
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "unused")))
+    terminal = FakeTerminal(columns=140)
+    model = Model(
+        id="qwen/qwen3.6-flash",
+        name="qwen/qwen3.6-flash",
+        api="faux",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        context_window=128000,
+        max_tokens=8192,
+    )
+    app = CodingApp(cwd=str(tmp_path), model=model, terminal=terminal, enable_tui=True)
+    mode = InteractiveMode(app)
+    mode.init()
+
+    try:
+        assert mode.footer_data_provider.getAvailableProviderCount() == 1
+    finally:
+        mode.footer_data_provider.dispose()
+        app.tui.stop()
+
+
+def test_interactive_mode_model_command_switches_openrouter_without_model_turn(tmp_path) -> None:
+    calls: list[object] = []
+
+    def script(model, context):
+        calls.append((model, context))
+        return text_response_events(model, "model should not run")
+
+    register_api_provider(create_faux_provider(script))
+    terminal = FakeTerminal(columns=140)
+    model = Model(
+        id="qwen/qwen3.6-flash",
+        name="qwen/qwen3.6-flash",
+        api="faux",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        context_window=128000,
+        max_tokens=8192,
+    )
+    app = CodingApp(cwd=str(tmp_path), model=model, terminal=terminal, enable_tui=True)
+    inputs = iter(["/model openrouter/moonshotai/kimi-k2.6", "/exit"])
+    mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
+
+    mode.run()
+
+    rendered = strip_ansi("\n".join(app.tui.render(140)))
+    assert calls == []
+    assert app.session.model.provider == "openrouter"
+    assert app.session.model.id == "moonshotai/kimi-k2.6"
+    assert "Switched model to openrouter/moonshotai/kimi-k2.6" in rendered
+
+
+def test_interactive_mode_model_command_selects_registered_alternate_without_model_turn(tmp_path, monkeypatch) -> None:
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
+    monkeypatch.setattr(interactive_mode, "_fetch_openrouter_model_catalog", lambda base_model: [])
+    terminal = FakeTerminal(columns=140)
+    active = Model(
+        id="qwen/qwen3.6-flash",
+        name="qwen/qwen3.6-flash",
+        api="faux",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        context_window=128000,
+        max_tokens=8192,
+    )
+    alternate = Model(
+        id="moonshotai/kimi-k2.6",
+        name="moonshotai/kimi-k2.6",
+        api="faux",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        context_window=128000,
+        max_tokens=8192,
+    )
+    register_model(alternate)
+    app = CodingApp(cwd=str(tmp_path), model=active, terminal=terminal, enable_tui=True)
+    inputs = iter(["/model", "1", "/exit"])
+    mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
+
+    mode.run()
+
+    rendered = strip_ansi("\n".join(app.tui.render(140)))
+    assert app.session.model is alternate
+    assert "Select model:" in rendered
+    assert "Switched model to openrouter/moonshotai/kimi-k2.6" in rendered
+    assert "model should not run" not in rendered
+
+
+def test_interactive_mode_model_command_fetches_openrouter_catalog_for_picker(tmp_path, monkeypatch) -> None:
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
+    terminal = FakeTerminal(columns=140)
+    active = Model(
+        id="qwen/qwen3.6-flash",
+        name="qwen/qwen3.6-flash",
+        api="faux",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        context_window=128000,
+        max_tokens=8192,
+    )
+    fetched = {"count": 0}
+
+    def fake_fetch(base_model):
+        fetched["count"] += 1
+        return [
+            {
+                "id": "moonshotai/kimi-k2.6",
+                "name": "Kimi K2.6",
+                "context_length": 262144,
+                "top_provider": {"max_completion_tokens": 16384},
+                "architecture": {"input_modalities": ["text"]},
+                "supported_parameters": ["reasoning"],
+            },
+            {
+                "id": "qwen/qwen3.6-flash",
+                "name": "Qwen Flash",
+                "context_length": 128000,
+                "top_provider": {"max_completion_tokens": 8192},
+                "architecture": {"input_modalities": ["text", "image"]},
+            },
+        ]
+
+    monkeypatch.setattr(interactive_mode, "_fetch_openrouter_model_catalog", fake_fetch)
+    app = CodingApp(cwd=str(tmp_path), model=active, terminal=terminal, enable_tui=True)
+    inputs = iter(["/model", "1", "/exit"])
+    mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
+
+    mode.run()
+
+    rendered = strip_ansi("\n".join(app.tui.render(140)))
+    assert fetched["count"] == 1
+    assert app.session.model.provider == "openrouter"
+    assert app.session.model.id == "moonshotai/kimi-k2.6"
+    assert app.session.model.context_window == 262144
+    assert app.session.model.max_tokens == 16384
+    assert app.session.model.reasoning is True
+    assert "Select model:" in rendered
+    assert "openrouter/moonshotai/kimi-k2.6" in rendered
+    assert "model should not run" not in rendered
+
+
+def test_interactive_mode_model_command_caps_openrouter_full_context_output_limit(tmp_path, monkeypatch) -> None:
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
+    terminal = FakeTerminal(columns=140)
+    active = Model(
+        id="qwen/qwen3.6-flash",
+        name="qwen/qwen3.6-flash",
+        api="faux",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        context_window=128000,
+        max_tokens=8192,
+    )
+
+    def fake_fetch(base_model):
+        return [
+            {
+                "id": "qwen/qwen3.6-35b-a3b",
+                "name": "Qwen 3.6 35B",
+                "context_length": 262144,
+                "top_provider": {"max_completion_tokens": 262144},
+                "supported_parameters": ["max_tokens", "tools"],
+            }
+        ]
+
+    monkeypatch.setattr(interactive_mode, "_fetch_openrouter_model_catalog", fake_fetch)
+    app = CodingApp(cwd=str(tmp_path), model=active, terminal=terminal, enable_tui=True)
+    inputs = iter(["/model", "1", "/exit"])
+    mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
+
+    mode.run()
+
+    assert app.session.model.id == "qwen/qwen3.6-35b-a3b"
+    assert app.session.model.context_window == 262144
+    assert app.session.model.max_tokens == 16384
+    assert app.session.model.max_tokens < app.session.model.context_window
+
+
+def test_interactive_mode_model_command_filters_openrouter_catalog_without_huge_picker(tmp_path, monkeypatch) -> None:
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
+    terminal = FakeTerminal(columns=160)
+    active = Model(
+        id="qwen/qwen3.6-flash",
+        name="qwen/qwen3.6-flash",
+        api="faux",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        context_window=128000,
+        max_tokens=8192,
+    )
+
+    def fake_fetch(base_model):
+        return [
+            {"id": f"acme/noise-{index}", "name": f"Noise {index}", "context_length": 4096}
+            for index in range(80)
+        ] + [
+            {"id": "moonshotai/kimi-k2.6", "name": "Kimi K2.6", "context_length": 262144},
+            {"id": "moonshotai/kimi-dev-72b", "name": "Kimi Dev", "context_length": 131072},
+        ]
+
+    monkeypatch.setattr(interactive_mode, "_fetch_openrouter_model_catalog", fake_fetch)
+    app = CodingApp(cwd=str(tmp_path), model=active, terminal=terminal, enable_tui=True)
+    inputs = iter(["/model kimi", "2", "/exit"])
+    mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
+
+    mode.run()
+
+    rendered = strip_ansi("\n".join(app.tui.render(160)))
+    assert app.session.model.id == "moonshotai/kimi-dev-72b"
+    assert "openrouter/moonshotai/kimi-k2.6" in rendered
+    assert "openrouter/moonshotai/kimi-dev-72b" in rendered
+    assert "acme/noise-0" not in rendered
+    assert "model should not run" not in rendered
+
+
+def test_interactive_mode_model_command_warns_and_falls_back_when_openrouter_fetch_fails(tmp_path, monkeypatch) -> None:
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
+    terminal = FakeTerminal(columns=140)
+    active = Model(
+        id="qwen/qwen3.6-flash",
+        name="qwen/qwen3.6-flash",
+        api="faux",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        context_window=128000,
+        max_tokens=8192,
+    )
+
+    def fail_fetch(base_model):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(interactive_mode, "_fetch_openrouter_model_catalog", fail_fetch)
+    app = CodingApp(cwd=str(tmp_path), model=active, terminal=terminal, enable_tui=True)
+    inputs = iter(["/model", "1", "/exit"])
+    mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
+
+    mode.run()
+
+    rendered = strip_ansi("\n".join(app.tui.render(140)))
+    assert app.session.model is active
+    assert "Could not fetch OpenRouter models; showing local models only." in rendered
+    assert "openrouter/qwen/qwen3.6-flash (current)" in rendered
+    assert "model should not run" not in rendered
+
+
+def test_interactive_mode_extension_select_uses_tui_input_when_interactive(tmp_path) -> None:
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "unused")))
+    terminal = FakeTerminal(columns=120)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+    mode = InteractiveMode(app)
+    mode.init()
+
+    def fail_raw_input(prompt: str) -> str:
+        raise AssertionError(f"raw input called: {prompt}")
+
+    mode.input_fn = fail_raw_input
+    result: dict[str, str | None] = {}
+    error: dict[str, BaseException] = {}
+
+    def prompt_for_selection() -> None:
+        try:
+            result["value"] = mode.prompt_extension_select("Pick auth method:", ("Use subscription", "Use API key"))
+        except BaseException as exc:  # noqa: BLE001 - test thread captures assertion failures.
+            error["value"] = exc
+
+    thread = threading.Thread(target=prompt_for_selection)
+    thread.start()
+    deadline = time.monotonic() + 2
+    while thread.is_alive() and mode.active_editor is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    app.tui._handle_terminal_input("2\r")
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert error == {}
+    assert result == {"value": "Use API key"}
+
+
+def test_interactive_mode_extension_select_reports_invalid_numeric_choice(tmp_path) -> None:
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "unused")))
+    terminal = FakeTerminal(columns=120)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+    mode = InteractiveMode(app, input_fn=lambda prompt: "99")
+    mode.init()
+
+    result = mode.prompt_extension_select("Select model:", ("alpha", "beta"), kind="model")
+
+    rendered = strip_ansi("\n".join(app.tui.render(120)))
+    assert result is None
+    assert "Invalid selection: 99. Enter a number from 1 to 2." in rendered
+
+
+def test_interactive_mode_extension_select_reports_blank_cancel(tmp_path) -> None:
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "unused")))
+    terminal = FakeTerminal(columns=120)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+    mode = InteractiveMode(app, input_fn=lambda prompt: "")
+    mode.init()
+
+    result = mode.prompt_extension_select("Select model:", ("alpha", "beta"), kind="model")
+
+    rendered = strip_ansi("\n".join(app.tui.render(120)))
+    assert result is None
+    assert "Selection cancelled." in rendered
 
 
 def test_interactive_mode_coerces_read_numeric_string_like_pi_validation(tmp_path) -> None:

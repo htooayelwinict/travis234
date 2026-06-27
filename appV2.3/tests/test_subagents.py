@@ -303,6 +303,15 @@ def test_callable_backend_rejects_malformed_handler_result(tmp_path):
             raise AssertionError(f"Expected malformed handler result {output!r} to fail")
 
 
+def test_subagent_task_prompt_prevents_parent_no_subagent_fallback(tmp_path):
+    task = SubagentTask(role="reviewer", goal="inspect README.md", cwd=str(tmp_path))
+
+    prompt = task.prompt()
+
+    assert "You are already the delegated child subagent" in prompt
+    assert "Do not answer `subagent tool unavailable`" in prompt
+
+
 def test_subagent_task_rejects_boolean_runtime_options(tmp_path):
     cases = (
         ({"timeout_seconds": True}, "Subagent timeout_seconds must be positive"),
@@ -1178,6 +1187,16 @@ def test_agent_session_cancel_agent_command_cancels_subagent(tmp_path):
     rendered = "\n".join(str(getattr(message, "content", "")) for message in messages)
     assert "cancelled" in rendered
     assert session.subagents.get_result(task_id).status == "cancelled"
+
+
+def test_agent_session_cancel_agent_command_reports_unknown_task_without_keyerror_quotes(tmp_path):
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+
+    messages = session.prompt("/cancel-agent subagent-deadbeef0000 user test")
+
+    rendered = "\n".join(str(getattr(message, "content", "")) for message in messages)
+    assert "Unknown subagent task: subagent-deadbeef0000" in rendered
+    assert "'Unknown subagent task:" not in rendered
 
 
 def test_supervisor_cancel_invokes_backend_cancel_hook(tmp_path):

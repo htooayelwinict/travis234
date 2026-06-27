@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import queue
 import threading
-from typing import AsyncIterator, Generic, Iterator, TypeVar
+from typing import AsyncIterator, Callable, Generic, Iterator, TypeVar
 
 from appv23.ai.types import AssistantMessage, AssistantMessageEvent
 
@@ -42,11 +42,30 @@ class EventStream(Generic[T, R]):
         self._queue.put(_SENTINEL)
 
     def __iter__(self) -> Iterator[T]:
+        yield from self.iter_until()
+
+    def iter_until(
+        self,
+        should_stop: Callable[[], bool] | None = None,
+        *,
+        poll_interval_seconds: float = 0.05,
+    ) -> Iterator[T]:
         while True:
-            item = self._queue.get()
+            if should_stop is not None and should_stop():
+                return
+            if should_stop is None:
+                item = self._queue.get()
+            else:
+                try:
+                    item = self._queue.get(timeout=poll_interval_seconds)
+                except queue.Empty:
+                    continue
             if item is _SENTINEL:
                 return
             yield item  # type: ignore[misc]
+
+    def close(self) -> None:
+        self.end(self._result)
 
     async def __aiter__(self) -> AsyncIterator[T]:
         while True:

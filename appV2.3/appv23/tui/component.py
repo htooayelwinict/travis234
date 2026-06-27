@@ -25,6 +25,32 @@ from appv23.tui.terminal_image import (
 from appv23.tui.utils import slice_by_column, truncate_to_width, visible_width, wrap_text
 
 CURSOR_MARKER = "\x1b_pi:c\x07"
+_ANSI_RESET = "\x1b[0m"
+_SIGNAL_GLASS_STATUS_COLORS = {
+    "compact": "38;2;86;240;182",
+    "info": "38;2;191;231;255",
+    "note": "38;2;255;229;166",
+    "warning": "38;2;255;182;72",
+    "error": "38;2;255;112;112",
+    "help": "38;2;120;255;208",
+    "status": "38;2;217;255;242",
+    "select": "38;2;120;255;208",
+    "auth": "38;2;120;255;208",
+    "model": "38;2;120;255;208",
+}
+_SIGNAL_GLASS_FOOTER_COLOR = "38;2;120;255;208"
+
+
+def _tui_color_enabled() -> bool:
+    if os.environ.get("NO_COLOR"):
+        return False
+    return os.environ.get("TERM", "").lower() != "dumb"
+
+
+def _ansi_color(text: str, color: str | None) -> str:
+    if not text or not color or not _tui_color_enabled():
+        return text
+    return f"\x1b[{color}m{text}{_ANSI_RESET}"
 
 
 class Component:
@@ -759,9 +785,17 @@ def _is_regional_indicator(char: str) -> bool:
 class Input(Component):
     """Single-line input with basic editing and submit callback."""
 
-    def __init__(self, value: str = "", *, prompt: str = "", on_submit: Callable[[str], None] | None = None) -> None:
+    def __init__(
+        self,
+        value: str = "",
+        *,
+        prompt: str = "",
+        on_submit: Callable[[str], None] | None = None,
+        mask: bool = False,
+    ) -> None:
         self.value = value
         self.prompt = prompt
+        self.mask = mask
         self.cursor = len(value)
         self.on_submit = on_submit
         self.on_escape: Callable[[], None] | None = None
@@ -992,18 +1026,20 @@ class Input(Component):
         available_width = width - prompt_width
         if available_width <= 0:
             return [truncate_to_width(self.prompt, width)]
-        if _is_plain_ascii_input(self.value):
-            return self._render_plain_ascii(width, prompt_width, available_width)
+        display_value = ("*" * len(self.value)) if self.mask else self.value
+        display_cursor = max(0, min(self.cursor, len(display_value)))
+        if _is_plain_ascii_input(display_value):
+            return self._render_plain_ascii(width, prompt_width, available_width, display_value, display_cursor)
 
         visible_text = ""
-        cursor_display = self.cursor
-        total_width = visible_width(self.value)
+        cursor_display = display_cursor
+        total_width = visible_width(display_value)
 
         if total_width < available_width:
-            visible_text = self.value
+            visible_text = display_value
         else:
-            scroll_width = available_width - 1 if self.cursor == len(self.value) else available_width
-            cursor_col = visible_width(self.value[: self.cursor])
+            scroll_width = available_width - 1 if display_cursor == len(display_value) else available_width
+            cursor_col = visible_width(display_value[:display_cursor])
             if scroll_width > 0:
                 half_width = scroll_width // 2
                 if cursor_col < half_width:
@@ -1012,8 +1048,8 @@ class Input(Component):
                     start_col = max(0, total_width - scroll_width)
                 else:
                     start_col = max(0, cursor_col - half_width)
-                visible_text = slice_by_column(self.value, start_col, scroll_width, strict=True)
-                before_cursor = slice_by_column(self.value, start_col, max(0, cursor_col - start_col), strict=True)
+                visible_text = slice_by_column(display_value, start_col, scroll_width, strict=True)
+                before_cursor = slice_by_column(display_value, start_col, max(0, cursor_col - start_col), strict=True)
                 cursor_display = len(before_cursor)
             else:
                 cursor_display = 0
@@ -1027,9 +1063,17 @@ class Input(Component):
         padding = " " * max(0, available_width - visual_length)
         return [truncate_to_width(self.prompt + text_with_cursor + padding, width)]
 
-    def _render_plain_ascii(self, width: int, prompt_width: int, available_width: int) -> list[str]:
-        value = self.value
-        cursor = max(0, min(self.cursor, len(value)))
+    def _render_plain_ascii(
+        self,
+        width: int,
+        prompt_width: int,
+        available_width: int,
+        value: str | None = None,
+        cursor: int | None = None,
+    ) -> list[str]:
+        value = self.value if value is None else value
+        cursor = self.cursor if cursor is None else cursor
+        cursor = max(0, min(cursor, len(value)))
         total_width = len(value)
         cursor_display = cursor
 
@@ -1802,7 +1846,8 @@ class StatusLine(Text):
     def render(self, width: int) -> list[str]:
         if not self.visible:
             return []
-        return super().render(width)
+        color = _SIGNAL_GLASS_STATUS_COLORS.get(self.kind, _SIGNAL_GLASS_STATUS_COLORS["status"])
+        return [_ansi_color(line, color) for line in super().render(width)]
 
     def _refresh_text(self) -> None:
         clean = self._message
@@ -1949,7 +1994,7 @@ class FooterComponent(Component):
             lines.append(truncate_to_width(status_line, width, "..."))
         if self.history_hint:
             lines.append(truncate_to_width(_single_line(self.history_hint), width, "..."))
-        return lines
+        return [_ansi_color(line, _SIGNAL_GLASS_FOOTER_COLOR) for line in lines]
 
 
 def _format_footer_tokens(count: int) -> str:

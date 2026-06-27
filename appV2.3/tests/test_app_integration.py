@@ -99,6 +99,131 @@ def test_coding_app_model_can_spawn_visible_subagent(tmp_path: Path) -> None:
     assert provider_calls["n"] == 3
 
 
+def test_coding_app_internal_subagent_result_includes_child_tool_trace(tmp_path: Path) -> None:
+    (tmp_path / "child.md").write_text("child trace body", encoding="utf-8")
+    model = faux_model()
+    provider_calls = {"n": 0}
+
+    def script(m, c):
+        provider_calls["n"] += 1
+        if provider_calls["n"] == 1:
+            return tool_call_response_events(
+                m,
+                "spawn_subagent",
+                {
+                    "role": "reviewer",
+                    "goal": "read child.md and report",
+                    "wait": True,
+                    "timeoutSeconds": 5,
+                },
+            )
+        if provider_calls["n"] == 2:
+            return tool_call_response_events(m, "read", {"path": "child.md"})
+        if provider_calls["n"] == 3:
+            return text_response_events(m, "child read child.md")
+        return text_response_events(m, "parent saw child trace")
+
+    register_api_provider(create_faux_provider(script))
+    app = CodingApp(cwd=str(tmp_path), model=model, terminal=FakeTerminal(), enable_tui=False)
+    events: list[object] = []
+    app.session.subscribe(events.append)
+
+    app.run_turn("spawn a reviewer subagent and show its status")
+
+    result = app.session.subagents.list_results()[0]
+    result_dict = result.as_dict()
+    tool_trace = result_dict["toolTrace"]
+    assert tool_trace
+    assert tool_trace[0]["toolName"] == "read"
+    assert tool_trace[0]["status"] == "ok"
+    assert "child.md" in tool_trace[0]["argsPreview"]
+    assert "child trace body" in tool_trace[0]["resultPreview"]
+    formatted = app.session._format_subagent_result(result)
+    assert "toolTrace:" in formatted
+    assert "read ok" in formatted
+    event_types = [event["type"] if isinstance(event, dict) else event.type for event in events]
+    assert "subagent_tool_start" in event_types
+    assert "subagent_tool_end" in event_types
+    assert provider_calls["n"] == 4
+
+
+def test_coding_app_tui_renderer_does_not_break_internal_subagent_tool_trace(tmp_path: Path) -> None:
+    (tmp_path / "child.md").write_text("child trace body", encoding="utf-8")
+    model = faux_model()
+    provider_calls = {"n": 0}
+
+    def script(m, c):
+        provider_calls["n"] += 1
+        if provider_calls["n"] == 1:
+            return tool_call_response_events(
+                m,
+                "spawn_subagent",
+                {
+                    "role": "reviewer",
+                    "goal": "read child.md and report",
+                    "wait": True,
+                    "timeoutSeconds": 5,
+                },
+            )
+        if provider_calls["n"] == 2:
+            return tool_call_response_events(m, "read", {"path": "child.md"})
+        if provider_calls["n"] == 3:
+            return text_response_events(m, "child read child.md")
+        return text_response_events(m, "parent saw child trace")
+
+    register_api_provider(create_faux_provider(script))
+    app = CodingApp(cwd=str(tmp_path), model=model, terminal=FakeTerminal(), enable_tui=True)
+
+    app.run_turn("spawn a reviewer subagent and show its status")
+
+    result = app.session.subagents.list_results()[0]
+    tool_trace = result.as_dict()["toolTrace"]
+    assert tool_trace[0]["toolName"] == "read"
+    assert tool_trace[0]["status"] == "ok"
+    assert "child trace body" in tool_trace[0]["resultPreview"]
+    assert provider_calls["n"] == 4
+
+
+def test_coding_app_internal_subagent_tool_trace_records_guardrail_halt(tmp_path: Path) -> None:
+    model = faux_model()
+    provider_calls = {"n": 0}
+
+    def script(m, c):
+        provider_calls["n"] += 1
+        if provider_calls["n"] == 1:
+            return tool_call_response_events(
+                m,
+                "spawn_subagent",
+                {
+                    "role": "reviewer",
+                    "goal": "try reading missing.md and report the blocker",
+                    "wait": True,
+                    "timeoutSeconds": 5,
+                },
+            )
+        if provider_calls["n"] in {2, 3, 4, 5}:
+            return tool_call_response_events(m, "read", {"path": "missing.md"})
+        return text_response_events(m, "parent saw child guardrail")
+
+    register_api_provider(create_faux_provider(script))
+    app = CodingApp(cwd=str(tmp_path), model=model, terminal=FakeTerminal(), enable_tui=False)
+
+    app.run_turn("spawn a reviewer subagent and show its status")
+
+    result = app.session.subagents.list_results()[0]
+    result_dict = result.as_dict()
+    tool_trace = result_dict["toolTrace"]
+    assert tool_trace
+    assert tool_trace[-1]["status"] == "guardrail_halt"
+    assert tool_trace[-1]["guardrailCode"] == "repeated_exact_failure_block"
+    assert result_dict["guardrail"]["code"] == "repeated_exact_failure_block"
+    assert result.status == "failed"
+    assert any("repeated_exact_failure_block" in error for error in result.errors)
+    formatted = app.session._format_subagent_result(result)
+    assert "guardrail: repeated_exact_failure_block" in formatted
+    assert "read guardrail_halt" in formatted
+
+
 def test_coding_app_wires_compaction_transform(tmp_path: Path) -> None:
     model = faux_model()
     register_api_provider(create_faux_provider(lambda m, c: text_response_events(m, "ok")))
@@ -602,6 +727,31 @@ def test_coding_app_wires_compaction_manager_into_session_api(tmp_path: Path) ->
 
     assert status.compressed is True
     assert any("session compacted" in str(message.content) for message in app.messages)
+
+
+def test_coding_app_manual_deep_compaction_reports_baseline_target(tmp_path: Path) -> None:
+    model = faux_model()
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=model,
+        terminal=FakeTerminal(),
+        context_length=128_000,
+        summarizer=lambda prompt: "## Historical Task Snapshot\ndeep compacted",
+    )
+    app.session.agent.state.messages = [
+        UserMessage(content=f"deep old context {index} " * 500, timestamp=now_ms())
+        for index in range(40)
+    ]
+
+    status = app.compaction.compress_manual_with_status(app.messages, deep=True)
+
+    assert status.compressed is True
+    assert status.deep is True
+    assert status.target_tokens is not None
+    assert status.target_tokens >= 4096
+    assert status.compression_passes >= 1
+    assert status.deep_stop_reason
+    assert any("deep compacted" in str(message.content) for message in status.messages)
 
 
 def test_coding_app_preflight_compacts_after_large_tool_result_before_next_provider_call(tmp_path: Path) -> None:

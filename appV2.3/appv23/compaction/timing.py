@@ -19,10 +19,11 @@ from appv23.ai.types import Message
 from appv23.compaction.compressor import ContextCompressor, Summarizer, estimate_tokens
 
 SUMMARY_FAILURE_COOLDOWN_SECONDS = 600.0
-AGGRESSIVE_MAX_PASSES = 3
-AGGRESSIVE_TARGET_CONTEXT_RATIO = 0.05
-AGGRESSIVE_MIN_TARGET_TOKENS = 2048
-AGGRESSIVE_MIN_PASS_REDUCTION_PCT = 5.0
+DEEP_MAX_PASSES = 4
+DEEP_FALLBACK_TARGET_CONTEXT_RATIO = 0.05
+DEEP_MIN_TARGET_TOKENS = 4096
+DEEP_BASELINE_MARGIN_TOKENS = 2048
+DEEP_MIN_PASS_REDUCTION_PCT = 5.0
 
 
 @dataclass
@@ -40,9 +41,9 @@ class ManualCompressionStatus:
     tokens_before: int = 0
     first_kept_message_index: int | None = None
     first_kept_entry_id: str | None = None
-    aggressive: bool = False
+    deep: bool = False
     compression_passes: int = 1
-    aggressive_stop_reason: str | None = None
+    deep_stop_reason: str | None = None
     target_tokens: int | None = None
 
 
@@ -110,11 +111,13 @@ class CompactionManager:
         *,
         summarizer: Optional[Summarizer] = None,
         max_overflow_attempts: int = 3,
+        deep_baseline_tokens: int | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.compressor = compressor
         self._summarizer = summarizer
         self.max_overflow_attempts = max_overflow_attempts
+        self.deep_baseline_tokens = deep_baseline_tokens
         self._clock = clock
         self.last_prompt_tokens = 0
         self.last_compression_before_tokens = 0
@@ -195,14 +198,19 @@ class CompactionManager:
         force: bool,
         *,
         focus: str | None = None,
-        aggressive: bool = False,
+        deep_tail: bool = False,
         trigger: str = "unknown",
         estimated_after: bool = False,
+        reject_same_count_growth: bool = False,
     ) -> tuple[list[Message], bool]:
         summarizer = summarizer or self._summarizer
         self._last_compression_error = None
         self._last_compression_result = None
         before_tokens = estimate_tokens(messages)
+        compression_count_before = self.compressor.compression_count
+        previous_summary_before = getattr(self.compressor, "_previous_summary", None)
+        last_savings_before = self.compressor.last_compression_savings_pct
+        ineffective_count_before = getattr(self.compressor, "_ineffective_compression_count", 0)
         if not force and self._in_cooldown():
             self._record_compression_ledger(
                 trigger=trigger,
@@ -215,8 +223,8 @@ class CompactionManager:
             return messages, False
         try:
             kwargs = {"summarizer": summarizer, "focus_topic": focus, "force": force}
-            if aggressive:
-                kwargs["aggressive"] = True
+            if deep_tail:
+                kwargs["deep"] = True
             result = self.compressor.compress(messages, **kwargs)
         except Exception as error:  # noqa: BLE001 - summary failure => cooldown, no crash
             self._summary_failure_cooldown_until = self._clock() + SUMMARY_FAILURE_COOLDOWN_SECONDS
@@ -235,6 +243,31 @@ class CompactionManager:
         if force:
             self._summary_failure_cooldown_until = 0.0
         after_tokens = estimate_tokens(result.messages)
+        if (
+            reject_same_count_growth
+            and result.compressed
+            and len(result.messages) >= len(messages)
+            and after_tokens > before_tokens
+        ):
+            self.compressor.compression_count = compression_count_before
+            self.compressor._previous_summary = previous_summary_before  # noqa: SLF001 - rolling back rejected no-op.
+            self.compressor.last_compression_savings_pct = last_savings_before
+            self.compressor._ineffective_compression_count = ineffective_count_before  # noqa: SLF001
+            self.compressor._last_noop_reason = "context_size_increase"  # noqa: SLF001
+            self.compressor._last_summary_error = None  # noqa: SLF001
+            self.compressor._last_summary_dropped_count = 0  # noqa: SLF001
+            self.compressor._last_summary_fallback_used = False  # noqa: SLF001
+            self.compressor._last_compress_aborted = False  # noqa: SLF001
+            self._last_compression_result = None
+            self._record_compression_ledger(
+                trigger=trigger,
+                tokens_before=before_tokens,
+                tokens_after=before_tokens,
+                compressed=False,
+                estimated_after=False,
+                stop_reason="context_size_increase",
+            )
+            return messages, False
         if result.compressed:
             self.last_compression_before_tokens = before_tokens
             self.last_compression_after_tokens = after_tokens
@@ -348,14 +381,18 @@ class CompactionManager:
     def compress_manual(self, messages: list[Message], summarizer=None, focus: str | None = None) -> list[Message]:
         return self.compress_manual_with_status(messages, summarizer=summarizer, focus=focus).messages
 
-    def _aggressive_target_tokens(self) -> int:
-        return max(AGGRESSIVE_MIN_TARGET_TOKENS, int(self.compressor.context_length * AGGRESSIVE_TARGET_CONTEXT_RATIO))
+    def _deep_target_tokens(self) -> int:
+        if self.deep_baseline_tokens is not None and self.deep_baseline_tokens > 0:
+            return max(DEEP_MIN_TARGET_TOKENS, int(self.deep_baseline_tokens) + DEEP_BASELINE_MARGIN_TOKENS)
+        return max(DEEP_MIN_TARGET_TOKENS, int(self.compressor.context_length * DEEP_FALLBACK_TARGET_CONTEXT_RATIO))
 
-    def _aggressive_noop_reason(self) -> str:
+    def _deep_noop_reason(self) -> str:
         if self._last_compression_error:
             return "failed"
         if self.compressor._last_compress_aborted:
             return "aborted"
+        if getattr(self.compressor, "_last_noop_reason", None) == "context_size_increase":
+            return "context_size_increase"
         if getattr(self.compressor, "_last_noop_reason", None) == "protected_recent_context":
             return "protected_recent_context"
         return "no_changes"
@@ -366,7 +403,7 @@ class CompactionManager:
                 return index
         return None
 
-    def _map_aggressive_source_indices(
+    def _map_deep_source_indices(
         self,
         messages: list[Message],
         previous_sources: list[int | None],
@@ -391,13 +428,13 @@ class CompactionManager:
                 return source_index
         return None
 
-    def _run_aggressive_manual_compress(
+    def _run_deep_manual_compress(
         self,
         messages: list[Message],
         summarizer,
         focus: str | None,
     ) -> tuple[list[Message], bool, int, str, int]:
-        target_tokens = self._aggressive_target_tokens()
+        target_tokens = self._deep_target_tokens()
         current_messages = messages
         current_tokens = estimate_tokens(current_messages)
         source_indices: list[int | None] = list(range(len(messages)))
@@ -406,7 +443,7 @@ class CompactionManager:
         stop_reason = "max_passes"
         first_kept_original_index: int | None = None
 
-        for pass_index in range(1, AGGRESSIVE_MAX_PASSES + 1):
+        for pass_index in range(1, DEEP_MAX_PASSES + 1):
             before_pass_tokens = current_tokens
             previous_sources = source_indices
             new_messages, compressed = self._run_compress(
@@ -414,14 +451,15 @@ class CompactionManager:
                 summarizer,
                 force=True,
                 focus=focus,
-                aggressive=True,
+                deep_tail=True,
                 trigger="manual",
+                reject_same_count_growth=True,
             )
             passes = pass_index
             after_pass_tokens = estimate_tokens(new_messages)
             result = self._last_compression_result
             if compressed and result is not None:
-                source_indices = self._map_aggressive_source_indices(new_messages, previous_sources, result)
+                source_indices = self._map_deep_source_indices(new_messages, previous_sources, result)
                 first_kept_original_index = self._first_kept_source_after_summary(new_messages, source_indices)
 
             current_messages = new_messages
@@ -438,14 +476,14 @@ class CompactionManager:
                 stop_reason = "summary_fallback"
                 break
             if not compressed:
-                stop_reason = self._aggressive_noop_reason()
+                stop_reason = self._deep_noop_reason()
                 break
 
             compressed_any = True
             if current_tokens <= target_tokens:
                 stop_reason = "target_reached"
                 break
-            if _token_reduction_pct(before_pass_tokens, current_tokens) < AGGRESSIVE_MIN_PASS_REDUCTION_PCT:
+            if _token_reduction_pct(before_pass_tokens, current_tokens) < DEEP_MIN_PASS_REDUCTION_PCT:
                 stop_reason = "insufficient_progress"
                 break
 
@@ -453,7 +491,7 @@ class CompactionManager:
             self._last_compression_result.first_kept_message_index = first_kept_original_index
         return current_messages, compressed_any, passes, stop_reason, target_tokens
 
-    def _format_aggressive_note(
+    def _format_deep_note(
         self,
         *,
         passes: int,
@@ -464,15 +502,17 @@ class CompactionManager:
         if not stop_reason or target_tokens is None:
             return None
         pass_word = "pass" if passes == 1 else "passes"
-        prefix = f"Aggressive compression: {passes} {pass_word}; "
+        prefix = f"Deep compression: {passes} {pass_word}; "
         if stop_reason == "target_reached":
-            return f"{prefix}target reached (~{after_tokens:,} <= ~{target_tokens:,} tokens)."
+            return f"{prefix}stopped near baseline target (~{after_tokens:,} <= ~{target_tokens:,} tokens)."
         if stop_reason == "max_passes":
-            return f"{prefix}stopped at the 3-pass safety limit (~{after_tokens:,} tokens, target ~{target_tokens:,})."
+            return f"{prefix}stopped at the 4-pass safety limit (~{after_tokens:,} tokens, target ~{target_tokens:,})."
         if stop_reason == "insufficient_progress":
             return f"{prefix}stopped because the last pass made insufficient progress."
         if stop_reason == "protected_recent_context":
             return f"{prefix}stopped because recent context is protected."
+        if stop_reason == "context_size_increase":
+            return f"{prefix}stopped because the generated summary would increase context size."
         if stop_reason == "summary_fallback":
             return f"{prefix}stopped after fallback summary recovery."
         if stop_reason == "failed":
@@ -488,15 +528,15 @@ class CompactionManager:
         messages: list[Message],
         summarizer=None,
         focus: str | None = None,
-        aggressive: bool = False,
+        deep: bool = False,
     ) -> ManualCompressionStatus:
         before_tokens = estimate_tokens(messages)
         compression_passes = 1
-        aggressive_stop_reason = None
+        deep_stop_reason = None
         target_tokens = None
-        if aggressive:
-            new_messages, compressed, compression_passes, aggressive_stop_reason, target_tokens = (
-                self._run_aggressive_manual_compress(messages, summarizer, focus)
+        if deep:
+            new_messages, compressed, compression_passes, deep_stop_reason, target_tokens = (
+                self._run_deep_manual_compress(messages, summarizer, focus)
             )
         else:
             new_messages, compressed = self._run_compress(
@@ -504,8 +544,9 @@ class CompactionManager:
                 summarizer,
                 force=True,
                 focus=focus,
-                aggressive=False,
+                deep_tail=False,
                 trigger="manual",
+                reject_same_count_growth=True,
             )
         after_tokens = estimate_tokens(new_messages)
         summary = summarize_manual_compression(messages, new_messages, before_tokens, after_tokens)
@@ -540,20 +581,20 @@ class CompactionManager:
             )
 
         note = summary["note"] if isinstance(summary["note"], str) else None
-        if (
-            not compressed
-            and not self._last_compression_error
-            and getattr(self.compressor, "_last_noop_reason", None) == "protected_recent_context"
-        ):
-            note = "No compactable history; recent context is protected."
-        aggressive_note = self._format_aggressive_note(
+        if not compressed and not self._last_compression_error:
+            noop_reason = getattr(self.compressor, "_last_noop_reason", None)
+            if noop_reason == "protected_recent_context":
+                note = "No compactable history; recent context is protected."
+            elif noop_reason == "context_size_increase":
+                note = "Compression skipped because the generated summary would increase context size."
+        deep_note = self._format_deep_note(
             passes=compression_passes,
-            stop_reason=aggressive_stop_reason,
+            stop_reason=deep_stop_reason,
             target_tokens=target_tokens,
             after_tokens=after_tokens,
         )
-        if aggressive_note:
-            note = f"{note} {aggressive_note}" if note else aggressive_note
+        if deep_note:
+            note = f"{note} {deep_note}" if note else deep_note
 
         result = self._last_compression_result
         return ManualCompressionStatus(
@@ -569,9 +610,9 @@ class CompactionManager:
             summary=getattr(result, "summary", None),
             tokens_before=int(getattr(result, "tokens_before", before_tokens) or before_tokens),
             first_kept_message_index=getattr(result, "first_kept_message_index", None),
-            aggressive=aggressive,
+            deep=deep,
             compression_passes=compression_passes,
-            aggressive_stop_reason=aggressive_stop_reason,
+            deep_stop_reason=deep_stop_reason,
             target_tokens=target_tokens,
         )
 

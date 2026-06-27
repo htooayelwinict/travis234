@@ -1023,7 +1023,7 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         *,
         focus_topic: str | None = None,
         force: bool = False,
-        aggressive: bool = False,
+        deep: bool = False,
     ) -> CompressionResult:
         summarizer = summarizer or self._summarizer
         before = estimate_tokens(messages)
@@ -1040,7 +1040,7 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         pruned = self.prune_old_tool_results(messages)
         head_end = self._protect_head_size(pruned)
         head_end = self._align_boundary_forward(pruned, head_end)
-        tail_start = self._find_tail_start(pruned, head_end, aggressive=aggressive)
+        tail_start = self._find_tail_start(pruned, head_end, deep=deep)
 
         if tail_start <= head_end:
             emergency_window = self._oversized_protected_head_window(pruned, head_end, before, force=force)
@@ -1120,15 +1120,15 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             first_kept_message_index=tail_start,
         )
 
-    def _find_tail_start(self, messages: list[Message], head_end: int, *, aggressive: bool = False) -> int:
+    def _find_tail_start(self, messages: list[Message], head_end: int, *, deep: bool = False) -> int:
         if head_end >= len(messages):
             return len(messages)
         budget = self.tail_token_budget
-        if aggressive:
+        if deep:
             budget = max(1024, int(budget * 0.25))
         total = len(messages)
         available_tail = max(0, total - head_end - 1)
-        min_tail_floor = 3 if aggressive else max(3, min(self.protect_last_n, _MAX_TAIL_MESSAGE_FLOOR))
+        min_tail_floor = 3 if deep else max(3, min(self.protect_last_n, _MAX_TAIL_MESSAGE_FLOOR))
         compressible_tail_cap = max(3, available_tail - 2)
         min_tail = (
             min(min_tail_floor, compressible_tail_cap, available_tail)

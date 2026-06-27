@@ -74,7 +74,11 @@ class CodingApp:
             threshold_percent=threshold_percent,
             summarizer=summarizer,
         )
-        self.compaction = CompactionManager(self.compressor, summarizer=summarizer)
+        self.compaction = CompactionManager(
+            self.compressor,
+            summarizer=summarizer,
+            deep_baseline_tokens=_estimate_static_prompt_tool_tokens(self.session),
+        )
         self.session.set_compaction_manager(self.compaction)
         self.terminal = terminal or ProcessTerminal()
         self.tui = TUI(self.terminal)

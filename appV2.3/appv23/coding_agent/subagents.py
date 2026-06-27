@@ -128,6 +128,9 @@ class SubagentTask:
     def prompt(self) -> str:
         parts = [
             f"Role: {self.role}",
+            "Delegation boundary: You are already the delegated child subagent. Execute the Goal directly with "
+            "the available tools. Do not evaluate whether the parent has subagent tools. Do not answer "
+            "`subagent tool unavailable` unless the Goal explicitly asks you to test nested-subagent tooling.",
             f"Goal: {self.goal}",
             f"Sandbox: {self.sandbox}",
             f"Allowed tools: {', '.join(self.allowed_tools) if self.allowed_tools else 'none'}",
@@ -154,6 +157,8 @@ class SubagentResult:
     raw_log_path: str | None = None
     started_at_ms: int = 0
     ended_at_ms: int = 0
+    tool_trace: list[dict[str, object]] = field(default_factory=list)
+    guardrail: dict[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.task_id, str) or not self.task_id.strip() or not _TASK_ID_PATTERN.fullmatch(self.task_id):
@@ -184,6 +189,10 @@ class SubagentResult:
                 raise ValueError(f"Subagent {field_name} must be a list of strings")
         if not isinstance(self.usage, dict):
             raise ValueError("Subagent usage must be a dict")
+        if not isinstance(self.tool_trace, list) or any(not isinstance(item, dict) for item in self.tool_trace):
+            raise ValueError("Subagent tool_trace must be a list of dicts")
+        if self.guardrail is not None and not isinstance(self.guardrail, dict):
+            raise ValueError("Subagent guardrail must be a dict when set")
 
     @property
     def duration_ms(self) -> int:
@@ -208,6 +217,8 @@ class SubagentResult:
             "startedAtMs": self.started_at_ms,
             "endedAtMs": self.ended_at_ms,
             "durationMs": self.duration_ms,
+            "toolTrace": [dict(item) for item in self.tool_trace],
+            "guardrail": dict(self.guardrail) if self.guardrail is not None else None,
         }
 
 

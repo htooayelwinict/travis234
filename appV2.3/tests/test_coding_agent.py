@@ -5391,6 +5391,36 @@ def test_agent_session_cycles_registered_models_without_scoped_models(tmp_path: 
     assert session.thinking_level == "high"
 
 
+def test_agent_session_cycle_includes_active_model_when_registry_does_not(tmp_path: Path) -> None:
+    active = Model(id="env-model", name="Env", api="faux", provider="openrouter", base_url="", reasoning=True)
+    alternate = Model(id="registered-model", name="Registered", api="faux", provider="openrouter", base_url="", reasoning=True)
+    register_model(alternate)
+    session = AgentSession(cwd=str(tmp_path), model=active, thinking_level="high")
+
+    result = session.cycle_model()
+
+    assert result is not None
+    assert result.model is alternate
+    assert result.thinking_level == "high"
+    assert result.is_scoped is False
+    assert session.model is alternate
+
+
+def test_agent_session_extension_model_registry_includes_active_model_without_registered_model(tmp_path: Path) -> None:
+    runner = ExtensionRunner()
+    active = Model(id="env-model", name="Env", api="faux", provider="openrouter", base_url="", reasoning=True)
+    session = AgentSession(cwd=str(tmp_path), model=active, extension_runner=runner)
+
+    registry = runner.create_context().modelRegistry
+
+    assert registry is not None
+    assert registry.find("openrouter", "env-model") is active
+    assert registry.getAll() == [active]
+    assert registry.getAvailable() == [active]
+    assert registry.hasConfiguredAuth(active) is True
+    assert session.extension_runner is runner
+
+
 def test_agent_session_thinking_level_helpers_follow_model_capabilities(tmp_path: Path) -> None:
     model = Model(
         id="restricted",

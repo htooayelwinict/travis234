@@ -10,6 +10,7 @@ from appv23.ai.providers.appv2_env import (
     AppV2EnvProvider,
     NullProvider,
     convert_messages,
+    create_appv2_env_provider,
     parse_sse_chunks,
 )
 from appv23.ai.types import (
@@ -50,6 +51,88 @@ def _openrouter_provider() -> AppV2EnvProvider:
     )
 
 
+def test_appv2_env_provider_uses_runtime_option_api_key_for_authorization(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeStream:
+        def __enter__(self):
+            raise RuntimeError("stop after capture")
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def stream(self, *args, **kwargs):
+            captured["headers"] = kwargs.get("headers")
+            return FakeStream()
+
+    monkeypatch.setattr(appv2_env.httpx, "Client", FakeClient)
+
+    _openrouter_provider().stream(
+        _model(),
+        Context(messages=[UserMessage(content="hi")]),
+        SimpleStreamOptions(api_key="runtime-login-key"),
+    ).result_sync()
+
+    assert captured["headers"]["Authorization"] == "Bearer runtime-login-key"
+
+
+def test_appv2_env_provider_factory_allows_runtime_login_key_without_startup_key(tmp_path, monkeypatch) -> None:
+    dotenv = tmp_path / ".env"
+    dotenv.write_text(
+        "\n".join(
+            [
+                "APPV2_WORKER_LLM_ENABLED=true",
+                "APPV2_WORKER_LLM_MODEL=qwen/qwen3.6-flash",
+                "APPV2_WORKER_LLM_BASE_URL=https://openrouter.ai/api/v1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    class FakeStream:
+        def __enter__(self):
+            raise RuntimeError("stop after capture")
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def stream(self, *args, **kwargs):
+            captured["headers"] = kwargs.get("headers")
+            return FakeStream()
+
+    monkeypatch.setattr(appv2_env.httpx, "Client", FakeClient)
+
+    provider = create_appv2_env_provider(dotenv_path=str(dotenv))
+    provider.stream_simple(
+        _model(),
+        Context(messages=[UserMessage(content="hi")]),
+        SimpleStreamOptions(api_key="runtime-login-key"),
+    ).result_sync()
+
+    assert captured["headers"]["Authorization"] == "Bearer runtime-login-key"
+
+
 def _run_http_status_failure(monkeypatch, response: httpx.Response) -> AssistantMessage:
     class FakeStream:
         def __enter__(self):
@@ -77,6 +160,22 @@ def _run_http_status_failure(monkeypatch, response: httpx.Response) -> Assistant
 
     monkeypatch.setattr(appv2_env.httpx, "Client", FakeClient)
     return _openrouter_provider().stream(_model(), Context(messages=[UserMessage(content="hi")])).result_sync()
+
+
+def test_appv2_env_provider_http_error_reports_runtime_model_after_switch(monkeypatch) -> None:
+    request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+    response = httpx.Response(
+        400,
+        request=request,
+        json={"error": {"message": "Bad Request"}},
+    )
+
+    message = _run_http_status_failure(monkeypatch, response)
+
+    assert message.stop_reason == "error"
+    assert message.error_message is not None
+    assert "for model acme/x" in message.error_message
+    assert "qwen/qwen3-coder-next" not in message.error_message
 
 
 def test_appv2_env_provider_formats_openrouter_403_as_actionable_auth_error(monkeypatch) -> None:
@@ -274,7 +373,8 @@ def test_appv2_env_provider_formats_non_json_malformed_and_empty_error_bodies_sa
         assert message.error_message is not None
         assert "OpenRouter authorization failed" in message.error_message
         assert "HTTP 403" in message.error_message
-        assert "qwen/qwen3-coder-next" in message.error_message
+        assert "acme/x" in message.error_message
+        assert "qwen/qwen3-coder-next" not in message.error_message
         assert "Provider message:" in message.error_message
         assert "JSONDecodeError" not in message.error_message
 
@@ -442,6 +542,72 @@ def test_appv2_env_provider_runtime_max_tokens_overrides_env_config(monkeypatch)
     ).result_sync()
 
     assert captured_body["max_tokens"] == 4096
+
+
+def test_appv2_env_provider_runtime_model_overrides_env_config_model(monkeypatch) -> None:
+    captured_body: dict = {}
+
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def iter_lines(self):
+            return iter(["data: [DONE]"])
+
+    class FakeStream:
+        def __enter__(self):
+            return FakeResponse()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def stream(self, *args, **kwargs):
+            captured_body.update(kwargs["json"])
+            return FakeStream()
+
+    monkeypatch.setattr(appv2_env.httpx, "Client", FakeClient)
+    provider = AppV2EnvProvider(
+        ModelConfig(
+            enabled=True,
+            api_key="configured-key",
+            model="qwen/qwen3.6-flash",
+            base_url="https://openrouter.ai/api/v1",
+            timeout_seconds=60,
+            temperature=0,
+            top_p=None,
+            frequency_penalty=None,
+            presence_penalty=None,
+            seed=None,
+            max_tokens=8192,
+        )
+    )
+    switched_model = Model(
+        id="openai/gpt-5.5",
+        name="OpenAI GPT 5.5",
+        api="openai-completions",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+    )
+
+    provider.stream(
+        switched_model,
+        Context(messages=[UserMessage(content="hi")]),
+    ).result_sync()
+
+    assert captured_body["model"] == "openai/gpt-5.5"
 
 
 def test_convert_messages_maps_roles_and_tools() -> None:
@@ -826,6 +992,21 @@ def test_parse_sse_openai_compatible_reasoning_fields() -> None:
     assert final.content[0].type == "thinking"
     assert final.content[0].thinking == "plan next"
     assert final.content[0].thinking_signature == "reasoning_content"
+
+
+def test_parse_sse_can_suppress_provider_reasoning_when_thinking_is_off() -> None:
+    lines = [
+        _sse({"choices": [{"delta": {"reasoning_content": "private reasoning"}}]}),
+        _sse({"choices": [{"delta": {"content": "Visible answer"}}]}),
+        _sse({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
+        "data: [DONE]",
+    ]
+    events = list(parse_sse_chunks(lines, _model(), include_reasoning=False))
+
+    assert [event.type for event in events if event.type.startswith("thinking")] == []
+    final = events[-1].message
+    assert [block.type for block in final.content] == ["text"]
+    assert final.content[0].text == "Visible answer"
 
 
 def test_parse_sse_captures_response_metadata_and_choice_usage() -> None:

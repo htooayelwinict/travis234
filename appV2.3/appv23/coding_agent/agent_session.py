@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import time
@@ -30,9 +31,13 @@ from appv23.agent.tool_guardrails import (
 from appv23.ai.model_resolver import ScopedModel
 from appv23.ai.models import (
     clamp_thinking_level,
+    get_api_key_for_provider,
     get_supported_thinking_levels,
+    get_provider_auth_status,
+    get_provider_display_name,
     get_providers,
     get_models,
+    has_configured_auth,
     register_model_request_headers,
     register_provider_auth_config,
     set_provider_models,
@@ -275,6 +280,69 @@ class ModelCycleResult:
         return self.is_scoped
 
 
+class _SessionModelRegistry:
+    def __init__(self, active_model_fn: Callable[[], Model]) -> None:
+        self._active_model_fn = active_model_fn
+
+    def getAll(self) -> list[Model]:
+        return _models_with_active_fallback(self._active_model_fn())
+
+    get_all = getAll
+
+    def getAvailable(self) -> list[Model]:
+        active_model = self._active_model_fn()
+        return [
+            model
+            for model in self.getAll()
+            if _models_are_same(model, active_model) or has_configured_auth(model)
+        ]
+
+    get_available = getAvailable
+
+    def find(self, provider: str, model_id: str) -> Model | None:
+        return next(
+            (
+                model
+                for model in self.getAll()
+                if model.provider == provider and model.id == model_id
+            ),
+            None,
+        )
+
+    def hasConfiguredAuth(self, model: Model) -> bool:
+        return _models_are_same(model, self._active_model_fn()) or has_configured_auth(model)
+
+    has_configured_auth = hasConfiguredAuth
+
+    def getProviderAuthStatus(self, provider: str) -> dict[str, object]:
+        if provider == self._active_model_fn().provider:
+            return {"configured": True, "source": "active_session"}
+        return get_provider_auth_status(provider)
+
+    get_provider_auth_status = getProviderAuthStatus
+
+    def getProviderDisplayName(self, provider: str) -> str:
+        return get_provider_display_name(provider)
+
+    get_provider_display_name = getProviderDisplayName
+
+    def getApiKeyForProvider(self, provider: str) -> str | None:
+        return get_api_key_for_provider(provider)
+
+    get_api_key_for_provider = getApiKeyForProvider
+
+
+def _models_are_same(left: Model | None, right: Model | None) -> bool:
+    return bool(left and right and left.provider == right.provider and left.id == right.id)
+
+
+def _models_with_active_fallback(active_model: Model) -> list[Model]:
+    models = [model for provider in get_providers() for model in get_models(provider)]
+    if not any(_models_are_same(model, active_model) for model in models):
+        models.append(active_model)
+    return models
+
+
 @dataclass
 class ExtensionCompactionResult:
     summary: str
@@ -440,7 +508,7 @@ class ExtensionCommandContext:
 def default_convert_to_llm(messages: list[AgentMessage]) -> list[Message]:
     """Convert Pi coding-agent custom messages to provider-safe ai Messages."""
     out: list[Message] = []
-    for message in messages:
+    for message in _exclude_aborted_turns_from_context(messages):
         role = getattr(message, "role", None)
         if role == "bashExecution":
             if getattr(message, "excludeFromContext", False):
@@ -484,6 +552,36 @@ def default_convert_to_llm(messages: list[AgentMessage]) -> list[Message]:
         elif role in ("user", "assistant", "toolResult"):
             out.append(message)
     return out
+
+
+def _exclude_aborted_turns_from_context(messages: list[AgentMessage]) -> list[AgentMessage]:
+    """Keep aborted turns in transcript state while excluding them from future LLM context."""
+    retained: list[AgentMessage] = []
+    for message in messages:
+        if isinstance(message, AssistantMessage) and message.stop_reason == "aborted":
+            _drop_current_turn_from_context(retained)
+            continue
+        retained.append(message)
+    return retained
+
+
+def _drop_current_turn_from_context(retained: list[AgentMessage]) -> None:
+    while retained:
+        candidate = retained[-1]
+        if _is_aborted_turn_boundary(candidate):
+            return
+        removed = retained.pop()
+        if getattr(removed, "role", None) == "user":
+            while retained and getattr(retained[-1], "role", None) == "user":
+                retained.pop()
+            return
+
+
+def _is_aborted_turn_boundary(message: AgentMessage) -> bool:
+    role = getattr(message, "role", None)
+    if role in {"bashExecution", "branchSummary", "compactionSummary", "custom"}:
+        return True
+    return isinstance(message, AssistantMessage) and message.stop_reason not in {"aborted", "toolUse"}
 
 
 def _bash_execution_to_text(message) -> str:
@@ -613,6 +711,8 @@ class AgentSession:
         self._extension_runner = extension_runner or ExtensionRunner()
         self._extension_error_unsubscribe: Callable[[], None] | None = None
         self._extension_error_listener: Callable[[dict[str, object]], None] | None = None
+        if getattr(self._extension_runner, "_model_registry", None) is None:
+            self._extension_runner._model_registry = _SessionModelRegistry(lambda: self.model)  # noqa: SLF001
         self._extension_ui_context: object | None = None
         self._extension_mode = "print"
         self._extension_command_context_actions: object | None = None
@@ -1213,10 +1313,11 @@ class AgentSession:
         try:
             result = self.subagents.cancel(task_id, reason.strip() or "Cancelled by user.")
         except KeyError as error:
+            message = str(error.args[0]) if error.args else str(error)
             return self.send_custom_message(
                 {
                     "customType": "subagent",
-                    "content": str(error),
+                    "content": message,
                     "display": True,
                 },
                 {"transient": True},
@@ -1523,6 +1624,8 @@ class AgentSession:
 
     def _run_internal_subagent(self, task: SubagentTask) -> SubagentResult:
         started = int(time.time() * 1000)
+        tool_trace: list[dict[str, object]] = []
+        trace_by_call_id: dict[str, dict[str, object]] = {}
         child = AgentSession(
             cwd=task.cwd,
             model=self.model,
@@ -1532,23 +1635,281 @@ class AgentSession:
             stream_fn=self._stream_fn,
             max_iterations=12,
         )
+        child.agent.subscribe(self._subagent_tool_trace_listener(task, child, tool_trace, trace_by_call_id))
+        child.agent._after_tool_call = self._subagent_after_tool_call_tracer(  # noqa: SLF001 - parent observes delegated child tools.
+            task,
+            child,
+            tool_trace,
+            trace_by_call_id,
+            child.agent._after_tool_call,  # noqa: SLF001
+        )
         try:
             messages = child.prompt(task.prompt())
-            summary = self._messages_to_summary(messages)
+            self._reconcile_subagent_tool_results_from_messages(task, child, messages, tool_trace, trace_by_call_id)
+            child_messages = list(child.agent.state.messages)
+            self._reconcile_subagent_tool_results_from_messages(
+                task,
+                child,
+                child_messages,
+                tool_trace,
+                trace_by_call_id,
+            )
+            summary = self._messages_to_summary(messages) or self._messages_to_summary(child_messages)
+            guardrail = child._tool_guardrail_halt_decision.to_metadata() if child._tool_guardrail_halt_decision else None
+            errors = []
+            status = "completed"
+            if guardrail:
+                status = "failed"
+                code = str(guardrail.get("code") or "tool_guardrail")
+                tool = str(guardrail.get("tool_name") or guardrail.get("toolName") or "tool")
+                errors.append(f"Subagent stopped by tool guardrail: {code} ({tool})")
+                self._mark_subagent_trace_guardrail(task, tool_trace, guardrail)
             ended = int(time.time() * 1000)
             return SubagentResult(
                 task_id=task.id,
                 backend=task.backend,
                 role=task.role,
-                status="completed",
+                status=status,
                 summary=summary or "Internal subagent completed without a final message.",
                 final_response=summary,
+                errors=errors,
+                tool_trace=tool_trace,
+                guardrail=guardrail,
                 child_session_id=child.session_id,
                 started_at_ms=started,
                 ended_at_ms=ended,
             )
         finally:
             child.shutdown()
+
+    def _subagent_tool_trace_listener(
+        self,
+        task: SubagentTask,
+        child: "AgentSession",
+        tool_trace: list[dict[str, object]],
+        trace_by_call_id: dict[str, dict[str, object]],
+    ) -> Callable[[object], None]:
+        def _listener(event) -> None:
+            event_type = getattr(event, "type", None)
+            if event_type == "tool_execution_start":
+                entry = {
+                    "toolCallId": getattr(event, "tool_call_id", ""),
+                    "toolName": getattr(event, "tool_name", ""),
+                    "status": "started",
+                    "argsPreview": _subagent_preview(getattr(event, "args", None)),
+                    "resultPreview": "",
+                    "startedAtMs": int(time.time() * 1000),
+                    "endedAtMs": 0,
+                    "elapsedMs": 0,
+                }
+                tool_trace.append(entry)
+                trace_by_call_id[str(entry["toolCallId"])] = entry
+                self._handle_subagent_event(_subagent_tool_event(task, "subagent_tool_start", entry))
+                return
+            if event_type == "message_end":
+                message = getattr(event, "message", None)
+                if getattr(message, "role", None) != "toolResult":
+                    return
+                self._record_subagent_tool_end(
+                    task,
+                    child,
+                    tool_trace,
+                    trace_by_call_id,
+                    tool_call_id=str(getattr(message, "tool_call_id", "")),
+                    tool_name=str(getattr(message, "tool_name", "")),
+                    args=None,
+                    content=getattr(message, "content", None),
+                    is_error=bool(getattr(message, "is_error", False)),
+                )
+                return
+            if event_type == "turn_end":
+                for message in getattr(event, "tool_results", []) or []:
+                    self._record_subagent_tool_end(
+                        task,
+                        child,
+                        tool_trace,
+                        trace_by_call_id,
+                        tool_call_id=str(getattr(message, "tool_call_id", "")),
+                        tool_name=str(getattr(message, "tool_name", "")),
+                        args=None,
+                        content=getattr(message, "content", None),
+                        is_error=bool(getattr(message, "is_error", False)),
+                    )
+                return
+            if event_type != "tool_execution_end":
+                return
+
+            tool_call_id = str(getattr(event, "tool_call_id", ""))
+            entry = trace_by_call_id.get(tool_call_id)
+            if entry is None:
+                entry = {
+                    "toolCallId": tool_call_id,
+                    "toolName": getattr(event, "tool_name", ""),
+                    "status": "started",
+                    "argsPreview": "",
+                    "resultPreview": "",
+                    "startedAtMs": int(time.time() * 1000),
+                    "endedAtMs": 0,
+                    "elapsedMs": 0,
+                }
+                tool_trace.append(entry)
+                trace_by_call_id[tool_call_id] = entry
+            result_preview = _subagent_tool_result_preview(getattr(event, "result", None))
+            status = "error" if bool(getattr(event, "is_error", False)) else "ok"
+            guardrail_code = _toolguard_code_from_text(result_preview)
+            if guardrail_code:
+                status = "guardrail_halt"
+                entry["guardrailCode"] = guardrail_code
+            ended = int(time.time() * 1000)
+            entry.update(
+                {
+                    "status": status,
+                    "resultPreview": _truncate_preview(result_preview),
+                    "endedAtMs": ended,
+                    "elapsedMs": max(0, ended - int(entry.get("startedAtMs", ended) or ended)),
+                }
+            )
+            self._handle_subagent_event(_subagent_tool_event(task, "subagent_tool_end", entry))
+            if guardrail_code:
+                self._handle_subagent_event(_subagent_tool_event(task, "subagent_tool_guardrail", entry))
+
+        return _listener
+
+    def _reconcile_subagent_tool_results_from_messages(
+        self,
+        task: SubagentTask,
+        child: "AgentSession",
+        messages: list[AgentMessage],
+        tool_trace: list[dict[str, object]],
+        trace_by_call_id: dict[str, dict[str, object]],
+    ) -> None:
+        for message in messages:
+            if getattr(message, "role", None) != "toolResult":
+                continue
+            self._record_subagent_tool_end(
+                task,
+                child,
+                tool_trace,
+                trace_by_call_id,
+                tool_call_id=str(getattr(message, "tool_call_id", "")),
+                tool_name=str(getattr(message, "tool_name", "")),
+                args=None,
+                content=getattr(message, "content", None),
+                is_error=bool(getattr(message, "is_error", False)),
+            )
+
+    def _subagent_after_tool_call_tracer(
+        self,
+        task: SubagentTask,
+        child: "AgentSession",
+        tool_trace: list[dict[str, object]],
+        trace_by_call_id: dict[str, dict[str, object]],
+        original_after_tool_call,
+    ):
+        def _after_tool_call(context, signal=None):
+            result = original_after_tool_call(context, signal=signal) if original_after_tool_call else None
+            content = getattr(result, "content", None) if result is not None else None
+            if content is None:
+                content = getattr(context.result, "content", None)
+            is_error = getattr(result, "is_error", None) if result is not None else None
+            if is_error is None:
+                is_error = bool(getattr(context, "is_error", False))
+            self._record_subagent_tool_end(
+                task,
+                child,
+                tool_trace,
+                trace_by_call_id,
+                tool_call_id=str(getattr(context.tool_call, "id", "")),
+                tool_name=str(getattr(context.tool_call, "name", "")),
+                args=getattr(context, "args", None),
+                content=content,
+                is_error=bool(is_error),
+            )
+            return result
+
+        return _after_tool_call
+
+    def _record_subagent_tool_end(
+        self,
+        task: SubagentTask,
+        child: "AgentSession",
+        tool_trace: list[dict[str, object]],
+        trace_by_call_id: dict[str, dict[str, object]],
+        *,
+        tool_call_id: str,
+        tool_name: str,
+        args: object,
+        content: object,
+        is_error: bool,
+    ) -> None:
+        entry = trace_by_call_id.get(tool_call_id)
+        if entry is None:
+            for candidate in reversed(tool_trace):
+                if candidate.get("status") != "started":
+                    continue
+                candidate_tool_name = str(candidate.get("toolName", ""))
+                if tool_name and candidate_tool_name and candidate_tool_name != tool_name:
+                    continue
+                entry = candidate
+                if tool_call_id:
+                    trace_by_call_id[tool_call_id] = entry
+                break
+        if entry is None:
+            entry = {
+                "toolCallId": tool_call_id,
+                "toolName": tool_name,
+                "status": "started",
+                "argsPreview": _subagent_preview(args),
+                "resultPreview": "",
+                "startedAtMs": int(time.time() * 1000),
+                "endedAtMs": 0,
+                "elapsedMs": 0,
+            }
+            tool_trace.append(entry)
+            trace_by_call_id[tool_call_id] = entry
+        elif int(entry.get("endedAtMs", 0) or 0) > 0:
+            return
+        result_preview = _tool_result_text(content)
+        status = "error" if is_error else "ok"
+        guardrail_code = _toolguard_code_from_text(result_preview)
+        decision = child._tool_guardrail_halt_decision
+        if decision is not None and decision.tool_name == tool_name:
+            guardrail_code = decision.code
+        if guardrail_code:
+            status = "guardrail_halt"
+            entry["guardrailCode"] = guardrail_code
+        ended = int(time.time() * 1000)
+        entry.update(
+            {
+                "toolName": tool_name or entry.get("toolName", ""),
+                "status": status,
+                "argsPreview": entry.get("argsPreview") or _subagent_preview(args),
+                "resultPreview": _truncate_preview(result_preview),
+                "endedAtMs": ended,
+                "elapsedMs": max(0, ended - int(entry.get("startedAtMs", ended) or ended)),
+            }
+        )
+        self._handle_subagent_event(_subagent_tool_event(task, "subagent_tool_end", entry))
+        if guardrail_code:
+            self._handle_subagent_event(_subagent_tool_event(task, "subagent_tool_guardrail", entry))
+
+    def _mark_subagent_trace_guardrail(
+        self,
+        task: SubagentTask,
+        tool_trace: list[dict[str, object]],
+        guardrail: dict[str, object],
+    ) -> None:
+        if not tool_trace:
+            return
+        code = str(guardrail.get("code") or "tool_guardrail")
+        tool = str(guardrail.get("tool_name") or "")
+        for entry in reversed(tool_trace):
+            if tool and entry.get("toolName") != tool:
+                continue
+            entry["status"] = "guardrail_halt"
+            entry["guardrailCode"] = code
+            self._handle_subagent_event(_subagent_tool_event(task, "subagent_tool_guardrail", entry))
+            return
 
     def _messages_to_summary(self, messages: list[AgentMessage]) -> str:
         parts: list[str] = []
@@ -1570,7 +1931,17 @@ class AgentSession:
         heading = f"Subagent {result.task_id} {result.role} [{result.backend}] {result.status}"
         files_changed = ", ".join(result.files_changed) if result.files_changed else "none"
         errors = "; ".join(result.errors) if result.errors else "none"
-        return f"{heading}\n{result.summary}\nfilesChanged: {files_changed}\nerrors: {errors}".strip()
+        lines = [heading, result.summary, f"filesChanged: {files_changed}", f"errors: {errors}"]
+        if result.guardrail:
+            code = result.guardrail.get("code", "unknown")
+            tool = result.guardrail.get("tool_name", result.guardrail.get("toolName", "tool"))
+            count = result.guardrail.get("count", "?")
+            lines.append(f"guardrail: {code} ({tool}, count={count})")
+        if result.tool_trace:
+            lines.append("toolTrace:")
+            for entry in result.tool_trace[-5:]:
+                lines.append(f"- {_format_subagent_tool_trace_entry(entry)}")
+        return "\n".join(lines).strip()
 
     def _handle_subagent_event(self, event: dict[str, object]) -> None:
         self._emit(event)
@@ -2159,7 +2530,7 @@ class AgentSession:
         return ModelCycleResult(model=next_scoped.model, thinking_level=self.thinking_level, is_scoped=True)
 
     def _cycle_available_model(self, direction: str) -> ModelCycleResult | None:
-        available_models = [model for provider in get_providers() for model in get_models(provider)]
+        available_models = _models_with_active_fallback(self.model)
         if len(available_models) <= 1:
             return None
 
@@ -2222,7 +2593,7 @@ class AgentSession:
         if original is not None and self.agent.state.model.provider == name:
             self.agent.state.model = original
 
-    def compact(self, focus: str | None = None, summarizer=None, aggressive: bool = False):
+    def compact(self, focus: str | None = None, summarizer=None, deep: bool = False):
         if self._compaction_manager is None:
             raise RuntimeError("No compaction manager configured")
         self._begin_compaction("manual")
@@ -2233,7 +2604,7 @@ class AgentSession:
                 self.messages,
                 summarizer=summarizer,
                 focus=focus,
-                aggressive=aggressive,
+                deep=deep,
             )
             if self._session_store and status.compressed:
                 first_kept = self._first_kept_entry_id_for_status(status, before_entry_ids)
@@ -3143,6 +3514,72 @@ def _get_user_message_text(message: UserMessage) -> str:
     if isinstance(content, str):
         return content
     return "".join(block.text for block in content if isinstance(block, TextContent))
+
+
+def _subagent_preview(value: object, *, limit: int = 160) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        text = value
+    else:
+        try:
+            text = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+        except Exception:
+            text = str(value)
+    return _truncate_preview(text.replace("\n", " "), limit=limit)
+
+
+def _subagent_tool_result_preview(result: object) -> str:
+    content = getattr(result, "content", result)
+    return _tool_result_text(content)
+
+
+def _truncate_preview(text: str, *, limit: int = 240) -> str:
+    text = str(text or "").replace("\n", " ").strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _toolguard_code_from_text(text: str) -> str | None:
+    match = re.search(r"\[Tool loop hard stop:\s*([^;\]]+)", text or "")
+    if match:
+        return match.group(1).strip()
+    return None
+
+
+def _subagent_tool_event(task: SubagentTask, event_type: str, entry: Mapping[str, object]) -> dict[str, object]:
+    payload = {
+        "type": event_type,
+        "taskId": task.id,
+        "role": task.role,
+        "backend": task.backend,
+        "toolCallId": entry.get("toolCallId", ""),
+        "toolName": entry.get("toolName", ""),
+        "status": entry.get("status", ""),
+        "argsPreview": entry.get("argsPreview", ""),
+        "resultPreview": entry.get("resultPreview", ""),
+        "elapsedMs": entry.get("elapsedMs", 0),
+    }
+    if entry.get("guardrailCode"):
+        payload["guardrailCode"] = entry["guardrailCode"]
+    return payload
+
+
+def _format_subagent_tool_trace_entry(entry: Mapping[str, object]) -> str:
+    tool = str(entry.get("toolName") or "tool")
+    status = str(entry.get("status") or "unknown")
+    args = str(entry.get("argsPreview") or "").strip()
+    result = str(entry.get("resultPreview") or "").strip()
+    guardrail = str(entry.get("guardrailCode") or "").strip()
+    parts = [tool, status]
+    if guardrail:
+        parts.append(guardrail)
+    if args:
+        parts.append(args)
+    if result:
+        parts.append(f"=> {result}")
+    return " ".join(parts)
 
 
 def _text_from_user_message_content(content: str | list[TextContent | ImageContent]) -> str:
