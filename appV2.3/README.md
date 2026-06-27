@@ -60,7 +60,7 @@ cd appV2.3
 uv run --with pytest python -m pytest tests -q
 ```
 
-Expected current `appV2.3` suite: `678 passed`.
+Expected current `appV2.3` suite: `680 passed`.
 
 ## Production verification gates
 

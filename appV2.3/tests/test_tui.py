@@ -877,6 +877,25 @@ def test_tui_manual_scroll_preserves_offset_until_rejoined_to_bottom() -> None:
     assert tui.request_render().lines == ["line 8", "line 9", "line 10", "line 11"]
 
 
+def test_interactive_mode_submit_rejoins_bottom_after_manual_scroll(tmp_path) -> None:
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "unused")))
+    terminal = FakeTerminal(columns=80, rows=6)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+    inputs = iter(["/agents", "/exit"])
+    mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
+    mode.init()
+    for index in range(12):
+        mode.history.add(Text(f"history {index}"))
+
+    app.tui.request_render()
+    app.tui.scroll_by(-3)
+    assert app.tui.is_scrolled()
+
+    assert mode.run() == 0
+
+    assert not app.tui.is_scrolled()
+
+
 def test_tui_page_keys_scroll_transcript_before_focused_input() -> None:
     class InputRecorder(Container):
         def __init__(self) -> None:
@@ -2458,6 +2477,19 @@ def test_input_ignores_leaked_mouse_report_fragments_that_reach_prompt_editor() 
 
     assert input_component.get_value() == "draft"
     assert input_component.cursor == len("draft")
+
+
+def test_input_buffers_incremental_leaked_mouse_report_fragments() -> None:
+    input_component = Input(value="draft")
+    input_component.cursor = len("draft")
+
+    for char in "[<65;1;1M":
+        input_component.handle_input(char)
+    for char in "clean":
+        input_component.handle_input(char)
+
+    assert input_component.get_value() == "draftclean"
+    assert input_component.cursor == len("draftclean")
 
 
 def test_input_ports_pi_alt_d_delete_word_forward_keybinding() -> None:

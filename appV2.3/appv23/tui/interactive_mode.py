@@ -284,6 +284,7 @@ class InteractiveMode:
                     self.tui.request_render()
                     continue
                 self.editor_text = ""
+                self.tui.scroll_to_bottom()
                 if prompt:
                     self.history.add(user_message_to_component(prompt))
                 else:

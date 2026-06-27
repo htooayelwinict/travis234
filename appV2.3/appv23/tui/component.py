@@ -726,6 +726,20 @@ def _match_leaked_mouse_report_fragment(text: str, index: int) -> re.Match[str] 
     return _LEAKED_SGR_MOUSE_FRAGMENT_RE.match(text, index) or _LEAKED_X10_MOUSE_FRAGMENT_RE.match(text, index)
 
 
+def _is_possible_leaked_mouse_report_fragment_prefix(text: str) -> bool:
+    if not text or len(text) > 32:
+        return False
+    if text in {"^", "^[", "^[[", "[", "[<", "<", "[M"}:
+        return True
+    if re.fullmatch(r"(?:\^\[\[|\[)?<\d*(?:;\d*){0,2}", text):
+        return True
+    if re.fullmatch(r"(?:\^\[\[|\[)?<\d+(?:;\d*){0,2}[Mm]?", text):
+        return True
+    if text.startswith("[M") and len(text) < 5:
+        return all(char >= " " for char in text[2:])
+    return False
+
+
 def _is_grapheme_extender(char: str) -> bool:
     codepoint = ord(char)
     return (
@@ -760,6 +774,7 @@ class Input(Component):
         self._kill_ring: list[str] = []
         self._last_action: str | None = None
         self._undo_stack: list[tuple[str, int]] = []
+        self._pending_leaked_mouse_fragment = ""
 
     def set_autocomplete_provider(self, provider: object | None) -> None:
         self.autocomplete_provider = provider
@@ -833,6 +848,10 @@ class Input(Component):
         return True
 
     def handle_input(self, data: str) -> None:
+        if self._pending_leaked_mouse_fragment:
+            data = self._pending_leaked_mouse_fragment + data
+            self._pending_leaked_mouse_fragment = ""
+
         index = 0
         while index < len(data):
             if data.startswith("\x1b[200~", index):
@@ -851,6 +870,9 @@ class Input(Component):
                 index += len(mouse_match.group(0))
             elif leaked_mouse_match := _match_leaked_mouse_report_fragment(data, index):
                 index = leaked_mouse_match.end()
+            elif _is_possible_leaked_mouse_report_fragment_prefix(data[index:]):
+                self._pending_leaked_mouse_fragment = data[index:]
+                break
             elif data.startswith("\x1b[A", index):
                 if self._history:
                     self._navigate_history(-1)
