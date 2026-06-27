@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import builtins
+import json
 import os
 import select
 import threading
@@ -5162,7 +5163,9 @@ def test_interactive_mode_login_api_key_is_local_tui_command(tmp_path) -> None:
     assert "model should not run" not in rendered
 
 
-def test_interactive_mode_login_api_key_offers_active_provider_without_registered_model(tmp_path) -> None:
+def test_interactive_mode_login_api_key_offers_active_provider_without_registered_model(monkeypatch, tmp_path) -> None:
+    agent_dir = tmp_path / "agent-home" / "agent"
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(agent_dir))
     register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
     terminal = FakeTerminal(columns=140)
     model = Model(
@@ -5185,6 +5188,9 @@ def test_interactive_mode_login_api_key_offers_active_provider_without_registere
     assert "typed-secret" not in rendered
     assert get_provider_auth_status("openrouter") == {"configured": True, "source": "stored"}
     assert get_api_key_for_provider("openrouter") == "typed-secret"
+    stored = json.loads((agent_dir / "auth.json").read_text(encoding="utf-8"))
+    assert stored == {"openrouter": {"type": "api_key", "key": "typed-secret"}}
+    assert (agent_dir / "auth.json").stat().st_mode & 0o777 == 0o600
     assert "model should not run" not in rendered
 
 

@@ -4,6 +4,7 @@
   "scripts": {
     "tui": "npm --prefix appV2.3 run tui --",
     "tui:v22": "npm --prefix appV2.2 run tui --",
-    "tui:v23": "npm --prefix appV2.3 run tui --"
+    "tui:v23": "npm --prefix appV2.3 run tui --",
+    "tui:v23:sandbox": "npm --prefix appV2.3 run tui:sandbox --"
   }
 }

@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "tui": "python3 scripts/appv23_tui.py"
+    "tui": "python3 scripts/appv23_tui.py",
+    "tui:sandbox": "python3 scripts/appv23_sandbox.py"
   },
   "dependencies": {}
 }

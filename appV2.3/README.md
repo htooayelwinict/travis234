@@ -33,10 +33,44 @@ Version-specific wrappers are also available:
 ```bash
 npm run tui:v22 -- --dotenv ../.env --cwd ..
 npm run tui:v23 -- --cwd .
+npm run tui:v23:sandbox -- --cwd docs
 ```
 
 When `--dotenv` is omitted, `appv23` searches the working directory (`--cwd`) and parent directories for `.env`, so the root `.env` works even when the npm wrapper runs from `appV2.3/`. Pass `--dotenv path/to/.env` to force a specific file.
 The sealed `appV2.2` wrapper does not use the appv23 resolver, so its example keeps explicit parent paths.
+
+## Whole-app Docker sandbox
+
+The sandbox launcher builds an appv23-only image from `appV2.3/Dockerfile.appv23` and runs the full TUI inside that image:
+
+```bash
+npm run tui:v23:sandbox -- --cwd docs
+```
+
+The image entrypoint is `appv23`. Direct Docker usage is:
+
+```bash
+docker run --rm -it \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --pids-limit 512 \
+  --user "$(id -u):$(id -g)" \
+  -v "$PWD/docs:/workspace:rw" \
+  -v "$HOME/.appv23/sandbox-home:/agent-home:rw" \
+  -e HOME=/agent-home \
+  -e PI_CODING_AGENT_DIR=/agent-home/agent \
+  appv23:local \
+  --cwd /workspace
+```
+
+Runtime mounts are intentionally narrow:
+
+- Host `--cwd` is mounted as `/workspace`.
+- `$HOME/.appv23/sandbox-home` is mounted as `/agent-home` for appv23 auth, model, and session state.
+- The host repo root, host home, `.env`, and provider API-key environment variables are not mounted or forwarded.
+- The Docker socket is not mounted.
+
+Use `/login` and `/model` inside the sandbox. API keys entered through `/login` are stored in the isolated sandbox agent dir at `/agent-home/agent/auth.json`, backed by `$HOME/.appv23/sandbox-home/agent/auth.json` on the host.
 
 ## Install locally from a wheel
 
