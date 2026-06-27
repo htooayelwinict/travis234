@@ -1,0 +1,395 @@
+#!/usr/bin/env node
+"use strict";
+
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { spawnSync } = require("node:child_process");
+
+const DEFAULT_IMAGE =
+  process.env.APPV23_IMAGE || process.env.APPV23_SANDBOX_IMAGE || "ghcr.io/htooayelwinict/appv23:production";
+const CONTAINER_WORKSPACE = "/workspace";
+const CONTAINER_AGENT_HOME = "/agent-home";
+const SKIP_IMPORT_NAMES = new Set([
+  ".DS_Store",
+  ".git",
+  ".hg",
+  ".mypy_cache",
+  ".pytest_cache",
+  ".ruff_cache",
+  ".svn",
+  ".venv",
+  "__pycache__",
+  "node_modules",
+  "venv",
+]);
+
+function parseArgs(argv) {
+  const config = {
+    cwd: process.cwd(),
+    image: DEFAULT_IMAGE,
+    agentHome: process.env.APPV23_SANDBOX_HOME || path.join(os.homedir(), ".appv23", "sandbox-home"),
+    network: true,
+    dryRun: false,
+    pull: true,
+    agentsFiles: [],
+    skillsPaths: [],
+    importUserSkills: true,
+    appArgs: [],
+  };
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--") {
+      config.appArgs.push(...argv.slice(index + 1));
+      break;
+    }
+    if (arg === "--cwd") {
+      config.cwd = requireValue(argv, ++index, arg);
+      continue;
+    }
+    if (arg.startsWith("--cwd=")) {
+      config.cwd = arg.slice("--cwd=".length);
+      continue;
+    }
+    if (arg === "--image") {
+      config.image = requireValue(argv, ++index, arg);
+      continue;
+    }
+    if (arg.startsWith("--image=")) {
+      config.image = arg.slice("--image=".length);
+      continue;
+    }
+    if (arg === "--agent-home") {
+      config.agentHome = requireValue(argv, ++index, arg);
+      continue;
+    }
+    if (arg.startsWith("--agent-home=")) {
+      config.agentHome = arg.slice("--agent-home=".length);
+      continue;
+    }
+    if (arg === "--agents-file") {
+      config.agentsFiles.push(requireValue(argv, ++index, arg));
+      continue;
+    }
+    if (arg.startsWith("--agents-file=")) {
+      config.agentsFiles.push(arg.slice("--agents-file=".length));
+      continue;
+    }
+    if (arg === "--with-skills") {
+      config.skillsPaths.push(requireValue(argv, ++index, arg));
+      continue;
+    }
+    if (arg.startsWith("--with-skills=")) {
+      config.skillsPaths.push(arg.slice("--with-skills=".length));
+      continue;
+    }
+    if (arg === "--no-user-skills") {
+      config.importUserSkills = false;
+      continue;
+    }
+    if (arg === "--no-network") {
+      config.network = false;
+      continue;
+    }
+    if (arg === "--pull") {
+      config.pull = true;
+      continue;
+    }
+    if (arg === "--no-pull") {
+      config.pull = false;
+      continue;
+    }
+    if (arg === "--dry-run") {
+      config.dryRun = true;
+      continue;
+    }
+    if (arg === "--help" || arg === "-h") {
+      config.help = true;
+      continue;
+    }
+    config.appArgs.push(arg);
+  }
+
+  return {
+    ...config,
+    cwd: resolvePath(config.cwd),
+    agentHome: resolvePath(config.agentHome),
+    agentsFiles: config.agentsFiles.map(resolvePath),
+    skillsPaths: config.skillsPaths.map(resolvePath),
+    appArgs: sanitizeAppArgs(config.appArgs),
+  };
+}
+
+function requireValue(argv, index, flag) {
+  const value = argv[index];
+  if (!value) {
+    throw new Error(`${flag} requires a value`);
+  }
+  return value;
+}
+
+function resolvePath(value) {
+  const expanded = value.startsWith("~/") ? path.join(os.homedir(), value.slice(2)) : value;
+  return path.resolve(expanded);
+}
+
+function sanitizeAppArgs(args) {
+  const stripped = [];
+  let skipNext = false;
+  for (const arg of args) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+    if (arg === "--cwd" || arg === "--dotenv") {
+      skipNext = true;
+      continue;
+    }
+    if (arg.startsWith("--cwd=") || arg.startsWith("--dotenv=")) {
+      continue;
+    }
+    stripped.push(arg);
+  }
+  return stripped;
+}
+
+function buildDockerCommand(config, runtime = {}) {
+  const uid = runtime.uid ?? (typeof process.getuid === "function" ? process.getuid() : 1000);
+  const gid = runtime.gid ?? (typeof process.getgid === "function" ? process.getgid() : 1000);
+  const pid = runtime.pid ?? process.pid;
+  const command = [
+    "docker",
+    "run",
+    "--rm",
+    "-it",
+    "--name",
+    `appv23-sandbox-${pid}`,
+    "--workdir",
+    CONTAINER_WORKSPACE,
+    "--cap-drop",
+    "ALL",
+    "--security-opt",
+    "no-new-privileges",
+    "--pids-limit",
+    "512",
+    "--user",
+    `${uid}:${gid}`,
+    "-v",
+    `${config.cwd}:${CONTAINER_WORKSPACE}:rw`,
+    "-v",
+    `${config.agentHome}:${CONTAINER_AGENT_HOME}:rw`,
+    "-e",
+    `HOME=${CONTAINER_AGENT_HOME}`,
+    "-e",
+    `PI_CODING_AGENT_DIR=${CONTAINER_AGENT_HOME}/agent`,
+    "-e",
+    "APPV23_SANDBOX=1",
+    "-e",
+    "APPV23_NO_VENV_REEXEC=1",
+    "-e",
+    "PYTHONUNBUFFERED=1",
+  ];
+  if (!config.network) {
+    command.push("--network=none");
+  }
+  command.push(config.image, "--cwd", CONTAINER_WORKSPACE, ...config.appArgs);
+  return command;
+}
+
+function buildPullCommand(config) {
+  return config.pull ? ["docker", "pull", config.image] : [];
+}
+
+function prepareSandboxImports(config, runtime = {}) {
+  const homeDir = runtime.homeDir || os.homedir();
+  fs.mkdirSync(config.agentHome, { recursive: true, mode: 0o700 });
+  prepareAgentsFiles(config);
+  prepareSkills(config, homeDir);
+}
+
+function prepareAgentsFiles(config) {
+  if (!config.agentsFiles.length) {
+    return;
+  }
+  const target = path.join(config.agentHome, "agent", "AGENTS.md");
+  const parts = [
+    "<!-- appv23-sandbox-imported-agents -->",
+    "# Imported appv23 sandbox instructions",
+    "",
+    "These instructions were copied into the sandbox from explicit --agents-file arguments.",
+    "",
+  ];
+  for (const source of config.agentsFiles) {
+    const stat = fs.statSync(source);
+    if (!stat.isFile()) {
+      throw new Error(`agents file is not a file: ${source}`);
+    }
+    parts.push(`## Source: ${source}`, "", fs.readFileSync(source, "utf8"), "");
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(target, parts.join("\n"), { mode: 0o600 });
+}
+
+function prepareSkills(config, homeDir) {
+  const sources = [];
+  const userSkills = path.join(homeDir, ".agents", "skills");
+  if (config.importUserSkills && fs.existsSync(userSkills)) {
+    sources.push(userSkills);
+  }
+  sources.push(...config.skillsPaths);
+  if (!sources.length) {
+    return;
+  }
+  const targetRoot = path.join(config.agentHome, ".agents", "skills");
+  fs.rmSync(targetRoot, { recursive: true, force: true });
+  fs.mkdirSync(targetRoot, { recursive: true, mode: 0o700 });
+  for (const source of sources) {
+    copySkillSource(source, targetRoot);
+  }
+}
+
+function copySkillSource(source, targetRoot) {
+  const stat = fs.statSync(source);
+  if (stat.isFile()) {
+    if (path.extname(source) !== ".md") {
+      throw new Error(`skills file must be markdown: ${source}`);
+    }
+    copyFileSafe(source, path.join(targetRoot, path.basename(source)));
+    return;
+  }
+  if (!stat.isDirectory()) {
+    throw new Error(`skills path is not a file or directory: ${source}`);
+  }
+  if (fs.existsSync(path.join(source, "SKILL.md"))) {
+    copyTreeSafe(source, path.join(targetRoot, path.basename(source)));
+    return;
+  }
+  for (const child of fs.readdirSync(source).sort()) {
+    const childPath = path.join(source, child);
+    if (shouldSkipImport(childPath)) {
+      continue;
+    }
+    const childStat = fs.statSync(childPath);
+    if (childStat.isDirectory()) {
+      copyTreeSafe(childPath, path.join(targetRoot, child));
+    } else if (childStat.isFile() && path.extname(childPath) === ".md") {
+      copyFileSafe(childPath, path.join(targetRoot, child));
+    }
+  }
+}
+
+function copyTreeSafe(source, target) {
+  if (shouldSkipImport(source) || fs.lstatSync(source).isSymbolicLink()) {
+    return;
+  }
+  const stat = fs.statSync(source);
+  if (stat.isFile()) {
+    copyFileSafe(source, target);
+    return;
+  }
+  fs.mkdirSync(target, { recursive: true });
+  for (const child of fs.readdirSync(source).sort()) {
+    const childPath = path.join(source, child);
+    if (shouldSkipImport(childPath)) {
+      continue;
+    }
+    const childTarget = path.join(target, child);
+    const childStat = fs.statSync(childPath);
+    if (childStat.isDirectory()) {
+      copyTreeSafe(childPath, childTarget);
+    } else if (childStat.isFile()) {
+      copyFileSafe(childPath, childTarget);
+    }
+  }
+}
+
+function copyFileSafe(source, target) {
+  if (shouldSkipImport(source) || fs.lstatSync(source).isSymbolicLink()) {
+    return;
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.copyFileSync(source, target);
+}
+
+function shouldSkipImport(filePath) {
+  const name = path.basename(filePath);
+  return SKIP_IMPORT_NAMES.has(name) || name.startsWith(".env");
+}
+
+function printHelp() {
+  process.stdout.write(`appv23-sandbox
+
+Run the prebuilt appv23 Docker image from any directory.
+
+Usage:
+  appv23-sandbox [options] [-- appv23 args]
+
+Options:
+  --cwd <path>          Host workspace to mount as /workspace. Defaults to current directory.
+  --image <name>        Docker image. Defaults to APPV23_SANDBOX_IMAGE or appv23:local.
+  --agent-home <path>   Sandbox state directory. Defaults to ~/.appv23/sandbox-home.
+  --agents-file <path>  Copy an explicit AGENTS.md-style file into sandbox context.
+  --with-skills <path>  Copy an extra skill file or directory into sandbox ~/.agents/skills.
+  --no-user-skills      Do not copy host ~/.agents/skills.
+  --no-network          Run container with --network=none.
+  --pull                Pull image before running. Default.
+  --no-pull             Do not pull image before running.
+  --dry-run             Print docker command instead of running it.
+  -h, --help            Show help.
+`);
+}
+
+function main(argv = process.argv.slice(2)) {
+  let config;
+  try {
+    config = parseArgs(argv);
+    if (config.help) {
+      printHelp();
+      return 0;
+    }
+    if (!fs.existsSync(config.cwd) || !fs.statSync(config.cwd).isDirectory()) {
+      throw new Error(`workspace does not exist or is not a directory: ${config.cwd}`);
+    }
+    prepareSandboxImports(config);
+    const pullCommand = buildPullCommand(config);
+    const command = buildDockerCommand(config);
+    if (config.dryRun) {
+      if (pullCommand.length) {
+        process.stdout.write(`${pullCommand.map(shellQuote).join(" ")}\n`);
+      }
+      process.stdout.write(`${command.map(shellQuote).join(" ")}\n`);
+      return 0;
+    }
+    if (pullCommand.length) {
+      const pull = spawnSync(pullCommand[0], pullCommand.slice(1), { stdio: "inherit" });
+      if ((pull.status ?? 1) !== 0) {
+        return pull.status ?? 1;
+      }
+    }
+    const result = spawnSync(command[0], command.slice(1), { stdio: "inherit" });
+    return result.status ?? 1;
+  } catch (error) {
+    process.stderr.write(`Error: ${error.message}\n`);
+    return 1;
+  }
+}
+
+function shellQuote(value) {
+  if (/^[A-Za-z0-9_./:=@+-]+$/.test(value)) {
+    return value;
+  }
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+module.exports = {
+  buildDockerCommand,
+  buildPullCommand,
+  parseArgs,
+  prepareSandboxImports,
+  sanitizeAppArgs,
+};
+
+if (require.main === module) {
+  process.exit(main());
+}

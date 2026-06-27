@@ -1,5 +1,8 @@
 FROM python:3.13-slim
 
+ARG APPV23_REPO=https://github.com/htooayelwinict/allthebest.git
+ARG APPV23_REF=next/appv23
+
 ENV PYTHONUNBUFFERED=1 \
     APPV23_NO_VENV_REEXEC=1 \
     HOME=/agent-home \
@@ -14,11 +17,11 @@ RUN apt-get update \
         ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /opt/appV2.3
+WORKDIR /opt
 
-COPY pyproject.toml README.md ./
-COPY appv23 ./appv23
-COPY scripts ./scripts
+RUN git clone --depth 1 --branch "${APPV23_REF}" "${APPV23_REPO}" /opt/allthebest
+
+WORKDIR /opt/allthebest/appV2.3
 
 RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir .

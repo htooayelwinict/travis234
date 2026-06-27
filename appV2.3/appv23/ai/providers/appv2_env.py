@@ -1094,7 +1094,27 @@ class NullProvider:
     stream_simple = stream
 
 
+def _has_runtime_api_key(options) -> bool:
+    api_key = getattr(options, "api_key", None) if options is not None else None
+    return isinstance(api_key, str) and bool(api_key.strip())
+
+
+class RuntimeAuthProvider:
+    api = PROVIDER_API
+
+    def __init__(self, config: ModelConfig) -> None:
+        self.configured = AppV2EnvProvider(config)
+        self.null = NullProvider()
+
+    def stream(self, model: Model, context: Context, options=None) -> AssistantMessageEventStream:
+        if _has_runtime_api_key(options):
+            return self.configured.stream(model, context, options)
+        return self.null.stream(model, context, options)
+
+    stream_simple = stream
+
+
 def create_appv2_env_provider(prefix: str = "APPV2_WORKER_LLM", dotenv_path: "str" = ".env") -> ApiProvider:
     config = load_model_config(prefix, dotenv_path)
-    impl = AppV2EnvProvider(config) if config.enabled else NullProvider()
+    impl = AppV2EnvProvider(config) if config.enabled else RuntimeAuthProvider(config)
     return ApiProvider(api=PROVIDER_API, stream=impl.stream, stream_simple=impl.stream_simple)

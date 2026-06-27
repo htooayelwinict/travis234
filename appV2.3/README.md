@@ -47,6 +47,46 @@ The sandbox launcher builds an appv23-only image from `appV2.3/Dockerfile.appv23
 npm run tui:v23:sandbox -- --cwd docs
 ```
 
+For installed-anywhere use, run the installer once from the repo:
+
+```bash
+npm run install:appv23
+```
+
+The installer pulls `ghcr.io/htooayelwinict/appv23:production`, installs the global `appv23-sandbox` command, and verifies the wrapper with a dry run. Then run from any directory:
+
+```bash
+appv23-sandbox --cwd .
+```
+
+Publish the production image first with the `appv23 release image` GitHub Actions workflow, or use the local development fallback below until that image exists.
+
+If your npm global prefix is not writable, install into a user-controlled prefix:
+
+```bash
+APPV23_NPM_PREFIX="$HOME/.local" npm run install:appv23
+```
+
+Use a specific release image:
+
+```bash
+APPV23_IMAGE=ghcr.io/htooayelwinict/appv23:2.3.0 npm run install:appv23
+```
+
+Development fallback, build the image locally from this checkout instead of pulling:
+
+```bash
+APPV23_IMAGE=appv23:local APPV23_BUILD_LOCAL=1 npm run install:appv23
+```
+
+Playwright is not installed in the base appv23 package or sandbox image. For browser automation development, install the optional extra from this directory:
+
+```bash
+python -m pip install ".[browser]"
+```
+
+The global wrapper does not need the repo as the current directory. It mounts the selected `--cwd`, stores sandbox state in `$HOME/.appv23/sandbox-home`, and copies host `$HOME/.agents/skills` into sandbox `$HOME/.agents/skills` before launch.
+
 The image entrypoint is `appv23`. Direct Docker usage is:
 
 ```bash
@@ -69,6 +109,19 @@ Runtime mounts are intentionally narrow:
 - `$HOME/.appv23/sandbox-home` is mounted as `/agent-home` for appv23 auth, model, and session state.
 - The host repo root, host home, `.env`, and provider API-key environment variables are not mounted or forwarded.
 - The Docker socket is not mounted.
+
+Sandbox instruction imports are copied, not mounted:
+
+- Host `$HOME/.agents/skills` is copied into sandbox `$HOME/.agents/skills` before launch.
+- Use `--no-user-skills` to skip copying host user skills.
+- Use `--with-skills <path>` to copy an extra skill file, skill directory, or skills directory.
+- Use `--agents-file <path>` to copy an explicit `AGENTS.md`-style file into the sandbox agent context.
+
+Example:
+
+```bash
+npm run tui:v23:sandbox -- --cwd docs --agents-file ./AGENTS.md --with-skills ~/.agents/skills
+```
 
 Use `/login` and `/model` inside the sandbox. API keys entered through `/login` are stored in the isolated sandbox agent dir at `/agent-home/agent/auth.json`, backed by `$HOME/.appv23/sandbox-home/agent/auth.json` on the host.
 

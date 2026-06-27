@@ -8,8 +8,10 @@ mounting only the selected workspace plus an isolated app home.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 from typing import Sequence
@@ -30,6 +32,20 @@ _PROVIDER_ENV_PREFIXES = (
 
 _STRIP_FLAGS_WITH_VALUE = {"--cwd", "--dotenv"}
 _STRIP_FLAGS_EXACT = set[str]()
+_IMPORTED_AGENTS_MARKER = "<!-- appv23-sandbox-imported-agents -->"
+_SKIP_IMPORT_NAMES = {
+    ".DS_Store",
+    ".git",
+    ".hg",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".svn",
+    ".venv",
+    "__pycache__",
+    "node_modules",
+    "venv",
+}
 
 
 @dataclass(frozen=True)
@@ -41,6 +57,9 @@ class SandboxConfig:
     extra_args: list[str] = field(default_factory=list)
     network: bool = True
     name: str | None = None
+    agents_files: list[Path] = field(default_factory=list)
+    skills_paths: list[Path] = field(default_factory=list)
+    import_user_skills: bool = True
 
     container_workspace: str = CONTAINER_WORKSPACE
     container_agent_home: str = CONTAINER_AGENT_HOME
@@ -63,6 +82,9 @@ def resolve_sandbox_config(
     network: bool = True,
     name: str | None = None,
     base_dir: str | Path | None = None,
+    agents_files: Sequence[str | Path] | None = None,
+    skills_paths: Sequence[str | Path] | None = None,
+    import_user_skills: bool = True,
 ) -> SandboxConfig:
     resolved_workspace = resolve_host_path(workspace, base_dir=base_dir)
     resolved_app_root = Path(app_root).expanduser().resolve()
@@ -79,6 +101,9 @@ def resolve_sandbox_config(
         extra_args=list(extra_args or []),
         network=network,
         name=name,
+        agents_files=[resolve_host_path(path, base_dir=base_dir) for path in agents_files or []],
+        skills_paths=[resolve_host_path(path, base_dir=base_dir) for path in skills_paths or []],
+        import_user_skills=import_user_skills,
     )
 
 
@@ -171,6 +196,138 @@ def assert_safe_environment(config: SandboxConfig) -> None:
     config.agent_home.mkdir(parents=True, exist_ok=True)
 
 
+def prepare_sandbox_imports(config: SandboxConfig) -> None:
+    _prepare_agents_files(config)
+    _prepare_skills(config)
+
+
+def _prepare_agents_files(config: SandboxConfig) -> None:
+    target = config.agent_home / "agent" / "AGENTS.md"
+    if not config.agents_files:
+        if target.exists() and target.read_text(encoding="utf-8", errors="ignore").startswith(_IMPORTED_AGENTS_MARKER):
+            target.unlink()
+        return
+
+    parts = [
+        _IMPORTED_AGENTS_MARKER,
+        "# Imported appv23 sandbox instructions",
+        "",
+        "These instructions were copied into the sandbox from explicit --agents-file arguments.",
+        "",
+    ]
+    for source in config.agents_files:
+        if not source.exists():
+            raise ValueError(f"agents file does not exist: {source}")
+        if not source.is_file():
+            raise ValueError(f"agents file is not a file: {source}")
+        parts.extend(
+            [
+                f"## Source: {source}",
+                "",
+                source.read_text(encoding="utf-8"),
+                "",
+            ]
+        )
+
+    target.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    target.write_text("\n".join(parts), encoding="utf-8")
+    os.chmod(target, 0o600)
+
+
+def _prepare_skills(config: SandboxConfig) -> None:
+    sources = _sandbox_skill_sources(config)
+    if not sources:
+        return
+
+    target_root = config.agent_home / ".agents" / "skills"
+    if target_root.exists():
+        shutil.rmtree(target_root)
+    target_root.mkdir(parents=True, mode=0o700, exist_ok=True)
+
+    imported: list[dict[str, str]] = []
+    for source in sources:
+        if not source.exists():
+            raise ValueError(f"skills path does not exist: {source}")
+        if source.is_file():
+            if source.suffix != ".md":
+                raise ValueError(f"skills file must be markdown: {source}")
+            target = target_root / source.name
+            _copy_file_safe(source, target)
+            imported.append({"source": str(source), "target": str(target)})
+            continue
+        if not source.is_dir():
+            raise ValueError(f"skills path is not a file or directory: {source}")
+        if (source / "SKILL.md").is_file():
+            target = target_root / source.name
+            _copy_tree_safe(source, target)
+            imported.append({"source": str(source), "target": str(target)})
+            continue
+        for child in sorted(source.iterdir(), key=lambda item: item.name):
+            if _should_skip_import(child):
+                continue
+            target = target_root / child.name
+            if child.is_dir():
+                _copy_tree_safe(child, target)
+                imported.append({"source": str(child), "target": str(target)})
+            elif child.is_file() and child.suffix == ".md":
+                _copy_file_safe(child, target)
+                imported.append({"source": str(child), "target": str(target)})
+
+    manifest = {
+        "source": "appv23-sandbox",
+        "skills": imported,
+    }
+    (target_root / ".appv23-import-manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+
+def _sandbox_skill_sources(config: SandboxConfig) -> list[Path]:
+    sources: list[Path] = []
+    if config.import_user_skills:
+        user_skills = Path.home() / ".agents" / "skills"
+        if user_skills.exists():
+            sources.append(user_skills.resolve())
+    sources.extend(path.resolve() for path in config.skills_paths)
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for source in sources:
+        key = str(source)
+        if key not in seen:
+            deduped.append(source)
+            seen.add(key)
+    return deduped
+
+
+def _copy_tree_safe(source: Path, target: Path) -> None:
+    if _should_skip_import(source):
+        return
+    if source.is_symlink():
+        return
+    if source.is_file():
+        _copy_file_safe(source, target)
+        return
+    target.mkdir(parents=True, exist_ok=True)
+    for child in sorted(source.iterdir(), key=lambda item: item.name):
+        if _should_skip_import(child):
+            continue
+        child_target = target / child.name
+        if child.is_dir():
+            _copy_tree_safe(child, child_target)
+        elif child.is_file():
+            _copy_file_safe(child, child_target)
+
+
+def _copy_file_safe(source: Path, target: Path) -> None:
+    if _should_skip_import(source) or source.is_symlink():
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target)
+
+
+def _should_skip_import(path: Path) -> bool:
+    name = path.name
+    return name in _SKIP_IMPORT_NAMES or name.startswith(".env")
+
+
 def ensure_image(config: SandboxConfig, *, rebuild: bool = False, dry_run: bool = False) -> int:
     if not rebuild:
         inspect = subprocess.run(
@@ -201,6 +358,7 @@ def run_sandbox(config: SandboxConfig, *, dry_run: bool = False, rebuild: bool =
         ensure_image(config, rebuild=rebuild, dry_run=True)
         print(" ".join(command))
         return 0
+    prepare_sandbox_imports(config)
     if provider_env_names_present():
         print(
             "appv23 sandbox: provider environment variables are intentionally not forwarded; "

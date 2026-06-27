@@ -86,12 +86,11 @@ def test_appv2_env_provider_uses_runtime_option_api_key_for_authorization(monkey
     assert captured["headers"]["Authorization"] == "Bearer runtime-login-key"
 
 
-def test_appv2_env_provider_factory_allows_runtime_login_key_without_startup_key(tmp_path, monkeypatch) -> None:
+def test_appv2_env_provider_factory_allows_runtime_login_key_without_startup_transport_flag(tmp_path, monkeypatch) -> None:
     dotenv = tmp_path / ".env"
     dotenv.write_text(
         "\n".join(
             [
-                "APPV2_WORKER_LLM_ENABLED=true",
                 "APPV2_WORKER_LLM_MODEL=qwen/qwen3.6-flash",
                 "APPV2_WORKER_LLM_BASE_URL=https://openrouter.ai/api/v1",
             ]

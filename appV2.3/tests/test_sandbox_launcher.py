@@ -5,6 +5,7 @@ from pathlib import Path
 from appv23.sandbox_launcher import (
     SandboxConfig,
     build_docker_command,
+    prepare_sandbox_imports,
     resolve_host_path,
     resolve_sandbox_config,
 )
@@ -85,3 +86,43 @@ def test_docker_command_rejects_parent_dotenv_args(tmp_path: Path) -> None:
     assert "--dotenv" not in command
     assert "../.env" not in command
     assert command[-2:] == ["--plain", "hi"]
+
+
+def test_prepare_sandbox_imports_copies_user_agents_skills(tmp_path: Path, monkeypatch) -> None:
+    host_home = tmp_path / "host-home"
+    user_skills = host_home / ".agents" / "skills"
+    user_skills.mkdir(parents=True)
+    (user_skills / "web_search.md").write_text("---\nname: web-search\n---\nUse curl.\n", encoding="utf-8")
+    (user_skills / ".env").write_text("SECRET=not-copied\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(host_home))
+
+    config = resolve_sandbox_config(
+        workspace=tmp_path / "workspace",
+        app_root=tmp_path / "appV2.3",
+        agent_home=tmp_path / "sandbox-home",
+    )
+
+    prepare_sandbox_imports(config)
+
+    imported = config.agent_home / ".agents" / "skills" / "web_search.md"
+    assert imported.read_text(encoding="utf-8") == "---\nname: web-search\n---\nUse curl.\n"
+    assert not (config.agent_home / ".agents" / "skills" / ".env").exists()
+
+
+def test_prepare_sandbox_imports_writes_explicit_agents_file(tmp_path: Path) -> None:
+    agents_file = tmp_path / "AGENTS.md"
+    agents_file.write_text("Stay inside cwd.\n", encoding="utf-8")
+    config = resolve_sandbox_config(
+        workspace=tmp_path / "workspace",
+        app_root=tmp_path / "appV2.3",
+        agent_home=tmp_path / "sandbox-home",
+        agents_files=[agents_file],
+        import_user_skills=False,
+    )
+
+    prepare_sandbox_imports(config)
+
+    imported = config.agent_home / "agent" / "AGENTS.md"
+    text = imported.read_text(encoding="utf-8")
+    assert "appv23-sandbox-imported-agents" in text
+    assert "Stay inside cwd." in text

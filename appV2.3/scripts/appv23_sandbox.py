@@ -33,6 +33,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cwd", default=".", help="Host workspace directory to mount as /workspace")
     parser.add_argument("--image", default=None, help="Docker image to use; defaults to APPV23_SANDBOX_IMAGE or appv23:local")
     parser.add_argument("--agent-home", default=None, help="Host directory for isolated appv23 sandbox state")
+    parser.add_argument(
+        "--agents-file",
+        action="append",
+        default=[],
+        help="Copy an explicit AGENTS.md/CLAUDE.md-style instruction file into the sandbox",
+    )
+    parser.add_argument(
+        "--with-skills",
+        action="append",
+        default=[],
+        help="Copy an explicit skill file or directory into sandbox $HOME/.agents/skills",
+    )
+    parser.add_argument("--no-user-skills", action="store_true", help="Do not copy host ~/.agents/skills into the sandbox")
     parser.add_argument("--no-network", action="store_true", help="Disable container network access")
     parser.add_argument("--rebuild", action="store_true", help="Rebuild the appv23 Docker image before running")
     parser.add_argument("--dry-run", action="store_true", help="Print docker command without running it")
@@ -45,6 +58,9 @@ def main(argv: list[str] | None = None) -> int:
         extra_args=extra,
         network=not args.no_network,
         base_dir=os.environ.get("INIT_CWD"),
+        agents_files=args.agents_file,
+        skills_paths=args.with_skills,
+        import_user_skills=not args.no_user_skills,
     )
     try:
         return run_sandbox(config, dry_run=args.dry_run, rebuild=args.rebuild)
