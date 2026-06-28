@@ -2757,6 +2757,68 @@ def test_tool_loop_guardrail_warns_on_repeated_idempotent_no_progress() -> None:
     assert "returned the same result 2 times" in second.message
 
 
+def test_tool_failure_classifier_does_not_treat_read_source_error_tokens_as_failure() -> None:
+    from appv23.agent.tool_guardrails import classify_tool_failure
+
+    source = 'import type { DraftAnalysis } from "../types";\nconst status = "error";\nconst failed = false;'
+
+    failed, suffix = classify_tool_failure("read", source)
+
+    assert failed is False
+    assert suffix == ""
+
+
+def test_tool_failure_classifier_keeps_explicit_tool_errors_as_failures() -> None:
+    from appv23.agent.tool_guardrails import classify_tool_failure
+
+    failed, suffix = classify_tool_failure("read", "Error: File not found: src/app/EditorPanel.tsx")
+
+    assert failed is True
+    assert suffix == " [error]"
+
+
+def test_agent_session_after_tool_call_does_not_mark_read_source_error_tokens_failed(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from appv23.agent.types import AgentToolResult
+    from appv23.ai.types import TextContent
+    from appv23.coding_agent.agent_session import AgentSession
+
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+    source = 'import type { DraftAnalysis } from "../types";\nconst status = "error";\nconst failed = false;'
+    context = SimpleNamespace(
+        tool_call=SimpleNamespace(name="read", id="call-read-source"),
+        args={"path": "src/lib/analyzer.ts"},
+        result=AgentToolResult(content=[TextContent(text=source)], details=None),
+        is_error=False,
+    )
+
+    try:
+        after = session._after_tool_call(context)
+    finally:
+        session.shutdown()
+
+    assert after is None or after.is_error is not True
+
+
+def test_tool_loop_guardrail_does_not_escalate_read_source_error_tokens_as_exact_failures() -> None:
+    from appv23.agent.tool_guardrails import ToolCallGuardrailController
+
+    controller = ToolCallGuardrailController()
+    source = 'import type { DraftAnalysis } from "../types";\nconst status = "error";\nconst failed = false;'
+
+    decisions = [
+        controller.after_call("read", {"path": "src/lib/analyzer.ts"}, source, failed=None)
+        for _ in range(4)
+    ]
+
+    assert [decision.action for decision in decisions] == ["allow", "warn", "halt", "halt"]
+    assert decisions[1].code == "idempotent_no_progress_warning"
+    assert decisions[2].code == "idempotent_no_progress_block"
+    assert decisions[3].code == "idempotent_no_progress_block"
+    assert all("repeated_exact_failure" not in decision.code for decision in decisions)
+
+
 def test_tool_loop_guardrail_treats_bash_file_preview_variants_as_no_progress() -> None:
     from appv23.agent.tool_guardrails import ToolCallGuardrailController
 

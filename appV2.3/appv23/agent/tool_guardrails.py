@@ -225,8 +225,18 @@ def classify_tool_failure(tool_name: str, result: str | None) -> tuple[bool, str
         if "Command exited with code " in result or "Command timed out after " in result:
             return True, " [error]"
         return False, ""
-    lower = result[:500].lower()
-    if '"error"' in lower or '"failed"' in lower or result.startswith("Error"):
+    lower = result.lstrip()[:500].lower()
+    if lower.startswith(
+        (
+            "error:",
+            "error\n",
+            "file not found:",
+            "permission denied:",
+            "permissionerror:",
+            "filenotfounderror:",
+            "operation aborted",
+        )
+    ):
         return True, " [error]"
     return False, ""
 
