@@ -1,152 +1,316 @@
 # appv23
 
-Pi-style coding agent with Hermes-style compaction, branched from the sealed `appV2.2` baseline.
+```text
+        _   _   _   _   _   _   _   _   _
+       / \ / \ / \ / \ / \ / \ / \ / \ / \
+      ( a | p | p | v | 2 | 3 | . | t | u )
+       \_/ \_/ \_/ \_/ \_/ \_/ \_/ \_/ \_/
 
-appv23 directly ports and adapts implementation work from Pi and Hermes Agent through the `appV2.2` baseline. See `NOTICE.md` for upstream attribution and `LICENSE` for the MIT license terms preserved from those projects.
-
-## Distribution model
-
-appv23 is shipped in three layers:
-
-1. `appV2.3/` is the Python application source used for local development, tests, and release-image builds.
-2. `ghcr.io/htooayelwinict/appv23:production` is the public Docker sandbox image. The production image is built from the `next/appv23` branch with `Dockerfile.appv23.release`.
-3. `@htooayelwinict/appv23@latest` is the public npm launcher package. It is a thin wrapper that pulls/runs the GHCR image from any directory.
-
-Recommended user entrypoint:
-
-```bash
-npx --yes @htooayelwinict/appv23@latest --cwd .
+      a sandbox-first coding-agent TUI
+      with explicit subagents, compact memory, and portable npm launch
 ```
 
-Persistent global command:
+appv23 is the active next-generation agent workspace after sealed appv22. It is a terminal coding agent built for real user-side operation: run it from any project with `npx`, keep API keys out of project files, mount only the selected workspace into Docker, and invoke subagents only when the workflow actually needs delegation.
+
+It directly ports and adapts implementation work from Pi and Hermes Agent through the `appV2.2` baseline. See `NOTICE.md` for upstream attribution and `LICENSE` for the preserved MIT license terms.
+
+## What makes appv23 different
+
+- Sandbox-first distribution: normal users run the public GHCR image through a tiny npm launcher.
+- Explicit subagents: child agents are not a default habit; they are skill-triggered or command-triggered for larger workflows.
+- Agentic TUI workflow: `/login`, `/model`, `/compact`, `/delegate`, `/agents`, and `/cancel-agent` are designed for long-running coding sessions.
+- Compact memory: Hermes-style compaction keeps long sessions usable without forcing the user to restart every time context grows.
+- Pi-style tool discipline: coding-agent tools, loop guards, read/write boundaries, and recovery prompts are designed to reduce runaway tool loops.
+- Portable install: `npx @htooayelwinict/appv23@latest --cwd .` works from any project directory once Docker is available.
+- Isolated credentials: `/login` stores API keys under the sandbox home, not inside the mounted project.
+- Recoverable skills: the npm package bundles default `AGENTS.md`, `web-search`, and `subagent-delegation` assets for first-run or accidental `~/.agents` deletion.
+- Appv23-only production image: Pi and Hermes remain reference sources in the repo, but the public image runs the appv23 runtime only.
+
+## Recommended user entrypoint
+
+Run from any project directory:
+
+```bash
+npx --yes @htooayelwinict/appv23@latest --cwd . --pull
+```
+
+Use `--pull` when you want the newest `ghcr.io/htooayelwinict/appv23:production` image immediately. Normal launches use an automatic pull cache to avoid pulling every time.
+
+Install a persistent global command:
 
 ```bash
 npm install -g @htooayelwinict/appv23@latest
 appv23 --cwd .
 ```
 
-The npm package does not contain the full Python runtime. It contains the launcher, compact default agent files, and bundled default skills. The runtime comes from the GHCR image.
+The npm package is a launcher, not the full Python app. Runtime code comes from:
 
-## Status
-
-`appV2.3` is the active next-version workspace. Keep `appV2.2/` sealed except for bug fixes, security fixes, test hardening, and documentation corrections. Put new advanced agent work in `appV2.3/`.
-
-This initial scaffold intentionally preserves the `APPV2_*` environment variable prefix for compatibility with the sealed baseline. Rename environment prefixes later only if the migration is planned and tested.
-
-## Requirements
-
-- Python 3.13
-- `uv` for local development from the repository root
-- Optional provider credentials in `.env` for live LLM runs
-
-## Run from the repository
-
-```bash
-uv run python appV2.3/scripts/appv23_tui.py --cwd .
+```text
+ghcr.io/htooayelwinict/appv23:production
 ```
 
-Or use the root npm wrapper:
+## Distribution model
 
-```bash
-npm run tui -- --cwd .
+appv23 ships as three layers:
+
+```text
+appV2.3/                                  Python source, tests, local dev entrypoints
+Dockerfile.appv23.release                production image builder
+packages/appv23-cli/                     npx/global Docker launcher
 ```
 
-Version-specific wrappers are also available:
+Runtime path:
 
-```bash
-npm run tui:v22 -- --dotenv ../.env --cwd ..
-npm run tui:v23 -- --cwd .
-npm run tui:v23:sandbox -- --cwd docs
+```text
+user shell -> npm launcher -> Docker sandbox -> appv23 Python TUI
 ```
 
-When `--dotenv` is omitted, `appv23` searches the working directory (`--cwd`) and parent directories for `.env`, so the root `.env` works even when the npm wrapper runs from `appV2.3/`. Pass `--dotenv path/to/.env` to force a specific file.
-The sealed `appV2.2` wrapper does not use the appv23 resolver, so its example keeps explicit parent paths.
+This split is intentional. npm stays small and fast to publish. Runtime fixes normally ship by rebuilding and pushing the GHCR image. Publish npm only when the launcher, bundled skills, bundled `AGENTS.md`, CLI flags, or package metadata changes.
 
-## Whole-app Docker sandbox
+## First run
 
-The sandbox launcher builds an appv23-only image from `appV2.3/Dockerfile.appv23` and runs the full TUI inside that image:
-
-```bash
-npm run tui:v23:sandbox -- --cwd docs
-```
-
-Run directly with the public npm package:
+Start the sandbox:
 
 ```bash
-npx --yes @htooayelwinict/appv23@latest --cwd docs
+npx --yes @htooayelwinict/appv23@latest --cwd . --pull
 ```
 
-Or install globally:
+Inside the TUI:
 
-```bash
-npm install -g @htooayelwinict/appv23@latest
-appv23 --cwd docs
+```text
+/login
+/model
+hi
 ```
 
-The npm launcher pulls and runs `ghcr.io/htooayelwinict/appv23:production`. The default pull mode is `auto`: the first successful pull records a cache under `$HOME/.appv23/sandbox-home/.appv23-pull-cache.json`, and normal repeat launches skip `docker pull` until that cache expires. Use `--pull` to force a fresh image pull or `--no-pull` to skip image pulling.
+Use `/login` to store an API key. Use `/model` to choose a provider/model. API keys entered through `/login` are stored at:
 
-Common npm/global usage:
+```text
+$HOME/.appv23/sandbox-home/agent/auth.json
+```
+
+Inside the container this is visible as:
+
+```text
+/agent-home/agent/auth.json
+```
+
+Project `.env` files are intentionally not mounted or forwarded through the npm/Docker path. For user-side sandbox runs, use `/login` and `/model`.
+
+## Common commands
 
 ```bash
 appv23 --cwd /path/to/project
-appv23 --cwd . --dry-run
 appv23 --cwd . --pull
 appv23 --cwd . --no-pull
+appv23 --cwd . --dry-run
 appv23 --cwd . --no-network
 appv23 --cwd . --image ghcr.io/htooayelwinict/appv23:production
 appv23 --cwd . --agents-file ./AGENTS.md
 appv23 --cwd . --with-skills ~/.agents/skills
+appv23 --cwd . --no-user-skills
 ```
 
-For installed-anywhere use, run the installer once from the repo:
+Use `--dry-run` to inspect the Docker command without starting the container.
+
+## TUI command map
+
+Inside appv23:
+
+```text
+/login                 configure provider credentials
+/logout                remove stored provider credentials
+/model                 choose a provider/model
+/compact               compact the current conversation
+/compact deep          stronger compaction pass
+/delegate              spawn a delegated worker through the runtime command path
+/agents                list delegated workers and status
+/cancel-agent <id>     mark a delegated worker cancelled
+/exit                  leave the TUI
+```
+
+Subagent skill workflows can also be triggered in natural language. For example:
+
+```text
+Use the subagent-delegation skill. Spawn a reviewer subagent to inspect docs/report/appv22_qa_scan_2026-06-26.md. Show me the child task id, child role, child status, and child summary.
+```
+
+## Subagents: what they are for
+
+Subagents are for bounded delegation, not for every prompt.
+
+Use them when:
+
+- A task has independent review, research, or inspection work.
+- You want a child summary without contaminating the parent with every file read.
+- You need a reviewer, explorer, security pass, QA pass, or web-search worker.
+- The user explicitly asks to spawn, delegate, hand off, verify through subagents, or use `/delegate`.
+
+Do not use them when:
+
+- The task is a simple edit or direct question.
+- The parent can answer with already-loaded context.
+- The child would need broad, unbounded repo scanning.
+- The user did not ask for delegation and no large workflow requires it.
+
+The intended behavior is simple:
+
+```text
+normal prompt -> main agent works normally
+explicit subagent request -> subagent-delegation skill or /delegate owns the workflow
+```
+
+## Subagent modes
+
+appv23 supports two practical delegation paths.
+
+### Prompt-level skill delegation
+
+Use this when you want the model to follow the bundled `subagent-delegation` skill.
+
+Example:
+
+```text
+Use the subagent-delegation skill. Spawn a reviewer subagent only. The child should inspect README.md and return status. Show task id, role, status, and summary.
+```
+
+Expected signs:
+
+```text
+[skill] subagent-delegation
+spawn_subagent(...)
+subagent_start
+subagent_stop
+status: completed
+summary: ...
+```
+
+The parent should not re-read all child files when the child summary is enough. If the child result is truncated, the parent should ask for a narrower follow-up child or report the truncation clearly.
+
+### Runtime slash-command delegation
+
+Use this when you want the runtime command path directly:
+
+```text
+/delegate reviewer inspect README.md and summarize risks
+/agents
+/cancel-agent subagent-123 user stopped the run
+```
+
+The runtime supervisor is conservative by default:
+
+- child depth is capped at `1`
+- internal workers are read-only by default
+- concurrent workers are capped
+- child results are summarized back to the parent
+- parent-observed timeouts are recorded as terminal timeout results
+- shutdown records active workers as cancelled
+
+### Codex backend delegation
+
+When Codex CLI is installed and authenticated, appv23 can delegate through Codex:
+
+```text
+/delegate --backend codex reviewer inspect README.md and summarize risks
+```
+
+Codex backend runs use a read-only sandbox by default and persist raw child logs under the session-local `subagents/<session-id>` directory.
+
+## User-side subagent smoke test
+
+Start appv23:
 
 ```bash
-npm run install:appv23
+npx --yes @htooayelwinict/appv23@latest --cwd . --pull
 ```
 
-The installer pulls `ghcr.io/htooayelwinict/appv23:production`, installs the global `appv23-sandbox` command, and verifies the wrapper with a dry run. Then run from any directory:
+Then ask:
+
+```text
+Use the subagent-delegation skill. Spawn a reviewer subagent only. The child should inspect README.md and return its status. Show me child task id, child role, child status, and child summary. If no subagent tool is available, say "subagent tool unavailable" and do nothing else.
+```
+
+Good output includes:
+
+```text
+child_task_id: subagent-...
+child_role: reviewer
+child_status: completed
+child_summary: ...
+```
+
+If the app says `subagent tool unavailable`, the skill loaded but the runtime tool was not exposed in that session. That is a real feature availability failure, not a README problem.
+
+## Web-search skill
+
+The bundled `web-search` skill is a small, bounded current-info workflow. It is not a giant crawler.
+
+Use it explicitly:
+
+```text
+Use the web-search skill. Search Google News for worldcup 2026 results and show at most five source rows.
+```
+
+Expected behavior:
+
+- uses bounded `curl`-style retrieval
+- avoids massive raw HTML/XML output
+- returns at most five concise rows
+- reports one concise blocker row if parsing or network access fails
+
+## Sandboxing model
+
+The npm launcher runs Docker with a narrow mount model.
+
+Mounted:
+
+```text
+selected --cwd                 -> /workspace
+$HOME/.appv23/sandbox-home     -> /agent-home
+```
+
+Not mounted:
+
+```text
+host home directory
+host repo root unless selected as --cwd
+project .env by default
+provider API-key environment variables
+Docker socket
+```
+
+Instruction imports are copied, not live-mounted:
+
+```text
+host ~/.agents/AGENTS.md       -> sandbox /agent-home/agent/AGENTS.md
+host ~/.agents/skills          -> sandbox /agent-home/.agents/skills
+```
+
+You can skip host skills:
 
 ```bash
-appv23-sandbox --cwd .
+appv23 --cwd . --no-user-skills
 ```
 
-Publish the production image first with the `appv23 release image` GitHub Actions workflow, or use the local development fallback below until that image exists.
-
-If your npm global prefix is not writable, install into a user-controlled prefix:
+You can add explicit files or skill directories:
 
 ```bash
-APPV23_NPM_PREFIX="$HOME/.local" npm run install:appv23
+appv23 --cwd . --agents-file ./AGENTS.md --with-skills ./skills
 ```
 
-Use a specific release image:
+The npm package also includes compact default assets:
 
-```bash
-APPV23_IMAGE=ghcr.io/htooayelwinict/appv23:2.3.0 npm run install:appv23
+```text
+packages/appv23-cli/agents/AGENTS.md
+packages/appv23-cli/skills/web-search/SKILL.md
+packages/appv23-cli/skills/subagent-delegation/SKILL.md
 ```
 
-Development fallback, build the image locally from this checkout instead of pulling:
+On startup, the launcher restores those defaults into host `~/.agents` only when the matching file or skill directory is missing. Existing user files are not overwritten.
 
-```bash
-APPV23_IMAGE=appv23:local APPV23_BUILD_LOCAL=1 npm run install:appv23
-```
+## Direct Docker usage
 
-Playwright is not installed in the base appv23 package or sandbox image. For browser automation development, install the optional extra from this directory:
-
-```bash
-python -m pip install ".[browser]"
-```
-
-The global wrapper does not need the repo as the current directory. It mounts the selected `--cwd`, stores sandbox state in `$HOME/.appv23/sandbox-home`, copies host `$HOME/.agents/AGENTS.md` into sandbox `$HOME/agent/AGENTS.md`, and copies host `$HOME/.agents/skills` into sandbox `$HOME/.agents/skills` before launch.
-
-The npm package also bundles compact defaults for first run and recovery:
-
-- `agents/AGENTS.md`
-- `skills/web-search/SKILL.md`
-- `skills/subagent-delegation/SKILL.md`
-
-On startup, the wrapper restores those files into host `~/.agents` only when the matching host file or skill directory is missing. Existing user files are never overwritten. This keeps normal sessions lightweight while making `npx @htooayelwinict/appv23@latest` usable after a fresh install or accidental `~/.agents` deletion.
-
-The image entrypoint is `appv23`. Direct Docker usage is:
+The image entrypoint is `appv23`.
 
 ```bash
 docker run --rm -it \
@@ -154,7 +318,7 @@ docker run --rm -it \
   --security-opt no-new-privileges \
   --pids-limit 512 \
   --user "$(id -u):$(id -g)" \
-  -v "$PWD/docs:/workspace:rw" \
+  -v "$PWD:/workspace:rw" \
   -v "$HOME/.appv23/sandbox-home:/agent-home:rw" \
   -e HOME=/agent-home \
   -e PI_CODING_AGENT_DIR=/agent-home/agent \
@@ -164,148 +328,174 @@ docker run --rm -it \
   --cwd /workspace
 ```
 
-Runtime mounts are intentionally narrow:
+## Local development from this repo
 
-- Host `--cwd` is mounted as `/workspace`.
-- `$HOME/.appv23/sandbox-home` is mounted as `/agent-home` for appv23 auth, model, and session state.
-- The host repo root, host home, `.env`, and provider API-key environment variables are not mounted or forwarded.
-- The Docker socket is not mounted.
-
-Sandbox instruction imports are copied, not mounted:
-
-- Host `$HOME/.agents/AGENTS.md` is copied into sandbox `$HOME/agent/AGENTS.md` before launch.
-- Host `$HOME/.agents/skills` is copied into sandbox `$HOME/.agents/skills` before launch.
-- Use `--no-user-skills` to skip copying host user skills.
-- Use `--with-skills <path>` to copy an extra skill file, skill directory, or skills directory.
-- Use `--agents-file <path>` to copy an explicit `AGENTS.md`-style file into the sandbox agent context.
-
-Example:
+Run the TUI locally:
 
 ```bash
-npm run tui:v23:sandbox -- --cwd docs --agents-file ./AGENTS.md --with-skills ~/.agents/skills
+PYTHONPATH=appV2.3 .venv/bin/python appV2.3/scripts/appv23_tui.py --cwd .
 ```
 
-Use `/login` and `/model` inside the sandbox. API keys entered through `/login` are stored in the isolated sandbox agent dir at `/agent-home/agent/auth.json`, backed by `$HOME/.appv23/sandbox-home/agent/auth.json` on the host.
-
-The npm and Docker sandbox paths intentionally do not mount or forward the project `.env` file. Use `/login` for user-side API keys and `/model` to select a provider/model. Direct local development can still use `--dotenv`:
+Use a specific `.env` only for local development:
 
 ```bash
 PYTHONPATH=appV2.3 .venv/bin/python appV2.3/scripts/appv23_tui.py --dotenv .env --cwd docs
 ```
 
-## Repository structure
+Root npm wrappers:
 
-```text
-appV2.3/
-  appv23/                  Python runtime package: TUI, agent loop, tools, auth, models, compaction, subagents.
-  scripts/                 Local entrypoints such as appv23_tui.py and appv23_sandbox.py.
-  tests/                   appv23 unit and integration tests.
-  Dockerfile.appv23        Local development sandbox image.
-  README.md                This appv23 guide.
-
-packages/appv23-cli/
-  bin/appv23.js            Public npm launcher used by npx/global install.
-  agents/AGENTS.md         Compact default agent kernel restored only when host ~/.agents/AGENTS.md is missing.
-  skills/                  Bundled default skills restored only when missing and copied into the sandbox.
-  test/                    npm launcher tests.
-
-Dockerfile.appv23.release  Production image builder for ghcr.io/htooayelwinict/appv23:production.
-package.json               Repo-level helper scripts, including image release and sandbox wrappers.
+```bash
+npm run tui -- --cwd .
+npm run tui:v23 -- --cwd .
+npm run tui:v23:sandbox -- --cwd docs
 ```
 
-The production image is intentionally appv23-only. Pi and Hermes sources remain in the repo for attribution/reference work, but the public npm path runs the appv23 runtime from the GHCR image.
+Build a local development image:
 
-## Install locally from a wheel
+```bash
+npm run tui:v23:sandbox -- --cwd docs
+```
+
+Install from wheel:
 
 ```bash
 uv build appV2.3
 uv tool install dist/appv23-*.whl
-```
-
-Then run:
-
-```bash
 appv23 --cwd .
 ```
 
-## Test
-
-From the package directory:
+Optional browser automation dependencies are not installed in the production image. For browser automation development:
 
 ```bash
 cd appV2.3
-uv run --with pytest python -m pytest tests -q
+python -m pip install ".[browser]"
 ```
 
-Expected current `appV2.3` suite: `745 passed`.
+## Release image flow
 
-## Production verification gates
+The production image is built from `next/appv23` using `Dockerfile.appv23.release`.
 
-Before calling appv23 production-ready, verify these current-state gates:
-
-1. Focused subagent skill smoke: the prompt explicitly invokes `subagent-delegation`, reads the skill, spawns one child, and reports `taskId`, `role`, `status`, and `summary`.
-2. Focused web-search skill smoke: the prompt explicitly invokes `web-search`, reads the skill, uses Google News RSS first, avoids the `curl | python3 <<'PY'` stdin trap, and returns at most five bounded `RESULT` rows or one concise blocker row.
-3. Runtime regression: run the focused tests for files touched in the current change set.
-4. Full suite: run `cd appV2.3 && uv run --with pytest python -m pytest tests -q`.
-5. Build: run `cd appV2.3 && uv build`.
-6. Gitops: inspect the final diff, commit only intended files, and push the active branch when Lewis asks.
-
-## User-side subagent smoke
-
-Start the app:
+Commit and push runtime changes first:
 
 ```bash
-npm run tui:v23
+git push upstream next/appv23
 ```
 
-`/subagents` is a prompt-level trigger, not a required runtime slash command. The supported production contract is: explicitly ask for the `subagent-delegation` skill, then ask for the bounded child task.
+Then build without stale branch cache:
 
-Then ask with explicit subagent wording so the `subagent-delegation` skill owns the workflow:
+```bash
+docker build --no-cache --pull=false \
+  -f Dockerfile.appv23.release \
+  -t ghcr.io/htooayelwinict/appv23:production \
+  .
+```
+
+Push GHCR:
+
+```bash
+docker push ghcr.io/htooayelwinict/appv23:production
+```
+
+Inspect the published image:
+
+```bash
+docker buildx imagetools inspect ghcr.io/htooayelwinict/appv23:production
+```
+
+Force users onto the newest image:
+
+```bash
+appv23 --cwd . --pull
+```
+
+## Npm package release rule
+
+Do not publish npm for every runtime fix.
+
+Publish npm only when one of these changes:
+
+- `packages/appv23-cli/bin/appv23.js`
+- bundled `agents/AGENTS.md`
+- bundled `skills/**/SKILL.md`
+- package metadata or version
+- launcher README
+- CLI flags or Docker run behavior
+
+Runtime-only Python fixes ship through GHCR.
+
+## Repository structure
 
 ```text
-Use the subagent-delegation skill. Spawn a reviewer subagent to inspect docs/report/appv22_qa_scan_2026-06-26.md. Show me the child task id, child role, child status, and child summary.
+appV2.3/
+  appv23/                  Python runtime: TUI, agent loop, tools, auth, models, compaction, subagents.
+  scripts/                 Local entrypoints: appv23_tui.py, appv23_sandbox.py.
+  tests/                   Unit and integration tests.
+  Dockerfile.appv23        Local development sandbox image.
+  README.md                This guide.
+
+packages/appv23-cli/
+  bin/appv23.js            Public npm launcher used by npx/global install.
+  agents/AGENTS.md         Default agent kernel restored only when host ~/.agents/AGENTS.md is missing.
+  skills/                  Bundled default skills restored only when missing and copied into sandbox.
+  test/                    npm launcher tests.
+
+Dockerfile.appv23.release  Production image builder for GHCR.
+package.json               Repo-level helpers for image release and sandbox wrappers.
 ```
 
-Working output should first show the skill read, then a `spawn_subagent` tool call plus child lifecycle evidence:
+## QA gates
+
+Run the full appv23 suite:
+
+```bash
+PYTHONPATH=appV2.3 .venv/bin/python -m pytest appV2.3/tests
+```
+
+Current expected suite result:
 
 ```text
-[skill] subagent-delegation
-subagent_start
-child_subagent_id: subagent-...
-child_role: reviewer
-subagent_stop
-status: completed
-summary: ...
+749 passed
 ```
 
-The `spawn_subagent` tool result should also include `taskId`, `role`, `status`, and `summary`.
+Focused subagent/TUI trace check:
 
-## User-side web-search skill smoke
-
-The `web-search` skill is a bounded Google News/current-facts lookup, not a general crawler. Start the app and ask:
-
-```text
-Use the web-search skill. Search Google News for worldcup 2026 results and show at most five source rows.
+```bash
+PYTHONPATH=appV2.3 .venv/bin/python -m pytest \
+  appV2.3/tests/test_app_integration.py -k 'subagent or tool_trace or guardrail' \
+  appV2.3/tests/test_tui.py -k 'subagent_tool_trace or successful_subagent_tool_trace or guardrail' \
+  appV2.3/tests/test_subagents.py
 ```
 
-Working output should include:
+Launcher QA:
 
-```text
-[skill] web_search
-RESULT  1  ...
+```bash
+npm --prefix packages/appv23-cli test
+npm --prefix packages/appv23-cli run pack:dry-run
 ```
 
-It should not print raw HTML/XML, and if Google blocks or parsing fails it should report one concise `ERROR`, `NO_RESULTS`, or `NO_PARSE_RESULTS` row.
+## Production readiness checklist
 
-## Environment
+Before calling a build production-ready:
 
-Copy the root template and set the worker provider values needed for live model calls:
+1. Runtime tests pass for the touched appv23 scope.
+2. Full appv23 Python suite passes.
+3. Subagent skill smoke returns `taskId`, `role`, `status`, and `summary`.
+4. Web-search skill smoke returns bounded rows or a concise blocker.
+5. Npm launcher dry-run shows the expected Docker command.
+6. GHCR image is rebuilt without stale branch cache when runtime code changed.
+7. Published image behavior is verified with `docker run` or a user-side TUI smoke.
+8. Only intended files are committed.
+9. Runtime-only fixes are shipped through GHCR; npm is published only for launcher/package changes.
+
+## Environment variables
+
+Local development can use `.env`:
 
 ```bash
 cp .env.example .env
 ```
 
-Minimum live-run settings:
+Minimum live-run values for the local dev path:
 
 ```text
 APPV2_WORKER_LLM_ENABLED=true
@@ -313,15 +503,10 @@ APPV2_WORKER_LLM_API_KEY=...
 APPV2_WORKER_LLM_BASE_URL=https://openrouter.ai/api/v1
 ```
 
-## Subagent workforce
+Sandbox users should prefer `/login` and `/model` instead of `.env`.
 
-AppV2.3 includes a backend-agnostic subagent supervisor for delegating focused work from an active `AgentSession`.
+## Status
 
-- Subagent tools are skill-governed. The main agent should act normally unless Lewis explicitly asks for subagents or invokes the `subagent-delegation` skill.
-- `/subagents` is treated as a prompt-level skill trigger. Use `/delegate` for the existing runtime slash command path.
-- `/agents` lists delegated workers and their current status.
-- `/delegate <role> <task>` runs an internal read-only AppV2.3 worker and returns its summary to the parent session.
-- `/delegate --backend codex <role> <task>` runs `codex exec --json` in a read-only sandbox when the Codex CLI is installed and authenticated. Model and non-`off` reasoning settings are forwarded to Codex when supplied.
-- `/cancel-agent <task-id> [reason]` records a terminal cancellation result for a delegated worker and prevents late child output from overwriting the parent-observed state.
+`appV2.3` is the active next-version workspace. Keep `appV2.2/` sealed except for bug fixes, security fixes, test hardening, and documentation corrections. Put advanced agent work in `appV2.3/`.
 
-The default safety model is intentionally conservative: subagents run at depth `1`, use read-only tools by default, cap concurrent workers at `3`, return structured summaries instead of silently mutating parent state, and record parent-observed timeouts as terminal `timeout` results. Session shutdown records active workers as cancelled, rejects new subagent spawns, and tears down the supervisor executor. Default Codex subagent runs persist raw child logs under the session-local `subagents/<session-id>` directory.
+The `APPV2_*` environment prefix is still preserved for compatibility with the sealed baseline. Rename prefixes only through a planned and tested migration.
