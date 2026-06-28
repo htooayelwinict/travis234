@@ -2621,6 +2621,37 @@ def test_agent_session_runs_read_tool_call(tmp_path: Path) -> None:
     assert calls["n"] == 2
 
 
+def test_internal_subagent_installs_run_alias_only_when_bash_is_allowed(tmp_path: Path) -> None:
+    model = faux_model()
+    session = AgentSession(cwd=str(tmp_path), model=model)
+    child_with_bash = AgentSession(
+        cwd=str(tmp_path),
+        model=model,
+        active_tool_names=["read", "bash"],
+        allowed_tool_names=["read", "bash"],
+    )
+    child_read_only = AgentSession(
+        cwd=str(tmp_path),
+        model=model,
+        active_tool_names=["read"],
+        allowed_tool_names=["read"],
+    )
+
+    try:
+        assert session._install_subagent_tool_aliases(child_with_bash, ("read", "bash")) == ["read", "bash", "run"]
+        child_with_bash.set_active_tools_by_name(["read", "bash", "run"])
+        run_definition = child_with_bash.get_tool_definition("run")
+
+        assert run_definition is not None
+        assert child_with_bash.get_active_tool_names() == ["read", "bash", "run"]
+        assert session._install_subagent_tool_aliases(child_read_only, ("read",)) == ["read"]
+        assert child_read_only.get_tool_definition("run") is None
+    finally:
+        child_with_bash.shutdown()
+        child_read_only.shutdown()
+        session.shutdown()
+
+
 def test_tool_loop_guardrail_warns_on_repeated_idempotent_no_progress() -> None:
     from appv23.agent.tool_guardrails import ToolCallGuardrailConfig, ToolCallGuardrailController
 

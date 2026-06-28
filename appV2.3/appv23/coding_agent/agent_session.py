@@ -1646,6 +1646,48 @@ class AgentSession:
     def _subagent_tool_result(self, content: str, details: dict[str, object]) -> AgentToolResult:
         return AgentToolResult(content=[TextContent(text=content)], details=details)
 
+    def _install_subagent_tool_aliases(self, child: "AgentSession", allowed_tools: tuple[str, ...]) -> list[str]:
+        active_tools = list(allowed_tools)
+        if "bash" not in allowed_tools or "run" in active_tools:
+            return active_tools
+        bash_definition = child.get_tool_definition("bash")
+        bash_tool = child._tool_by_name.get("bash")  # noqa: SLF001 - same class scoped child setup.
+        if bash_definition is None or bash_tool is None:
+            return active_tools
+        run_definition = ToolDefinition(
+            name="run",
+            label="run",
+            description="Compatibility alias for bash in delegated coding-agent sessions.",
+            parameters=bash_definition.parameters,
+            execute=bash_definition.execute,
+            prompt_snippet="Run shell commands. This is a compatibility alias for bash.",
+            prompt_guidelines=[
+                "The run tool is an alias for bash and is only available when bash is already allowed.",
+            ],
+            render_shell=bash_definition.render_shell,
+            render_call=bash_definition.render_call,
+            render_result=bash_definition.render_result,
+            execution_mode=bash_definition.execution_mode,
+            prepare_arguments=bash_definition.prepare_arguments,
+            source_info=bash_definition.source_info,
+        )
+        child._tool_definition_by_name["run"] = run_definition  # noqa: SLF001 - same class scoped child setup.
+        child._tool_source_info_by_name["run"] = child._tool_source_info_by_name.get(  # noqa: SLF001
+            "bash",
+            create_synthetic_source_info("<builtin:run>", source="builtin"),
+        )
+        child._tool_by_name["run"] = AgentTool(  # noqa: SLF001 - same class scoped child setup.
+            name="run",
+            description=run_definition.description,
+            parameters=run_definition.parameters,
+            label="run",
+            execute=bash_tool.execute,
+            prepare_arguments=bash_tool.prepare_arguments,
+            execution_mode=bash_tool.execution_mode,
+        )
+        active_tools.append("run")
+        return active_tools
+
     def _run_internal_subagent(self, task: SubagentTask) -> SubagentResult:
         started = int(time.time() * 1000)
         tool_trace: list[dict[str, object]] = []
@@ -1659,6 +1701,9 @@ class AgentSession:
             stream_fn=self._stream_fn,
             max_iterations=12,
         )
+        child_active_tools = self._install_subagent_tool_aliases(child, task.allowed_tools)
+        if child_active_tools != list(task.allowed_tools):
+            child.set_active_tools_by_name(child_active_tools)
         child.agent.subscribe(self._subagent_tool_trace_listener(task, child, tool_trace, trace_by_call_id))
         child.agent._after_tool_call = self._subagent_after_tool_call_tracer(  # noqa: SLF001 - parent observes delegated child tools.
             task,
