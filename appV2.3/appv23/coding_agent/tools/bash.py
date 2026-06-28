@@ -20,6 +20,7 @@ from appv23.coding_agent.tools.truncate import (
     format_size,
     truncation_to_details,
 )
+from appv23.coding_agent.tools.trust import mark_agent_written_file
 from appv23.coding_agent.tools.types import ToolContext, ToolDefinition, wrap_tool_definition
 
 BASH_SCHEMA = {
@@ -281,11 +282,22 @@ def _execute_bash(
 
         snapshot = finish_output()
         output_text, details = _format_output(output, snapshot)
+        _mark_full_output_path(details, output_text, ctx)
         if exit_code is not None and exit_code != 0:
             raise RuntimeError(_append_status(output_text, f"Command exited with code {exit_code}"))
         return AgentToolResult(content=[TextContent(text=output_text)], details=details)
     finally:
         update_dirty = False
+
+
+def _mark_full_output_path(details, content: str, ctx) -> None:
+    if not isinstance(details, dict):
+        return
+    full_output_path = details.get("fullOutputPath")
+    if not isinstance(full_output_path, str) or not full_output_path:
+        return
+    trust_state = ctx.get("trust_state") if isinstance(ctx, dict) else getattr(ctx, "trust_state", None)
+    mark_agent_written_file(full_output_path, content, trust_state if isinstance(trust_state, dict) else None)
 
 
 def create_bash_tool_definition(

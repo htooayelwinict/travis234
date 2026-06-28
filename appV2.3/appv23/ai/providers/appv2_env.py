@@ -40,6 +40,7 @@ from appv23.ai.types import (
     empty_usage,
     now_ms,
 )
+from appv23.coding_agent.tools.trust import text_content_with_provider_trust
 
 PROVIDER_API = "openai-completions"
 
@@ -278,7 +279,8 @@ def _convert_message(message: Message, model: Model | None = None) -> dict:
 
 
 def _convert_single_tool_result(message: ToolResultMessage) -> dict:
-    content = _text_of(message.content)
+    provider_content = text_content_with_provider_trust(message.tool_name, message.content, message.details)
+    content = _text_of(provider_content)
     if not content and any(isinstance(block, ImageContent) for block in message.content):
         content = "(see attached image)"
     return {

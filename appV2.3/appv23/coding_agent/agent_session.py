@@ -799,6 +799,8 @@ class AgentSession:
             thinking_level = restored_context.thinking_level
             self._session_name = restored_context.session_name
 
+        self._trust_state: dict[str, object] = {"written_files": {}}
+
         if tools is not None:
             base_tools = tools
             base_definitions = [create_tool_definition_from_agent_tool(tool) for tool in base_tools]
@@ -809,7 +811,7 @@ class AgentSession:
             }
         elif tool_definitions is not None:
             base_tools = [
-                wrap_tool_definition(definition, lambda: ToolContext(cwd=self.cwd, model=self.model))
+                wrap_tool_definition(definition, lambda: ToolContext(cwd=self.cwd, model=self.model, trust_state=self._trust_state))
                 for definition in tool_definitions
             ]
             base_definitions = tool_definitions
@@ -824,7 +826,7 @@ class AgentSession:
                 *self._create_subagent_tool_definitions(),
             ]
             base_tools = [
-                wrap_tool_definition(definition, lambda: ToolContext(cwd=self.cwd, model=self.model))
+                wrap_tool_definition(definition, lambda: ToolContext(cwd=self.cwd, model=self.model, trust_state=self._trust_state))
                 for definition in base_definitions
             ]
             base_source_infos = {
@@ -959,7 +961,7 @@ class AgentSession:
             source_info_by_name[registered.definition.name] = registered.source_info
             tool_by_name[registered.definition.name] = wrap_tool_definition(
                 registered.definition,
-                lambda: ToolContext(cwd=self.cwd, model=self.model),
+                lambda: ToolContext(cwd=self.cwd, model=self.model, trust_state=self._trust_state),
             )
 
         self._tool_definition_by_name = {

@@ -10,6 +10,7 @@ from appv23.agent.types import AgentTool, AgentToolResult
 from appv23.ai.types import TextContent
 from appv23.coding_agent.tools.file_mutation_queue import with_file_mutation_queue
 from appv23.coding_agent.tools.path_utils import resolve_to_cwd
+from appv23.coding_agent.tools.trust import mark_agent_written_file
 from appv23.coding_agent.tools.types import ToolContext, ToolDefinition, wrap_tool_definition
 
 WRITE_SCHEMA = {
@@ -65,10 +66,19 @@ def _execute_write(
             raise RuntimeError("Operation aborted")
 
     with_file_mutation_queue(absolute_path, mutate)
+    mark_agent_written_file(absolute_path, content, _ctx_trust_state(ctx))
     return AgentToolResult(
         content=[TextContent(text=f"Successfully wrote {len(content)} bytes to {path}")],
         details=None,
     )
+
+
+def _ctx_trust_state(ctx) -> dict | None:
+    if isinstance(ctx, dict):
+        value = ctx.get("trust_state")
+    else:
+        value = getattr(ctx, "trust_state", None)
+    return value if isinstance(value, dict) else None
 
 
 def create_write_tool_definition(cwd: str, operations: WriteOperations | None = None) -> ToolDefinition:

@@ -19,6 +19,7 @@ class ToolContext:
 
     cwd: str
     model: Any | None = None
+    trust_state: dict[str, Any] | None = None
 
 
 @dataclass

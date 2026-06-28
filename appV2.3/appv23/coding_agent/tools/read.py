@@ -18,6 +18,7 @@ from appv23.coding_agent.tools.truncate import (
     truncate_head,
     truncation_to_details,
 )
+from appv23.coding_agent.tools.trust import annotate_agent_written_read
 from appv23.coding_agent.tools.types import ToolContext, ToolDefinition, wrap_tool_definition
 
 ReadFile = Callable[[str], bytes]
@@ -208,6 +209,7 @@ def _execute_read(
         details = None
 
     _check_aborted(signal)
+    details = annotate_agent_written_read(absolute_path, details, _ctx_value(ctx, "trust_state"))
     return AgentToolResult(content=[TextContent(text=output)], details=details)
 
 
