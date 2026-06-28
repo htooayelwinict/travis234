@@ -2621,7 +2621,7 @@ def test_agent_session_runs_read_tool_call(tmp_path: Path) -> None:
     assert calls["n"] == 2
 
 
-def test_internal_subagent_installs_run_alias_only_when_bash_is_allowed(tmp_path: Path) -> None:
+def test_internal_subagent_installs_run_alias_without_escalating_read_only_child(tmp_path: Path) -> None:
     model = faux_model()
     session = AgentSession(cwd=str(tmp_path), model=model)
     child_with_bash = AgentSession(
@@ -2644,8 +2644,15 @@ def test_internal_subagent_installs_run_alias_only_when_bash_is_allowed(tmp_path
 
         assert run_definition is not None
         assert child_with_bash.get_active_tool_names() == ["read", "bash", "run"]
-        assert session._install_subagent_tool_aliases(child_read_only, ("read",)) == ["read"]
-        assert child_read_only.get_tool_definition("run") is None
+        assert session._install_subagent_tool_aliases(child_read_only, ("read",)) == ["read", "run"]
+        child_read_only.set_active_tools_by_name(["read", "run"])
+        blocked_run = child_read_only.get_tool_definition("run")
+
+        assert blocked_run is not None
+        blocked_result = blocked_run.execute("call-1", {"command": "python -V"})
+        assert blocked_result.details["blocked"] is True
+        assert blocked_result.details["reason"] == "subagent_run_requires_bash"
+        assert "cannot run shell commands" in blocked_result.content[0].text
     finally:
         child_with_bash.shutdown()
         child_read_only.shutdown()

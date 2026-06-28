@@ -70,7 +70,7 @@ from appv23.coding_agent.subagents import (
     SubagentTask,
 )
 from appv23.coding_agent.tools import create_all_tool_definitions
-from appv23.coding_agent.tools.bash import BashExecOptions, BashOperations, create_local_bash_operations
+from appv23.coding_agent.tools.bash import BASH_SCHEMA, BashExecOptions, BashOperations, create_local_bash_operations
 from appv23.coding_agent.tools.output_accumulator import OutputAccumulator
 from appv23.coding_agent.tools.types import (
     ToolContext,
@@ -1648,28 +1648,71 @@ class AgentSession:
 
     def _install_subagent_tool_aliases(self, child: "AgentSession", allowed_tools: tuple[str, ...]) -> list[str]:
         active_tools = list(allowed_tools)
-        if "bash" not in allowed_tools or "run" in active_tools:
+        if "run" in active_tools:
             return active_tools
         bash_definition = child.get_tool_definition("bash")
         bash_tool = child._tool_by_name.get("bash")  # noqa: SLF001 - same class scoped child setup.
-        if bash_definition is None or bash_tool is None:
-            return active_tools
+
+        if "bash" in allowed_tools and bash_definition is not None and bash_tool is not None:
+            run_execute = bash_definition.execute
+            run_prepare_arguments = bash_definition.prepare_arguments
+            run_execution_mode = bash_definition.execution_mode
+            run_render_shell = bash_definition.render_shell
+            run_render_call = bash_definition.render_call
+            run_render_result = bash_definition.render_result
+            description = "Compatibility alias for bash in delegated coding-agent sessions."
+            prompt_snippet = "Run shell commands. This is a compatibility alias for bash."
+            prompt_guidelines = [
+                "The run tool is an alias for bash and is only available when bash is already allowed.",
+            ]
+            agent_execute = bash_tool.execute
+        else:
+            def run_execute(_tool_call_id, args, signal=None, on_update=None, ctx=None):
+                command = args.get("command", "") if isinstance(args, Mapping) else ""
+                return AgentToolResult(
+                    content=[
+                        TextContent(
+                            text=(
+                                "Blocked: this subagent is read-only and cannot run shell commands. "
+                                "Use read, grep, find, or ls, or report that the goal requires a bash-enabled skill role."
+                            )
+                        )
+                    ],
+                    details={
+                        "blocked": True,
+                        "reason": "subagent_run_requires_bash",
+                        "command": command,
+                        "allowedTools": list(allowed_tools),
+                    },
+                )
+
+            run_prepare_arguments = None
+            run_execution_mode = "default"
+            run_render_shell = None
+            run_render_call = lambda args, ctx=None: f"run {args.get('command', '')}" if isinstance(args, Mapping) else "run"
+            run_render_result = None
+            description = "Blocked compatibility shim for shell commands in read-only subagents."
+            prompt_snippet = "Shell commands are blocked for this read-only subagent."
+            prompt_guidelines = [
+                "Do not use run unless bash is listed as an allowed tool.",
+                "If a goal requires shell access and bash is not allowed, report the blocker instead of retrying.",
+            ]
+            agent_execute = run_execute
+
         run_definition = ToolDefinition(
             name="run",
             label="run",
-            description="Compatibility alias for bash in delegated coding-agent sessions.",
-            parameters=bash_definition.parameters,
-            execute=bash_definition.execute,
-            prompt_snippet="Run shell commands. This is a compatibility alias for bash.",
-            prompt_guidelines=[
-                "The run tool is an alias for bash and is only available when bash is already allowed.",
-            ],
-            render_shell=bash_definition.render_shell,
-            render_call=bash_definition.render_call,
-            render_result=bash_definition.render_result,
-            execution_mode=bash_definition.execution_mode,
-            prepare_arguments=bash_definition.prepare_arguments,
-            source_info=bash_definition.source_info,
+            description=description,
+            parameters=bash_definition.parameters if bash_definition is not None else BASH_SCHEMA,
+            execute=run_execute,
+            prompt_snippet=prompt_snippet,
+            prompt_guidelines=prompt_guidelines,
+            render_shell=run_render_shell,
+            render_call=run_render_call,
+            render_result=run_render_result,
+            execution_mode=run_execution_mode,
+            prepare_arguments=run_prepare_arguments,
+            source_info=bash_definition.source_info if bash_definition is not None else None,
         )
         child._tool_definition_by_name["run"] = run_definition  # noqa: SLF001 - same class scoped child setup.
         child._tool_source_info_by_name["run"] = child._tool_source_info_by_name.get(  # noqa: SLF001
@@ -1681,9 +1724,9 @@ class AgentSession:
             description=run_definition.description,
             parameters=run_definition.parameters,
             label="run",
-            execute=bash_tool.execute,
-            prepare_arguments=bash_tool.prepare_arguments,
-            execution_mode=bash_tool.execution_mode,
+            execute=agent_execute,
+            prepare_arguments=run_prepare_arguments,
+            execution_mode=run_execution_mode,
         )
         active_tools.append("run")
         return active_tools
