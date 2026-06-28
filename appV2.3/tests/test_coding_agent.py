@@ -981,6 +981,37 @@ def test_spawn_subagent_tool_rejects_safety_override_text_before_spawning(tmp_pa
         session.shutdown()
 
 
+def test_spawn_subagent_tool_blocks_duplicate_model_spawns_in_same_turn(tmp_path: Path, monkeypatch) -> None:
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+    definition = session.get_tool_definition("spawn_subagent")
+    assert definition is not None
+    spawned: list[tuple[str, str]] = []
+
+    def fake_spawn(role: str, goal: str, options: dict | None = None):
+        task = session._build_subagent_task(role, goal, options)
+        spawned.append((role, goal))
+        return task.id, task
+
+    monkeypatch.setattr(session, "_spawn_subagent_task", fake_spawn)
+
+    try:
+        first = definition.execute("call-1", {"role": "shell-check", "goal": "run python -V", "wait": False})
+        duplicate = definition.execute("call-2", {"role": "shell-check", "goal": "run   python -V", "wait": False})
+
+        assert first.details["status"] == "queued"
+        assert duplicate.details["status"] == "blocked"
+        assert duplicate.details["reason"] == "duplicate_subagent_spawn_this_turn"
+        assert len(spawned) == 1
+
+        session._reset_model_subagent_turn_budget()
+        after_reset = definition.execute("call-3", {"role": "shell-check", "goal": "run python -V", "wait": False})
+
+        assert after_reset.details["status"] == "queued"
+        assert len(spawned) == 2
+    finally:
+        session.shutdown()
+
+
 def test_extension_subagent_task_builder_rejects_safety_overrides(tmp_path: Path) -> None:
     session = AgentSession(cwd=str(tmp_path), model=faux_model())
     try:

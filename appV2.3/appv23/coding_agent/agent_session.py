@@ -727,6 +727,7 @@ class AgentSession:
         self._event_listeners: list[Callable[[object], None]] = []
         self._subagent_observer_errors: list[str] = []
         self._model_subagents_spawned_this_turn = 0
+        self._model_subagent_spawn_signatures_this_turn: set[tuple[str, str, str]] = set()
         self.subagents = SubagentSupervisor(max_threads=3, max_depth=1, event_sink=self._handle_subagent_event)
         self.subagents.register_backend(CallableSubagentBackend("internal", self._run_internal_subagent))
         self.subagents.register_backend(
@@ -1162,6 +1163,7 @@ class AgentSession:
 
     def _reset_model_subagent_turn_budget(self) -> None:
         self._model_subagents_spawned_this_turn = 0
+        self._model_subagent_spawn_signatures_this_turn.clear()
 
     def _try_execute_extension_command(self, text: str) -> list[AgentMessage] | None:
         parsed = self._parse_extension_command(text)
@@ -1551,6 +1553,23 @@ class AgentSession:
             options["backend"] = args["backend"]
         if "contextPack" in args:
             options["contextPack"] = context_pack
+        spawn_signature = (
+            role.strip().lower(),
+            re.sub(r"\s+", " ", goal.strip()).lower(),
+            re.sub(r"\s+", " ", str(context_pack).strip()).lower(),
+        )
+        if spawn_signature in self._model_subagent_spawn_signatures_this_turn:
+            details = {
+                "status": "blocked",
+                "reason": "duplicate_subagent_spawn_this_turn",
+                "role": role,
+                "spawnedThisTurn": self._model_subagents_spawned_this_turn,
+            }
+            return self._subagent_tool_result(
+                "Subagent spawn blocked: this same role and goal already ran in this turn. "
+                "Use the existing child result, summarize the blocker, or ask the user before retrying.",
+                details,
+            )
         if self._model_subagents_spawned_this_turn >= _MODEL_SUBAGENT_SPAWN_LIMIT_PER_TURN:
             details = {
                 "status": "blocked",
@@ -1566,6 +1585,7 @@ class AgentSession:
             )
         task_id, task = self._spawn_subagent_task(role, goal, options)
         self._model_subagents_spawned_this_turn += 1
+        self._model_subagent_spawn_signatures_this_turn.add(spawn_signature)
         if wait_for_result:
             result = self.subagents.wait(
                 task_id,
