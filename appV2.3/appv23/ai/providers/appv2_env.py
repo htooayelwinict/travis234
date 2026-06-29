@@ -58,6 +58,11 @@ _TEXT_STREAM_TOOL_PROTOCOL_LINE_RE = re.compile(
     r"^\s*(?:</?(?:tool_call|function_call|tool_response|function|parameter)(?:\s[^>]*)?>|<parameter=[^>]*>?)\s*$",
     re.IGNORECASE,
 )
+_TEXT_STREAM_INLINE_PROTOCOL_RE = re.compile(
+    r"</?(?:tool_call|function_call|tool_response|function|parameter)(?:\b[^>\n]{0,200})?>|"
+    r"<parameter=[^\s<>\n,.;:)\]}]+>?",
+    re.IGNORECASE,
+)
 _BILLING_PATTERNS = (
     "key limit exceeded",
     "spending limit",
@@ -813,6 +818,7 @@ def parse_sse_chunks(
     thinking_index: int | None = None
     tool_call_blocks_by_index: dict[int, ToolCall] = {}
     tool_call_blocks_by_id: dict[str, ToolCall] = {}
+    pending_tool_call_parts: dict[tuple[str, int | str], dict[str, str]] = {}
     tool_arg_bufs: dict[int, str] = {}
     finish_reason = "stop"
     has_finish_reason = False
@@ -853,6 +859,9 @@ def parse_sse_chunks(
             yield ErrorEvent(reason="error", error=message)
             return
         reason, error_message = _map_stop_reason(finish_reason)
+        if reason == "toolUse" and not any(isinstance(block, ToolCall) for block in message.content):
+            reason = "stop"
+            error_message = None
         message.stop_reason = reason
         if reason == "error":
             message.error_message = error_message
@@ -876,6 +885,7 @@ def parse_sse_chunks(
                     "thinking_index": thinking_index,
                     "tool_call_blocks_by_index": tool_call_blocks_by_index,
                     "tool_call_blocks_by_id": tool_call_blocks_by_id,
+                    "pending_tool_call_parts": pending_tool_call_parts,
                     "tool_arg_bufs": tool_arg_bufs,
                     "content_index_of": content_index_of,
                     "ensure_start": ensure_start,
@@ -924,6 +934,13 @@ def _should_stop_text_stream(text: str) -> bool:
     return False
 
 
+def _escape_inline_tool_protocol_fragments(text: str) -> str:
+    return _TEXT_STREAM_INLINE_PROTOCOL_RE.sub(
+        lambda match: match.group(0).replace("<", "&lt;").replace(">", "&gt;"),
+        text,
+    )
+
+
 def _parse_sse_payload(
     payload: str,
     model: Model,
@@ -941,6 +958,7 @@ def _parse_sse_payload(
     tool_arg_bufs = state["tool_arg_bufs"]
     tool_call_blocks_by_index = state["tool_call_blocks_by_index"]
     tool_call_blocks_by_id = state["tool_call_blocks_by_id"]
+    pending_tool_call_parts = state.setdefault("pending_tool_call_parts", {})
     content_index_of = state["content_index_of"]
     ensure_start = state["ensure_start"]
     text_index = state["text_index"]
@@ -1010,6 +1028,8 @@ def _parse_sse_payload(
         if _should_stop_text_stream(candidate_text):
             state["text_guard_triggered"] = True
             content_piece = _TEXT_STREAM_GUARD_NOTICE
+        else:
+            content_piece = _escape_inline_tool_protocol_fragments(content_piece)
         text_buf += content_piece
         state["text_buf"] = text_buf
         message.content[text_index].text = text_buf
@@ -1022,29 +1042,65 @@ def _parse_sse_payload(
         return
 
     for tc in delta.get("tool_calls") or []:
-        start = ensure_start()
-        if start:
-            state["started"] = True
-            yield start
         stream_index = tc.get("index")
         if not isinstance(stream_index, int):
             stream_index = None
         tool_call_id = tc.get("id") or ""
         fn = tc.get("function") or {}
+        if not isinstance(fn, dict):
+            fn = {}
+        name_fragment = fn.get("name") if isinstance(fn.get("name"), str) else ""
+        arg_fragment = fn.get("arguments") if isinstance(fn.get("arguments"), str) else ""
         tool_call = tool_call_blocks_by_index.get(stream_index) if stream_index is not None else None
         if tool_call is None and tool_call_id:
             tool_call = tool_call_blocks_by_id.get(tool_call_id)
         if tool_call is None:
-            tool_call = ToolCall(id=tool_call_id, name=fn.get("name") or "", arguments={})
+            pending_key = (
+                ("index", stream_index)
+                if stream_index is not None
+                else (("id", tool_call_id) if tool_call_id else None)
+            )
+            if pending_key is None:
+                continue
+            pending = pending_tool_call_parts.setdefault(
+                pending_key,
+                {"id": "", "name": "", "arguments": ""},
+            )
+            if tool_call_id:
+                pending["id"] = tool_call_id
+            if name_fragment:
+                pending["name"] = name_fragment
+            if arg_fragment:
+                pending["arguments"] += arg_fragment
+            if not pending["id"] or not pending["name"]:
+                continue
+
+            start = ensure_start()
+            if start:
+                state["started"] = True
+                yield start
+            tool_call = ToolCall(
+                id=pending["id"],
+                name=pending["name"],
+                arguments=_parse_streaming_json(pending["arguments"]),
+            )
             content_index = len(message.content)
             message.content.append(tool_call)
-            tool_arg_bufs[content_index] = ""
+            tool_arg_bufs[content_index] = pending["arguments"]
             if stream_index is not None:
                 tool_call_blocks_by_index[stream_index] = tool_call
-            if tool_call_id:
-                tool_call_blocks_by_id[tool_call_id] = tool_call
+            if tool_call.id:
+                tool_call_blocks_by_id[tool_call.id] = tool_call
+            pending_tool_call_parts.pop(pending_key, None)
             yield ToolcallStartEvent(content_index=content_index, partial=message)
+            if arg_fragment:
+                yield ToolcallDeltaEvent(content_index=content_index, delta=arg_fragment, partial=message)
+            continue
         else:
+            start = ensure_start()
+            if start:
+                state["started"] = True
+                yield start
             content_index = content_index_of(tool_call)
             if content_index < 0:
                 continue
@@ -1055,10 +1111,8 @@ def _parse_sse_payload(
         if tool_call_id and not tool_call.id:
             tool_call.id = tool_call_id
             tool_call_blocks_by_id[tool_call_id] = tool_call
-        fn = tc.get("function") or {}
-        if fn.get("name") and not tool_call.name:
-            tool_call.name = fn["name"]
-        arg_fragment = fn.get("arguments") or ""
+        if name_fragment and not tool_call.name:
+            tool_call.name = name_fragment
         if arg_fragment:
             tool_arg_bufs[content_index] = tool_arg_bufs.get(content_index, "") + arg_fragment
             tool_call.arguments = _parse_streaming_json(tool_arg_bufs[content_index])

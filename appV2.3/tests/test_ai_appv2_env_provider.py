@@ -55,7 +55,7 @@ def _openrouter_provider() -> AppV2EnvProvider:
     )
 
 
-def test_convert_messages_projects_large_write_content_as_schema_valid_placeholder() -> None:
+def test_convert_messages_keeps_large_historical_write_structural_without_internal_text() -> None:
     large_content = "SMOKING-GUN-WRITE-CONTENT\n" + ("generated report body " * 500)
     assistant = AssistantMessage(
         content=[
@@ -73,22 +73,82 @@ def test_convert_messages_projects_large_write_content_as_schema_valid_placehold
         timestamp=now_ms(),
     )
 
+    tool_result = ToolResultMessage(
+        tool_call_id="write-1",
+        tool_name="write",
+        content=[TextContent(text="Successfully wrote 11026 bytes to docs/report.md")],
+        is_error=False,
+        timestamp=now_ms(),
+    )
+
+    converted, _tools = convert_messages(Context(messages=[assistant, tool_result]), _model())
+
+    encoded_args = converted[0]["tool_calls"][0]["function"]["arguments"]
+
+    assert "Historical write tool call omitted from provider replay" not in repr(converted)
+    assert "regenerate full content" not in repr(converted)
+    assert "SMOKING-GUN-WRITE-CONTENT" not in repr(converted)
+    assert "[appv23 omitted historical write content:" not in repr(converted)
+    assert converted[0]["role"] == "assistant"
+    assert converted[0]["tool_calls"][0]["function"]["name"] == "write"
+    assert json.loads(encoded_args) == {"path": "docs/report.md"}
+    assert converted[1]["role"] == "tool"
+    assert converted[1]["tool_call_id"] == "write-1"
+
+
+def test_convert_messages_does_not_turn_session_sanitized_write_metadata_into_assistant_text() -> None:
+    assistant = AssistantMessage(
+        content=[
+            ToolCall(
+                id="write-1",
+                name="write",
+                arguments={
+                    "path": "docs/report.md",
+                    "content_omitted": True,
+                    "content_chars": 8192,
+                    "content_sha256": "abcd" * 16,
+                    "_appv23_omitted_write_content": True,
+                },
+            )
+        ],
+        api="openai-completions",
+        provider="openrouter",
+        model="acme/x",
+        usage=empty_usage(),
+        stop_reason="toolUse",
+        timestamp=now_ms(),
+    )
+
     converted, _tools = convert_messages(Context(messages=[assistant]), _model())
 
-    assert converted[0]["role"] == "assistant"
-    assert converted[0]["content"] == ""
-    assert converted[0]["tool_calls"][0]["function"]["name"] == "write"
     encoded_args = converted[0]["tool_calls"][0]["function"]["arguments"]
-    args = json.loads(encoded_args)
-    assert args["path"] == "docs/report.md"
-    assert args["content"].startswith("[appv23 omitted historical write content:")
-    assert "SMOKING-GUN-WRITE-CONTENT" not in encoded_args
-    assert "content_omitted" not in encoded_args
-    assert "[appv23 redacted tool argument" not in encoded_args
-    assert "Historical write completed" not in converted[0]["content"]
+
+    assert "Historical write tool call omitted from provider replay" not in repr(converted)
+    assert "regenerate full content" not in repr(converted)
+    assert "content_omitted" not in repr(converted)
+    assert "content_chars" not in repr(converted)
+    assert "content_sha256" not in repr(converted)
+    assert json.loads(encoded_args) == {"path": "docs/report.md"}
 
 
-def test_convert_messages_elides_matching_tool_result_for_omitted_write_history() -> None:
+def test_provider_write_projection_never_uses_refusable_content_placeholder() -> None:
+    from appv23.coding_agent.tools.trust import (
+        is_omitted_write_content_placeholder,
+        project_tool_call_arguments_for_provider,
+    )
+
+    args = project_tool_call_arguments_for_provider(
+        "write",
+        {"path": "reports/demo.md", "content": "x" * 1000},
+    )
+
+    assert args["path"] == "reports/demo.md"
+    assert "content" not in args
+    assert not any(is_omitted_write_content_placeholder(value) for value in args.values())
+    assert "content_omitted" not in args
+
+
+def test_convert_messages_preserves_matching_tool_result_for_historical_write_replay() -> None:
     large_content = "SMOKING-GUN-WRITE-CONTENT\n" + ("generated report body " * 500)
     assistant = AssistantMessage(
         content=[
@@ -115,18 +175,12 @@ def test_convert_messages_elides_matching_tool_result_for_omitted_write_history(
 
     converted, _tools = convert_messages(Context(messages=[assistant, tool_result]), _model())
 
-    assert len(converted) == 2
     assert converted[0]["role"] == "assistant"
-    assert converted[0]["content"] == ""
-    encoded_args = converted[0]["tool_calls"][0]["function"]["arguments"]
-    args = json.loads(encoded_args)
-    assert args["path"] == "docs/report.md"
-    assert args["content"].startswith("[appv23 omitted historical write content:")
+    assert json.loads(converted[0]["tool_calls"][0]["function"]["arguments"]) == {"path": "docs/report.md"}
     assert converted[1]["role"] == "tool"
     assert converted[1]["tool_call_id"] == "write-1"
-    assert "Successfully wrote 11026 bytes to docs/report.md" in converted[1]["content"]
-    assert "Historical write completed" not in repr(converted)
-    assert "File content was omitted" not in repr(converted)
+    assert "[appv23 omitted historical write content:" not in repr(converted)
+    assert "SMOKING-GUN-WRITE-CONTENT" not in repr(converted)
 
 
 def test_convert_messages_scrubs_legacy_write_redaction_marker_from_tool_call_arguments() -> None:
@@ -150,13 +204,43 @@ def test_convert_messages_scrubs_legacy_write_redaction_marker_from_tool_call_ar
     converted, _tools = convert_messages(Context(messages=[assistant]), _model())
 
     assert converted[0]["role"] == "assistant"
-    assert converted[0]["content"] == ""
-    encoded_args = converted[0]["tool_calls"][0]["function"]["arguments"]
-    args = json.loads(encoded_args)
-    assert args["path"] == "docs/report.md"
-    assert args["content"].startswith("[appv23 omitted historical write content:")
-    assert legacy_marker not in encoded_args
-    assert "Historical write completed" not in repr(converted)
+    assert json.loads(converted[0]["tool_calls"][0]["function"]["arguments"]) == {"path": "docs/report.md"}
+    assert legacy_marker not in repr(converted)
+    assert "[appv23 omitted historical write content:" not in repr(converted)
+
+
+def test_convert_messages_projects_existing_omitted_write_placeholder_to_path_only() -> None:
+    assistant = AssistantMessage(
+        content=[
+            ToolCall(
+                id="write-1",
+                name="write",
+                arguments={
+                    "path": "docs/report.md",
+                    "content": "[appv23 omitted historical write content: 1234 chars, sha256=abcdef1234567890]",
+                },
+            )
+        ],
+        api="openai-completions",
+        provider="openrouter",
+        model="acme/x",
+        usage=empty_usage(),
+        stop_reason="toolUse",
+        timestamp=now_ms(),
+    )
+
+    tool_result = ToolResultMessage(
+        tool_call_id="write-1",
+        tool_name="write",
+        content=[TextContent(text="Successfully wrote 1234 bytes to docs/report.md")],
+        is_error=False,
+        timestamp=now_ms(),
+    )
+
+    converted, _tools = convert_messages(Context(messages=[assistant, tool_result]), _model())
+
+    assert "[appv23 omitted historical write content:" not in repr(converted)
+    assert json.loads(converted[0]["tool_calls"][0]["function"]["arguments"]) == {"path": "docs/report.md"}
 
 
 def test_convert_messages_preserves_long_bash_command_in_tool_call_arguments() -> None:
@@ -1391,7 +1475,7 @@ def test_parse_sse_missing_finish_reason_returns_error_event() -> None:
 def test_parse_sse_maps_pi_finish_reasons() -> None:
     normal_cases = [
         ("end", "done", "stop"),
-        ("function_call", "done", "toolUse"),
+        ("function_call", "done", "stop"),
         ("network_error", "error", "error"),
         ("content_filter", "error", "error"),
         ("weird_provider_reason", "error", "error"),

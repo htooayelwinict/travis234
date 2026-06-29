@@ -135,7 +135,6 @@ class AgentLoopConfig:
     max_retry_delay_ms: int | None = None
     on_payload: Any | None = None
     on_response: Any | None = None
-    sanitize_tool_call_history: Callable[[AssistantMessage], AssistantMessage | None] | None = None
     temperature: float | None = None
     max_tokens: int | None = None
     max_iterations: int = 90

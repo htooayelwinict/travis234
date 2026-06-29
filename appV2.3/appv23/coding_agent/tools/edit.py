@@ -18,6 +18,7 @@ from appv23.coding_agent.tools.edit_diff import (
 )
 from appv23.coding_agent.tools.file_mutation_queue import with_file_mutation_queue
 from appv23.coding_agent.tools.path_utils import resolve_to_cwd
+from appv23.coding_agent.tools.trust import mark_agent_written_file
 from appv23.coding_agent.tools.types import ToolContext, ToolDefinition, wrap_tool_definition
 
 EDIT_SCHEMA = {
@@ -89,9 +90,10 @@ def _execute_edit(cwd: str, tool_call_id, args, signal=None, on_update=None, ctx
     path, edits = _validate_edit_input(args)
     absolute_path = resolve_to_cwd(path, cwd)
     result_details: dict = {}
+    final_content_for_trust: str | None = None
 
     def mutate() -> None:
-        nonlocal result_details
+        nonlocal result_details, final_content_for_trust
         if signal and signal.aborted:
             raise RuntimeError("Operation aborted")
         if not os.path.exists(absolute_path):
@@ -111,6 +113,7 @@ def _execute_edit(cwd: str, tool_call_id, args, signal=None, on_update=None, ctx
             handle.write(final_content)
         if signal and signal.aborted:
             raise RuntimeError("Operation aborted")
+        final_content_for_trust = final_content
         result_details = {
             "path": absolute_path,
             "diff": diff_result.diff,
@@ -119,10 +122,18 @@ def _execute_edit(cwd: str, tool_call_id, args, signal=None, on_update=None, ctx
         }
 
     with_file_mutation_queue(absolute_path, mutate)
+    if final_content_for_trust is not None:
+        mark_agent_written_file(absolute_path, final_content_for_trust, _ctx_value(ctx, "trust_state"))
     return AgentToolResult(
         content=[TextContent(text=f"Successfully replaced {len(edits)} block(s) in {path}.")],
         details=result_details,
     )
+
+
+def _ctx_value(ctx, key: str, default=None):
+    if isinstance(ctx, dict):
+        return ctx.get(key, default)
+    return getattr(ctx, key, default)
 
 
 def create_edit_tool_definition(cwd: str) -> ToolDefinition:

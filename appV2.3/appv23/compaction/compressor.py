@@ -147,6 +147,11 @@ _JSON_SECRET_RE = re.compile(
 )
 _AUTH_HEADER_RE = re.compile(r"(Authorization\s*:\s*Bearer\s+)[^\s]+", re.IGNORECASE)
 _MEDIA_DIRECTIVE_RE = re.compile(r"MEDIA:\S+")
+_INTERNAL_REPLAY_MARKER_NEEDLES = (
+    "Historical write tool call omitted from provider replay.",
+    "[File mutation recovery: code=write_omitted_historical_content;",
+    "[appv23 omitted historical write content:",
+)
 
 _SUMMARIZER_PREAMBLE = (
     "You are a summarization agent creating a context checkpoint. "
@@ -231,7 +236,22 @@ def _redact_sensitive_text(text: str) -> str:
     return text
 
 
+def _scrub_internal_replay_markers(text: str) -> str:
+    if text is None:
+        return text
+    if not isinstance(text, str):
+        text = str(text)
+    if not text:
+        return text
+    return "".join(
+        line
+        for line in text.splitlines(keepends=True)
+        if not any(needle in line for needle in _INTERNAL_REPLAY_MARKER_NEEDLES)
+    )
+
+
 def _sanitize_summary_source_text(text: str) -> str:
+    text = _scrub_internal_replay_markers(text)
     return _MEDIA_DIRECTIVE_RE.sub("[media attachment]", _redact_sensitive_text(text))
 
 
@@ -760,12 +780,13 @@ class ContextCompressor:
         serialized = self._serialize_for_summary(middle)
         template = self._summary_template(self._summary_budget(middle))
         if self._previous_summary:
+            previous_summary = _redact_sensitive_text(_scrub_internal_replay_markers(self._previous_summary))
             prompt = f"""{_SUMMARIZER_PREAMBLE}
 
 You are updating a context compaction summary. A previous compaction produced the summary below. New conversation turns have occurred since then and need to be incorporated.
 
 PREVIOUS SUMMARY:
-{_redact_sensitive_text(self._previous_summary)}
+{previous_summary}
 
 NEW TURNS TO INCORPORATE:
 {serialized}
@@ -908,11 +929,24 @@ Write only the summary body. Do not include any preamble or prefix."""
         return "".join(block.text for block in message.content if isinstance(block, TextContent))
 
     @classmethod
+    def _scrub_tool_arg_for_summary(cls, value):
+        if isinstance(value, str):
+            return _scrub_internal_replay_markers(value)
+        if isinstance(value, dict):
+            return {key: cls._scrub_tool_arg_for_summary(inner) for key, inner in value.items()}
+        if isinstance(value, list):
+            return [cls._scrub_tool_arg_for_summary(inner) for inner in value]
+        if isinstance(value, tuple):
+            return tuple(cls._scrub_tool_arg_for_summary(inner) for inner in value)
+        return value
+
+    @classmethod
     def _tool_args_for_summary(cls, arguments: dict | None) -> str:
+        safe_arguments = cls._scrub_tool_arg_for_summary(arguments or {})
         try:
-            args = json.dumps(arguments or {}, ensure_ascii=False, sort_keys=True)
+            args = json.dumps(safe_arguments, ensure_ascii=False, sort_keys=True)
         except TypeError:
-            args = str(arguments or {})
+            args = str(safe_arguments)
         args = _redact_sensitive_text(args)
         if len(args) > cls._SUMMARY_TOOL_ARGS_MAX:
             args = args[: cls._SUMMARY_TOOL_ARGS_HEAD] + "..."
@@ -928,7 +962,7 @@ Write only the summary body. Do not include any preamble or prefix."""
         call_id_to_tool: dict[str, tuple[str, str]] = {}
 
         def compact_turn(message: Message) -> str:
-            text = _redact_sensitive_text(_message_text(message))
+            text = _sanitize_summary_source_text(_message_text(message))
             text = re.sub(r"\bgh[pousr]_[A-Za-z0-9_.-]+", "[REDACTED]", text)
             text = re.sub(r"\s+", " ", text).strip()
             if len(text) > _FALLBACK_TURN_MAX_CHARS:
@@ -1033,7 +1067,7 @@ Continue from the most recent unfulfilled user ask and protected tail messages. 
 
 ## Critical Context
 Summary generation was unavailable, so this is a best-effort deterministic fallback for {len(middle)} compacted message(s).{reason_text}"""
-        summary = _redact_sensitive_text(body.strip())
+        summary = _redact_sensitive_text(_scrub_internal_replay_markers(body.strip()))
         if len(summary) > _FALLBACK_SUMMARY_MAX_CHARS:
             summary = summary[: _FALLBACK_SUMMARY_MAX_CHARS - 42].rstrip() + "\n...[fallback summary truncated]"
         return summary

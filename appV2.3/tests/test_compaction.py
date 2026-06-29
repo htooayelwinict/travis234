@@ -117,7 +117,7 @@ def test_prune_summarizes_old_tool_result_and_truncates_args() -> None:
     assert "[appv23 redacted tool argument" not in repr(data_arg)
 
 
-def test_prune_preserves_write_path_while_redacting_large_content_arg() -> None:
+def test_prune_preserves_write_path_and_metadata_while_removing_large_content_arg() -> None:
     big = "Y" * 500
     big_args = {"path": "docs/report.md", "content": "SMOKING-GUN-WRITE-CONTENT\n" + ("Z" * 2000)}
     messages = [
@@ -134,10 +134,11 @@ def test_prune_preserves_write_path_while_redacting_large_content_arg() -> None:
     assert arguments["path"] == "docs/report.md"
     assert "content" not in arguments
     assert arguments["content_omitted"] is True
-    assert arguments["content_chars"] == len(big_args["content"])
+    assert arguments["content_chars"] > 2000
     assert isinstance(arguments["content_sha256"], str)
     assert "SMOKING-GUN-WRITE-CONTENT" not in repr(arguments)
     assert "[appv23 redacted tool argument" not in repr(arguments)
+    assert "[appv23 omitted historical write content:" not in repr(arguments)
     assert "_truncated" not in arguments
 
 
@@ -600,6 +601,87 @@ def test_summary_serialization_replaces_hermes_media_directives() -> None:
 
     assert "MEDIA:" not in serialized
     assert serialized.count("[media attachment]") == 3
+
+
+def test_compaction_never_summarizes_internal_write_omission_marker() -> None:
+    omitted_marker = (
+        "Historical write tool call omitted from provider replay. "
+        "To continue safely, inspect the file on disk or regenerate full content from current state.\n"
+        "[File mutation recovery: code=write_omitted_historical_content; path=src/app.py]\n"
+        "[appv23 omitted historical write content: path=src/app.py]"
+    )
+    messages = [
+        _user("start task"),
+        _assistant(omitted_marker),
+        _user("latest request"),
+    ]
+
+    compressor = ContextCompressor(context_length=100, protect_first_n=1, protect_last_n=1)
+    result = compressor.compress(messages, summarizer=lambda prompt: prompt, force=True)
+
+    compressed = repr(result.messages)
+    assert "Historical write tool call omitted from provider replay" not in compressed
+    assert "regenerate full content" not in compressed
+
+
+def test_rehydrated_previous_summary_scrubs_internal_write_omission_marker_from_prompt() -> None:
+    previous_summary = (
+        "## Goal\nprior goal\n"
+        "Historical write tool call omitted from provider replay. "
+        "To continue safely, inspect the file on disk or regenerate full content from current state.\n"
+        "## Relevant Files\n- docs/report.md"
+    )
+    messages = [
+        _user("first goal"),
+        _assistant(SUMMARY_PREFIX + previous_summary + "\n\n" + EXPECTED_SUMMARY_END_MARKER),
+    ]
+    for i in range(12):
+        messages.append(_assistant(f"old assistant {i} " * 20))
+        messages.append(_user(f"old user {i} " * 20))
+    messages.append(_user("latest request"))
+    seen_prompts: list[str] = []
+
+    def summarizer(prompt: str) -> str:
+        seen_prompts.append(prompt)
+        return "## Goal\nupdated goal"
+
+    compressor = ContextCompressor(context_length=1500, protect_first_n=1, protect_last_n=2)
+    result = compressor.compress(messages, summarizer=summarizer)
+
+    assert result.compressed is True
+    assert seen_prompts
+    assert "Historical write tool call omitted from provider replay" not in seen_prompts[0]
+    assert "regenerate full content" not in seen_prompts[0]
+    assert "Historical write tool call omitted from provider replay" not in repr(result.messages)
+    assert "regenerate full content" not in repr(result.messages)
+
+
+def test_summary_serialization_scrubs_internal_write_omission_marker_from_tool_args() -> None:
+    serialized = ContextCompressor()._serialize_for_summary(
+        [
+            _assistant(
+                "wrote report",
+                tool_calls=[
+                    ToolCall(
+                        id="call-1",
+                        name="write",
+                        arguments={
+                            "path": "docs/report.md",
+                            "content": (
+                                "[appv23 omitted historical write content: "
+                                "1234 chars, sha256=abcdef1234567890]"
+                            ),
+                        },
+                    )
+                ],
+            ),
+        ]
+    )
+
+    assert "[Tool calls:" in serialized
+    assert "write(" in serialized
+    assert '"path": "docs/report.md"' in serialized
+    assert "[appv23 omitted historical write content:" not in serialized
 
 
 def test_summary_redacts_secret_values_in_prompt_and_output() -> None:

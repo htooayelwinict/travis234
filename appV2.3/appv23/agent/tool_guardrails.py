@@ -451,9 +451,8 @@ class ToolCallGuardrailController:
                     code="repeated_file_mutation_warning",
                     message=(
                         f"{tool_name} changed {display_path} {mutation_count} times in this turn. "
-                        "This is allowed only when you intentionally have complete replacement content. "
-                        "If you are refining an existing file, read the current file state first and prefer edit "
-                        "for precise changes instead of another blind full-file rewrite."
+                        "If this was intentional, continue with the current file state. "
+                        "If not, inspect the latest file content before making another mutation."
                     ),
                     tool_name=tool_name,
                     count=mutation_count,

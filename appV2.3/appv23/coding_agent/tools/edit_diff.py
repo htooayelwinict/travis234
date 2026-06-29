@@ -19,6 +19,12 @@ class DiffResult:
     first_changed_line: int | None = None
 
 
+class EditToolError(ValueError):
+    def __init__(self, message: str, details: dict) -> None:
+        super().__init__(message)
+        self.details = details
+
+
 def detect_line_ending(content: str) -> str:
     crlf_idx = content.find("\r\n")
     lf_idx = content.find("\n")
@@ -75,13 +81,21 @@ def _not_found_error(path: str, edit_index: int, total_edits: int) -> ValueError
 
 
 def _duplicate_error(path: str, edit_index: int, total_edits: int, occurrences: int) -> ValueError:
-    if total_edits == 1:
-        return ValueError(
-            f"Found {occurrences} occurrences of the text in {path}. The text must be unique. Please provide more context to make it unique."
-        )
-    return ValueError(
-        f"Found {occurrences} occurrences of edits[{edit_index}] in {path}. Each oldText must be unique. Please provide more context to make it unique."
+    target = "oldText" if total_edits == 1 else f"edits[{edit_index}].oldText"
+    message = (
+        f"edit_failed: ambiguous_old_text\n"
+        f"Found {occurrences} occurrences of {target} in {path}. "
+        "Do not retry the same oldText. Read the current file content, then retry with a larger unique oldText block "
+        "or combine nearby changes into one edit call."
     )
+    details = {
+        "code": "ambiguous_old_text",
+        "path": path,
+        "occurrences": occurrences,
+        "edit_index": edit_index,
+        "recovery": "read_current_file_then_retry_with_unique_context",
+    }
+    return EditToolError(message, details)
 
 
 def _empty_old_text_error(path: str, edit_index: int, total_edits: int) -> ValueError:

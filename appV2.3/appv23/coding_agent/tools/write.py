@@ -43,6 +43,16 @@ def _default_write_file(path: str, content: str) -> None:
 
 
 _DEFAULT_OPERATIONS = WriteOperations(mkdir=_default_mkdir, write_file=_default_write_file)
+_OMITTED_WRITE_FAILURE_CODE = "write_omitted_historical_content"
+_REDACTED_WRITE_FAILURE_CODE = "write_redacted_tool_argument"
+
+
+def _historical_write_content_error(*, path: str, code: str, marker: str) -> str:
+    return (
+        f"{code}: Refusing to write appv23 {marker} for path {path}. "
+        "The provided content is an internal replay marker, not file bytes. "
+        "Provide the complete intended file content before calling write."
+    )
 
 
 def _execute_write(
@@ -58,11 +68,19 @@ def _execute_write(
     content = args["content"]
     if is_legacy_tool_argument_redaction_marker(content):
         raise ValueError(
-            "Refusing to write appv23 redacted tool argument marker; regenerate the full file content before writing."
+            _historical_write_content_error(
+                path=path,
+                code=_REDACTED_WRITE_FAILURE_CODE,
+                marker="redacted tool argument marker",
+            )
         )
     if is_omitted_write_content_placeholder(content):
         raise ValueError(
-            "Refusing to write appv23 omitted historical write content marker; regenerate the full file content before writing."
+            _historical_write_content_error(
+                path=path,
+                code=_OMITTED_WRITE_FAILURE_CODE,
+                marker="omitted historical write content marker",
+            )
         )
     absolute_path = resolve_to_cwd(path, cwd)
     parent = os.path.dirname(absolute_path)

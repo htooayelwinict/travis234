@@ -50,6 +50,7 @@ from appv23.coding_agent.system_prompt import BuildSystemPromptOptions
 from appv23.coding_agent.tools.bash import BashOperations, BashSpawnContext, create_bash_tool, create_local_bash_operations
 from appv23.coding_agent.tools.path_utils import resolve_to_cwd
 from appv23.coding_agent.tools.write import WriteOperations, create_write_tool
+from appv23.coding_agent.tools.trust import omitted_write_content_placeholder
 from appv23.coding_agent.tools.truncate import truncate_head
 from appv23.coding_agent.tools.types import ToolContext, ToolDefinition, wrap_tool_definition
 from appv23.ai.providers.faux import create_faux_provider, faux_model, text_response_events, tool_call_response_events
@@ -180,6 +181,278 @@ def test_read_tool_uses_operations_and_omits_details_without_truncation(tmp_path
     ]
     assert result.content[0].text == "hello from operations\n"
     assert result.details is None
+
+
+def test_edit_marks_file_for_untrusted_readback(tmp_path: Path) -> None:
+    from appv23.ai.providers.appv2_env import convert_messages
+    from appv23.ai.types import Context
+    from appv23.coding_agent.tools.edit import create_edit_tool_definition
+    from appv23.coding_agent.tools.read import create_read_tool_definition
+    from appv23.coding_agent.tools.trust import create_trust_state
+
+    trust_state = create_trust_state()
+    target = tmp_path / "notes.md"
+    target.write_text("before\n", encoding="utf-8")
+    edit_tool = create_edit_tool_definition(str(tmp_path))
+    read_tool = create_read_tool_definition(str(tmp_path))
+    ctx = ToolContext(cwd=str(tmp_path), model=None, trust_state=trust_state)
+
+    edit_tool.execute(
+        "edit-1",
+        {"path": "notes.md", "edits": [{"oldText": "before", "newText": "after"}]},
+        ctx=ctx,
+    )
+    read_result = read_tool.execute("read-1", {"path": "notes.md"}, ctx=ctx)
+    tool_message = ToolResultMessage(
+        tool_call_id="read-1",
+        tool_name="read",
+        content=read_result.content,
+        details=read_result.details,
+        is_error=False,
+    )
+
+    converted, _tools = convert_messages(Context(messages=[tool_message]), faux_model())
+
+    assert converted[0]["content"].startswith("<untrusted_file_content")
+
+
+def test_bash_heredoc_write_marks_file_for_untrusted_readback(tmp_path: Path) -> None:
+    from appv23.ai.providers.appv2_env import convert_messages
+    from appv23.ai.types import Context
+    from appv23.coding_agent.tools.bash import create_bash_tool_definition
+    from appv23.coding_agent.tools.read import create_read_tool_definition
+    from appv23.coding_agent.tools.trust import create_trust_state
+
+    trust_state = create_trust_state()
+    bash_tool = create_bash_tool_definition(str(tmp_path))
+    read_tool = create_read_tool_definition(str(tmp_path))
+    ctx = ToolContext(cwd=str(tmp_path), model=None, trust_state=trust_state)
+
+    bash_tool.execute("bash-1", {"command": "cat > generated.md <<'EOF'\n# Generated\nEOF"}, ctx=ctx)
+    read_result = read_tool.execute("read-1", {"path": "generated.md"}, ctx=ctx)
+    tool_message = ToolResultMessage(
+        tool_call_id="read-1",
+        tool_name="read",
+        content=read_result.content,
+        details=read_result.details,
+        is_error=False,
+    )
+
+    converted, _tools = convert_messages(Context(messages=[tool_message]), faux_model())
+
+    assert converted[0]["content"].startswith("<untrusted_file_content")
+
+
+def test_bash_write_detection_ignores_quoted_redirect_literals(tmp_path: Path) -> None:
+    from appv23.ai.providers.appv2_env import convert_messages
+    from appv23.ai.types import Context
+    from appv23.coding_agent.tools.bash import create_bash_tool_definition
+    from appv23.coding_agent.tools.read import create_read_tool_definition
+    from appv23.coding_agent.tools.trust import create_trust_state
+
+    trust_state = create_trust_state()
+    target = tmp_path / "notes.md"
+    target.write_text("safe\n", encoding="utf-8")
+    bash_tool = create_bash_tool_definition(str(tmp_path))
+    read_tool = create_read_tool_definition(str(tmp_path))
+    ctx = ToolContext(cwd=str(tmp_path), model=None, trust_state=trust_state)
+
+    bash_tool.execute("bash-1", {"command": "printf '%s\\n' '>' notes.md"}, ctx=ctx)
+    read_result = read_tool.execute("read-1", {"path": "notes.md"}, ctx=ctx)
+    tool_message = ToolResultMessage(
+        tool_call_id="read-1",
+        tool_name="read",
+        content=read_result.content,
+        details=read_result.details,
+        is_error=False,
+    )
+
+    converted, _tools = convert_messages(Context(messages=[tool_message]), faux_model())
+
+    assert not converted[0]["content"].startswith("<untrusted_file_content")
+
+
+def test_bash_heredoc_write_marks_file_even_when_command_exits_nonzero(tmp_path: Path) -> None:
+    from appv23.ai.providers.appv2_env import convert_messages
+    from appv23.ai.types import Context
+    from appv23.coding_agent.tools.bash import create_bash_tool_definition
+    from appv23.coding_agent.tools.read import create_read_tool_definition
+    from appv23.coding_agent.tools.trust import create_trust_state
+
+    trust_state = create_trust_state()
+    bash_tool = create_bash_tool_definition(str(tmp_path))
+    read_tool = create_read_tool_definition(str(tmp_path))
+    ctx = ToolContext(cwd=str(tmp_path), model=None, trust_state=trust_state)
+
+    try:
+        bash_tool.execute("bash-1", {"command": "cat > generated.md <<'EOF'\n# Generated\nEOF\nfalse"}, ctx=ctx)
+    except RuntimeError:
+        pass
+    read_result = read_tool.execute("read-1", {"path": "generated.md"}, ctx=ctx)
+    tool_message = ToolResultMessage(
+        tool_call_id="read-1",
+        tool_name="read",
+        content=read_result.content,
+        details=read_result.details,
+        is_error=False,
+    )
+
+    converted, _tools = convert_messages(Context(messages=[tool_message]), faux_model())
+
+    assert converted[0]["content"].startswith("<untrusted_file_content")
+
+
+def test_write_rejects_omitted_historical_marker_without_retry_instruction(tmp_path: Path) -> None:
+    tool = create_write_tool(str(tmp_path))
+    marker = "[appv23 omitted historical write content: 1234 chars, sha256=abc123]"
+
+    with pytest.raises(ValueError) as error:
+        tool.execute("write-1", {"path": "demo_okf_bundle/spec/technical_review.md", "content": marker})
+
+    message = str(error.value)
+    assert "Refusing to write appv23 omitted historical write content marker" in message
+    assert "Retry the failed target path" not in message
+    assert "regenerate full content" not in message.lower()
+    assert "Do not write unrelated files" not in message
+
+
+def test_agent_session_file_mutation_recovery_keeps_metadata_out_of_tool_result_text(tmp_path: Path) -> None:
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+    original_content = [
+        TextContent(
+            text=(
+                "write_omitted_historical_content: Refusing to write appv23 omitted historical write content "
+                "marker for path report.md."
+            )
+        )
+    ]
+    try:
+        content, details, content_changed, details_changed = session._apply_file_mutation_recovery(
+            tool_name="write",
+            args={"path": "report.md"},
+            content=original_content,
+            details=None,
+            is_error=True,
+            result_text=original_content[0].text,
+        )
+
+        assert details_changed is True
+        assert content_changed is False
+        assert session._turn_failed_file_mutations["report.md"]["code"] == "write_omitted_historical_content"
+        rendered = _content_text(content)
+        assert "[File mutation recovery:" not in rendered
+        assert "Retry the failed target path" not in rendered
+        assert details["appv23_file_mutation_failure"]["code"] == "write_omitted_historical_content"
+        assert details["appv23_file_mutation_failure"]["path"] == "report.md"
+    finally:
+        session.shutdown()
+
+
+def test_write_tool_allows_intentional_second_full_rewrite(tmp_path: Path) -> None:
+    tool = create_write_tool(str(tmp_path))
+
+    first = tool.execute("write-1", {"path": "out.md", "content": "first\n"})
+    second = tool.execute("write-2", {"path": "out.md", "content": "second\n"})
+
+    assert "Successfully wrote" in first.content[0].text
+    assert "Successfully wrote" in second.content[0].text
+    assert (tmp_path / "out.md").read_text(encoding="utf-8") == "second\n"
+
+
+def test_repeated_write_mutation_warns_without_blocking_or_retry_wording(tmp_path: Path) -> None:
+    from appv23.agent.tool_guardrails import ToolCallGuardrailController
+
+    controller = ToolCallGuardrailController(cwd=str(tmp_path))
+
+    first = controller.after_call("write", {"path": "out.md"}, "Successfully wrote 6 bytes to out.md", failed=False)
+    second = controller.after_call("write", {"path": "out.md"}, "Successfully wrote 7 bytes to out.md", failed=False)
+
+    assert first.action == "allow"
+    assert first.allows_execution is True
+    assert second.action == "warn"
+    assert second.allows_execution is True
+    assert second.should_halt is False
+    assert second.code == "repeated_file_mutation_warning"
+    assert "blocked" not in second.message.lower()
+    assert "retry" not in second.message.lower()
+
+
+def test_agent_session_surfaces_unresolved_omitted_write_failure_footer(tmp_path: Path) -> None:
+    model = faux_model()
+    marker = omitted_write_content_placeholder(chars=9369, sha256="abc123")
+    seen_tool_results: list[str] = []
+
+    def script(m, c):
+        tool_results = [
+            _content_text(message.content)
+            for message in c.messages
+            if getattr(message, "role", None) == "toolResult"
+        ]
+        if tool_results:
+            seen_tool_results.append(tool_results[-1])
+            return text_response_events(m, "Created the OKF bundle.")
+        return tool_call_response_events(
+            m,
+            "write",
+            {"path": "demo_okf_bundle/spec/technical_review.md", "content": marker},
+            call_id="write_failed",
+        )
+
+    register_api_provider(create_faux_provider(script))
+    session = AgentSession(cwd=str(tmp_path), model=model)
+
+    session.prompt("make okf bundle")
+
+    assert seen_tool_results
+    assert "write_omitted_historical_content" in seen_tool_results[-1]
+    assert "[File mutation recovery:" not in seen_tool_results[-1]
+    assert "Retry the failed target path" not in seen_tool_results[-1]
+    final_text = _content_text(session.messages[-1].content)
+    assert "Created the OKF bundle." in final_text
+    assert "Unresolved file mutation" in final_text
+    assert "demo_okf_bundle/spec/technical_review.md was not written" in final_text
+
+
+def test_agent_session_clears_omitted_write_failure_after_successful_target_retry(tmp_path: Path) -> None:
+    model = faux_model()
+    marker = omitted_write_content_placeholder(chars=9369, sha256="abc123")
+    provider_calls = {"n": 0}
+
+    def script(m, c):
+        provider_calls["n"] += 1
+        if provider_calls["n"] == 1:
+            return tool_call_response_events(
+                m,
+                "write",
+                {"path": "demo_okf_bundle/spec/technical_review.md", "content": marker},
+                call_id="write_failed",
+            )
+        if provider_calls["n"] == 2:
+            tool_results = [
+                _content_text(message.content)
+                for message in c.messages
+                if getattr(message, "role", None) == "toolResult"
+            ]
+            assert "write_omitted_historical_content" in tool_results[-1]
+            return tool_call_response_events(
+                m,
+                "write",
+                {"path": "demo_okf_bundle/spec/technical_review.md", "content": "regenerated full content\n"},
+                call_id="write_recovered",
+            )
+        return text_response_events(m, "Recovered and wrote the requested file.")
+
+    register_api_provider(create_faux_provider(script))
+    session = AgentSession(cwd=str(tmp_path), model=model)
+
+    session.prompt("make okf bundle")
+
+    final_text = _content_text(session.messages[-1].content)
+    assert "Recovered and wrote the requested file." in final_text
+    assert "Unresolved file mutation" not in final_text
+    assert (tmp_path / "demo_okf_bundle/spec/technical_review.md").read_text(encoding="utf-8") == (
+        "regenerated full content\n"
+    )
 
 
 def test_read_tool_checks_abort_after_access_before_read_file(tmp_path: Path) -> None:
@@ -433,6 +706,26 @@ def test_edit_tool_multi_edit_schema_and_errors(tmp_path: Path) -> None:
         assert False, "expected error"
     except ValueError:
         pass
+
+
+def test_edit_tool_duplicate_match_error_has_structured_recovery(tmp_path: Path) -> None:
+    target = tmp_path / "f.txt"
+    target.write_text("risk: low\nrisk: medium\nrisk: high\n", encoding="utf-8")
+    tool = create_tool("edit", str(tmp_path))
+
+    with pytest.raises(ValueError) as caught:
+        tool.execute("c1", {"path": "f.txt", "edits": [{"oldText": "risk", "newText": "severity"}]})
+
+    error = caught.value
+    assert "ambiguous_old_text" in str(error)
+    assert "Do not retry the same oldText" in str(error)
+    assert getattr(error, "details") == {
+        "code": "ambiguous_old_text",
+        "path": "f.txt",
+        "occurrences": 3,
+        "edit_index": 0,
+        "recovery": "read_current_file_then_retry_with_unique_context",
+    }
 
 
 def test_edit_tool_prepare_arguments_keeps_legacy_out_of_schema(tmp_path: Path) -> None:
@@ -1232,6 +1525,15 @@ def test_build_system_prompt_includes_tools_and_cwd(tmp_path: Path) -> None:
     assert "Use read to examine files instead of cat or sed." in prompt
     assert "Be concise in your responses" in prompt
     assert str(tmp_path).replace("\\", "/") in prompt
+
+
+def test_default_system_prompt_identifies_appv23_and_prefers_file_tools(tmp_path: Path) -> None:
+    prompt = build_system_prompt(BuildSystemPromptOptions(cwd=str(tmp_path)))
+
+    assert "inside appv23" in prompt
+    assert "inside pi" not in prompt
+    assert "Use write/edit for file mutations" in prompt
+    assert "If edit fails because oldText is not unique" in prompt
 
 
 def test_build_system_prompt_accepts_scope_narrowing_recovery_guidelines(tmp_path: Path) -> None:
@@ -7348,9 +7650,11 @@ def test_session_store_redacts_large_write_content_when_persisting_assistant_too
     entry = json.loads(raw.splitlines()[-1])
     args = entry["message"]["content"][0]["arguments"]
     assert "content" not in args
+    assert args["_appv23_omitted_write_content"] is True
     assert args["content_omitted"] is True
     assert args["content_chars"] == len(large_content)
     assert isinstance(args["content_sha256"], str)
+    assert "[appv23 omitted historical write content:" not in raw
 
 
 def test_agent_session_get_user_messages_for_forking_from_session_entries(tmp_path: Path) -> None:

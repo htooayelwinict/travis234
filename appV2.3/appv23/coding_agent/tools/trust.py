@@ -14,11 +14,12 @@ import hashlib
 import threading
 from typing import Any
 
-from appv23.ai.types import AssistantMessage, TextContent, ToolCall
+from appv23.ai.types import TextContent, ToolCall
 
 TRUST_DETAILS_KEY = "appv23_trust"
 TOOL_ARGUMENT_REDACTION_MARKER = "[appv23 redacted tool argument"
 OMITTED_TOOL_ARGUMENT_KEY = "_appv23_omitted_tool_argument"
+OMITTED_WRITE_CONTENT_METADATA_KEY = "_appv23_omitted_write_content"
 OMITTED_WRITE_CONTENT_PLACEHOLDER_PREFIX = "[appv23 omitted historical write content:"
 
 _TOOL_ARGUMENT_STRING_MAX = 500
@@ -57,7 +58,7 @@ _LEGACY_TOOL_ARGUMENT_REDACTION_RE = re.compile(
     r"^\[appv23 redacted tool argument (?P<label>[^:\]]+): (?P<chars>\d+) chars, sha256=(?P<sha256>[0-9a-f]{16,64})\]$"
 )
 _OMITTED_WRITE_CONTENT_PLACEHOLDER_RE = re.compile(
-    r"^\[appv23 omitted historical write content: (?P<chars>\d+) chars, sha256=(?P<sha256>[0-9a-f]{16,64})\]$"
+    r"^\[appv23 omitted historical write content: (?P<chars>\d+) chars, sha256=(?P<sha256>[^\]]+)\]$"
 )
 
 
@@ -95,21 +96,20 @@ def project_tool_call_arguments_for_provider(tool_name: str, arguments: Any) -> 
     raw_path = sanitized.get("path")
     if isinstance(raw_path, str) and raw_path:
         projected["path"] = raw_path
-    projected["content"] = omitted_write_content_placeholder(
-        chars=_safe_int(sanitized.get("content_chars")),
-        sha256=str(sanitized.get("content_sha256") or "unknown"),
-    )
     return projected
 
 
-def sanitize_assistant_tool_calls_for_history(message: AssistantMessage) -> AssistantMessage:
-    """Deprecated no-op: runtime tool-call history must not be mutated.
-
-    Provider/session serializers call ``sanitize_tool_call_arguments`` on copied
-    payloads. Mutating the live assistant message can turn synthetic redaction
-    text into future executable tool input.
-    """
-    return message
+def write_content_omission_metadata(tool_name: str, arguments: Any) -> dict[str, Any] | None:
+    if _normalized_tool_name(tool_name) != "write" or not isinstance(arguments, dict):
+        return None
+    content = arguments.get("content")
+    if not isinstance(content, str) or not _should_omit_write_content(content):
+        return None
+    metadata = _omitted_write_content_metadata(content)
+    path = arguments.get("path")
+    if isinstance(path, str) and path:
+        metadata["path"] = path
+    return metadata
 
 
 def is_legacy_tool_argument_redaction_marker(value: Any) -> bool:
@@ -271,7 +271,8 @@ def _sanitize_write_arguments(tool_name: str, arguments: dict[Any, Any]) -> dict
     for key, value in arguments.items():
         key_str = str(key)
         if key_str == "content" and isinstance(value, str) and _should_omit_write_content(value):
-            sanitized.update(_omitted_write_content_metadata(value))
+            metadata = _omitted_write_content_metadata(value)
+            sanitized.update(metadata)
             continue
         sanitized[key_str] = _sanitize_tool_argument_value(tool_name, value, (key_str,))
     return sanitized
@@ -290,19 +291,25 @@ def _should_redact_tool_argument(tool_name: str, value: str, path: tuple[str, ..
 
 
 def _should_omit_write_content(value: str) -> bool:
-    return len(value) > _WRITE_CONTENT_STRING_MAX or is_legacy_tool_argument_redaction_marker(value)
+    return (
+        len(value) > _WRITE_CONTENT_STRING_MAX
+        or is_legacy_tool_argument_redaction_marker(value)
+        or is_omitted_write_content_placeholder(value)
+    )
 
 
 def _omitted_write_content_metadata(value: str) -> dict[str, Any]:
     parsed_legacy_marker = _parse_legacy_tool_argument_redaction_marker(value)
     if parsed_legacy_marker:
         return {
+            OMITTED_WRITE_CONTENT_METADATA_KEY: True,
             "content_omitted": True,
             "content_chars": parsed_legacy_marker["chars"],
             "content_sha256": parsed_legacy_marker["sha256"],
             "content_legacy_redaction_marker": True,
         }
     return {
+        OMITTED_WRITE_CONTENT_METADATA_KEY: True,
         "content_omitted": True,
         "content_chars": len(value),
         "content_sha256": _sha256_text(value),

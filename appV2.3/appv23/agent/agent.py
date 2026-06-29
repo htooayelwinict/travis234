@@ -92,7 +92,6 @@ class Agent:
         max_retry_delay_ms: int | None = None,
         on_payload=None,
         on_response=None,
-        sanitize_tool_call_history=None,
         max_iterations: int = 90,
     ) -> None:
         self._state = AgentState(
@@ -114,7 +113,6 @@ class Agent:
         self.max_retry_delay_ms = max_retry_delay_ms
         self.on_payload = on_payload
         self.on_response = on_response
-        self._sanitize_tool_call_history = sanitize_tool_call_history
         self.max_iterations = max(1, int(max_iterations))
         self._listeners: list[Listener] = []
         self._signal = AbortSignal()
@@ -228,7 +226,6 @@ class Agent:
             max_retry_delay_ms=self.max_retry_delay_ms,
             on_payload=self.on_payload,
             on_response=self.on_response,
-            sanitize_tool_call_history=self._sanitize_tool_call_history,
             max_tokens=self._state.model.max_tokens or None,
             max_iterations=self.max_iterations,
             iteration_budget=IterationBudget(self.max_iterations),

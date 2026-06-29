@@ -23,7 +23,7 @@ class BuildSystemPromptOptions:
 
 
 _PREAMBLE = (
-    "You are an expert coding assistant operating inside pi, a coding agent harness. "
+    "You are an expert coding assistant operating inside appv23, a coding agent harness. "
     "You help users by reading files, executing commands, editing code, and writing new files."
 )
 
@@ -79,6 +79,10 @@ def build_system_prompt(options: BuildSystemPromptOptions) -> str:
     has_find = "find" in tools
     has_ls = "ls" in tools
     has_read = "read" in tools
+    if "write" in tools or "edit" in tools:
+        add("Use write/edit for file mutations; do not use bash heredocs or shell redirection to create files when write/edit can do the job.")
+    if "edit" in tools:
+        add("If edit fails because oldText is not unique, do not retry the same small oldText. Read the current file and retry with a larger unique block, or use one multi-edit call for disjoint changes.")
     if has_bash and not has_grep and not has_find and not has_ls:
         add("Use bash for file operations like ls, rg, find")
     for guideline in options.prompt_guidelines:

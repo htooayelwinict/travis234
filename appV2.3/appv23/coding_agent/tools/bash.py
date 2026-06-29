@@ -283,11 +283,237 @@ def _execute_bash(
         snapshot = finish_output()
         output_text, details = _format_output(output, snapshot)
         _mark_full_output_path(details, output_text, ctx)
+        _mark_obvious_bash_write_targets(spawn_context.command, spawn_context.cwd, ctx)
         if exit_code is not None and exit_code != 0:
             raise RuntimeError(_append_status(output_text, f"Command exited with code {exit_code}"))
         return AgentToolResult(content=[TextContent(text=output_text)], details=details)
     finally:
         update_dirty = False
+
+
+def _mark_obvious_bash_write_targets(command: str, cwd: str, ctx) -> None:
+    trust_state = _ctx_trust_state(ctx)
+    for target in _extract_obvious_write_targets(command, cwd):
+        content = _read_bounded_text_file(target)
+        if content is not None:
+            mark_agent_written_file(target, content, trust_state)
+
+
+def _extract_obvious_write_targets(command: str, cwd: str) -> list[str]:
+    targets: list[str] = []
+    seen: set[str] = set()
+
+    def add_target(raw_target: str) -> None:
+        target = raw_target.strip()
+        if _ignored_bash_write_target(target):
+            return
+        absolute_target = target if os.path.isabs(target) else os.path.abspath(os.path.join(cwd, target))
+        if absolute_target not in seen:
+            seen.add(absolute_target)
+            targets.append(absolute_target)
+
+    for raw_line in _command_lines_without_heredoc_bodies(command):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        for target in _extract_redirect_targets_from_line(line):
+            add_target(target)
+        tokens = _shellish_words_and_operators(line)
+        for index, token in enumerate(tokens):
+            if token == "tee":
+                for candidate in tokens[index + 1 :]:
+                    if candidate in {"|", ";", "&&", "||", ">", ">>", "<", "<<"}:
+                        break
+                    if not candidate.startswith("-"):
+                        add_target(candidate)
+    return targets
+
+
+def _command_lines_without_heredoc_bodies(command: str) -> list[str]:
+    lines: list[str] = []
+    pending_delimiters: list[str] = []
+    for raw_line in command.splitlines():
+        stripped = raw_line.strip()
+        if pending_delimiters:
+            if stripped == pending_delimiters[0]:
+                pending_delimiters.pop(0)
+            continue
+        lines.append(raw_line)
+        pending_delimiters.extend(_extract_heredoc_delimiters(raw_line))
+    return lines
+
+
+def _extract_heredoc_delimiters(line: str) -> list[str]:
+    delimiters: list[str] = []
+    index = 0
+    while index < len(line):
+        index = _next_unquoted_operator(line, "<<", index)
+        if index < 0:
+            break
+        index += 2
+        if index < len(line) and line[index] == "-":
+            index += 1
+        while index < len(line) and line[index].isspace():
+            index += 1
+        delimiter, index = _read_shellish_word(line, index)
+        if delimiter:
+            delimiters.append(delimiter)
+    return delimiters
+
+
+def _extract_redirect_targets_from_line(line: str) -> list[str]:
+    targets: list[str] = []
+    index = 0
+    while index < len(line):
+        index = _next_unquoted_redirection(line, index)
+        if index < 0:
+            break
+        index += 2 if index + 1 < len(line) and line[index + 1] == ">" else 1
+        while index < len(line) and line[index].isspace():
+            index += 1
+        target, index = _read_shellish_word(line, index)
+        if target:
+            targets.append(target)
+    return targets
+
+
+def _next_unquoted_redirection(line: str, start: int) -> int:
+    index = start
+    quote: str | None = None
+    while index < len(line):
+        char = line[index]
+        if char == "\\":
+            index += 2
+            continue
+        if quote:
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            index += 1
+            continue
+        if char == ">" and _looks_like_redirect_position(line, index):
+            return index
+        index += 1
+    return -1
+
+
+def _next_unquoted_operator(line: str, operator: str, start: int) -> int:
+    index = start
+    quote: str | None = None
+    while index < len(line):
+        char = line[index]
+        if char == "\\":
+            index += 2
+            continue
+        if quote:
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            index += 1
+            continue
+        if line.startswith(operator, index):
+            return index
+        index += 1
+    return -1
+
+
+def _looks_like_redirect_position(line: str, index: int) -> bool:
+    if index == 0 or line[index - 1].isspace():
+        return True
+    previous = index - 1
+    while previous >= 0 and line[previous].isspace():
+        previous -= 1
+    if previous < 0 or line[previous] in {"|", "&", ";", "("}:
+        return True
+    if line[previous].isdigit():
+        before_fd = previous - 1
+        while before_fd >= 0 and line[before_fd].isdigit():
+            before_fd -= 1
+        return before_fd < 0 or line[before_fd].isspace() or line[before_fd] in {"|", "&", ";", "("}
+    return False
+
+
+def _shellish_words_and_operators(line: str) -> list[str]:
+    tokens: list[str] = []
+    index = 0
+    while index < len(line):
+        while index < len(line) and line[index].isspace():
+            index += 1
+        if index >= len(line):
+            break
+        if line.startswith("&&", index) or line.startswith("||", index) or line.startswith(">>", index) or line.startswith(
+            "<<", index
+        ):
+            tokens.append(line[index : index + 2])
+            index += 2
+            continue
+        if line[index] in {"|", ";", ">", "<"}:
+            tokens.append(line[index])
+            index += 1
+            continue
+        word, index = _read_shellish_word(line, index)
+        if word:
+            tokens.append(word)
+        else:
+            index += 1
+    return tokens
+
+
+def _read_shellish_word(line: str, start: int) -> tuple[str, int]:
+    chars: list[str] = []
+    index = start
+    quote: str | None = None
+    while index < len(line):
+        char = line[index]
+        if char == "\\":
+            if index + 1 < len(line):
+                chars.append(line[index + 1])
+                index += 2
+            else:
+                index += 1
+            continue
+        if quote:
+            if char == quote:
+                quote = None
+            else:
+                chars.append(char)
+            index += 1
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            index += 1
+            continue
+        if char.isspace() or char in {"|", ";", ">", "<", "&"}:
+            break
+        chars.append(char)
+        index += 1
+    return "".join(chars), index
+
+
+def _ignored_bash_write_target(target: str) -> bool:
+    return not target or target.startswith("-") or target.startswith("&") or target in {"/dev/null", "&1", "&2"}
+
+
+def _read_bounded_text_file(path: str) -> str | None:
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "rb") as handle:
+            data = handle.read(DEFAULT_MAX_BYTES)
+    except OSError:
+        return None
+    if b"\x00" in data:
+        return None
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
 
 
 def _mark_full_output_path(details, content: str, ctx) -> None:
@@ -296,8 +522,12 @@ def _mark_full_output_path(details, content: str, ctx) -> None:
     full_output_path = details.get("fullOutputPath")
     if not isinstance(full_output_path, str) or not full_output_path:
         return
+    mark_agent_written_file(full_output_path, content, _ctx_trust_state(ctx))
+
+
+def _ctx_trust_state(ctx) -> dict | None:
     trust_state = ctx.get("trust_state") if isinstance(ctx, dict) else getattr(ctx, "trust_state", None)
-    mark_agent_written_file(full_output_path, content, trust_state if isinstance(trust_state, dict) else None)
+    return trust_state if isinstance(trust_state, dict) else None
 
 
 def create_bash_tool_definition(

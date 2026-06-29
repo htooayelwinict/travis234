@@ -75,7 +75,7 @@ from appv23.coding_agent.subagents import (
 from appv23.coding_agent.tools import create_all_tool_definitions
 from appv23.coding_agent.tools.bash import BASH_SCHEMA, BashExecOptions, BashOperations, create_local_bash_operations
 from appv23.coding_agent.tools.output_accumulator import OutputAccumulator
-from appv23.coding_agent.tools.trust import create_trust_state, sanitize_assistant_tool_calls_for_history
+from appv23.coding_agent.tools.trust import create_trust_state
 from appv23.coding_agent.tools.types import (
     ToolContext,
     ToolDefinition,
@@ -191,6 +191,15 @@ _NON_RETRYABLE_PROVIDER_LIMIT_MARKERS = (
     "out of budget",
     "quota exceeded",
     "billing",
+)
+_OMITTED_WRITE_FAILURE_CODE = "write_omitted_historical_content"
+_OMITTED_WRITE_FAILURE_MARKERS = (
+    _OMITTED_WRITE_FAILURE_CODE,
+    "omitted historical write content marker",
+)
+_OMITTED_WRITE_RECOVERY = (
+    "The provided content was an internal replay marker, not file bytes. "
+    "Provide the complete intended file content before calling write."
 )
 
 
@@ -660,6 +669,58 @@ def _append_toolguard_content(content, decision: ToolGuardrailDecision):
     return blocks
 
 
+def _append_text_to_content(content, addition: str):
+    blocks = list(content or [])
+    if not blocks:
+        return [TextContent(text=addition)]
+    for index, block in enumerate(blocks):
+        if isinstance(block, TextContent):
+            blocks[index] = replace(block, text=block.text + addition)
+            return blocks
+        if getattr(block, "type", None) == "text":
+            text = str(getattr(block, "text", ""))
+            blocks[index] = TextContent(text=text + addition)
+            return blocks
+    blocks.append(TextContent(text=addition))
+    return blocks
+
+
+def _tool_arg_path(args) -> str | None:
+    if not isinstance(args, Mapping):
+        return None
+    value = args.get("path")
+    if not isinstance(value, str):
+        return None
+    path = value.strip()
+    return path or None
+
+
+def _is_omitted_write_failure_text(text: str) -> bool:
+    lowered = str(text or "").lower()
+    return any(marker.lower() in lowered for marker in _OMITTED_WRITE_FAILURE_MARKERS)
+
+
+def _with_file_mutation_failure_details(details, failure: dict[str, str]) -> dict[str, object]:
+    if isinstance(details, dict):
+        next_details: dict[str, object] = dict(details)
+    elif details is None:
+        next_details = {}
+    else:
+        next_details = {"originalDetails": details}
+    next_details["appv23_file_mutation_failure"] = dict(failure)
+    return next_details
+
+
+def _format_unresolved_file_mutation_footer(failures: Mapping[str, dict[str, str]]) -> str:
+    lines = ["Unresolved file mutation:"]
+    for failure in failures.values():
+        path = failure.get("path") or "<unknown>"
+        reason = failure.get("reason") or "file mutation failed"
+        recovery = failure.get("recovery") or _OMITTED_WRITE_RECOVERY
+        lines.append(f"- {path} was not written ({reason}). {recovery}")
+    return "\n".join(lines)
+
+
 def _coerce_tool_guardrail_config(
     value: ToolCallGuardrailConfig | Mapping[str, object] | None,
 ) -> ToolCallGuardrailConfig:
@@ -768,6 +829,7 @@ class AgentSession:
         self._tool_guardrail_halt_decision: ToolGuardrailDecision | None = None
         self._tool_guardrail_halt_response_emitted = False
         self._tool_loop_recovery_steered_keys: set[tuple[str, str, int]] = set()
+        self._turn_failed_file_mutations: dict[str, dict[str, str]] = {}
         self._scoped_models = list(scoped_models or [])
         self._convert_to_llm = convert_to_llm or default_convert_to_llm
         self._caller_transform_context = transform_context
@@ -873,7 +935,6 @@ class AgentSession:
             max_retry_delay_ms=max_retry_delay_ms,
             on_payload=self._on_provider_payload,
             on_response=self._on_provider_response,
-            sanitize_tool_call_history=sanitize_assistant_tool_calls_for_history,
             session_id=self.session_id or None,
             max_iterations=max_iterations,
         )
@@ -3108,6 +3169,7 @@ class AgentSession:
         self._tool_guardrail_halt_decision = None
         self._tool_guardrail_halt_response_emitted = False
         self._tool_loop_recovery_steered_keys = set()
+        self._turn_failed_file_mutations = {}
         active_stream_fn = stream_fn or self._stream_fn
         try:
             new_messages = list(self.agent.prompt(prompt_message, stream_fn=active_stream_fn))
@@ -3250,6 +3312,17 @@ class AgentSession:
                 is_error = True
                 is_error_changed = True
 
+        mutation_content, mutation_details, mutation_content_changed, mutation_details_changed = (
+            self._apply_file_mutation_recovery(context.tool_call.name, context.args, content, details, result_text, is_error)
+        )
+        if mutation_content_changed:
+            content = mutation_content
+            content_changed = True
+            result_text = _tool_result_text(content)
+        if mutation_details_changed:
+            details = mutation_details
+            details_changed = True
+
         decision = self._tool_guardrails.after_call(
             context.tool_call.name,
             context.args,
@@ -3274,6 +3347,37 @@ class AgentSession:
             is_error=is_error if is_error_changed else None,
             terminate=True if decision.should_halt else None,
         )
+
+    def _apply_file_mutation_recovery(
+        self,
+        tool_name: str,
+        args,
+        content,
+        details,
+        result_text: str,
+        is_error: bool,
+    ):
+        if str(tool_name or "").lower() != "write":
+            return content, details, False, False
+        path = _tool_arg_path(args)
+        if not path:
+            return content, details, False, False
+        if not is_error:
+            self._turn_failed_file_mutations.pop(path, None)
+            return content, details, False, False
+        if not _is_omitted_write_failure_text(result_text):
+            return content, details, False, False
+
+        failure = {
+            "code": _OMITTED_WRITE_FAILURE_CODE,
+            "toolName": "write",
+            "path": path,
+            "reason": "omitted historical write content marker",
+            "recovery": _OMITTED_WRITE_RECOVERY,
+        }
+        self._turn_failed_file_mutations[path] = failure
+        next_details = _with_file_mutation_failure_details(details, failure)
+        return content, next_details, False, True
 
     def _should_stop_after_turn(self, context) -> bool:
         decision = self._tool_guardrail_halt_decision
@@ -3313,11 +3417,21 @@ class AgentSession:
             "to change strategy instead of repeating the same call."
         )
 
+    def _append_unresolved_file_mutation_footer(self, message: AssistantMessage) -> None:
+        if message.stop_reason != "stop" or not self._turn_failed_file_mutations:
+            return
+        footer = _format_unresolved_file_mutation_footer(self._turn_failed_file_mutations)
+        if not footer or footer in _tool_result_text(message.content):
+            return
+        message.content = _append_text_to_content(message.content, "\n\n" + footer)
+
     def _handle_agent_event(self, event) -> None:
         if event.type == "message_end" and self._extension_runner.has_handlers("message_end"):
             replacement = self._extension_runner.emit_message_end({"type": "message_end", "message": event.message})
             if replacement is not None:
                 _replace_message_in_place(event.message, replacement)
+        if event.type == "message_end" and isinstance(event.message, AssistantMessage):
+            self._append_unresolved_file_mutation_footer(event.message)
         if event.type == "message_start" and getattr(event.message, "role", None) == "user":
             message_text = _get_user_message_text(event.message)
             if message_text:

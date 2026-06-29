@@ -39,9 +39,6 @@ from appv23.ai.types import (
     empty_usage,
     now_ms,
 )
-from appv23.coding_agent.tools.trust import sanitize_assistant_tool_calls_for_history
-
-
 def _convert(messages):
     out: list[Message] = []
     for m in messages:
@@ -175,7 +172,6 @@ def test_tool_call_history_keeps_raw_arguments_after_execution_before_next_model
         execute=write_execute,
     )
     config = _config(model)
-    config.sanitize_tool_call_history = sanitize_assistant_tool_calls_for_history
 
     run_agent_loop(
         [UserMessage(content="go", timestamp=now_ms())],
@@ -286,6 +282,95 @@ def test_duplicate_tool_calls_in_same_assistant_turn_execute_once() -> None:
         "call_1",
         "call_3",
     ]
+
+
+@pytest.mark.parametrize(
+    "bad_call",
+    [
+        ToolCall(id="call_missing_name", name="", arguments={"text": "hi"}),
+        ToolCall(id="", name="echo", arguments={"text": "hi"}),
+        ToolCall(id="call_bad_args", name="echo", arguments="not-an-object"),
+    ],
+)
+def test_agent_loop_drops_malformed_tool_calls_before_execution(bad_call: ToolCall) -> None:
+    model = faux_model()
+    provider_calls = {"n": 0}
+    executions: list[dict] = []
+    events: list = []
+
+    def script(m, c):
+        provider_calls["n"] += 1
+        return [
+            StartEvent(
+                partial=AssistantMessage(
+                    content=[bad_call],
+                    api=model.api,
+                    provider=model.provider,
+                    model=model.id,
+                    usage=empty_usage(),
+                    stop_reason="toolUse",
+                    timestamp=now_ms(),
+                )
+            ),
+            ToolcallStartEvent(content_index=0, partial=AssistantMessage(
+                content=[bad_call],
+                api=model.api,
+                provider=model.provider,
+                model=model.id,
+                usage=empty_usage(),
+                stop_reason="toolUse",
+                timestamp=now_ms(),
+            )),
+            ToolcallEndEvent(content_index=0, tool_call=bad_call, partial=AssistantMessage(
+                content=[bad_call],
+                api=model.api,
+                provider=model.provider,
+                model=model.id,
+                usage=empty_usage(),
+                stop_reason="toolUse",
+                timestamp=now_ms(),
+            )),
+            DoneEvent(
+                reason="toolUse",
+                message=AssistantMessage(
+                    content=[bad_call],
+                    api=model.api,
+                    provider=model.provider,
+                    model=model.id,
+                    usage=empty_usage(),
+                    stop_reason="toolUse",
+                    timestamp=now_ms(),
+                ),
+            ),
+        ]
+
+    register_api_provider(create_faux_provider(script))
+
+    def echo_execute(tool_call_id, args, signal=None, on_update=None):
+        executions.append(dict(args))
+        return AgentToolResult(content=[TextContent(text=f"echo:{args['text']}")], details={})
+
+    echo = AgentTool(
+        name="echo",
+        description="echo",
+        parameters={"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+        label="Echo",
+        execute=echo_execute,
+    )
+
+    messages = run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(tools=[echo]),
+        _config(model),
+        lambda e: events.append(e),
+    )
+
+    assistant = next(message for message in messages if getattr(message, "role", None) == "assistant")
+    assert executions == []
+    assert all(event.type != "tool_execution_start" for event in events)
+    assert all(getattr(message, "role", None) != "toolResult" for message in messages)
+    assert all(getattr(block, "type", None) != "toolCall" for block in assistant.content)
+    assert assistant.stop_reason == "stop"
 
 
 def test_overlapping_file_mutation_batch_executes_sequentially() -> None:
@@ -877,6 +962,54 @@ def test_unknown_tool_returns_error_result() -> None:
     )
     assert ends[0].is_error is True
     assert "not found" in ends[0].result.content[0].text
+
+
+def test_tool_exception_details_are_preserved_in_error_result() -> None:
+    model = faux_model()
+    calls = {"n": 0}
+
+    def script(m, c):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return tool_call_response_events(m, "edit", {"path": "f.txt"})
+        return text_response_events(m, "ok")
+
+    register_api_provider(create_faux_provider(script))
+
+    class StructuredToolError(RuntimeError):
+        def __init__(self) -> None:
+            super().__init__("edit_failed: ambiguous_old_text")
+            self.details = {
+                "code": "ambiguous_old_text",
+                "path": "f.txt",
+                "occurrences": 3,
+                "recovery": "read_current_file_then_retry_with_unique_context",
+            }
+
+    edit = AgentTool(
+        name="edit",
+        description="edit",
+        parameters={"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+        label="Edit",
+        execute=lambda *a, **k: (_ for _ in ()).throw(StructuredToolError()),
+    )
+
+    ends: list = []
+    run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(tools=[edit]),
+        _config(model),
+        lambda e: ends.append(e) if e.type == "tool_execution_end" else None,
+    )
+
+    assert ends[0].is_error is True
+    assert ends[0].result.content[0].text == "edit_failed: ambiguous_old_text"
+    assert ends[0].result.details == {
+        "code": "ambiguous_old_text",
+        "path": "f.txt",
+        "occurrences": 3,
+        "recovery": "read_current_file_then_retry_with_unique_context",
+    }
 
 
 def test_agent_class_reduces_state() -> None:

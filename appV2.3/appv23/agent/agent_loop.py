@@ -352,6 +352,7 @@ def _stream_assistant_response(
                 _emit_event(emit, MessageUpdateEvent(message=copy.copy(last_partial_snapshot), assistant_message_event=event))
         elif event.type in ("done", "error"):
             final_message = response.result_sync()
+            _drop_malformed_tool_calls(final_message)
             _deduplicate_tool_calls(final_message)
             if partial_added:
                 context.messages[-1] = final_message
@@ -381,6 +382,7 @@ def _stream_assistant_response(
         )
 
     final_message = response.result_sync()
+    _drop_malformed_tool_calls(final_message)
     _deduplicate_tool_calls(final_message)
     if partial_added:
         context.messages[-1] = final_message
@@ -460,6 +462,37 @@ def _deduplicate_tool_calls(message: AssistantMessage) -> None:
         next_content.append(item)
     if changed:
         message.content = next_content
+
+
+def _drop_malformed_tool_calls(message: AssistantMessage) -> None:
+    content = getattr(message, "content", None)
+    if not content:
+        return
+    next_content = []
+    changed = False
+    for item in content:
+        if getattr(item, "type", None) != "toolCall":
+            next_content.append(item)
+            continue
+        if _is_domain_valid_tool_call(item):
+            next_content.append(item)
+            continue
+        changed = True
+    if not changed:
+        return
+    message.content = next_content
+    if message.stop_reason == "toolUse" and not any(getattr(item, "type", None) == "toolCall" for item in next_content):
+        message.stop_reason = "stop"
+
+
+def _is_domain_valid_tool_call(tool_call: object) -> bool:
+    return (
+        isinstance(getattr(tool_call, "id", None), str)
+        and bool(getattr(tool_call, "id", "").strip())
+        and isinstance(getattr(tool_call, "name", None), str)
+        and bool(getattr(tool_call, "name", "").strip())
+        and isinstance(getattr(tool_call, "arguments", None), dict)
+    )
 
 
 def _canonical_tool_call_arguments(arguments: Any) -> str:
@@ -623,7 +656,7 @@ def _prepare_tool_call(current_context, assistant_message, tool_call, config, si
             "kind": "immediate",
             "tool_call": prepared_call,
             "args": getattr(prepared_call, "arguments", getattr(tool_call, "arguments", {})),
-            "result": _error_result(str(error)),
+            "result": _error_result(str(error), _error_details(error)),
             "is_error": True,
             "apply_after_tool_call": True,
         }
@@ -665,7 +698,7 @@ def _execute_prepared(prepared: dict, signal, emit: AgentEventSink) -> dict:
     except Exception as error:  # noqa: BLE001
         accepting["value"] = False
         _settle_emit_results(update_events)
-        return {"result": _error_result(str(error)), "is_error": True}
+        return {"result": _error_result(str(error), _error_details(error)), "is_error": True}
 
 
 def _emit_event(emit: AgentEventSink, event: AgentEvent) -> None:
@@ -725,10 +758,18 @@ def _finalize_immediate(current_context, assistant_message, tool_call, preparati
     return _finalize(current_context, assistant_message, prepared, executed, config, signal)
 
 
-def _error_result(message: str) -> AgentToolResult:
+def _error_details(error: Exception) -> Any:
+    try:
+        details = getattr(error, "details", None)
+    except Exception:
+        return {}
+    return details if details is not None else {}
+
+
+def _error_result(message: str, details: Any | None = None) -> AgentToolResult:
     from appv23.ai.types import TextContent
 
-    return AgentToolResult(content=[TextContent(text=message)], details={})
+    return AgentToolResult(content=[TextContent(text=message)], details=details if details is not None else {})
 
 
 def _emit_tool_end(finalized: dict, emit: AgentEventSink) -> None:

@@ -12,6 +12,7 @@ repo inspection, code edits, or ordinary reasoning.
 
 - Use `curl` for network retrieval.
 - Prefer shell tools already common in the sandbox: `sed`, `awk`, `perl`, `grep`, and `head`.
+- Use only the shell/curl pattern below for normal web-search execution.
 - Prefer Google News RSS for news/current-result lookup:
   `https://news.google.com/rss/search?q=<encoded-query>&hl=en-US&gl=US&ceid=US:en`
 - Keep output small: show at most 5 useful results.
