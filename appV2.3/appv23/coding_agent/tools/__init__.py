@@ -67,13 +67,11 @@ _OPTION_ALIASES = {
     "read": {
         "autoResizeImages": "auto_resize_images",
         "imageResizer": "image_resizer",
-        "allowedReadRoots": "allowed_read_roots",
-        "allowedReadFiles": "allowed_read_files",
     },
 }
 
 _SUPPORTED_DEFINITION_OPTIONS = {
-    "read": {"operations", "auto_resize_images", "image_resizer", "allowed_read_roots", "allowed_read_files"},
+    "read": {"operations", "auto_resize_images", "image_resizer"},
     "bash": {"operations", "command_prefix", "shell_path", "spawn_hook"},
     "edit": set(),
     "write": {"operations"},
@@ -84,7 +82,7 @@ _SUPPORTED_DEFINITION_OPTIONS = {
 
 _SUPPORTED_TOOL_OPTIONS = {
     **_SUPPORTED_DEFINITION_OPTIONS,
-    "read": {"operations", "auto_resize_images", "image_resizer", "model", "allowed_read_roots", "allowed_read_files"},
+    "read": {"operations", "auto_resize_images", "image_resizer", "model"},
 }
 
 

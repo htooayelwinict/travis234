@@ -39,19 +39,59 @@ def _tool_name(tool: Any, tool_call: Any) -> str:
 
 def _tool_validation_error(tool: Any, tool_call: Any, error: str) -> ToolValidationError:
     tool_name = _tool_name(tool, tool_call)
-    received = _format_received_arguments(getattr(tool_call, "arguments", None))
+    arguments = getattr(tool_call, "arguments", None)
+    received = _format_received_arguments(tool_name, arguments)
+    recovery = _tool_validation_recovery_guidance(tool_name, arguments, error)
     return ToolValidationError(
         f'Validation failed for tool "{tool_name}":\n'
         f"  - {error}\n\n"
         f"Received arguments:\n{received}"
+        f"{recovery}"
     )
 
 
-def _format_received_arguments(arguments: Any) -> str:
+def _format_received_arguments(tool_name: str, arguments: Any) -> str:
+    if tool_name == "write" and _contains_protocol_literal(arguments):
+        return f"[appv23 omitted protocol-shaped malformed {tool_name} arguments]"
     try:
         return json.dumps(arguments, ensure_ascii=False, indent=2, default=str)
     except TypeError:
         return str(arguments)
+
+
+def _contains_protocol_literal(value: Any) -> bool:
+    if isinstance(value, str):
+        return _looks_like_protocol_literal(value)
+    if isinstance(value, dict):
+        return any(_contains_protocol_literal(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_protocol_literal(item) for item in value)
+    return False
+
+
+def _tool_validation_recovery_guidance(tool_name: str, arguments: Any, error: str) -> str:
+    return ""
+
+
+def _has_no_content_argument(arguments: dict[str, Any]) -> bool:
+    return not (isinstance(arguments.get("content"), str) and arguments.get("content") != "")
+
+
+def _looks_like_protocol_literal(value: str | None) -> bool:
+    if not isinstance(value, str):
+        return False
+    lowered = value.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "<function",
+            "</function",
+            "<parameter",
+            "</parameter",
+            "<tool_call",
+            "</tool_call",
+        )
+    )
 
 
 def _is_record(value: Any) -> bool:
@@ -243,6 +283,12 @@ def _validate_value(value: Any, schema: dict[str, Any], path: str) -> None:
     if "array" in schema_types:
         if not isinstance(value, list):
             raise ToolValidationError(f"{path}: expected array")
+        min_items = schema.get("minItems")
+        if isinstance(min_items, int) and len(value) < min_items:
+            raise ToolValidationError(f"{path}: expected array length >= {min_items}")
+        max_items = schema.get("maxItems")
+        if isinstance(max_items, int) and len(value) > max_items:
+            raise ToolValidationError(f"{path}: expected array length <= {max_items}")
         items = schema.get("items")
         if isinstance(items, list):
             for index, item_schema in enumerate(items):
@@ -260,6 +306,13 @@ def _validate_value(value: Any, schema: dict[str, Any], path: str) -> None:
     schema_type = schema_types[0] if schema_types else None
     if schema_type == "string" and not isinstance(value, str):
         raise ToolValidationError(f"{path}: expected string")
+    if schema_type == "string":
+        min_length = schema.get("minLength")
+        if isinstance(min_length, int) and len(value) < min_length:
+            raise ToolValidationError(f"{path}: expected string length >= {min_length}")
+        max_length = schema.get("maxLength")
+        if isinstance(max_length, int) and len(value) > max_length:
+            raise ToolValidationError(f"{path}: expected string length <= {max_length}")
     if schema_type == "integer" and (not isinstance(value, int) or isinstance(value, bool)):
         raise ToolValidationError(f"{path}: expected integer")
     if schema_type == "number" and (not isinstance(value, (int, float)) or isinstance(value, bool)):

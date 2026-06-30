@@ -68,7 +68,8 @@ FILE_OBSERVING_TOOL_NAMES = frozenset(
         "mcp_filesystem_read_text_file",
     }
 )
-RECOVERABLE_BLOCK_CODES = frozenset()
+PACKAGE_MANAGER_MUTATION_REQUIRES_CONSENT_CODE = "package_manager_mutation_requires_consent"
+RECOVERABLE_BLOCK_CODES = frozenset({PACKAGE_MANAGER_MUTATION_REQUIRES_CONSENT_CODE})
 
 DEFAULT_NO_PROGRESS_BLOCK_TOOL_NAMES = frozenset(
     {
@@ -104,6 +105,61 @@ _BASH_MUTATION_MARKERS = (
     " chmod ",
     " chown ",
     " tee ",
+)
+_BASH_PACKAGE_MANAGER_STATE_COMMANDS = frozenset(
+    {
+        "ci",
+        "i",
+        "install",
+        "uninstall",
+        "add",
+        "remove",
+        "sync",
+        "update",
+        "upgrade",
+    }
+)
+_PACKAGE_MANAGER_DENY_MARKERS = (
+    "do not install",
+    "don't install",
+    "dont install",
+    "without installing",
+    "no install",
+    "do not add dependencies",
+    "don't add dependencies",
+    "dont add dependencies",
+    "do not add packages",
+    "don't add packages",
+    "dont add packages",
+)
+_PACKAGE_MANAGER_ALLOW_MARKERS = (
+    "add dependencies",
+    "add dependency",
+    "add package",
+    "add packages",
+    "bun install",
+    "install dependencies",
+    "install dependency",
+    "install deps",
+    "install package",
+    "install packages",
+    "install requirements",
+    "install the package",
+    "install it",
+    "npm i",
+    "npm install",
+    "pip install",
+    "pnpm install",
+    "poetry add",
+    "poetry install",
+    "python -m pip install",
+    "python3 -m pip install",
+    "run install",
+    "uv add",
+    "uv pip install",
+    "uv sync",
+    "yarn add",
+    "yarn install",
 )
 
 
@@ -256,6 +312,62 @@ def classify_tool_failure(tool_name: str, result: str | None) -> tuple[bool, str
     return False, ""
 
 
+def package_manager_mutation_decision(
+    tool_name: str,
+    args: Mapping[str, Any] | None,
+    latest_user_message: str | None,
+) -> ToolGuardrailDecision:
+    args = _coerce_args(args)
+    signature = ToolCallSignature.from_call(tool_name, args)
+    if not _tool_call_is_package_manager_state_mutation(tool_name, args):
+        return ToolGuardrailDecision(tool_name=tool_name, signature=signature)
+
+    prompt = (latest_user_message or "").strip().lower()
+    if _user_message_forbids_package_manager_mutation(prompt):
+        return ToolGuardrailDecision(
+            action="block",
+            code=PACKAGE_MANAGER_MUTATION_REQUIRES_CONSENT_CODE,
+            message=(
+                "Blocked package-manager state mutation because the latest user request "
+                "explicitly asked not to install dependencies. Do not run pip/npm/yarn/pnpm/bun/poetry/uv "
+                "install/add/sync commands for this turn. Use existing files, existing environment, or "
+                "`PYTHONPATH=src` style test commands instead."
+            ),
+            tool_name=tool_name,
+            count=1,
+            signature=signature,
+        )
+    if _user_message_allows_package_manager_mutation(prompt):
+        return ToolGuardrailDecision(tool_name=tool_name, signature=signature)
+    return ToolGuardrailDecision(
+        action="block",
+        code=PACKAGE_MANAGER_MUTATION_REQUIRES_CONSENT_CODE,
+        message=(
+            "Blocked package-manager state mutation because dependency/package installation requires "
+            "explicit user consent. Ask before installing, or use existing project commands and "
+            "`PYTHONPATH=src` style test commands when possible."
+        ),
+        tool_name=tool_name,
+        count=1,
+        signature=signature,
+    )
+
+
+def _tool_call_is_package_manager_state_mutation(tool_name: str, args: Mapping[str, Any]) -> bool:
+    if tool_name != "bash":
+        return False
+    command = args.get("command")
+    return isinstance(command, str) and _bash_command_is_package_manager_state_mutation(command)
+
+
+def _user_message_forbids_package_manager_mutation(prompt: str) -> bool:
+    return any(marker in prompt for marker in _PACKAGE_MANAGER_DENY_MARKERS)
+
+
+def _user_message_allows_package_manager_mutation(prompt: str) -> bool:
+    return any(marker in prompt for marker in _PACKAGE_MANAGER_ALLOW_MARKERS)
+
+
 class ToolCallGuardrailController:
     """Per-turn controller for repeated failed/non-progressing tool calls."""
 
@@ -372,9 +484,7 @@ class ToolCallGuardrailController:
                     DEFAULT_READ_STYLE_EXACT_FAILURE_BLOCK_AFTER,
                 )
 
-            if exact_count >= exact_failure_block_after and (
-                self.config.hard_stop_enabled or tool_name in DEFAULT_NO_PROGRESS_BLOCK_TOOL_NAMES
-            ):
+            if exact_count >= exact_failure_block_after:
                 decision = ToolGuardrailDecision(
                     action="halt",
                     code="repeated_exact_failure_block",
@@ -431,8 +541,14 @@ class ToolCallGuardrailController:
 
             return ToolGuardrailDecision(tool_name=tool_name, count=exact_count, signature=signature)
 
-        self._exact_failure_counts.pop(signature, None)
-        self._same_tool_failure_counts.pop(tool_name, None)
+        if _tool_call_may_change_state(tool_name, args):
+            self._exact_failure_counts.clear()
+            self._same_tool_failure_counts.clear()
+            self._no_progress.clear()
+            self._reset_consecutive()
+        else:
+            self._exact_failure_counts.pop(signature, None)
+            self._same_tool_failure_counts.pop(tool_name, None)
 
         observed_path = _file_observation_path_key(tool_name, args, self.cwd)
         if observed_path is not None:
@@ -445,19 +561,6 @@ class ToolCallGuardrailController:
             mutation_count = self._landed_file_mutation_counts.get(mutation_path, 0) + 1
             self._landed_file_mutation_counts[mutation_path] = mutation_count
             self._landed_file_mutations[mutation_path] = display_path
-            if mutation_count > 1:
-                return ToolGuardrailDecision(
-                    action="warn",
-                    code="repeated_file_mutation_warning",
-                    message=(
-                        f"{tool_name} changed {display_path} {mutation_count} times in this turn. "
-                        "If this was intentional, continue with the current file state. "
-                        "If not, inspect the latest file content before making another mutation."
-                    ),
-                    tool_name=tool_name,
-                    count=mutation_count,
-                    signature=signature,
-                )
 
         if not self._is_idempotent(tool_name):
             self._forget_no_progress(tool_name, args, signature)
@@ -545,6 +648,74 @@ def _file_mutation_path_key(tool_name: str, args: Mapping[str, Any], cwd: str | 
     return _canonical_shell_path(path, cwd)
 
 
+def _tool_call_may_change_state(tool_name: str, args: Mapping[str, Any]) -> bool:
+    if tool_name in MUTATING_TOOL_NAMES:
+        return True
+    if tool_name != "bash":
+        return False
+    command = args.get("command")
+    return isinstance(command, str) and _bash_command_may_change_state(command)
+
+
+def _bash_command_may_change_state(command: str) -> bool:
+    stripped = command.strip()
+    if not stripped:
+        return False
+    lowered = f" {stripped.lower()} "
+    if any(marker in lowered for marker in _BASH_MUTATION_MARKERS):
+        return True
+    if any(marker in lowered for marker in (" > ", " >> ", " 2> ", " 2>> ")):
+        return True
+    try:
+        tokens = shlex.split(stripped)
+    except ValueError:
+        return False
+    lower_tokens = [token.lower() for token in tokens]
+    for index, token in enumerate(lower_tokens):
+        next_token = lower_tokens[index + 1] if index + 1 < len(lower_tokens) else ""
+        second_next = lower_tokens[index + 2] if index + 2 < len(lower_tokens) else ""
+        third_next = lower_tokens[index + 3] if index + 3 < len(lower_tokens) else ""
+        if token in {"pip", "pip3"} and next_token in _BASH_PACKAGE_MANAGER_STATE_COMMANDS:
+            return True
+        if token in {"python", "python3"} and next_token == "-m" and second_next in {"pip", "pip3"}:
+            return third_next in _BASH_PACKAGE_MANAGER_STATE_COMMANDS
+        if token in {"npm", "pnpm", "yarn", "bun", "poetry"} and next_token in _BASH_PACKAGE_MANAGER_STATE_COMMANDS:
+            return True
+        if token == "uv" and (
+            next_token in {"sync", "add", "remove"}
+            or (next_token == "pip" and second_next in _BASH_PACKAGE_MANAGER_STATE_COMMANDS)
+        ):
+            return True
+    return False
+
+
+def _bash_command_is_package_manager_state_mutation(command: str) -> bool:
+    stripped = command.strip()
+    if not stripped:
+        return False
+    try:
+        tokens = shlex.split(stripped)
+    except ValueError:
+        return False
+    lower_tokens = [token.lower() for token in tokens]
+    for index, token in enumerate(lower_tokens):
+        next_token = lower_tokens[index + 1] if index + 1 < len(lower_tokens) else ""
+        second_next = lower_tokens[index + 2] if index + 2 < len(lower_tokens) else ""
+        third_next = lower_tokens[index + 3] if index + 3 < len(lower_tokens) else ""
+        if token in {"pip", "pip3"} and next_token in _BASH_PACKAGE_MANAGER_STATE_COMMANDS:
+            return True
+        if token in {"python", "python3"} and next_token == "-m" and second_next in {"pip", "pip3"}:
+            return third_next in _BASH_PACKAGE_MANAGER_STATE_COMMANDS
+        if token in {"npm", "pnpm", "yarn", "bun", "poetry"} and next_token in _BASH_PACKAGE_MANAGER_STATE_COMMANDS:
+            return True
+        if token == "uv" and (
+            next_token in {"sync", "add", "remove"}
+            or (next_token == "pip" and second_next in _BASH_PACKAGE_MANAGER_STATE_COMMANDS)
+        ):
+            return True
+    return False
+
+
 def _file_observation_path_key(tool_name: str, args: Mapping[str, Any], cwd: str | None = None) -> str | None:
     if tool_name not in FILE_OBSERVING_TOOL_NAMES:
         return None
@@ -581,6 +752,7 @@ def _tool_failure_recovery_hint(tool_name: str, count: int) -> str:
     common = (
         f"{tool_name} has failed {count} times this turn. This looks like a loop. "
         "Do not switch to text-only replies; keep using tools, but diagnose before retrying. "
+        "This recovery guidance applies unless the user explicitly limited attempts, retries, or commands. "
         "First inspect the latest error/output and verify your assumptions. "
     )
     if tool_name in {"terminal", "bash"}:

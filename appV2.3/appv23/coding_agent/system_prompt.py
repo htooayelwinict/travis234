@@ -28,6 +28,19 @@ _PREAMBLE = (
 )
 
 
+_TASK_COMPLETION_GUIDANCE = (
+    "# Finishing the job\n"
+    "When the user asks you to build, run, verify, summarize, report, review, document, "
+    "or write something, the deliverable is the completed artifact backed by real tool "
+    "output, not a description of one. If the user names a file path for a summary, "
+    "report, checklist, notes, document, or other written result, that file path is "
+    "the deliverable. If the target file does not exist, create it with write instead "
+    "of treating it as source content to read. Use edit for precise updates to existing "
+    "files. If a tool failure blocks the real path, report the blocker directly instead "
+    "of inventing a result."
+)
+
+
 def _get_readme_path() -> str:
     return get_readme_path()
 
@@ -79,10 +92,6 @@ def build_system_prompt(options: BuildSystemPromptOptions) -> str:
     has_find = "find" in tools
     has_ls = "ls" in tools
     has_read = "read" in tools
-    if "write" in tools or "edit" in tools:
-        add("Use write/edit for file mutations; do not use bash heredocs or shell redirection to create files when write/edit can do the job.")
-    if "edit" in tools:
-        add("If edit fails because oldText is not unique, do not retry the same small oldText. Read the current file and retry with a larger unique block, or use one multi-edit call for disjoint changes.")
     if has_bash and not has_grep and not has_find and not has_ls:
         add("Use bash for file operations like ls, rg, find")
     for guideline in options.prompt_guidelines:
@@ -94,6 +103,7 @@ def build_system_prompt(options: BuildSystemPromptOptions) -> str:
 
     prompt = (
         f"{_PREAMBLE}\n\n"
+        f"{_TASK_COMPLETION_GUIDANCE}\n\n"
         f"Available tools:\n{tools_list}\n\n"
         "In addition to the tools above, you may have access to other custom tools depending on the project.\n\n"
         f"Guidelines:\n{guidelines_text}\n\n"
@@ -118,12 +128,7 @@ def build_system_prompt(options: BuildSystemPromptOptions) -> str:
 def _context_section(context_files: list[tuple[str, str]]) -> str:
     if not context_files:
         return ""
-    section = (
-        "\n\n<project_context>\n\n"
-        "Mandatory active instructions from AGENTS.md/CLAUDE.md context files:\n\n"
-        "These instructions are active for every turn. Follow them as instruction contracts, not background reference. "
-        "They narrow and specialize your behavior unless they conflict with higher-priority system, developer, platform, or tool safety rules.\n\n"
-    )
+    section = "\n\n<project_context>\n\nProject-specific instructions and guidelines:\n\n"
     for file_path, content in context_files:
         section += f'<project_instructions path="{file_path}">\n{content}\n</project_instructions>\n\n'
     section += "</project_context>\n"

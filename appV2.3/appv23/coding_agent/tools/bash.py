@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import os
+import shlex
+import shutil
 import signal as signal_module
 import subprocess
 import sys
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 from appv23.agent.types import AgentTool, AgentToolResult
 from appv23.ai.types import TextContent
+from appv23.coding_agent.config import get_bin_dir
 from appv23.coding_agent.tools.output_accumulator import OutputAccumulator, OutputSnapshot
 from appv23.coding_agent.tools.truncate import (
     DEFAULT_MAX_BYTES,
@@ -20,7 +24,6 @@ from appv23.coding_agent.tools.truncate import (
     format_size,
     truncation_to_details,
 )
-from appv23.coding_agent.tools.trust import mark_agent_written_file
 from appv23.coding_agent.tools.types import ToolContext, ToolDefinition, wrap_tool_definition
 
 BASH_SCHEMA = {
@@ -117,7 +120,7 @@ def create_local_bash_operations(shell_path: str | None = None) -> BashOperation
         process = subprocess.Popen(
             [shell, "-c", command],
             cwd=cwd,
-            env=_with_python_bin_on_path(options.env or os.environ.copy()),
+            env=get_shell_env(options.env),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -156,17 +159,84 @@ def create_local_bash_operations(shell_path: str | None = None) -> BashOperation
     return BashOperations(exec=exec_command)
 
 
-def _with_python_bin_on_path(env: dict[str, str]) -> dict[str, str]:
-    python_bin = os.path.dirname(sys.executable)
-    current_path = env.get("PATH", "")
-    if python_bin and python_bin not in current_path.split(os.pathsep):
-        env = dict(env)
-        env["PATH"] = python_bin + (os.pathsep + current_path if current_path else "")
-    return env
+def get_shell_env(env: dict[str, str] | None = None) -> dict[str, str]:
+    shell_env = dict(env or os.environ)
+    _strip_runtime_pythonpath(shell_env)
+    path_key = next((key for key in shell_env if key.lower() == "path"), "PATH")
+    current_path = shell_env.get(path_key, "")
+    path_entries = [entry for entry in current_path.split(os.pathsep) if entry]
+    path_entries = _without_runtime_python_bin(path_entries)
+    bin_dir = get_bin_dir()
+    _ensure_python_command_shim(bin_dir, path_entries)
+    if bin_dir and bin_dir not in path_entries:
+        path_entries.insert(0, bin_dir)
+    shell_env[path_key] = os.pathsep.join(path_entries)
+    return shell_env
+
+
+getShellEnv = get_shell_env
+
+
+def _strip_runtime_pythonpath(env: dict[str, str]) -> None:
+    pythonpath = env.get("PYTHONPATH")
+    if not pythonpath:
+        return
+    runtime_roots = _runtime_pythonpath_roots()
+    kept_entries: list[str] = []
+    for entry in pythonpath.split(os.pathsep):
+        if not entry:
+            continue
+        if _resolve_pythonpath_entry(entry) in runtime_roots:
+            continue
+        kept_entries.append(entry)
+    if kept_entries:
+        env["PYTHONPATH"] = os.pathsep.join(kept_entries)
+    else:
+        env.pop("PYTHONPATH", None)
+
+
+def _runtime_pythonpath_roots() -> set[Path]:
+    return {Path(__file__).resolve().parents[3]}
+
+
+def _without_runtime_python_bin(path_entries: list[str]) -> list[str]:
+    runtime_python_bins = {Path(sys.executable).expanduser().parent, Path(sys.executable).resolve().parent}
+    return [entry for entry in path_entries if _resolve_path_entry(entry) not in runtime_python_bins]
+
+
+def _ensure_python_command_shim(bin_dir: str, path_entries: list[str]) -> None:
+    if os.name == "nt":
+        return
+    search_path = os.pathsep.join(path_entries)
+    if shutil.which("python", path=search_path):
+        return
+    python3 = shutil.which("python3", path=search_path)
+    if not python3:
+        return
+    shim = Path(bin_dir) / "python"
+    if shim.exists():
+        return
+    try:
+        shim.parent.mkdir(parents=True, exist_ok=True)
+        shim.write_text(f"#!/bin/sh\nexec {shlex.quote(python3)} \"$@\"\n", encoding="utf-8")
+        shim.chmod(0o755)
+    except OSError:
+        return
+
+
+def _resolve_pythonpath_entry(entry: str) -> Path:
+    return _resolve_path_entry(entry)
+
+
+def _resolve_path_entry(entry: str) -> Path:
+    path = Path(entry).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    return path.resolve()
 
 
 def _resolve_spawn_context(command: str, cwd: str, spawn_hook: BashSpawnHook | None = None) -> BashSpawnContext:
-    context = BashSpawnContext(command=command, cwd=cwd, env=_with_python_bin_on_path(os.environ.copy()))
+    context = BashSpawnContext(command=command, cwd=cwd, env=get_shell_env())
     return spawn_hook(context) if spawn_hook else context
 
 
@@ -282,252 +352,11 @@ def _execute_bash(
 
         snapshot = finish_output()
         output_text, details = _format_output(output, snapshot)
-        _mark_full_output_path(details, output_text, ctx)
-        _mark_obvious_bash_write_targets(spawn_context.command, spawn_context.cwd, ctx)
         if exit_code is not None and exit_code != 0:
             raise RuntimeError(_append_status(output_text, f"Command exited with code {exit_code}"))
         return AgentToolResult(content=[TextContent(text=output_text)], details=details)
     finally:
         update_dirty = False
-
-
-def _mark_obvious_bash_write_targets(command: str, cwd: str, ctx) -> None:
-    trust_state = _ctx_trust_state(ctx)
-    for target in _extract_obvious_write_targets(command, cwd):
-        content = _read_bounded_text_file(target)
-        if content is not None:
-            mark_agent_written_file(target, content, trust_state)
-
-
-def _extract_obvious_write_targets(command: str, cwd: str) -> list[str]:
-    targets: list[str] = []
-    seen: set[str] = set()
-
-    def add_target(raw_target: str) -> None:
-        target = raw_target.strip()
-        if _ignored_bash_write_target(target):
-            return
-        absolute_target = target if os.path.isabs(target) else os.path.abspath(os.path.join(cwd, target))
-        if absolute_target not in seen:
-            seen.add(absolute_target)
-            targets.append(absolute_target)
-
-    for raw_line in _command_lines_without_heredoc_bodies(command):
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        for target in _extract_redirect_targets_from_line(line):
-            add_target(target)
-        tokens = _shellish_words_and_operators(line)
-        for index, token in enumerate(tokens):
-            if token == "tee":
-                for candidate in tokens[index + 1 :]:
-                    if candidate in {"|", ";", "&&", "||", ">", ">>", "<", "<<"}:
-                        break
-                    if not candidate.startswith("-"):
-                        add_target(candidate)
-    return targets
-
-
-def _command_lines_without_heredoc_bodies(command: str) -> list[str]:
-    lines: list[str] = []
-    pending_delimiters: list[str] = []
-    for raw_line in command.splitlines():
-        stripped = raw_line.strip()
-        if pending_delimiters:
-            if stripped == pending_delimiters[0]:
-                pending_delimiters.pop(0)
-            continue
-        lines.append(raw_line)
-        pending_delimiters.extend(_extract_heredoc_delimiters(raw_line))
-    return lines
-
-
-def _extract_heredoc_delimiters(line: str) -> list[str]:
-    delimiters: list[str] = []
-    index = 0
-    while index < len(line):
-        index = _next_unquoted_operator(line, "<<", index)
-        if index < 0:
-            break
-        index += 2
-        if index < len(line) and line[index] == "-":
-            index += 1
-        while index < len(line) and line[index].isspace():
-            index += 1
-        delimiter, index = _read_shellish_word(line, index)
-        if delimiter:
-            delimiters.append(delimiter)
-    return delimiters
-
-
-def _extract_redirect_targets_from_line(line: str) -> list[str]:
-    targets: list[str] = []
-    index = 0
-    while index < len(line):
-        index = _next_unquoted_redirection(line, index)
-        if index < 0:
-            break
-        index += 2 if index + 1 < len(line) and line[index + 1] == ">" else 1
-        while index < len(line) and line[index].isspace():
-            index += 1
-        target, index = _read_shellish_word(line, index)
-        if target:
-            targets.append(target)
-    return targets
-
-
-def _next_unquoted_redirection(line: str, start: int) -> int:
-    index = start
-    quote: str | None = None
-    while index < len(line):
-        char = line[index]
-        if char == "\\":
-            index += 2
-            continue
-        if quote:
-            if char == quote:
-                quote = None
-            index += 1
-            continue
-        if char in {"'", '"'}:
-            quote = char
-            index += 1
-            continue
-        if char == ">" and _looks_like_redirect_position(line, index):
-            return index
-        index += 1
-    return -1
-
-
-def _next_unquoted_operator(line: str, operator: str, start: int) -> int:
-    index = start
-    quote: str | None = None
-    while index < len(line):
-        char = line[index]
-        if char == "\\":
-            index += 2
-            continue
-        if quote:
-            if char == quote:
-                quote = None
-            index += 1
-            continue
-        if char in {"'", '"'}:
-            quote = char
-            index += 1
-            continue
-        if line.startswith(operator, index):
-            return index
-        index += 1
-    return -1
-
-
-def _looks_like_redirect_position(line: str, index: int) -> bool:
-    if index == 0 or line[index - 1].isspace():
-        return True
-    previous = index - 1
-    while previous >= 0 and line[previous].isspace():
-        previous -= 1
-    if previous < 0 or line[previous] in {"|", "&", ";", "("}:
-        return True
-    if line[previous].isdigit():
-        before_fd = previous - 1
-        while before_fd >= 0 and line[before_fd].isdigit():
-            before_fd -= 1
-        return before_fd < 0 or line[before_fd].isspace() or line[before_fd] in {"|", "&", ";", "("}
-    return False
-
-
-def _shellish_words_and_operators(line: str) -> list[str]:
-    tokens: list[str] = []
-    index = 0
-    while index < len(line):
-        while index < len(line) and line[index].isspace():
-            index += 1
-        if index >= len(line):
-            break
-        if line.startswith("&&", index) or line.startswith("||", index) or line.startswith(">>", index) or line.startswith(
-            "<<", index
-        ):
-            tokens.append(line[index : index + 2])
-            index += 2
-            continue
-        if line[index] in {"|", ";", ">", "<"}:
-            tokens.append(line[index])
-            index += 1
-            continue
-        word, index = _read_shellish_word(line, index)
-        if word:
-            tokens.append(word)
-        else:
-            index += 1
-    return tokens
-
-
-def _read_shellish_word(line: str, start: int) -> tuple[str, int]:
-    chars: list[str] = []
-    index = start
-    quote: str | None = None
-    while index < len(line):
-        char = line[index]
-        if char == "\\":
-            if index + 1 < len(line):
-                chars.append(line[index + 1])
-                index += 2
-            else:
-                index += 1
-            continue
-        if quote:
-            if char == quote:
-                quote = None
-            else:
-                chars.append(char)
-            index += 1
-            continue
-        if char in {"'", '"'}:
-            quote = char
-            index += 1
-            continue
-        if char.isspace() or char in {"|", ";", ">", "<", "&"}:
-            break
-        chars.append(char)
-        index += 1
-    return "".join(chars), index
-
-
-def _ignored_bash_write_target(target: str) -> bool:
-    return not target or target.startswith("-") or target.startswith("&") or target in {"/dev/null", "&1", "&2"}
-
-
-def _read_bounded_text_file(path: str) -> str | None:
-    if not os.path.isfile(path):
-        return None
-    try:
-        with open(path, "rb") as handle:
-            data = handle.read(DEFAULT_MAX_BYTES)
-    except OSError:
-        return None
-    if b"\x00" in data:
-        return None
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError:
-        return None
-
-
-def _mark_full_output_path(details, content: str, ctx) -> None:
-    if not isinstance(details, dict):
-        return
-    full_output_path = details.get("fullOutputPath")
-    if not isinstance(full_output_path, str) or not full_output_path:
-        return
-    mark_agent_written_file(full_output_path, content, _ctx_trust_state(ctx))
-
-
-def _ctx_trust_state(ctx) -> dict | None:
-    trust_state = ctx.get("trust_state") if isinstance(ctx, dict) else getattr(ctx, "trust_state", None)
-    return trust_state if isinstance(trust_state, dict) else None
 
 
 def create_bash_tool_definition(
@@ -548,6 +377,7 @@ def create_bash_tool_definition(
         ),
         parameters=BASH_SCHEMA,
         prompt_snippet="Execute bash commands (ls, grep, find, etc.)",
+        prompt_guidelines=[],
         execute=lambda tid, args, signal=None, on_update=None, ctx=None: _execute_bash(
             cwd, ops, command_prefix, spawn_hook, tid, args, signal, on_update, ctx
         ),

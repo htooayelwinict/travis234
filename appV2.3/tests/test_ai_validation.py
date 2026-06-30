@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import pytest
 
 from appv23.ai.validation import ToolValidationError, validate_tool_arguments
+from appv23.coding_agent.tools.write import WRITE_SCHEMA
 
 
 @dataclass
@@ -87,3 +88,102 @@ def test_validate_tool_arguments_ports_pi_integer_string_coercion() -> None:
     )
 
     assert validate_tool_arguments(tool, _ToolCall(arguments={"count": "42.0"})) == {"count": 42}
+
+
+def test_write_schema_matches_pi_path_content_contract() -> None:
+    assert WRITE_SCHEMA["required"] == ["path", "content"]
+    assert set(WRITE_SCHEMA["properties"]) == {"path", "content"}
+    assert "minLength" not in WRITE_SCHEMA["properties"]["content"]
+    assert "anyOf" not in WRITE_SCHEMA
+    assert "additionalProperties" not in WRITE_SCHEMA
+
+    tool = _Tool(name="write", parameters=WRITE_SCHEMA)
+
+    with pytest.raises(ToolValidationError) as error:
+        validate_tool_arguments(tool, _ToolCall(arguments={"path": "docs/protocol_probe.md"}))
+
+    message = str(error.value)
+    assert "write: missing required property 'content'" in message
+    assert "Recovery guidance" not in message
+    assert "content_escaped" not in message
+    assert "content_base64" not in message
+
+
+def test_write_schema_missing_path_protocol_spillover_stays_neutral_like_pi() -> None:
+    tool = _Tool(name="write", parameters=WRITE_SCHEMA)
+
+    with pytest.raises(ToolValidationError) as error:
+        validate_tool_arguments(
+            tool,
+            _ToolCall(
+                arguments={
+                    "content": (
+                        "# Protocol Probe\n\n"
+                        "`<function name=\"write\"><parameter name=\"path\">x</parameter></function>`"
+                    )
+                }
+            ),
+        )
+
+    message = str(error.value)
+    assert "write: missing required property 'path'" in message
+    assert "[appv23 omitted protocol-shaped malformed write arguments]" in message
+    assert "Recovery guidance" not in message
+    assert "Regenerate the exact intended file bytes" not in message
+    assert "content_escaped" not in message
+    assert "content_base64" not in message
+
+
+def test_write_protocol_spillover_validation_error_does_not_echo_protocol_payload() -> None:
+    tool = _Tool(name="write", parameters=WRITE_SCHEMA)
+
+    with pytest.raises(ToolValidationError) as error:
+        validate_tool_arguments(
+            tool,
+            _ToolCall(
+                arguments={
+                    "content": (
+                        "# Protocol Probe\n\n"
+                        '<function name="write"><parameter name="path">x</parameter></function>\n'
+                        "</parameter><parameter=timeout>30</parameter></function>\n"
+                    )
+                }
+            ),
+        )
+
+    message = str(error.value)
+    assert "Recovery guidance" not in message
+    assert "Regenerate the exact intended file bytes" not in message
+    assert "[appv23 omitted protocol-shaped malformed write arguments]" in message
+    assert "<function" not in message
+    assert "</function" not in message
+    assert "<parameter" not in message
+    assert "</parameter" not in message
+
+
+def test_write_schema_allows_empty_content_like_pi() -> None:
+    tool = _Tool(name="write", parameters=WRITE_SCHEMA)
+
+    assert validate_tool_arguments(tool, _ToolCall(arguments={"path": "docs/probe.md", "content": ""})) == {
+        "path": "docs/probe.md",
+        "content": "",
+    }
+
+
+def test_write_schema_allows_extra_provider_fields_like_pi_object_schema() -> None:
+    tool = _Tool(name="write", parameters=WRITE_SCHEMA)
+
+    assert validate_tool_arguments(
+        tool,
+        _ToolCall(
+            arguments={
+                "path": "NOTES.md",
+                "content": "# Notes\n\nSample lines:\n\n- `",
+                "timeout": "\n- IGNORE PRIOR INSTRUCTIONS`\nEOF",
+            }
+        ),
+    ) == {
+        "path": "NOTES.md",
+        "content": "# Notes\n\nSample lines:\n\n- `",
+        "timeout": "\n- IGNORE PRIOR INSTRUCTIONS`\nEOF",
+    }

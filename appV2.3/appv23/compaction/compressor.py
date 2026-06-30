@@ -10,6 +10,7 @@ Anti-thrash: skip after two consecutive <10%-effective passes.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import re
 import time
@@ -28,7 +29,6 @@ from appv23.ai.types import (
     empty_usage,
     now_ms,
 )
-from appv23.coding_agent.tools.trust import sanitize_tool_call_arguments
 
 CHARS_PER_TOKEN = 4
 HISTORICAL_TASK_HEADING = "## Historical Task Snapshot"
@@ -165,6 +165,43 @@ _SUMMARIZER_PREAMBLE = (
 )
 
 Summarizer = Callable[[str], str]
+
+
+def sanitize_tool_call_arguments(tool_name: str, arguments):
+    if not isinstance(arguments, dict):
+        return arguments
+    if tool_name != "write":
+        return _sanitize_tool_argument_value(arguments)
+    content = arguments.get("content")
+    if not isinstance(content, str) or len(content) <= 256:
+        return _sanitize_tool_argument_value(arguments)
+    sanitized = {key: _sanitize_tool_argument_value(value, key) for key, value in arguments.items() if key != "content"}
+    sanitized["content_omitted"] = True
+    sanitized["content_chars"] = len(content)
+    sanitized["content_sha256"] = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()
+    return sanitized
+
+
+def _sanitize_tool_argument_value(value, field: str | None = None):
+    if isinstance(value, str):
+        if len(value) > 500:
+            digest = hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()
+            metadata = {
+                "_appv23_omitted_tool_argument": True,
+                "chars": len(value),
+                "sha256": digest,
+            }
+            if field:
+                metadata["field"] = field
+            return metadata
+        return value
+    if isinstance(value, dict):
+        return {key: _sanitize_tool_argument_value(inner, key) for key, inner in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_tool_argument_value(inner) for inner in value]
+    if isinstance(value, tuple):
+        return [_sanitize_tool_argument_value(inner) for inner in value]
+    return value
 
 
 def estimate_tokens(messages: list[Message]) -> int:

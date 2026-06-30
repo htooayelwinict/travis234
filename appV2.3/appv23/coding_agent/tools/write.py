@@ -10,18 +10,13 @@ from appv23.agent.types import AgentTool, AgentToolResult
 from appv23.ai.types import TextContent
 from appv23.coding_agent.tools.file_mutation_queue import with_file_mutation_queue
 from appv23.coding_agent.tools.path_utils import resolve_to_cwd
-from appv23.coding_agent.tools.trust import (
-    is_legacy_tool_argument_redaction_marker,
-    is_omitted_write_content_placeholder,
-    mark_agent_written_file,
-)
 from appv23.coding_agent.tools.types import ToolContext, ToolDefinition, wrap_tool_definition
 
 WRITE_SCHEMA = {
     "type": "object",
     "properties": {
         "path": {"type": "string", "description": "Path to the file to write (relative or absolute)"},
-        "content": {"type": "string", "description": "Full file content to write"},
+        "content": {"type": "string", "description": "Content to write to the file"},
     },
     "required": ["path", "content"],
 }
@@ -43,18 +38,6 @@ def _default_write_file(path: str, content: str) -> None:
 
 
 _DEFAULT_OPERATIONS = WriteOperations(mkdir=_default_mkdir, write_file=_default_write_file)
-_OMITTED_WRITE_FAILURE_CODE = "write_omitted_historical_content"
-_REDACTED_WRITE_FAILURE_CODE = "write_redacted_tool_argument"
-
-
-def _historical_write_content_error(*, path: str, code: str, marker: str) -> str:
-    return (
-        f"{code}: Refusing to write appv23 {marker} for path {path}. "
-        "The provided content is an internal replay marker, not file bytes. "
-        "Provide the complete intended file content before calling write."
-    )
-
-
 def _execute_write(
     cwd: str,
     tool_call_id,
@@ -65,27 +48,13 @@ def _execute_write(
     operations: WriteOperations = _DEFAULT_OPERATIONS,
 ):
     path = args["path"]
-    content = args["content"]
-    if is_legacy_tool_argument_redaction_marker(content):
-        raise ValueError(
-            _historical_write_content_error(
-                path=path,
-                code=_REDACTED_WRITE_FAILURE_CODE,
-                marker="redacted tool argument marker",
-            )
-        )
-    if is_omitted_write_content_placeholder(content):
-        raise ValueError(
-            _historical_write_content_error(
-                path=path,
-                code=_OMITTED_WRITE_FAILURE_CODE,
-                marker="omitted historical write content marker",
-            )
-        )
+    content = args.get("content", "")
     absolute_path = resolve_to_cwd(path, cwd)
     parent = os.path.dirname(absolute_path)
+    result_details: dict = {}
 
     def mutate() -> None:
+        nonlocal result_details
         if signal and signal.aborted:
             raise RuntimeError("Operation aborted")
         operations.mkdir(parent)
@@ -94,21 +63,17 @@ def _execute_write(
         operations.write_file(absolute_path, content)
         if signal and signal.aborted:
             raise RuntimeError("Operation aborted")
+        result_details = {
+            "path": absolute_path,
+            "bytes_written": len(content.encode("utf-8")),
+            "total_bytes": os.path.getsize(absolute_path),
+        }
 
     with_file_mutation_queue(absolute_path, mutate)
-    mark_agent_written_file(absolute_path, content, _ctx_trust_state(ctx))
     return AgentToolResult(
         content=[TextContent(text=f"Successfully wrote {len(content)} bytes to {path}")],
-        details=None,
+        details=result_details,
     )
-
-
-def _ctx_trust_state(ctx) -> dict | None:
-    if isinstance(ctx, dict):
-        value = ctx.get("trust_state")
-    else:
-        value = getattr(ctx, "trust_state", None)
-    return value if isinstance(value, dict) else None
 
 
 def create_write_tool_definition(cwd: str, operations: WriteOperations | None = None) -> ToolDefinition:
@@ -122,7 +87,10 @@ def create_write_tool_definition(cwd: str, operations: WriteOperations | None = 
         ),
         parameters=WRITE_SCHEMA,
         prompt_snippet="Create or overwrite files",
-        prompt_guidelines=["Use write only for new files or complete rewrites."],
+        prompt_guidelines=[
+            "Use write only for new files or complete rewrites.",
+            "When the user asks for a summary, report, checklist, notes, or other deliverable in a file path, create or update that file with write before your final response.",
+        ],
         execute=lambda tid, args, signal=None, on_update=None, ctx=None: _execute_write(
             cwd, tid, args, signal, on_update, ctx, ops
         ),

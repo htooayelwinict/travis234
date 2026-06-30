@@ -4818,10 +4818,9 @@ def test_interactive_mode_runs_bang_bash_while_turn_is_streaming(tmp_path) -> No
     thread.start()
 
     assert first_stream_started.wait(timeout=2)
-    time.sleep(0.1)
     try:
+        assert _wait_until(lambda: app.session.has_pending_bash_messages is True, timeout=2)
         assert app.session.get_steering_messages() == []
-        assert app.session.has_pending_bash_messages is True
         assert mode.status._message == "Running"
     finally:
         first_stream_released.set()

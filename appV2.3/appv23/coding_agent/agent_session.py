@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
-import sys
 import time
 from dataclasses import dataclass
 from dataclasses import replace
@@ -29,6 +29,7 @@ from appv23.agent.tool_guardrails import (
     ToolGuardrailDecision,
     append_toolguard_guidance,
     classify_tool_failure,
+    package_manager_mutation_decision,
     toolguard_synthetic_result,
 )
 from appv23.ai.model_resolver import ScopedModel
@@ -48,11 +49,12 @@ from appv23.ai.models import (
     unregister_provider_models,
 )
 from appv23.ai.stream import ApiProvider, register_api_provider
-from appv23.ai.types import AssistantMessage, Cost, ImageContent, Message, Model, TextContent, UserMessage
+from appv23.ai.types import AssistantMessage, Cost, ImageContent, Message, Model, TextContent, UserMessage, now_ms
 from appv23.ai.types import ToolCall, ToolResultMessage, Usage
 from appv23.compaction.compressor import LEGACY_SUMMARY_PREFIX, SUMMARY_END_MARKER, SUMMARY_PREFIX, estimate_tokens
 from appv23.compaction.timing import CompactionManager
 from appv23.coding_agent.branch_summarization import generate_branch_summary
+from appv23.coding_agent.config import get_docs_path, get_examples_path, get_readme_path
 from appv23.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
 from appv23.coding_agent.resource_loader import DefaultResourceLoader
 from appv23.coding_agent.session_store import (
@@ -73,9 +75,9 @@ from appv23.coding_agent.subagents import (
     SubagentTask,
 )
 from appv23.coding_agent.tools import create_all_tool_definitions
-from appv23.coding_agent.tools.bash import BASH_SCHEMA, BashExecOptions, BashOperations, create_local_bash_operations
+from appv23.coding_agent.tools.bash import BASH_SCHEMA, BashExecOptions, BashOperations, create_local_bash_operations, get_shell_env
 from appv23.coding_agent.tools.output_accumulator import OutputAccumulator
-from appv23.coding_agent.tools.trust import create_trust_state
+from appv23.coding_agent.tools.path_utils import resolve_to_cwd
 from appv23.coding_agent.tools.types import (
     ToolContext,
     ToolDefinition,
@@ -100,7 +102,39 @@ _SUBAGENT_RESULT_SUMMARY_LIMIT = 1000
 _SUBAGENT_VISIBLE_SUMMARY_LIMIT = 320
 _SUBAGENT_TOOL_TRACE_DISPLAY_LIMIT = 3
 _SUBAGENT_EXPANSION_BUDGETS = {"short": 1200, "medium": 6000, "long": 12000}
-_DEFAULT_ACTIVE_TOOL_NAMES = ["read", "bash", "edit", "write", *_SUBAGENT_TOOL_NAMES]
+_DEFAULT_ACTIVE_TOOL_NAMES = ["read", "bash", "edit", "write"]
+_SUBAGENT_OPT_IN_TERMS = (
+    "/subagents",
+    "subagent",
+    "subagents",
+    "child agent",
+    "child-agent",
+    "delegate",
+    "delegation",
+    "spawn_subagent",
+    "wait_subagent",
+    "reviewer agent",
+    "researcher agent",
+)
+_SUBAGENT_OPT_OUT_TERMS = (
+    "without subagent",
+    "without subagents",
+    "no subagent",
+    "no subagents",
+    "do not use subagent",
+    "do not use subagents",
+    "don't use subagent",
+    "don't use subagents",
+)
+
+
+def _prompt_requests_subagent_tools(text: str) -> bool:
+    lowered = re.sub(r"\s+", " ", str(text or "").lower())
+    if any(term in lowered for term in _SUBAGENT_OPT_OUT_TERMS):
+        return False
+    return any(term in lowered for term in _SUBAGENT_OPT_IN_TERMS)
+
+
 _SPAWN_SUBAGENT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -182,6 +216,13 @@ _RETRYABLE_ERROR_MARKERS = (
     "timeout",
     "terminated",
 )
+_MALFORMED_STREAMED_TOOL_ARGS_MARKER = "malformed streamed tool-call arguments"
+_MALFORMED_STREAM_RECOVERY_PREFIX = (
+    "The previous provider stream ended with malformed streamed tool-call arguments"
+)
+_PARTIAL_STREAM_STUB_ID = "partial-stream-stub"
+_PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE = "partial_stream_dropped_tool_calls"
+_MAX_PARTIAL_STREAM_CONTINUATIONS = 3
 _NON_RETRYABLE_PROVIDER_LIMIT_MARKERS = (
     "gousagelimiterror",
     "freeusagelimiterror",
@@ -192,17 +233,6 @@ _NON_RETRYABLE_PROVIDER_LIMIT_MARKERS = (
     "quota exceeded",
     "billing",
 )
-_OMITTED_WRITE_FAILURE_CODE = "write_omitted_historical_content"
-_OMITTED_WRITE_FAILURE_MARKERS = (
-    _OMITTED_WRITE_FAILURE_CODE,
-    "omitted historical write content marker",
-)
-_OMITTED_WRITE_RECOVERY = (
-    "The provided content was an internal replay marker, not file bytes. "
-    "Provide the complete intended file content before calling write."
-)
-
-
 @dataclass
 class QueueUpdateEvent:
     steering: list[str]
@@ -669,6 +699,103 @@ def _append_toolguard_content(content, decision: ToolGuardrailDecision):
     return blocks
 
 
+def _with_toolguard_details(details, decision: ToolGuardrailDecision):
+    next_details = dict(details) if isinstance(details, dict) else {}
+    warnings = list(next_details.get("toolGuardrailWarnings") or [])
+    warnings.append(decision.to_metadata())
+    next_details["toolGuardrailWarnings"] = warnings
+    return next_details
+
+
+def _toolguard_steering_message(decision: ToolGuardrailDecision) -> str:
+    tool = decision.tool_name or "tool"
+    return (
+        f"[tool_guardrail_warning code={decision.code} tool={tool} count={decision.count}] "
+        f"{decision.message}"
+    )
+
+
+_PROCESS_LIMIT_EXACT_MARKERS = (
+    "do not retry",
+    "don't retry",
+    "dont retry",
+    "no retry",
+    "no retries",
+    "do not rerun",
+    "don't rerun",
+    "dont rerun",
+    "do not run any other command",
+    "don't run any other command",
+    "dont run any other command",
+    "run no other command",
+    "single command",
+    "single run",
+    "single attempt",
+    "one command",
+    "one run",
+    "one attempt",
+    "once only",
+)
+_PROCESS_LIMIT_GLOBAL_MARKERS = (
+    "do not call any more tools",
+    "don't call any more tools",
+    "dont call any more tools",
+    "stop after any tool failure",
+    "stop after any failed tool",
+    "stop after the first tool failure",
+    "stop after the first failed tool",
+)
+
+
+def _is_internal_steering_user_message(text: str | None) -> bool:
+    prompt = (text or "").lstrip()
+    return prompt.startswith(("[tool_guardrail_warning", "[user_process_limit]"))
+
+
+def _user_message_has_process_limit(text: str | None) -> bool:
+    prompt = (text or "").strip().lower()
+    if not prompt:
+        return False
+    return any(marker in prompt for marker in _PROCESS_LIMIT_EXACT_MARKERS)
+
+
+def _user_process_limit_applies_to_tool(text: str | None, tool_name: str | None) -> bool:
+    prompt = (text or "").strip().lower()
+    if not prompt:
+        return False
+    if any(marker in prompt for marker in _PROCESS_LIMIT_GLOBAL_MARKERS):
+        return True
+    if (tool_name or "") != "bash":
+        return False
+    return _user_message_has_process_limit(prompt)
+
+
+def _user_process_limit_steering_message(latest_user_message: str, tool_name: str) -> str:
+    excerpt = " ".join((latest_user_message or "").split())
+    if len(excerpt) > 220:
+        excerpt = excerpt[:217].rstrip() + "..."
+    tool = tool_name or "tool"
+    return (
+        "[user_process_limit] The latest user request explicitly limited attempts, retries, "
+        f"or commands: \"{excerpt}\". You already executed {tool} and it returned an error. "
+        "Do not call any more tools in this turn: no edit, write, append, bash, diagnostics, "
+        "retries, reruns, or workaround fixes. Report the exact result and ask whether to continue."
+    )
+
+
+def _user_process_limit_tool_result_note(latest_user_message: str, tool_name: str) -> str:
+    excerpt = " ".join((latest_user_message or "").split())
+    if len(excerpt) > 220:
+        excerpt = excerpt[:217].rstrip() + "..."
+    tool = tool_name or "tool"
+    return (
+        "\n\n[User process limit: the latest request explicitly limited attempts, retries, "
+        f"or commands: \"{excerpt}\". {tool} already returned an error. "
+        "The runtime is stopping this turn without more tools so the agent reports this result "
+        "instead of retrying or working around the limit.]"
+    )
+
+
 def _append_text_to_content(content, addition: str):
     blocks = list(content or [])
     if not blocks:
@@ -685,40 +812,63 @@ def _append_text_to_content(content, addition: str):
     return blocks
 
 
-def _tool_arg_path(args) -> str | None:
-    if not isinstance(args, Mapping):
-        return None
-    value = args.get("path")
-    if not isinstance(value, str):
-        return None
-    path = value.strip()
-    return path or None
+_MISSING_READ_ERROR_MARKERS = (
+    "file not found",
+    "no such file",
+    "not found",
+)
+
+_OUTPUT_ARTIFACT_REQUEST_MARKERS = (
+    "summarize",
+    "summary",
+    "report",
+    "review",
+    "notes",
+    "checklist",
+    "document",
+    "write",
+    "create",
+    "generate",
+    "save",
+    "output",
+)
 
 
-def _is_omitted_write_failure_text(text: str) -> bool:
-    lowered = str(text or "").lower()
-    return any(marker.lower() in lowered for marker in _OMITTED_WRITE_FAILURE_MARKERS)
+def _path_mentioned_in_text(path: str, text: str) -> bool:
+    needle = path.strip().lower()
+    if not needle:
+        return False
+    normalized_needle = needle.replace("\\", "/")
+    normalized_text = text.lower().replace("\\", "/")
+    basename = normalized_needle.rsplit("/", 1)[-1]
+    return normalized_needle in normalized_text or bool(basename and basename in normalized_text)
 
 
-def _with_file_mutation_failure_details(details, failure: dict[str, str]) -> dict[str, object]:
-    if isinstance(details, dict):
-        next_details: dict[str, object] = dict(details)
-    elif details is None:
-        next_details = {}
-    else:
-        next_details = {"originalDetails": details}
-    next_details["appv23_file_mutation_failure"] = dict(failure)
-    return next_details
-
-
-def _format_unresolved_file_mutation_footer(failures: Mapping[str, dict[str, str]]) -> str:
-    lines = ["Unresolved file mutation:"]
-    for failure in failures.values():
-        path = failure.get("path") or "<unknown>"
-        reason = failure.get("reason") or "file mutation failed"
-        recovery = failure.get("recovery") or _OMITTED_WRITE_RECOVERY
-        lines.append(f"- {path} was not written ({reason}). {recovery}")
-    return "\n".join(lines)
+def _missing_read_output_artifact_note(
+    tool_name: str,
+    args,
+    result_text: str,
+    latest_user_message: str,
+) -> str:
+    if tool_name != "read" or not isinstance(args, Mapping):
+        return ""
+    path = args.get("path") or args.get("file_path")
+    if not isinstance(path, str) or not path.strip():
+        return ""
+    lowered_result = (result_text or "").lower()
+    if not any(marker in lowered_result for marker in _MISSING_READ_ERROR_MARKERS):
+        return ""
+    lowered_user = (latest_user_message or "").lower()
+    if not _path_mentioned_in_text(path, lowered_user):
+        return ""
+    if not any(marker in lowered_user for marker in _OUTPUT_ARTIFACT_REQUEST_MARKERS):
+        return ""
+    return (
+        f"\n\n[Recovery hint: read could not find {path}. The latest user request appears "
+        "to name this path as an output artifact. If so, use write to create it with the "
+        "requested summary/report/notes instead of treating the missing file as source "
+        "content. If the user intended an existing input file, report the missing file directly.]"
+    )
 
 
 def _coerce_tool_guardrail_config(
@@ -829,7 +979,9 @@ class AgentSession:
         self._tool_guardrail_halt_decision: ToolGuardrailDecision | None = None
         self._tool_guardrail_halt_response_emitted = False
         self._tool_loop_recovery_steered_keys: set[tuple[str, str, int]] = set()
-        self._turn_failed_file_mutations: dict[str, dict[str, str]] = {}
+        self._process_limit_recovery_steered = False
+        self._process_limit_halt_message: str | None = None
+        self._process_limit_halt_response_emitted = False
         self._scoped_models = list(scoped_models or [])
         self._convert_to_llm = convert_to_llm or default_convert_to_llm
         self._caller_transform_context = transform_context
@@ -855,6 +1007,7 @@ class AgentSession:
         self._retry_attempt = 0
         self._retry_signal: AbortSignal | None = None
         self._retryable_error_predicate = retryable_error_predicate
+        self._partial_stream_continue_retries = 0
         self._session_store = (
             SessionStore(session_path, cwd=cwd, parent_session=parent_session_path, session_id=session_id)
             if session_path
@@ -866,8 +1019,6 @@ class AgentSession:
             thinking_level = restored_context.thinking_level
             self._session_name = restored_context.session_name
 
-        self._trust_state = create_trust_state()
-
         if tools is not None:
             base_tools = tools
             base_definitions = [create_tool_definition_from_agent_tool(tool) for tool in base_tools]
@@ -878,7 +1029,7 @@ class AgentSession:
             }
         elif tool_definitions is not None:
             base_tools = [
-                wrap_tool_definition(definition, lambda: ToolContext(cwd=self.cwd, model=self.model, trust_state=self._trust_state))
+                wrap_tool_definition(definition, lambda: ToolContext(cwd=self.cwd, model=self.model))
                 for definition in tool_definitions
             ]
             base_definitions = tool_definitions
@@ -893,7 +1044,7 @@ class AgentSession:
                 *self._create_subagent_tool_definitions(),
             ]
             base_tools = [
-                wrap_tool_definition(definition, lambda: ToolContext(cwd=self.cwd, model=self.model, trust_state=self._trust_state))
+                wrap_tool_definition(definition, lambda: ToolContext(cwd=self.cwd, model=self.model))
                 for definition in base_definitions
             ]
             base_source_infos = {
@@ -1006,12 +1157,9 @@ class AgentSession:
             "imageAutoResize",
             "image_auto_resize",
         )
-        skill_read_access = self._skill_read_access()
         return {
             "read": {
                 "auto_resize_images": True if auto_resize_images is None else bool(auto_resize_images),
-                "allowed_read_roots": skill_read_access["roots"],
-                "allowed_read_files": skill_read_access["files"],
             },
             "bash": {
                 "command_prefix": self._settings_shell_command_prefix(),
@@ -1029,7 +1177,7 @@ class AgentSession:
             source_info_by_name[registered.definition.name] = registered.source_info
             tool_by_name[registered.definition.name] = wrap_tool_definition(
                 registered.definition,
-                lambda: ToolContext(cwd=self.cwd, model=self.model, trust_state=self._trust_state),
+                lambda: ToolContext(cwd=self.cwd, model=self.model),
             )
 
         self._tool_definition_by_name = {
@@ -1234,19 +1382,32 @@ class AgentSession:
 
         if preflight_result:
             preflight_result(True)
+        restore_active_tool_names: list[str] | None = None
+        if _prompt_requests_subagent_tools(current_text):
+            current_active_tool_names = self.get_active_tool_names()
+            missing_subagent_tools = [
+                name for name in _SUBAGENT_TOOL_NAMES if name not in set(current_active_tool_names)
+            ]
+            if missing_subagent_tools:
+                restore_active_tool_names = current_active_tool_names
+                self.set_active_tools_by_name([*current_active_tool_names, *missing_subagent_tools])
         self.agent.state.system_prompt = self.system_prompt
         self._reset_model_subagent_turn_budget()
-        if self._pending_next_turn_messages:
-            prompt_message = _user_message(current_text, current_images)
-            pending_next_turn = list(self._pending_next_turn_messages)
-            self._pending_next_turn_messages = []
-            prompt_messages = [prompt_message, *pending_next_turn]
-            prompt_messages = self._apply_before_agent_start(current_text, current_images, prompt_messages)
-            return self._run_agent_prompt(prompt_messages, stream_fn=stream_fn)
+        try:
+            if self._pending_next_turn_messages:
+                prompt_message = _user_message(current_text, current_images)
+                pending_next_turn = list(self._pending_next_turn_messages)
+                self._pending_next_turn_messages = []
+                prompt_messages = [prompt_message, *pending_next_turn]
+                prompt_messages = self._apply_before_agent_start(current_text, current_images, prompt_messages)
+                return self._run_agent_prompt(prompt_messages, stream_fn=stream_fn)
 
-        prompt_message = _user_message(current_text, current_images)
-        prompt_message = self._apply_before_agent_start(current_text, current_images, prompt_message)
-        return self._run_agent_prompt(prompt_message, stream_fn=stream_fn)
+            prompt_message = _user_message(current_text, current_images)
+            prompt_message = self._apply_before_agent_start(current_text, current_images, prompt_message)
+            return self._run_agent_prompt(prompt_message, stream_fn=stream_fn)
+        finally:
+            if restore_active_tool_names is not None:
+                self.set_active_tools_by_name(restore_active_tool_names)
 
     def _reset_model_subagent_turn_budget(self) -> None:
         self._model_subagents_spawned_this_turn = 0
@@ -2303,7 +2464,7 @@ class AgentSession:
         options = options or {}
         cwd = str(options.get("cwd") or self.cwd)
         timeout = options.get("timeout")
-        env = _with_python_bin_on_path(os.environ.copy())
+        env = get_shell_env()
         try:
             completed = subprocess.run(
                 [command, *args],
@@ -2418,11 +2579,9 @@ class AgentSession:
     followUp = follow_up
 
     def _steer_tool_loop_recovery(self, decision: ToolGuardrailDecision) -> None:
-        # Hermes keeps recovery guidance attached to the tool result so the
-        # next provider request preserves role alternation and the warning is
-        # interpreted as observation-bound data.  Do not enqueue a separate
-        # user turn here.
-        return
+        if decision.action != "warn" or not decision.message:
+            return
+        self.agent.steer(_user_message(_toolguard_steering_message(decision)))
 
     def send_custom_message(self, message: dict, options: dict | None = None, stream_fn=None) -> list[AgentMessage]:
         options = options or {}
@@ -2524,6 +2683,7 @@ class AgentSession:
         active_tool_names = self.get_active_tool_names()
         self.system_prompt = self._build_system_prompt(active_tool_names)
         self.agent.state.system_prompt = self.system_prompt
+        self._queue_partial_stream_continuation_if_needed()
         return AgentLoopTurnUpdate(
             context=AgentContext(
                 system_prompt=self.agent.state.system_prompt,
@@ -2532,6 +2692,25 @@ class AgentSession:
             ),
             model=self.agent.state.model,
             thinking_level=self.agent.state.thinking_level,
+        )
+
+    def _queue_partial_stream_continuation_if_needed(self) -> None:
+        last_message = self.agent.state.messages[-1] if self.agent.state.messages else None
+        if not isinstance(last_message, AssistantMessage):
+            return
+        dropped_tools = _partial_stream_dropped_tool_names(last_message)
+        if not dropped_tools:
+            if last_message.stop_reason != "length":
+                self._partial_stream_continue_retries = 0
+            return
+        if self._partial_stream_continue_retries >= _MAX_PARTIAL_STREAM_CONTINUATIONS:
+            return
+        self._partial_stream_continue_retries += 1
+        self.agent.follow_up(
+            UserMessage(
+                content=[TextContent(text=_partial_stream_continuation_prompt(dropped_tools))],
+                timestamp=now_ms(),
+            )
         )
 
     def clear_queue(self) -> dict[str, list[str]]:
@@ -3169,7 +3348,10 @@ class AgentSession:
         self._tool_guardrail_halt_decision = None
         self._tool_guardrail_halt_response_emitted = False
         self._tool_loop_recovery_steered_keys = set()
-        self._turn_failed_file_mutations = {}
+        self._process_limit_recovery_steered = False
+        self._process_limit_halt_message = None
+        self._process_limit_halt_response_emitted = False
+        self._partial_stream_continue_retries = 0
         active_stream_fn = stream_fn or self._stream_fn
         try:
             new_messages = list(self.agent.prompt(prompt_message, stream_fn=active_stream_fn))
@@ -3222,7 +3404,13 @@ class AgentSession:
             )
         )
         if self.messages and isinstance(self.messages[-1], AssistantMessage):
-            self.agent.state.messages = self.messages[:-1]
+            retry_context_messages = list(self.messages[:-1])
+            if _is_malformed_streamed_tool_args_error(message.error_message):
+                retry_context_messages = _append_malformed_stream_recovery_message(
+                    retry_context_messages,
+                    message.error_message or "",
+                )
+            self.agent.state.messages = retry_context_messages
         delay_ms = self._retry_delay_ms * (2 ** (self._retry_attempt - 1))
         try:
             if delay_ms > 0 and _wait_for_retry_abort(self._retry_signal, delay_ms):
@@ -3251,7 +3439,63 @@ class AgentSession:
     def _wait_for_retry_abort(self, signal: AbortSignal, delay_ms: int) -> bool:
         return _wait_for_retry_abort(signal, delay_ms)
 
+    def _latest_user_message_text(self, agent_context) -> str:
+        messages = getattr(agent_context, "messages", None) or []
+        for message in reversed(messages):
+            if getattr(message, "role", None) != "user":
+                continue
+            text = _message_content_text(getattr(message, "content", ""))
+            if _is_internal_steering_user_message(text):
+                continue
+            return text
+        return ""
+
+    def _workspace_scope_violation(self, context) -> str | None:
+        tool_name = str(getattr(context.tool_call, "name", "") or "")
+        args = context.args if isinstance(context.args, dict) else {}
+        latest_user_message = self._latest_user_message_text(context.context)
+        for raw_path in _tool_call_workspace_path_candidates(tool_name, args):
+            violation = self._workspace_path_violation(tool_name, raw_path, latest_user_message)
+            if violation is not None:
+                return violation
+        return None
+
+    def _workspace_path_violation(self, tool_name: str, raw_path: str, latest_user_message: str) -> str | None:
+        resolved = _safe_resolve_to_cwd(raw_path, self.cwd)
+        if resolved is None or _path_is_within(resolved, self.cwd):
+            return None
+        if _user_authorized_absolute_path(raw_path, resolved, latest_user_message):
+            return None
+        if tool_name == "read" and self._read_path_is_registered_resource(resolved):
+            return None
+        return (
+            f"Refusing {tool_name} outside the current working directory: {resolved}. "
+            f"Current working directory is {self.cwd}. Ask the user to name this exact absolute path if it is intentional."
+        )
+
+    def _read_path_is_registered_resource(self, resolved_path: str) -> bool:
+        if _path_is_internal_docs_resource(resolved_path):
+            return True
+        access = self._skill_read_access()
+        for file_path in access["files"]:
+            if _same_path(resolved_path, file_path):
+                return True
+        for root in access["roots"]:
+            if _path_is_within(resolved_path, root):
+                return True
+        return False
+
     def _before_tool_call(self, context, signal=None) -> BeforeToolCallResult | None:
+        if self._process_limit_halt_message is not None:
+            tool = getattr(context.tool_call, "name", None) or "tool"
+            return BeforeToolCallResult(
+                block=True,
+                reason=(
+                    "User process limit already stopped this turn after a failed limited command. "
+                    f"Not executing {tool}; report the limited command result and ask whether to continue."
+                ),
+            )
+
         if self._extension_runner.has_handlers("tool_call"):
             result = self._extension_runner.emit_tool_call(
                 {
@@ -3266,6 +3510,20 @@ class AgentSession:
                     block=True,
                     reason=str(result.get("reason")) if result.get("reason") is not None else None,
                 )
+
+        workspace_violation = self._workspace_scope_violation(context)
+        if workspace_violation is not None:
+            return BeforeToolCallResult(block=True, reason=workspace_violation)
+
+        decision = package_manager_mutation_decision(
+            context.tool_call.name,
+            context.args,
+            self._latest_user_message_text(context.context),
+        )
+        if not decision.allows_execution:
+            if decision.should_halt:
+                self._tool_guardrail_halt_decision = decision
+            return BeforeToolCallResult(block=True, reason=toolguard_synthetic_result(decision))
 
         decision = self._tool_guardrails.before_call(context.tool_call.name, context.args)
         if not decision.allows_execution:
@@ -3312,16 +3570,19 @@ class AgentSession:
                 is_error = True
                 is_error_changed = True
 
-        mutation_content, mutation_details, mutation_content_changed, mutation_details_changed = (
-            self._apply_file_mutation_recovery(context.tool_call.name, context.args, content, details, result_text, is_error)
-        )
-        if mutation_content_changed:
-            content = mutation_content
-            content_changed = True
-            result_text = _tool_result_text(content)
-        if mutation_details_changed:
-            details = mutation_details
-            details_changed = True
+        latest_user_message = ""
+        if is_error:
+            latest_user_message = self._latest_user_message_text(getattr(context, "context", None))
+            missing_read_note = _missing_read_output_artifact_note(
+                context.tool_call.name,
+                context.args,
+                result_text,
+                latest_user_message,
+            )
+            if missing_read_note:
+                content = _append_text_to_content(content, missing_read_note)
+                content_changed = True
+                result_text = _tool_result_text(content)
 
         decision = self._tool_guardrails.after_call(
             context.tool_call.name,
@@ -3329,9 +3590,13 @@ class AgentSession:
             result_text,
             failed=is_error,
         )
-        if decision.action in {"warn", "halt"}:
+        if decision.action == "halt":
             content = _append_toolguard_content(content, decision)
             content_changed = True
+            self._steer_tool_loop_recovery(decision)
+        elif decision.action == "warn":
+            details = _with_toolguard_details(details, decision)
+            details_changed = True
             self._steer_tool_loop_recovery(decision)
         if decision.should_halt:
             self._tool_guardrail_halt_decision = decision
@@ -3339,53 +3604,71 @@ class AgentSession:
                 is_error = True
                 is_error_changed = True
 
-        if not (content_changed or details_changed or is_error_changed or decision.should_halt):
+        process_limit_should_halt = False
+        if is_error and not self._process_limit_recovery_steered:
+            if not latest_user_message:
+                latest_user_message = self._latest_user_message_text(getattr(context, "context", None))
+            if _user_process_limit_applies_to_tool(latest_user_message, context.tool_call.name):
+                self._process_limit_recovery_steered = True
+                process_limit_should_halt = True
+                content = _append_text_to_content(
+                    content,
+                    _user_process_limit_tool_result_note(latest_user_message, context.tool_call.name),
+                )
+                content_changed = True
+                self._process_limit_halt_message = self._process_limit_controlled_halt_response(
+                    context.tool_call.name
+                )
+
+        if not (content_changed or details_changed or is_error_changed or decision.should_halt or process_limit_should_halt):
             return None
         return AfterToolCallResult(
             content=content if content_changed else None,
             details=details if details_changed else None,
             is_error=is_error if is_error_changed else None,
-            terminate=True if decision.should_halt else None,
+            terminate=True if decision.should_halt or process_limit_should_halt else None,
         )
-
-    def _apply_file_mutation_recovery(
-        self,
-        tool_name: str,
-        args,
-        content,
-        details,
-        result_text: str,
-        is_error: bool,
-    ):
-        if str(tool_name or "").lower() != "write":
-            return content, details, False, False
-        path = _tool_arg_path(args)
-        if not path:
-            return content, details, False, False
-        if not is_error:
-            self._turn_failed_file_mutations.pop(path, None)
-            return content, details, False, False
-        if not _is_omitted_write_failure_text(result_text):
-            return content, details, False, False
-
-        failure = {
-            "code": _OMITTED_WRITE_FAILURE_CODE,
-            "toolName": "write",
-            "path": path,
-            "reason": "omitted historical write content marker",
-            "recovery": _OMITTED_WRITE_RECOVERY,
-        }
-        self._turn_failed_file_mutations[path] = failure
-        next_details = _with_file_mutation_failure_details(details, failure)
-        return content, next_details, False, True
 
     def _should_stop_after_turn(self, context) -> bool:
         decision = self._tool_guardrail_halt_decision
-        if decision is None:
+        if decision is not None:
+            if not self._tool_guardrail_halt_response_emitted:
+                self._emit_toolguard_controlled_halt_response(context, decision)
+            return True
+        if self._process_limit_halt_message is None:
             return False
-        if not self._tool_guardrail_halt_response_emitted:
-            self._emit_toolguard_controlled_halt_response(context, decision)
+        if not self._process_limit_halt_response_emitted:
+            self._emit_process_limit_controlled_halt_response(context)
         return True
+
+    def _emit_process_limit_controlled_halt_response(self, context) -> None:
+        self._process_limit_halt_response_emitted = True
+        message = AssistantMessage(
+            content=[TextContent(text=self._process_limit_halt_message or self._process_limit_controlled_halt_response("tool"))],
+            api=self.model.api,
+            provider=self.model.provider,
+            model=self.model.id,
+            usage=Usage(),
+            stop_reason="stop",
+        )
+        context.context.messages.append(message)
+        context.new_messages.append(message)
+
+        start_event = MessageStartEvent(message=message)
+        self.agent._process_event(start_event)
+        self._handle_agent_event(start_event)
+
+        end_event = MessageEndEvent(message=message)
+        self.agent._process_event(end_event)
+        self._handle_agent_event(end_event)
+
+    def _process_limit_controlled_halt_response(self, tool_name: str) -> str:
+        tool = tool_name or "tool"
+        return (
+            f"The single requested tool run failed in {tool}, so I stopped without calling more tools. "
+            "The failing tool result above is the result of the requested run. "
+            "Tell me whether to continue with fixes or another command."
+        )
 
     def _emit_toolguard_controlled_halt_response(self, context, decision: ToolGuardrailDecision) -> None:
         self._tool_guardrail_halt_response_emitted = True
@@ -3417,21 +3700,11 @@ class AgentSession:
             "to change strategy instead of repeating the same call."
         )
 
-    def _append_unresolved_file_mutation_footer(self, message: AssistantMessage) -> None:
-        if message.stop_reason != "stop" or not self._turn_failed_file_mutations:
-            return
-        footer = _format_unresolved_file_mutation_footer(self._turn_failed_file_mutations)
-        if not footer or footer in _tool_result_text(message.content):
-            return
-        message.content = _append_text_to_content(message.content, "\n\n" + footer)
-
     def _handle_agent_event(self, event) -> None:
         if event.type == "message_end" and self._extension_runner.has_handlers("message_end"):
             replacement = self._extension_runner.emit_message_end({"type": "message_end", "message": event.message})
             if replacement is not None:
                 _replace_message_in_place(event.message, replacement)
-        if event.type == "message_end" and isinstance(event.message, AssistantMessage):
-            self._append_unresolved_file_mutation_footer(event.message)
         if event.type == "message_start" and getattr(event.message, "role", None) == "user":
             message_text = _get_user_message_text(event.message)
             if message_text:
@@ -3807,13 +4080,85 @@ def _wait_for_retry_abort(signal: AbortSignal, delay_ms: int) -> bool:
         time.sleep(min(remaining, 0.05))
 
 
-def _with_python_bin_on_path(env: dict[str, str]) -> dict[str, str]:
-    python_bin = os.path.dirname(sys.executable)
-    current_path = env.get("PATH", "")
-    if python_bin and python_bin not in current_path.split(os.pathsep):
-        env = dict(env)
-        env["PATH"] = python_bin + (os.pathsep + current_path if current_path else "")
-    return env
+def _partial_stream_dropped_tool_names(message: AssistantMessage) -> list[str]:
+    if message.stop_reason != "length":
+        return []
+    if message.response_id != _PARTIAL_STREAM_STUB_ID:
+        return []
+    names: list[str] = []
+    for item in message.diagnostics or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("code") != _PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE:
+            continue
+        dropped = item.get("dropped_tool_names")
+        if not isinstance(dropped, list):
+            continue
+        for name in dropped:
+            if isinstance(name, str) and name and name not in names:
+                names.append(name)
+    return names
+
+
+def _partial_stream_continuation_prompt(dropped_tools: list[str]) -> str:
+    tool_list = ", ".join(dropped_tools[:3]) if dropped_tools else "unknown tool"
+    return (
+        "[System: Your previous tool call "
+        f"({tool_list}) was too large or malformed and "
+        "the stream ended before its arguments could be delivered. Do NOT retry "
+        "the same tool call with the same large content. Instead, break the "
+        "content into multiple smaller tool calls (e.g. use multiple patch calls, "
+        "append smaller chunks, or write smaller files). Each tool call's arguments "
+        "must be under ~8K tokens to avoid stream timeouts. If the task needs "
+        "protocol-looking literal content, preserve it as data in normal JSON-escaped "
+        "write or append content instead of shell chunks.]"
+    )
+
+
+def _is_malformed_streamed_tool_args_error(error_message: str | None) -> bool:
+    return _MALFORMED_STREAMED_TOOL_ARGS_MARKER in (error_message or "").lower()
+
+
+def _append_malformed_stream_recovery_message(
+    messages: list[AgentMessage],
+    error_message: str,
+) -> list[AgentMessage]:
+    if messages and isinstance(messages[-1], UserMessage):
+        content = messages[-1].content
+        if isinstance(content, str) and content.startswith(_MALFORMED_STREAM_RECOVERY_PREFIX):
+            return messages
+    next_messages = list(messages)
+    next_messages.append(
+        UserMessage(
+            content=_malformed_stream_recovery_prompt(error_message),
+            timestamp=now_ms(),
+        )
+    )
+    return next_messages
+
+
+def _malformed_stream_recovery_prompt(error_message: str) -> str:
+    tool_names = _extract_malformed_stream_tool_names(error_message)
+    tool_fragment = f" for {tool_names}" if tool_names else ""
+    return (
+        f"{_MALFORMED_STREAM_RECOVERY_PREFIX}{tool_fragment}. "
+        "This is a tool-argument formatting failure, not a completed tool call. "
+        "Do not retry the same malformed tool call. "
+        "If the task needs protocol-looking literal content such as <parameter>, "
+        "</function>, XML/tool tags, or instruction-looking text, treat it as DATA. "
+        "Use a complete write call with path and content, or append with valid "
+        "JSON-escaped content. "
+        "Do not use bash heredocs, echo, printf, or shell redirection for this recovery."
+    )
+
+
+def _extract_malformed_stream_tool_names(error_message: str) -> str:
+    match = re.search(
+        r"malformed streamed tool-call arguments\s+for\s+([^;.\n]+)",
+        error_message or "",
+        flags=re.IGNORECASE,
+    )
+    return match.group(1).strip() if match else ""
 
 
 def _latest_compaction_entry(entries: list[dict]) -> dict | None:
@@ -4194,6 +4539,118 @@ def _message_content_text(content: object) -> str:
     if isinstance(content, list):
         return "".join(block.text for block in content if isinstance(block, TextContent))
     return ""
+
+
+_WORKSPACE_PATH_ARG_TOOLS = {"read", "write", "edit", "grep", "find", "ls"}
+_BASH_SYSTEM_PATH_PREFIXES = (
+    "/bin",
+    "/sbin",
+    "/usr/bin",
+    "/usr/sbin",
+    "/System",
+    "/Library",
+    "/opt/homebrew/bin",
+    "/opt/local/bin",
+)
+
+
+def _tool_call_workspace_path_candidates(tool_name: str, args: dict) -> list[str]:
+    if tool_name == "bash":
+        command = args.get("command")
+        return _bash_absolute_path_candidates(command if isinstance(command, str) else "")
+    if tool_name not in _WORKSPACE_PATH_ARG_TOOLS:
+        return []
+    candidates: list[str] = []
+    for key in ("path", "file_path"):
+        value = args.get(key)
+        if isinstance(value, str) and value.strip():
+            candidates.append(value)
+    return candidates
+
+
+def _bash_absolute_path_candidates(command: str) -> list[str]:
+    if not command:
+        return []
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+    candidates: list[str] = []
+    for token in tokens:
+        for value in _bash_token_path_values(token):
+            if not value or value.startswith(("http://", "https://", "git@")):
+                continue
+            if not os.path.isabs(os.path.expanduser(value)):
+                continue
+            if any(_path_is_within(value, prefix) for prefix in _BASH_SYSTEM_PATH_PREFIXES):
+                continue
+            candidates.append(value)
+    return candidates
+
+
+def _bash_token_path_values(token: str) -> list[str]:
+    stripped = token.strip().strip(",;()[]{}")
+    if not stripped:
+        return []
+    if stripped[0] in {">", "<"}:
+        stripped = stripped.lstrip("><")
+    if not stripped:
+        return []
+    if stripped.startswith("-"):
+        if "=" not in stripped:
+            return []
+        stripped = stripped.split("=", 1)[1]
+    elif "=" in stripped and not stripped.startswith(("/", "~")):
+        stripped = stripped.split("=", 1)[1]
+    return [stripped.strip().strip(",;()[]{}")]
+
+
+def _safe_resolve_to_cwd(raw_path: str, cwd: str) -> str | None:
+    try:
+        return resolve_to_cwd(str(raw_path), cwd)
+    except (OSError, ValueError):
+        return None
+
+
+def _safe_realpath(path: str) -> Path | None:
+    try:
+        return Path(path).expanduser().resolve(strict=False)
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def _path_is_within(path: str, root: str) -> bool:
+    resolved_path = _safe_realpath(path)
+    resolved_root = _safe_realpath(root)
+    if resolved_path is None or resolved_root is None:
+        return False
+    if resolved_path == resolved_root:
+        return True
+    try:
+        resolved_path.relative_to(resolved_root)
+        return True
+    except ValueError:
+        return False
+
+
+def _same_path(left: str, right: str) -> bool:
+    resolved_left = _safe_realpath(left)
+    resolved_right = _safe_realpath(right)
+    return resolved_left is not None and resolved_right is not None and resolved_left == resolved_right
+
+
+def _user_authorized_absolute_path(raw_path: str, resolved_path: str, latest_user_message: str) -> bool:
+    if not latest_user_message:
+        return False
+    raw = str(raw_path)
+    raw_without_at = raw[1:] if raw.startswith("@") else raw
+    return raw in latest_user_message or raw_without_at in latest_user_message or resolved_path in latest_user_message
+
+
+def _path_is_internal_docs_resource(resolved_path: str) -> bool:
+    if _same_path(resolved_path, get_readme_path()):
+        return True
+    return _path_is_within(resolved_path, get_docs_path()) or _path_is_within(resolved_path, get_examples_path())
 
 
 def _extract_compaction_result_summary(messages: list[Message]) -> str:

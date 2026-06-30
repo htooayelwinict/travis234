@@ -568,13 +568,11 @@ def _serialize_block(block) -> dict[str, Any]:
             "redacted": block.redacted,
         }
     if isinstance(block, ToolCall):
-        from appv23.coding_agent.tools.trust import sanitize_tool_call_arguments
-
         return {
             "type": "toolCall",
             "id": block.id,
             "name": block.name,
-            "arguments": sanitize_tool_call_arguments(block.name, block.arguments),
+            "arguments": block.arguments,
             "thoughtSignature": block.thought_signature,
         }
     raise TypeError(f"Unsupported content block: {type(block).__name__}")

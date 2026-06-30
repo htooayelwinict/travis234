@@ -13,6 +13,10 @@ import httpx
 
 from appv23.ai.env_config import ModelConfig, load_model_config
 from appv23.ai.event_stream import AssistantMessageEventStream, create_assistant_message_event_stream
+from appv23.ai.providers.base import ProviderProfile
+from appv23.ai.providers.catalog import get_provider_profile, resolve_provider_runtime
+from appv23.ai.providers.message_sanitization import repair_tool_call_arguments
+from appv23.ai.providers.transports import get_transport
 from appv23.ai.stream import ApiProvider
 from appv23.ai.types import (
     AssistantMessage,
@@ -40,31 +44,13 @@ from appv23.ai.types import (
     empty_usage,
     now_ms,
 )
-from appv23.coding_agent.tools.trust import (
-    project_tool_call_arguments_for_provider,
-    provider_tool_call_elision_text,
-    should_elide_tool_call_for_provider,
-    text_content_with_provider_trust,
-)
-
 PROVIDER_API = "openai-completions"
+PARTIAL_STREAM_STUB_ID = "partial-stream-stub"
+PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE = "partial_stream_dropped_tool_calls"
+LEAKED_TOOL_PROTOCOL_TEXT_CODE = "leaked_tool_protocol_text"
 
 _VALID_JSON_ESCAPES = {'"', "\\", "/", "b", "f", "n", "r", "t", "u"}
 _REASONING_FIELDS = ("reasoning_content", "reasoning", "reasoning_text")
-_TEXT_STREAM_GUARD_NOTICE = "\n\n[appv23 stopped display: repeated output/tool-protocol leak detected.]"
-_TEXT_STREAM_PROTOCOL_RE = re.compile(
-    r"</?(?:tool_call|function_call|tool_response|function|parameter|system|developer|assistant|user)\b|<parameter=",
-    re.IGNORECASE,
-)
-_TEXT_STREAM_TOOL_PROTOCOL_LINE_RE = re.compile(
-    r"^\s*(?:</?(?:tool_call|function_call|tool_response|function|parameter)(?:\s[^>]*)?>|<parameter=[^>]*>?)\s*$",
-    re.IGNORECASE,
-)
-_TEXT_STREAM_INLINE_PROTOCOL_RE = re.compile(
-    r"</?(?:tool_call|function_call|tool_response|function|parameter)(?:\b[^>\n]{0,200})?>|"
-    r"<parameter=[^\s<>\n,.;:)\]}]+>?",
-    re.IGNORECASE,
-)
 _BILLING_PATTERNS = (
     "key limit exceeded",
     "spending limit",
@@ -90,6 +76,28 @@ _OPENROUTER_PROMPT_GUARDRAIL_PATTERNS = (
     "prompt injection patterns detected",
     "system_prefix_spoofing",
 )
+_TOOL_CALL_LEAK_PATTERN = re.compile(r"(?:^|[\s>|])to=functions\.[A-Za-z_][\w.]*", re.IGNORECASE)
+_TOOL_PROTOCOL_XML_BLOCK_PATTERN = re.compile(
+    r"(?is)"
+    r"<(?:tool_call|tool_calls|tool_response|function_call|function_calls)\b[^>]*>.*?"
+    r"</(?:tool_call|tool_calls|tool_response|function_call|function_calls)>"
+    r"|<function\s+name\s*=\s*[\"'][^\"']+[\"'][^>]*>.*?</function>"
+)
+_TOOL_PROTOCOL_XML_LINE_PATTERN = re.compile(
+    r"(?im)^[ \t]*</?(?:parameter|function|tool_call|tool_calls|tool_response|function_call|function_calls)"
+    r"(?:[\s=>][^>]*)?>[ \t]*(?:\r?\n|$)"
+)
+_TOOL_PROTOCOL_XML_PREFIX_PATTERN = re.compile(
+    r"(?is)(?:^|[\s>])(?:"
+    r"</?(?:tool_call|tool_calls|tool_response|function_call|function_calls|parameter)(?:$|[\s=>_/])"
+    r"|<tool(?:$|_)"
+    r"|</tool(?:$|[_>\s])"
+    r"|<function\s+(?:$|name\s*=)"
+    r"|</function(?:$|[\s>])"
+    r"|<parameter(?:$|[\s=>])"
+    r"|</parameter(?:$|[\s>])"
+    r")"
+)
 _PROVIDER_ERROR_DETAIL_HEAD_CHARS = 450
 _PROVIDER_ERROR_DETAIL_TAIL_CHARS = 300
 _PROVIDER_ERROR_DETAIL_TRUNCATION_MARKER = "... [truncated provider error body] ..."
@@ -102,16 +110,21 @@ def convert_messages(context: Context, model: Model | None = None) -> "tuple[lis
     if context.system_prompt:
         messages.append({"role": "system", "content": _sanitize_surrogates(context.system_prompt)})
     context_messages = _transform_messages(context.messages, model) if model is not None else context.messages
-    context_messages = _elide_historical_mutating_tool_calls_for_provider(context_messages)
     index = 0
     while index < len(context_messages):
         message = context_messages[index]
         if message.role == "toolResult":
-            tool_messages, next_index = _convert_tool_result_group(context_messages, index, model)
+            tool_messages, next_index = _convert_tool_result_group(
+                context_messages,
+                index,
+                model,
+            )
             messages.extend(tool_messages)
             index = next_index
             continue
-        messages.append(_convert_message(message, model))
+        converted_message = _convert_message(message, model)
+        if converted_message is not None:
+            messages.append(converted_message)
         index += 1
     tools = None
     if context.tools:
@@ -120,30 +133,6 @@ def convert_messages(context: Context, model: Model | None = None) -> "tuple[lis
             for t in context.tools
         ]
     return messages, tools
-
-
-def _elide_historical_mutating_tool_calls_for_provider(messages: list[Message]) -> list[Message]:
-    """Collapse unsafe historical mutating tool-call pairs into plain context."""
-    elided_tool_call_ids: set[str] = set()
-    converted: list[Message] = []
-    for message in messages:
-        if isinstance(message, AssistantMessage):
-            next_content = []
-            elision_notes: list[str] = []
-            for block in message.content:
-                if isinstance(block, ToolCall) and should_elide_tool_call_for_provider(block.name, block.arguments):
-                    if block.id:
-                        elided_tool_call_ids.add(block.id)
-                    elision_notes.append(provider_tool_call_elision_text(block.name, block.arguments))
-                    continue
-                next_content.append(block)
-            if elision_notes:
-                converted.append(replace(message, content=[*next_content, TextContent(text="\n".join(elision_notes))]))
-                continue
-        if isinstance(message, ToolResultMessage) and message.tool_call_id in elided_tool_call_ids:
-            continue
-        converted.append(message)
-    return converted
 
 
 def _transform_messages(messages: list[Message], model: Model) -> list[Message]:
@@ -296,7 +285,41 @@ def _normalize_tool_call_id(tool_call_id: str, model: Model) -> str:
     return tool_call_id
 
 
-def _convert_message(message: Message, model: Model | None = None) -> dict:
+def _repair_tool_call_name_fragment(name: str) -> str:
+    if not name:
+        return ""
+    separator_indexes = [index for sep in ('"', "'", "<", ">") if (index := name.find(sep)) >= 0]
+    if not separator_indexes:
+        return name
+    first = min(separator_indexes)
+    return name[:first] if first > 0 else ""
+
+
+def _coerce_tool_call_arguments_for_replay(arguments: Any, tool_name: str = "?") -> tuple[dict[str, Any], bool]:
+    if arguments is None:
+        return {}, False
+    if isinstance(arguments, dict):
+        return arguments, False
+    if isinstance(arguments, str):
+        if not arguments.strip():
+            return {}, False
+        try:
+            parsed = json.loads(arguments)
+        except json.JSONDecodeError:
+            repaired = repair_tool_call_arguments(arguments, tool_name)
+            try:
+                parsed = json.loads(repaired)
+            except json.JSONDecodeError:
+                return {}, True
+            return (parsed, True) if isinstance(parsed, dict) else ({}, True)
+        return (parsed, False) if isinstance(parsed, dict) else ({}, True)
+    return {}, True
+
+
+def _convert_message(
+    message: Message,
+    model: Model | None = None,
+) -> dict | None:
     if message.role == "user":
         content = _sanitize_surrogates(message.content) if isinstance(message.content, str) else _convert_user_content_parts(message.content)
         return {"role": "user", "content": content}
@@ -305,19 +328,26 @@ def _convert_message(message: Message, model: Model | None = None) -> dict:
     # assistant
     text_parts = [_sanitize_surrogates(b.text) for b in message.content if isinstance(b, TextContent)]
     thinking_parts = [b for b in message.content if isinstance(b, ThinkingContent) and b.thinking.strip()]
-    tool_calls = [
-        {
-            "id": b.id,
-            "type": "function",
-            "function": {
-                "name": b.name,
-                "arguments": json.dumps(project_tool_call_arguments_for_provider(b.name, b.arguments)),
+    tool_calls = []
+    for block in message.content:
+        if not isinstance(block, ToolCall):
+            continue
+        name = _repair_tool_call_name_fragment(block.name)
+        arguments, _repaired_corruption = _coerce_tool_call_arguments_for_replay(block.arguments, name)
+        tool_calls.append(
+            {
+                "id": block.id,
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": json.dumps(arguments),
+                },
             },
-        }
-        for b in message.content
-        if isinstance(b, ToolCall)
-    ]
-    out: dict = {"role": "assistant", "content": "".join(text_parts)}
+        )
+    content_text = "".join(text_parts)
+    if not content_text and not thinking_parts and not tool_calls:
+        return None
+    out: dict = {"role": "assistant", "content": content_text}
     if thinking_parts:
         signature = thinking_parts[0].thinking_signature
         if model is not None and model.provider == "opencode-go" and signature == "reasoning":
@@ -329,11 +359,28 @@ def _convert_message(message: Message, model: Model | None = None) -> dict:
     return out
 
 
-def _convert_single_tool_result(message: ToolResultMessage) -> dict:
-    provider_content = text_content_with_provider_trust(message.tool_name, message.content, message.details)
-    content = _text_of(provider_content)
+def _compact_validation_error_for_provider(tool_name: str, content: str) -> str:
+    if not isinstance(content, str) or not content.startswith('Validation failed for tool "'):
+        return content
+    match = re.match(r'^Validation failed for tool "([^"]+)":\n\s+- ([^\n]+)', content)
+    if not match:
+        return content
+    name = match.group(1) or tool_name or "tool"
+    error = match.group(2).strip()
+    return (
+        f"Tool argument validation failed for {name}: {error}. "
+        "The previous tool call did not execute."
+    )
+
+
+def _convert_single_tool_result(
+    message: ToolResultMessage,
+) -> dict:
+    content = _text_of(message.content)
     if not content and any(isinstance(block, ImageContent) for block in message.content):
         content = "(see attached image)"
+    if message.is_error:
+        content = _compact_validation_error_for_provider(message.tool_name, content)
     return {
         "role": "tool",
         "tool_call_id": message.tool_call_id,
@@ -343,14 +390,17 @@ def _convert_single_tool_result(message: ToolResultMessage) -> dict:
 
 
 def _convert_tool_result_group(
-    messages: list[Message], start_index: int, model: Model | None
+    messages: list[Message],
+    start_index: int,
+    model: Model | None,
 ) -> tuple[list[dict], int]:
     converted: list[dict] = []
     image_parts: list[dict] = []
     index = start_index
     while index < len(messages) and messages[index].role == "toolResult":
         message = messages[index]
-        converted.append(_convert_single_tool_result(message))
+        converted_message = _convert_single_tool_result(message)
+        converted.append(converted_message)
         if model is not None and "image" in model.input:
             for block in message.content:
                 if isinstance(block, ImageContent):
@@ -635,6 +685,11 @@ def _parse_json_with_repair(json_text: str) -> Any:
         raise
 
 
+def _looks_like_unrepairable_hanging_tool_args(json_text: str) -> bool:
+    stripped = json_text.strip()
+    return stripped.endswith(":") or bool(re.search(r'[:,]\s*"[^"]+"\s*:\s*$', stripped))
+
+
 def _partial_parse_json(json_text: str) -> Any:
     if not isinstance(json_text, str):
         raise TypeError(f"expecting str, got {type(json_text).__name__}")
@@ -793,6 +848,8 @@ def _parse_streaming_json(partial_json: str | None) -> dict:
     try:
         parsed = _parse_json_with_repair(partial_json)
     except Exception:
+        if _looks_like_unrepairable_hanging_tool_args(partial_json):
+            return {}
         try:
             parsed = _partial_parse_json(partial_json)
         except Exception:
@@ -801,6 +858,76 @@ def _parse_streaming_json(partial_json: str | None) -> dict:
             except Exception:
                 return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _repair_complete_tool_arguments(raw_arguments: str | None) -> dict | None:
+    if not raw_arguments or not raw_arguments.strip():
+        return {}
+
+    source = raw_arguments.strip()
+    try:
+        parsed = json.loads(source, strict=False)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        pass
+
+    fixed = re.sub(r",\s*([}\]])", r"\1", source)
+    open_curly = fixed.count("{") - fixed.count("}")
+    open_bracket = fixed.count("[") - fixed.count("]")
+    if open_curly > 0:
+        fixed += "}" * open_curly
+    if open_bracket > 0:
+        fixed += "]" * open_bracket
+
+    for _ in range(50):
+        try:
+            parsed = json.loads(fixed, strict=False)
+            return parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError:
+            if fixed.endswith("}") and fixed.count("}") > fixed.count("{"):
+                fixed = fixed[:-1]
+            elif fixed.endswith("]") and fixed.count("]") > fixed.count("["):
+                fixed = fixed[:-1]
+            else:
+                break
+
+    try:
+        repaired = _repair_json(fixed)
+        parsed = json.loads(repaired, strict=False)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        return None
+
+
+def _parse_complete_tool_arguments(raw_arguments: str | None) -> dict | None:
+    return _repair_complete_tool_arguments(raw_arguments)
+
+
+def _streaming_tool_arguments_are_malformed(raw_arguments: str | None) -> bool:
+    if not raw_arguments or not raw_arguments.strip():
+        return False
+    stripped = raw_arguments.strip()
+    if stripped == "{}":
+        return False
+    return _parse_complete_tool_arguments(stripped) is None
+
+
+def _looks_like_leaked_tool_protocol_text(text: str) -> bool:
+    return bool(
+        _TOOL_CALL_LEAK_PATTERN.search(text)
+        or _TOOL_PROTOCOL_XML_BLOCK_PATTERN.search(text)
+        or _TOOL_PROTOCOL_XML_LINE_PATTERN.search(text)
+        or _TOOL_PROTOCOL_XML_PREFIX_PATTERN.search(text)
+    )
+
+
+def _strip_leaked_tool_xml(text: str) -> str:
+    if not text:
+        return text
+    stripped = _TOOL_PROTOCOL_XML_BLOCK_PATTERN.sub("", text)
+    stripped = _TOOL_PROTOCOL_XML_LINE_PATTERN.sub("", stripped)
+    stripped = _TOOL_CALL_LEAK_PATTERN.sub("", stripped)
+    return stripped
 
 
 def _iter_sse_data(
@@ -835,13 +962,32 @@ def parse_sse_chunks(
     data_idle_timeout_seconds: float | None = None,
     clock: Callable[[], float] = time.monotonic,
     include_reasoning: bool = True,
+    api_mode: str = "chat_completions",
 ) -> Iterator:
     """Pure transform: decoded SSE lines -> AssistantMessageEvent stream."""
+    if api_mode == "codex_responses":
+        yield from _parse_codex_responses_sse_chunks(
+            lines,
+            model,
+            data_idle_timeout_seconds=data_idle_timeout_seconds,
+            clock=clock,
+            include_reasoning=include_reasoning,
+        )
+        return
+    if api_mode == "anthropic_messages":
+        yield from _parse_anthropic_messages_sse_chunks(
+            lines,
+            model,
+            data_idle_timeout_seconds=data_idle_timeout_seconds,
+            clock=clock,
+            include_reasoning=include_reasoning,
+        )
+        return
+
     message = _blank(model)
     started = False
     text_index: int | None = None
     text_buf = ""
-    text_guard_triggered = False
     thinking_index: int | None = None
     tool_call_blocks_by_index: dict[int, ToolCall] = {}
     tool_call_blocks_by_id: dict[str, ToolCall] = {}
@@ -849,6 +995,7 @@ def parse_sse_chunks(
     tool_arg_bufs: dict[int, str] = {}
     finish_reason = "stop"
     has_finish_reason = False
+    stream_leaked_tool_protocol_text = False
     usage = empty_usage()
 
     def content_index_of(block: TextContent | ThinkingContent | ToolCall) -> int:
@@ -867,11 +1014,12 @@ def parse_sse_chunks(
     def end_content_events() -> Iterator:
         for content_index, block in enumerate(message.content):
             if isinstance(block, TextContent):
+                block.text = _strip_leaked_tool_xml(block.text)
                 yield TextEndEvent(content_index=content_index, content=block.text, partial=message)
             elif isinstance(block, ThinkingContent):
                 yield ThinkingEndEvent(content_index=content_index, content=block.thinking, partial=message)
             elif isinstance(block, ToolCall):
-                block.arguments = _parse_streaming_json(tool_arg_bufs.get(content_index, ""))
+                block.arguments = _parse_complete_tool_arguments(tool_arg_bufs.get(content_index, "")) or {}
                 yield ToolcallEndEvent(content_index=content_index, tool_call=block, partial=message)
 
         if not started:
@@ -879,7 +1027,67 @@ def parse_sse_chunks(
         message.usage = usage
 
     def final_events() -> Iterator:
+        leaked_tool_protocol_text = stream_leaked_tool_protocol_text or any(
+            isinstance(block, TextContent) and _looks_like_leaked_tool_protocol_text(block.text)
+            for block in message.content
+        )
+        malformed_tool_argument_indexes: set[int] = (
+            {
+                content_index
+                for content_index, raw_arguments in tool_arg_bufs.items()
+                if _streaming_tool_arguments_are_malformed(raw_arguments)
+            }
+            if has_finish_reason
+            else set()
+        )
+        should_drop_tool_calls = not has_finish_reason or bool(malformed_tool_argument_indexes)
+        dropped_tool_names: list[str] = []
+        dropped_tool_finish_reason = finish_reason if has_finish_reason else None
+        if should_drop_tool_calls:
+            dropped_tool_names = [
+                block.name or "?"
+                for content_index, block in enumerate(message.content)
+                if isinstance(block, ToolCall)
+                and (not malformed_tool_argument_indexes or content_index in malformed_tool_argument_indexes)
+            ]
+            message.content = [
+                block
+                for content_index, block in enumerate(message.content)
+                if not isinstance(block, ToolCall)
+                or (malformed_tool_argument_indexes and content_index not in malformed_tool_argument_indexes)
+            ]
+            for content_index in malformed_tool_argument_indexes:
+                tool_arg_bufs.pop(content_index, None)
+            if not has_finish_reason:
+                tool_arg_bufs.clear()
+        has_remaining_tool_calls = any(isinstance(block, ToolCall) for block in message.content)
+        if leaked_tool_protocol_text and not has_remaining_tool_calls:
+            for block in message.content:
+                if isinstance(block, TextContent):
+                    block.text = ""
         yield from end_content_events()
+        if dropped_tool_names and (not has_finish_reason or malformed_tool_argument_indexes):
+            message.stop_reason = "length"
+            message.response_id = PARTIAL_STREAM_STUB_ID
+            diagnostics = list(message.diagnostics or [])
+            diagnostics.append(
+                {
+                    "code": PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE,
+                    "dropped_tool_names": dropped_tool_names,
+                    "finish_reason": dropped_tool_finish_reason,
+                }
+            )
+            message.diagnostics = diagnostics
+            yield DoneEvent(reason="length", message=message)
+            return
+        if leaked_tool_protocol_text and not has_remaining_tool_calls:
+            message.stop_reason = "length"
+            message.response_id = PARTIAL_STREAM_STUB_ID
+            diagnostics = list(message.diagnostics or [])
+            diagnostics.append({"code": LEAKED_TOOL_PROTOCOL_TEXT_CODE})
+            message.diagnostics = diagnostics
+            yield DoneEvent(reason="length", message=message)
+            return
         if not has_finish_reason:
             message.stop_reason = "error"
             message.error_message = "Stream ended without finish_reason"
@@ -908,12 +1116,12 @@ def parse_sse_chunks(
                     "started": started,
                     "text_index": text_index,
                     "text_buf": text_buf,
-                    "text_guard_triggered": text_guard_triggered,
                     "thinking_index": thinking_index,
                     "tool_call_blocks_by_index": tool_call_blocks_by_index,
                     "tool_call_blocks_by_id": tool_call_blocks_by_id,
                     "pending_tool_call_parts": pending_tool_call_parts,
                     "tool_arg_bufs": tool_arg_bufs,
+                    "leaked_tool_protocol_text": stream_leaked_tool_protocol_text,
                     "content_index_of": content_index_of,
                     "ensure_start": ensure_start,
                 },
@@ -923,8 +1131,8 @@ def parse_sse_chunks(
             started = state["started"]
             text_index = state["text_index"]
             text_buf = state["text_buf"]
-            text_guard_triggered = bool(state.get("text_guard_triggered"))
             thinking_index = state["thinking_index"]
+            stream_leaked_tool_protocol_text = bool(state.get("leaked_tool_protocol_text"))
             if state.get("finish_reason"):
                 finish_reason = state["finish_reason"]
                 has_finish_reason = True
@@ -940,32 +1148,527 @@ def parse_sse_chunks(
     yield from final_events()
 
 
-def _should_stop_text_stream(text: str) -> bool:
-    tail = text[-2000:]
-    lines = [line.strip() for line in tail.splitlines() if line.strip()]
-    if any(_TEXT_STREAM_TOOL_PROTOCOL_LINE_RE.match(line) for line in lines[-4:]):
-        return True
-
-    tokens = re.findall(r"\b[A-Za-z][A-Za-z0-9_-]{3,}\b", tail)
-    if len(tokens) >= 16:
-        last = [token.lower() for token in tokens[-16:]]
-        if len(set(last)) == 1:
-            return True
-
-    if len(lines) >= 6 and len(lines[-1]) >= 12 and len(set(lines[-6:])) == 1:
-        return True
-
-    if len(_TEXT_STREAM_PROTOCOL_RE.findall(tail)) >= 3:
-        return True
-
-    return False
+def _responses_tool_call_id(call_id: str, item_id: str | None) -> str:
+    return f"{call_id}|{item_id}" if item_id else call_id
 
 
-def _escape_inline_tool_protocol_fragments(text: str) -> str:
-    return _TEXT_STREAM_INLINE_PROTOCOL_RE.sub(
-        lambda match: match.group(0).replace("<", "&lt;").replace(">", "&gt;"),
-        text,
-    )
+def _map_responses_status(status: str | None) -> tuple[str, str | None]:
+    if status in (None, "completed", "in_progress", "queued"):
+        return "stop", None
+    if status == "incomplete":
+        return "length", None
+    if status in ("failed", "cancelled"):
+        return "error", f"Provider response status: {status}"
+    return "error", f"Provider response status: {status}"
+
+
+def _merge_responses_usage(usage: Usage, raw: "dict | None") -> Usage:
+    if not isinstance(raw, dict):
+        return usage
+    details = raw.get("input_tokens_details")
+    cached = int(details.get("cached_tokens") or 0) if isinstance(details, dict) else 0
+    output_details = raw.get("output_tokens_details")
+    reasoning = int(output_details.get("reasoning_tokens") or 0) if isinstance(output_details, dict) else 0
+    input_tokens = int(raw.get("input_tokens") or 0)
+    usage.input = max(0, input_tokens - cached) or usage.input
+    usage.output = int(raw.get("output_tokens") or 0) or usage.output
+    usage.total_tokens = int(raw.get("total_tokens") or 0) or usage.total_tokens
+    if hasattr(usage, "cache_read"):
+        usage.cache_read = cached or getattr(usage, "cache_read")
+    if hasattr(usage, "reasoning"):
+        usage.reasoning = reasoning or getattr(usage, "reasoning")
+    return usage
+
+
+def _parse_codex_responses_sse_chunks(
+    lines: Iterable[str],
+    model: Model,
+    *,
+    data_idle_timeout_seconds: float | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    include_reasoning: bool = True,
+) -> Iterator:
+    message = _blank(model)
+    started = False
+    usage = empty_usage()
+    output_slots: dict[int, tuple[str, int]] = {}
+    tool_arg_bufs: dict[int, str] = {}
+    completed = False
+
+    def ensure_start():
+        nonlocal started
+        if not started:
+            started = True
+            return StartEvent(partial=message)
+        return None
+
+    def create_slot(output_index: int, item: dict[str, Any]) -> Iterator:
+        item_type = item.get("type")
+        if item_type == "reasoning":
+            if not include_reasoning:
+                return
+            start = ensure_start()
+            if start:
+                yield start
+            content_index = len(message.content)
+            message.content.append(ThinkingContent(thinking="", thinking_signature=None))
+            output_slots[output_index] = ("thinking", content_index)
+            yield ThinkingStartEvent(content_index=content_index, partial=message)
+            return
+        if item_type == "message":
+            start = ensure_start()
+            if start:
+                yield start
+            content_index = len(message.content)
+            message.content.append(TextContent(text=""))
+            output_slots[output_index] = ("text", content_index)
+            yield TextStartEvent(content_index=content_index, partial=message)
+            return
+        if item_type == "function_call":
+            call_id = str(item.get("call_id") or item.get("id") or "")
+            item_id = str(item.get("id") or "") or None
+            name = str(item.get("name") or "")
+            raw_arguments = item.get("arguments") if isinstance(item.get("arguments"), str) else ""
+            start = ensure_start()
+            if start:
+                yield start
+            content_index = len(message.content)
+            block = ToolCall(
+                id=_responses_tool_call_id(call_id, item_id),
+                name=name,
+                arguments=_parse_streaming_json(raw_arguments),
+            )
+            message.content.append(block)
+            output_slots[output_index] = ("toolCall", content_index)
+            tool_arg_bufs[content_index] = raw_arguments
+            yield ToolcallStartEvent(content_index=content_index, partial=message)
+
+    def get_slot(output_index: int, item: dict[str, Any] | None = None) -> tuple[str, int] | None:
+        slot = output_slots.get(output_index)
+        if slot is None and item is not None:
+            for event in create_slot(output_index, item):
+                pending_events.append(event)
+            slot = output_slots.get(output_index)
+        return slot
+
+    pending_events: list[Any] = []
+
+    try:
+        payloads = _iter_sse_data(lines, data_idle_timeout_seconds=data_idle_timeout_seconds, clock=clock)
+        for payload in payloads:
+            try:
+                event = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            event_type = event.get("type")
+            if event_type == "response.created":
+                response = event.get("response")
+                if isinstance(response, dict) and isinstance(response.get("id"), str):
+                    message.response_id = response["id"]
+                continue
+            if event_type == "response.output_item.added":
+                item = event.get("item")
+                if isinstance(item, dict) and isinstance(event.get("output_index"), int):
+                    yield from create_slot(event["output_index"], item)
+                continue
+            if event_type in ("response.output_text.delta", "response.refusal.delta"):
+                output_index = event.get("output_index")
+                if not isinstance(output_index, int):
+                    continue
+                slot = output_slots.get(output_index)
+                if slot is None:
+                    continue
+                kind, content_index = slot
+                if kind != "text" or not isinstance(message.content[content_index], TextContent):
+                    continue
+                delta = event.get("delta")
+                if not isinstance(delta, str) or not delta:
+                    continue
+                block = message.content[content_index]
+                block.text += delta
+                yield TextDeltaEvent(content_index=content_index, delta=delta, partial=message)
+                continue
+            if event_type in ("response.reasoning_summary_text.delta", "response.reasoning_text.delta"):
+                if not include_reasoning:
+                    continue
+                output_index = event.get("output_index")
+                if not isinstance(output_index, int):
+                    continue
+                slot = output_slots.get(output_index)
+                if slot is None:
+                    continue
+                kind, content_index = slot
+                if kind != "thinking" or not isinstance(message.content[content_index], ThinkingContent):
+                    continue
+                delta = event.get("delta")
+                if not isinstance(delta, str) or not delta:
+                    continue
+                block = message.content[content_index]
+                block.thinking += delta
+                yield ThinkingDeltaEvent(content_index=content_index, delta=delta, partial=message)
+                continue
+            if event_type == "response.function_call_arguments.delta":
+                output_index = event.get("output_index")
+                if not isinstance(output_index, int):
+                    continue
+                slot = output_slots.get(output_index)
+                if slot is None:
+                    continue
+                kind, content_index = slot
+                if kind != "toolCall" or not isinstance(message.content[content_index], ToolCall):
+                    continue
+                delta = event.get("delta")
+                if not isinstance(delta, str):
+                    continue
+                tool_arg_bufs[content_index] = tool_arg_bufs.get(content_index, "") + delta
+                message.content[content_index].arguments = _parse_streaming_json(tool_arg_bufs[content_index])
+                yield ToolcallDeltaEvent(content_index=content_index, delta=delta, partial=message)
+                continue
+            if event_type == "response.function_call_arguments.done":
+                output_index = event.get("output_index")
+                if not isinstance(output_index, int):
+                    continue
+                slot = output_slots.get(output_index)
+                if slot is None:
+                    continue
+                kind, content_index = slot
+                if kind != "toolCall" or not isinstance(message.content[content_index], ToolCall):
+                    continue
+                arguments = event.get("arguments")
+                if isinstance(arguments, str):
+                    tool_arg_bufs[content_index] = arguments
+                    message.content[content_index].arguments = _parse_streaming_json(arguments)
+                continue
+            if event_type == "response.output_item.done":
+                item = event.get("item")
+                output_index = event.get("output_index")
+                if not isinstance(item, dict) or not isinstance(output_index, int):
+                    continue
+                pending_events.clear()
+                slot = get_slot(output_index, item)
+                while pending_events:
+                    yield pending_events.pop(0)
+                if slot is None:
+                    continue
+                kind, content_index = slot
+                if kind == "text" and isinstance(message.content[content_index], TextContent):
+                    parts = item.get("content")
+                    if isinstance(parts, list):
+                        text = "".join(
+                            str(part.get("text") or part.get("refusal") or "")
+                            for part in parts
+                            if isinstance(part, dict)
+                        )
+                        if text:
+                            message.content[content_index].text = _strip_leaked_tool_xml(text)
+                    yield TextEndEvent(
+                        content_index=content_index,
+                        content=message.content[content_index].text,
+                        partial=message,
+                    )
+                elif kind == "thinking" and isinstance(message.content[content_index], ThinkingContent):
+                    summary = item.get("summary")
+                    if isinstance(summary, list):
+                        text = "\n\n".join(
+                            str(part.get("text") or "")
+                            for part in summary
+                            if isinstance(part, dict) and part.get("text")
+                        )
+                        if text:
+                            message.content[content_index].thinking = text
+                    message.content[content_index].thinking_signature = json.dumps(item)
+                    yield ThinkingEndEvent(
+                        content_index=content_index,
+                        content=message.content[content_index].thinking,
+                        partial=message,
+                    )
+                elif kind == "toolCall" and isinstance(message.content[content_index], ToolCall):
+                    raw_arguments = item.get("arguments")
+                    if isinstance(raw_arguments, str):
+                        tool_arg_bufs[content_index] = raw_arguments
+                    message.content[content_index].arguments = _parse_complete_tool_arguments(
+                        tool_arg_bufs.get(content_index, "")
+                    ) or {}
+                    yield ToolcallEndEvent(
+                        content_index=content_index,
+                        tool_call=message.content[content_index],
+                        partial=message,
+                    )
+                output_slots.pop(output_index, None)
+                continue
+            if event_type in ("response.completed", "response.incomplete"):
+                response = event.get("response")
+                if isinstance(response, dict):
+                    completed = True
+                    if isinstance(response.get("id"), str):
+                        message.response_id = response["id"]
+                    usage = _merge_responses_usage(usage, response.get("usage"))
+                    reason, error_message = _map_responses_status(response.get("status"))
+                    if reason == "stop" and any(isinstance(block, ToolCall) for block in message.content):
+                        reason = "toolUse"
+                    message.usage = usage
+                    message.stop_reason = reason
+                    if reason == "error":
+                        message.error_message = error_message
+                        yield ErrorEvent(reason="error", error=message)
+                    else:
+                        yield DoneEvent(reason=reason, message=message)
+                    return
+            if event_type == "response.failed":
+                message.stop_reason = "error"
+                response = event.get("response")
+                error = response.get("error") if isinstance(response, dict) else None
+                if isinstance(error, dict):
+                    message.error_message = str(error.get("message") or error.get("code") or "Provider response failed")
+                else:
+                    message.error_message = "Provider response failed"
+                yield ErrorEvent(reason="error", error=message)
+                return
+    except TimeoutError as error:
+        message.stop_reason = "error"
+        message.error_message = str(error)
+        yield ErrorEvent(reason="error", error=message)
+        return
+
+    if not completed:
+        message.stop_reason = "error"
+        message.error_message = "Responses stream ended before a terminal response event"
+        yield ErrorEvent(reason="error", error=message)
+
+
+def _map_anthropic_stop_reason(reason: str | None) -> tuple[str, str | None]:
+    if reason in (None, "end_turn", "stop_sequence", "pause_turn"):
+        return "stop", None
+    if reason == "tool_use":
+        return "toolUse", None
+    if reason in ("max_tokens", "model_context_window_exceeded"):
+        return "length", None
+    if reason == "refusal":
+        return "error", "The model refused to complete the request"
+    return "error", f"Provider stop_reason: {reason}"
+
+
+def _merge_anthropic_usage(usage: Usage, raw: "dict | None") -> Usage:
+    if not isinstance(raw, dict):
+        return usage
+    input_tokens = int(raw.get("input_tokens") or 0)
+    output_tokens = int(raw.get("output_tokens") or 0)
+    cache_read = int(raw.get("cache_read_input_tokens") or 0)
+    cache_write = int(raw.get("cache_creation_input_tokens") or 0)
+    usage.input = input_tokens or usage.input
+    usage.output = output_tokens or usage.output
+    usage.total_tokens = (usage.input or 0) + (usage.output or 0) + cache_read + cache_write
+    if hasattr(usage, "cache_read"):
+        usage.cache_read = cache_read or getattr(usage, "cache_read")
+    if hasattr(usage, "cache_write"):
+        usage.cache_write = cache_write or getattr(usage, "cache_write")
+    output_details = raw.get("output_tokens_details")
+    if hasattr(usage, "reasoning") and isinstance(output_details, dict):
+        usage.reasoning = int(output_details.get("thinking_tokens") or 0) or getattr(usage, "reasoning")
+    return usage
+
+
+def _parse_anthropic_messages_sse_chunks(
+    lines: Iterable[str],
+    model: Model,
+    *,
+    data_idle_timeout_seconds: float | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    include_reasoning: bool = True,
+) -> Iterator:
+    message = _blank(model)
+    started = False
+    usage = empty_usage()
+    block_slots: dict[int, tuple[str, int]] = {}
+    tool_arg_bufs: dict[int, str] = {}
+    stop_reason = "stop"
+    error_message: str | None = None
+    saw_message_start = False
+    saw_message_stop = False
+
+    def ensure_start():
+        nonlocal started
+        if not started:
+            started = True
+            return StartEvent(partial=message)
+        return None
+
+    try:
+        payloads = _iter_sse_data(lines, data_idle_timeout_seconds=data_idle_timeout_seconds, clock=clock)
+        for payload in payloads:
+            try:
+                event = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            event_type = event.get("type")
+            if event_type == "message_start":
+                saw_message_start = True
+                raw_message = event.get("message")
+                if isinstance(raw_message, dict):
+                    if isinstance(raw_message.get("id"), str):
+                        message.response_id = raw_message["id"]
+                    usage = _merge_anthropic_usage(usage, raw_message.get("usage"))
+                continue
+            if event_type == "content_block_start":
+                index = event.get("index")
+                content_block = event.get("content_block")
+                if not isinstance(index, int) or not isinstance(content_block, dict):
+                    continue
+                block_type = content_block.get("type")
+                start = ensure_start()
+                if start:
+                    yield start
+                content_index = len(message.content)
+                if block_type == "text":
+                    initial_text = content_block.get("text") if isinstance(content_block.get("text"), str) else ""
+                    message.content.append(TextContent(text=initial_text))
+                    block_slots[index] = ("text", content_index)
+                    yield TextStartEvent(content_index=content_index, partial=message)
+                elif block_type == "thinking" and include_reasoning:
+                    initial_thinking = content_block.get("thinking") if isinstance(content_block.get("thinking"), str) else ""
+                    signature = content_block.get("signature") if isinstance(content_block.get("signature"), str) else None
+                    message.content.append(ThinkingContent(thinking=initial_thinking, thinking_signature=signature))
+                    block_slots[index] = ("thinking", content_index)
+                    yield ThinkingStartEvent(content_index=content_index, partial=message)
+                elif block_type == "redacted_thinking" and include_reasoning:
+                    signature = content_block.get("data") if isinstance(content_block.get("data"), str) else None
+                    message.content.append(
+                        ThinkingContent(thinking="[Reasoning redacted]", thinking_signature=signature, redacted=True)
+                    )
+                    block_slots[index] = ("thinking", content_index)
+                    yield ThinkingStartEvent(content_index=content_index, partial=message)
+                elif block_type == "tool_use":
+                    raw_input = content_block.get("input")
+                    initial_args = raw_input if isinstance(raw_input, dict) else {}
+                    raw_arguments = json.dumps(initial_args) if initial_args else ""
+                    message.content.append(
+                        ToolCall(
+                            id=str(content_block.get("id") or ""),
+                            name=str(content_block.get("name") or ""),
+                            arguments=initial_args,
+                        )
+                    )
+                    block_slots[index] = ("toolCall", content_index)
+                    tool_arg_bufs[content_index] = raw_arguments
+                    yield ToolcallStartEvent(content_index=content_index, partial=message)
+                continue
+            if event_type == "content_block_delta":
+                index = event.get("index")
+                delta = event.get("delta")
+                if not isinstance(index, int) or not isinstance(delta, dict):
+                    continue
+                slot = block_slots.get(index)
+                if slot is None:
+                    continue
+                kind, content_index = slot
+                delta_type = delta.get("type")
+                if delta_type == "text_delta" and kind == "text" and isinstance(message.content[content_index], TextContent):
+                    text = delta.get("text")
+                    if isinstance(text, str) and text:
+                        message.content[content_index].text += text
+                        yield TextDeltaEvent(content_index=content_index, delta=text, partial=message)
+                elif (
+                    delta_type == "thinking_delta"
+                    and kind == "thinking"
+                    and isinstance(message.content[content_index], ThinkingContent)
+                ):
+                    thinking = delta.get("thinking")
+                    if isinstance(thinking, str) and thinking:
+                        message.content[content_index].thinking += thinking
+                        yield ThinkingDeltaEvent(content_index=content_index, delta=thinking, partial=message)
+                elif (
+                    delta_type == "signature_delta"
+                    and kind == "thinking"
+                    and isinstance(message.content[content_index], ThinkingContent)
+                ):
+                    signature = delta.get("signature")
+                    if isinstance(signature, str):
+                        block = message.content[content_index]
+                        block.thinking_signature = (block.thinking_signature or "") + signature
+                elif (
+                    delta_type == "input_json_delta"
+                    and kind == "toolCall"
+                    and isinstance(message.content[content_index], ToolCall)
+                ):
+                    partial_json = delta.get("partial_json")
+                    if isinstance(partial_json, str):
+                        tool_arg_bufs[content_index] = tool_arg_bufs.get(content_index, "") + partial_json
+                        message.content[content_index].arguments = _parse_streaming_json(tool_arg_bufs[content_index])
+                        yield ToolcallDeltaEvent(content_index=content_index, delta=partial_json, partial=message)
+                continue
+            if event_type == "content_block_stop":
+                index = event.get("index")
+                if not isinstance(index, int):
+                    continue
+                slot = block_slots.pop(index, None)
+                if slot is None:
+                    continue
+                kind, content_index = slot
+                if kind == "text" and isinstance(message.content[content_index], TextContent):
+                    message.content[content_index].text = _strip_leaked_tool_xml(message.content[content_index].text)
+                    yield TextEndEvent(
+                        content_index=content_index,
+                        content=message.content[content_index].text,
+                        partial=message,
+                    )
+                elif kind == "thinking" and isinstance(message.content[content_index], ThinkingContent):
+                    yield ThinkingEndEvent(
+                        content_index=content_index,
+                        content=message.content[content_index].thinking,
+                        partial=message,
+                    )
+                elif kind == "toolCall" and isinstance(message.content[content_index], ToolCall):
+                    message.content[content_index].arguments = _parse_complete_tool_arguments(
+                        tool_arg_bufs.get(content_index, "")
+                    ) or {}
+                    yield ToolcallEndEvent(
+                        content_index=content_index,
+                        tool_call=message.content[content_index],
+                        partial=message,
+                    )
+                continue
+            if event_type == "message_delta":
+                delta = event.get("delta")
+                if isinstance(delta, dict):
+                    reason, mapped_error = _map_anthropic_stop_reason(delta.get("stop_reason"))
+                    stop_reason = reason
+                    error_message = mapped_error
+                usage = _merge_anthropic_usage(usage, event.get("usage"))
+                continue
+            if event_type == "message_stop":
+                saw_message_stop = True
+                message.usage = usage
+                if stop_reason == "error":
+                    message.stop_reason = "error"
+                    message.error_message = error_message
+                    yield ErrorEvent(reason="error", error=message)
+                else:
+                    message.stop_reason = stop_reason
+                    yield DoneEvent(reason=stop_reason, message=message)
+                return
+            if event_type == "error":
+                message.stop_reason = "error"
+                error = event.get("error")
+                if isinstance(error, dict):
+                    message.error_message = str(error.get("message") or error.get("type") or "Anthropic stream error")
+                else:
+                    message.error_message = "Anthropic stream error"
+                yield ErrorEvent(reason="error", error=message)
+                return
+    except TimeoutError as error:
+        message.stop_reason = "error"
+        message.error_message = str(error)
+        yield ErrorEvent(reason="error", error=message)
+        return
+
+    if saw_message_start and not saw_message_stop:
+        message.stop_reason = "error"
+        message.error_message = "Anthropic stream ended before message_stop"
+        yield ErrorEvent(reason="error", error=message)
 
 
 def _parse_sse_payload(
@@ -1040,33 +1743,24 @@ def _parse_sse_payload(
 
     content_piece = delta.get("content")
     if content_piece:
-        if state.get("text_guard_triggered") or text_buf.endswith(_TEXT_STREAM_GUARD_NOTICE):
-            return
-        start = ensure_start()
-        if start:
-            state["started"] = True
-            yield start
-        if text_index is None:
-            text_index = len(message.content)
-            state["text_index"] = text_index
-            message.content.append(TextContent(text=""))
-            yield TextStartEvent(content_index=text_index, partial=message)
-        candidate_text = text_buf + content_piece
-        if _should_stop_text_stream(candidate_text):
-            state["text_guard_triggered"] = True
-            content_piece = _TEXT_STREAM_GUARD_NOTICE
+        if state.get("leaked_tool_protocol_text"):
+            pass
+        elif _looks_like_leaked_tool_protocol_text(text_buf + content_piece):
+            state["leaked_tool_protocol_text"] = True
         else:
-            content_piece = _escape_inline_tool_protocol_fragments(content_piece)
-        text_buf += content_piece
-        state["text_buf"] = text_buf
-        message.content[text_index].text = text_buf
-        yield TextDeltaEvent(content_index=text_index, delta=content_piece, partial=message)
-
-    if state.get("text_guard_triggered"):
-        usage_ref["usage"] = usage
-        if choice.get("finish_reason"):
-            state["finish_reason"] = "stop"
-        return
+            start = ensure_start()
+            if start:
+                state["started"] = True
+                yield start
+            if text_index is None:
+                text_index = len(message.content)
+                state["text_index"] = text_index
+                message.content.append(TextContent(text=""))
+                yield TextStartEvent(content_index=text_index, partial=message)
+            text_buf += content_piece
+            state["text_buf"] = text_buf
+            message.content[text_index].text = text_buf
+            yield TextDeltaEvent(content_index=text_index, delta=content_piece, partial=message)
 
     for tc in delta.get("tool_calls") or []:
         stream_index = tc.get("index")
@@ -1076,7 +1770,7 @@ def _parse_sse_payload(
         fn = tc.get("function") or {}
         if not isinstance(fn, dict):
             fn = {}
-        name_fragment = fn.get("name") if isinstance(fn.get("name"), str) else ""
+        name_fragment = _repair_tool_call_name_fragment(fn.get("name")) if isinstance(fn.get("name"), str) else ""
         arg_fragment = fn.get("arguments") if isinstance(fn.get("arguments"), str) else ""
         tool_call = tool_call_blocks_by_index.get(stream_index) if stream_index is not None else None
         if tool_call is None and tool_call_id:
@@ -1167,6 +1861,16 @@ class AppV2EnvProvider:
 
     def __init__(self, config: ModelConfig) -> None:
         self.config = config
+        self.provider_profile = get_provider_profile("openrouter") or ProviderProfile(
+            name="openrouter",
+            base_url="https://openrouter.ai/api/v1",
+        )
+        self.transport = get_transport(self.provider_profile.api_mode)
+
+    def _transport_for_profile(self, profile: ProviderProfile):
+        if profile.api_mode == self.provider_profile.api_mode:
+            return self.transport
+        return get_transport(profile.api_mode)
 
     def stream(self, model: Model, context: Context, options=None) -> AssistantMessageEventStream:
         s = create_assistant_message_event_stream()
@@ -1178,34 +1882,65 @@ class AppV2EnvProvider:
     def _run(self, s: AssistantMessageEventStream, model: Model, context: Context, options) -> None:
         try:
             messages, tools = convert_messages(context, model)
-            body: dict = {
-                "model": model.id or self.config.model,
-                "messages": messages,
-                "stream": True,
-                "temperature": self.config.temperature,
-            }
-            if tools:
-                body["tools"] = tools
             max_tokens = getattr(options, "max_tokens", None) if options is not None else None
             if max_tokens is None:
                 max_tokens = self.config.max_tokens
-            if max_tokens is not None:
-                body["max_tokens"] = max_tokens
-            if self.config.provider_sort:
-                body["provider"] = {"sort": self.config.provider_sort, "allow_fallbacks": True}
+            provider_preferences = (
+                {"sort": self.config.provider_sort, "allow_fallbacks": True}
+                if self.config.provider_sort
+                else None
+            )
+            runtime = resolve_provider_runtime(
+                model.provider,
+                explicit_base_url=model.base_url,
+                fallback_base_url=self.config.base_url,
+            )
+            profile = runtime.profile or self.provider_profile
+            transport = (
+                self._transport_for_profile(profile)
+                if profile.api_mode == runtime.api_mode
+                else get_transport(runtime.api_mode)
+            )
+            endpoint_path = runtime.endpoint_path
+            base_url = runtime.base_url or model.base_url or profile.base_url or self.config.base_url
+            api_mode = getattr(transport, "api_mode", runtime.api_mode)
+            transport_kwargs = {
+                "model": model.id or self.config.model,
+                "messages": messages,
+                "tools": tools,
+                "profile": profile,
+                "stream": True,
+                "temperature": self.config.temperature,
+                "max_tokens": max_tokens,
+                "provider_preferences": provider_preferences,
+            }
+            session_id = getattr(options, "session_id", None) if options is not None else None
+            if isinstance(session_id, str) and session_id.strip():
+                transport_kwargs["session_id"] = session_id
+            reasoning_config = getattr(options, "reasoning_config", None) if options is not None else None
+            if isinstance(reasoning_config, dict):
+                transport_kwargs["reasoning_config"] = reasoning_config
+            body = transport.build_kwargs(
+                **transport_kwargs,
+            )
             on_payload = getattr(options, "on_payload", None) if options is not None else None
             if callable(on_payload):
                 next_body = on_payload(body)
                 if isinstance(next_body, dict):
                     body = next_body
             option_headers = getattr(options, "headers", None) if options is not None else None
-            headers = {str(key): str(value) for key, value in option_headers.items()} if isinstance(option_headers, dict) else {}
+            headers = dict(profile.default_headers)
+            if isinstance(option_headers, dict):
+                headers.update({str(key): str(value) for key, value in option_headers.items()})
+            extra_headers = body.pop("extra_headers", None)
+            if isinstance(extra_headers, dict):
+                headers.update({str(key): str(value) for key, value in extra_headers.items()})
             option_api_key = getattr(options, "api_key", None) if options is not None else None
             api_key = option_api_key if isinstance(option_api_key, str) and option_api_key.strip() else self.config.api_key
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
             headers.setdefault("Content-Type", "application/json")
-            url = self.config.base_url.rstrip("/") + "/chat/completions"
+            url = base_url.rstrip("/") + endpoint_path
             with httpx.Client(timeout=self.config.timeout_seconds) as client:
                 with client.stream("POST", url, json=body, headers=headers) as response:
                     on_response = getattr(options, "on_response", None) if options is not None else None
@@ -1217,6 +1952,7 @@ class AppV2EnvProvider:
                         model,
                         data_idle_timeout_seconds=self.config.timeout_seconds,
                         include_reasoning=bool(getattr(options, "reasoning", None)),
+                        api_mode=api_mode,
                     ):
                         s.push(event)
         except Exception as exc:  # encode failure as an error event, never raise
