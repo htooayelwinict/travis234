@@ -1230,8 +1230,37 @@ def test_agent_session_spawn_subagent_tool_rejects_read_only_child_file_mutation
     assert "Subagents are read-only" in rendered
     assert "spawn the child for inspection only" in rendered
     assert "parent should write" in rendered
+    assert "No subagent task was spawned" in rendered
     assert spawned_goals == []
     assert session.subagents.list_tasks() == []
+
+
+def test_agent_session_spawn_subagent_tool_allows_negated_file_mutation_instruction(tmp_path):
+    spawned_goals: list[str] = []
+
+    def backend(task):
+        spawned_goals.append(task.goal)
+        return "No blockers."
+
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+    session.subagents.register_backend(CallableSubagentBackend("internal", backend))
+
+    result = session._execute_spawn_subagent_tool(
+        "tool-call",
+        {
+            "role": "reviewer",
+            "goal": "Inspect ledger.py and tests/test_ledger.py only. Summarize blockers only. Do not write files.",
+            "wait": True,
+        },
+    )
+
+    rendered = "\n".join(block.text for block in result.content)
+    assert result.details["status"] == "completed"
+    assert "No blockers." in rendered
+    assert spawned_goals == [
+        "Inspect ledger.py and tests/test_ledger.py only. Summarize blockers only. Do not write files."
+    ]
+    assert len(session.subagents.list_tasks()) == 1
 
 
 def test_agent_session_expand_subagent_result_returns_bounded_full_child_output(tmp_path):

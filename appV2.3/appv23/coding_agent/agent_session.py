@@ -135,10 +135,30 @@ _SUBAGENT_FILE_MUTATION_GOAL_PATTERN = re.compile(
     r")",
     re.IGNORECASE,
 )
+_SUBAGENT_FILE_MUTATION_NEGATION_PREFIX_PATTERN = re.compile(
+    r"(?:"
+    r"\bdo\s+not\b"
+    r"|\bdon't\b"
+    r"|\bnever\b"
+    r"|\bmust\s+not\b"
+    r"|\bshould\s+not\b"
+    r"|\bwithout\b"
+    r"|\bavoid\b"
+    r"|\bno\s+need\s+to\b"
+    r")"
+    r"(?:\s+\w+){0,6}\s*$",
+    re.IGNORECASE,
+)
 
 
 def _subagent_goal_requests_file_mutation(goal: str) -> bool:
-    return bool(_SUBAGENT_FILE_MUTATION_GOAL_PATTERN.search(str(goal or "")))
+    text = str(goal or "")
+    for match in _SUBAGENT_FILE_MUTATION_GOAL_PATTERN.finditer(text):
+        prefix = text[max(0, match.start() - 80) : match.start()]
+        if _SUBAGENT_FILE_MUTATION_NEGATION_PREFIX_PATTERN.search(prefix):
+            continue
+        return True
+    return False
 
 
 def _prompt_requests_subagent_tools(text: str) -> bool:
@@ -1847,7 +1867,8 @@ class AgentSession:
             return self._subagent_tool_result(
                 "Subagents are read-only and cannot write, edit, create, delete, or save files. "
                 "If Lewis requested a written artifact, spawn the child for inspection only, then the parent should write "
-                "the requested file from the child summary.",
+                "the requested file from the child summary. "
+                "No subagent task was spawned and no taskId exists for wait_subagent, cancel_subagent, or expand_subagent_result.",
                 details,
             )
         normalized_role = self._normalize_subagent_role(role)
