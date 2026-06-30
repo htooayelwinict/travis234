@@ -807,6 +807,61 @@ def test_unknown_tool_returns_error_result() -> None:
     assert "not found" in ends[0].result.content[0].text
 
 
+def test_unknown_tool_error_reports_active_tool_catalog_for_recovery() -> None:
+    model = faux_model()
+    calls = {"n": 0}
+
+    def script(m, c):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return tool_call_response_events(m, "glob", {"pattern": "**/*.py"})
+        return text_response_events(m, "ok")
+
+    register_api_provider(create_faux_provider(script))
+    read = AgentTool(
+        name="read",
+        description="read",
+        parameters={"type": "object"},
+        label="Read",
+        execute=lambda *a, **k: AgentToolResult(content=[TextContent(text="read")], details={}),
+    )
+    grep = AgentTool(
+        name="grep",
+        description="grep",
+        parameters={"type": "object"},
+        label="Grep",
+        execute=lambda *a, **k: AgentToolResult(content=[TextContent(text="grep")], details={}),
+    )
+    find = AgentTool(
+        name="find",
+        description="find",
+        parameters={"type": "object"},
+        label="Find",
+        execute=lambda *a, **k: AgentToolResult(content=[TextContent(text="find")], details={}),
+    )
+    ls = AgentTool(
+        name="ls",
+        description="ls",
+        parameters={"type": "object"},
+        label="List",
+        execute=lambda *a, **k: AgentToolResult(content=[TextContent(text="ls")], details={}),
+    )
+    ends: list = []
+
+    run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(tools=[read, grep, find, ls]),
+        _config(model),
+        lambda e: ends.append(e) if e.type == "tool_execution_end" else None,
+    )
+
+    assert ends[0].is_error is True
+    text = ends[0].result.content[0].text
+    assert "Tool glob not found" in text
+    assert "Available tools: read, grep, find, ls" in text
+    assert "Use find or ls for file discovery" in text
+
+
 def test_agent_class_reduces_state() -> None:
     model = faux_model()
     register_api_provider(create_faux_provider(lambda m, c: text_response_events(m, "reply")))

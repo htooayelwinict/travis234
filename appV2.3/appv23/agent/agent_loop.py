@@ -582,7 +582,7 @@ def _prepare_tool_call(current_context, assistant_message, tool_call, config, si
             "kind": "immediate",
             "tool_call": tool_call,
             "args": getattr(tool_call, "arguments", {}),
-            "result": _error_result(f"Tool {tool_call.name} not found"),
+            "result": _error_result(_unknown_tool_message(tool_call.name, current_context.tools or [])),
             "is_error": True,
             "apply_after_tool_call": True,
         }
@@ -729,6 +729,22 @@ def _error_result(message: str) -> AgentToolResult:
     from appv23.ai.types import TextContent
 
     return AgentToolResult(content=[TextContent(text=message)], details={})
+
+
+def _unknown_tool_message(tool_name: str, tools: list[AgentTool]) -> str:
+    message = f"Tool {tool_name} not found"
+    available: list[str] = []
+    seen: set[str] = set()
+    for tool in tools:
+        if tool.name in seen:
+            continue
+        seen.add(tool.name)
+        available.append(tool.name)
+    if available:
+        message += f". Available tools: {', '.join(available)}"
+    if tool_name == "glob":
+        message += ". Use find or ls for file discovery; glob is not available in this tool catalog"
+    return message
 
 
 def _emit_tool_end(finalized: dict, emit: AgentEventSink) -> None:
