@@ -14,8 +14,10 @@ import httpx
 from appv231.ai.env_config import ModelConfig, load_model_config
 from appv231.ai.event_stream import AssistantMessageEventStream, create_assistant_message_event_stream
 from appv231.ai.providers.base import ProviderProfile
+from appv231.ai.providers.capabilities import build_generation_payload
 from appv231.ai.providers.catalog import get_provider_profile, resolve_provider_runtime
 from appv231.ai.providers.message_sanitization import repair_tool_call_arguments
+from appv231.ai.providers.params import GenerationParams, merge_generation_params
 from appv231.ai.providers.transports import get_transport
 from appv231.ai.stream import ApiProvider
 from appv231.ai.types import (
@@ -1946,14 +1948,16 @@ class AppV2EnvProvider:
     def _run(self, s: AssistantMessageEventStream, model: Model, context: Context, options) -> None:
         try:
             messages, tools = convert_messages(context, model)
+            option_params = getattr(options, "generation_params", None) if options is not None else None
+            if option_params is not None and not isinstance(option_params, GenerationParams):
+                option_params = None
+            generation_params = merge_generation_params(self.config.generation_params, option_params)
             max_tokens = getattr(options, "max_tokens", None) if options is not None else None
-            if max_tokens is None:
-                max_tokens = self.config.max_tokens
-            provider_preferences = (
-                {"sort": self.config.provider_sort, "allow_fallbacks": True}
-                if self.config.provider_sort
-                else None
-            )
+            if max_tokens is not None:
+                generation_params = merge_generation_params(
+                    generation_params,
+                    GenerationParams(max_tokens=max_tokens, sources={"max_tokens": "runtime_options"}),
+                )
             runtime = resolve_provider_runtime(
                 model.provider,
                 explicit_base_url=model.base_url,
@@ -1968,15 +1972,22 @@ class AppV2EnvProvider:
             endpoint_path = runtime.endpoint_path
             base_url = runtime.base_url or model.base_url or profile.base_url or self.config.base_url
             api_mode = getattr(transport, "api_mode", runtime.api_mode)
+            generation_payload = build_generation_payload(
+                provider=runtime.provider,
+                api_mode=api_mode,
+                params=generation_params,
+                tools_enabled=bool(tools),
+            )
             transport_kwargs = {
                 "model": model.id or self.config.model,
                 "messages": messages,
                 "tools": tools,
                 "profile": profile,
                 "stream": True,
-                "temperature": self.config.temperature,
-                "max_tokens": max_tokens,
-                "provider_preferences": provider_preferences,
+                "temperature": generation_payload.temperature,
+                "max_tokens": generation_payload.max_tokens,
+                "provider_preferences": generation_payload.provider_preferences,
+                "request_overrides": generation_payload.request_overrides,
             }
             session_id = getattr(options, "session_id", None) if options is not None else None
             if isinstance(session_id, str) and session_id.strip():

@@ -16,6 +16,7 @@ from appv231.ai.providers.appv2_env import (
     parse_sse_chunks,
 )
 from appv231.ai.providers.base import ProviderProfile
+from appv231.ai.providers.params import GenerationParams
 from appv231.ai.providers.transports import ChatCompletionsTransport
 from appv231.ai.types import (
     AssistantMessage,
@@ -1525,6 +1526,7 @@ def test_appv2_env_provider_runtime_max_tokens_overrides_env_config(monkeypatch)
             presence_penalty=None,
             seed=None,
             max_tokens=8192,
+            generation_params=GenerationParams(max_tokens=8192),
         )
     )
 
@@ -1535,6 +1537,94 @@ def test_appv2_env_provider_runtime_max_tokens_overrides_env_config(monkeypatch)
     ).result_sync()
 
     assert captured_body["max_tokens"] == 4096
+
+
+def test_appv2_env_provider_applies_generation_params_to_payload(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def iter_lines(self):
+            return iter(
+                [
+                    'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":null}]}',
+                    'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+                    "data: [DONE]",
+                ]
+            )
+
+    class FakeClient:
+        def __init__(self, timeout):
+            captured["timeout"] = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def stream(self, method, url, json, headers):
+            captured["method"] = method
+            captured["url"] = url
+            captured["body"] = json
+            captured["headers"] = headers
+            return FakeResponse()
+
+    class FakeStream:
+        def __init__(self):
+            self.events = []
+
+        def push(self, event):
+            self.events.append(event)
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(appv2_env.httpx, "Client", FakeClient)
+    config = appv2_env.ModelConfig(
+        enabled=True,
+        api_key="test-key",
+        model="acme/x",
+        base_url="https://openrouter.ai/api/v1",
+        timeout_seconds=55,
+        temperature=0,
+        top_p=None,
+        frequency_penalty=None,
+        presence_penalty=None,
+        seed=None,
+        stop=[],
+        provider_sort="latency",
+        max_tokens=None,
+        generation_params=GenerationParams(
+            temperature=0.2,
+            top_p=0.9,
+            max_tokens=4096,
+            stop=("END",),
+            provider_sort="throughput",
+        ),
+    )
+
+    provider = appv2_env.AppV2EnvProvider(config)
+    stream = FakeStream()
+    provider._run(stream, _model(), Context(messages=[UserMessage(content="hi")]), None)
+
+    body = captured["body"]
+    assert body["temperature"] == 0.2
+    assert body["top_p"] == 0.9
+    assert body["max_tokens"] == 4096
+    assert body["stop"] == ["END"]
+    assert body["provider"] == {"sort": "throughput", "allow_fallbacks": True}
 
 
 def test_appv2_env_provider_runtime_model_overrides_env_config_model(monkeypatch) -> None:
@@ -2683,7 +2773,7 @@ def test_appv2_env_provider_resolves_transport_from_runtime_profile(monkeypatch)
 
     runtime_profile = ProviderProfile(
         name="active-provider",
-        api_mode="active_mode",
+        api_mode="chat_completions",
         base_url="https://active.example/v1",
     )
 
@@ -2692,8 +2782,8 @@ def test_appv2_env_provider_resolves_transport_from_runtime_profile(monkeypatch)
             provider="active-provider",
             requested_provider="active-provider",
             profile=runtime_profile,
-            api_mode="active_mode",
-            transport="active_mode",
+            api_mode="chat_completions",
+            transport="openai_chat",
             endpoint_path="/active",
             base_url="https://active.example/v1",
             api_key_env_vars=("ACTIVE_API_KEY",),
@@ -2702,7 +2792,7 @@ def test_appv2_env_provider_resolves_transport_from_runtime_profile(monkeypatch)
         )
 
     class FakeTransport:
-        api_mode = "active_mode"
+        api_mode = "chat_completions"
 
         def build_kwargs(self, **kwargs):
             captured["profile"] = kwargs["profile"]
@@ -2760,7 +2850,7 @@ def test_appv2_env_provider_resolves_transport_from_runtime_profile(monkeypatch)
     events = list(provider.stream(model, Context(messages=[UserMessage("hi", timestamp=now_ms())])))
 
     assert events[-1].type == "done"
-    assert captured["api_mode"] == "active_mode"
+    assert captured["api_mode"] == "chat_completions"
     assert captured["profile"] is runtime_profile
     assert captured["model"] == "active/model"
     assert captured["json"]["from_active_transport"] is True
@@ -2772,7 +2862,19 @@ def test_appv2_env_provider_delegates_payload_construction_to_transport(monkeypa
     class FakeTransport:
         api_mode = "chat_completions"
 
-        def build_kwargs(self, *, model, messages, tools, profile, stream, temperature, max_tokens, provider_preferences):
+        def build_kwargs(
+            self,
+            *,
+            model,
+            messages,
+            tools,
+            profile,
+            stream,
+            temperature,
+            max_tokens,
+            provider_preferences,
+            request_overrides,
+        ):
             captured["transport_model"] = model
             captured["transport_messages"] = messages
             captured["transport_tools"] = tools
@@ -2781,6 +2883,7 @@ def test_appv2_env_provider_delegates_payload_construction_to_transport(monkeypa
             captured["transport_temperature"] = temperature
             captured["transport_max_tokens"] = max_tokens
             captured["transport_provider_preferences"] = provider_preferences
+            captured["transport_request_overrides"] = request_overrides
             return {"model": model, "messages": messages, "stream": stream, "metadata": {"from_transport": True}}
 
     class FakeStream:
@@ -2830,9 +2933,10 @@ def test_appv2_env_provider_delegates_payload_construction_to_transport(monkeypa
     assert captured["transport_model"] == "acme/x"
     assert captured["transport_profile"].name == "openrouter"
     assert captured["transport_stream"] is True
-    assert captured["transport_temperature"] == 0
+    assert captured["transport_temperature"] is None
     assert captured["transport_max_tokens"] == 99
-    assert captured["transport_provider_preferences"] == {"sort": "latency", "allow_fallbacks": True}
+    assert captured["transport_provider_preferences"] is None
+    assert captured["transport_request_overrides"] == {}
     assert captured["json"]["metadata"] == {"from_transport": True}
 
 
