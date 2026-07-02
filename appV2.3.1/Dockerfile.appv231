@@ -1,0 +1,29 @@
+FROM python:3.13-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    APPV231_NO_VENV_REEXEC=1 \
+    HOME=/agent-home \
+    PI_CODING_AGENT_DIR=/agent-home/agent
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bash \
+        ca-certificates \
+        curl \
+        git \
+        ripgrep \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/appV2.3.1
+
+COPY pyproject.toml README.md ./
+COPY appv231 ./appv231
+COPY scripts ./scripts
+
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir .
+
+WORKDIR /workspace
+
+ENTRYPOINT ["appv231"]
+CMD ["--cwd", "/workspace"]

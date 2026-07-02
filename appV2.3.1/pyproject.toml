@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "appv231"
+version = "2.3.0"
+description = "Pi-style coding agent with Hermes-style compaction."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+  "httpx>=0.27",
+  "langgraph>=0.6.0",
+  "openrouter>=0.9.1",
+  "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+browser = [
+  "playwright>=1.59",
+]
+
+[project.scripts]
+appv231 = "appv231.cli:main"
+v231 = "appv231.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["appv231*"]
+
+[tool.setuptools.package-data]
+"appv231.coding_agent" = ["export_html_assets/vendor/*.js"]

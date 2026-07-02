@@ -1,0 +1,11 @@
+{
+  "name": "appv231-pi-tui",
+  "version": "2.3.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "tui": "python3 scripts/appv231_tui.py",
+    "tui:sandbox": "python3 scripts/appv231_sandbox.py"
+  },
+  "dependencies": {}
+}
