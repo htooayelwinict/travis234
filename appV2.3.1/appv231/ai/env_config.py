@@ -7,6 +7,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from appv231.ai.providers.params import GenerationParams, params_from_mapping
+
 TRUE_VALUES = {"1", "true", "yes", "on"}
 DEFAULT_MODEL_PER_PROVIDER = {
     "amazon-bedrock": "us.anthropic.claude-opus-4-6-v1",
@@ -27,6 +29,7 @@ DEFAULT_MODEL_PER_PROVIDER = {
     "cerebras": "zai-glm-4.7",
     "zai": "glm-5.1",
     "zai-coding-cn": "glm-5.1",
+    "stepfun": "step-3.7-flash",
     "mistral": "devstral-medium-latest",
     "minimax": "MiniMax-M2.7",
     "minimax-cn": "MiniMax-M2.7",
@@ -87,6 +90,7 @@ PROVIDER_API_KEY_ENV = {
     "xiaomi-token-plan-sgp": ("XIAOMI_TOKEN_PLAN_SGP_API_KEY",),
     "zai": ("ZAI_API_KEY",),
     "zai-coding-cn": ("ZAI_CODING_CN_API_KEY",),
+    "stepfun": ("STEPFUN_API_KEY",),
 }
 SUFFIXES = (
     "ENABLED", "API_KEY", "MODEL", "BASE_URL", "TIMEOUT_SECONDS", "TEMPERATURE",
@@ -110,6 +114,7 @@ class ModelConfig:
     stop: list[str] = field(default_factory=list)
     provider_sort: str | None = "latency"
     max_tokens: int | None = None
+    generation_params: GenerationParams = field(default_factory=GenerationParams)
 
 
 def load_dotenv_values(path: "str | Path" = ".env") -> dict[str, str]:
@@ -142,6 +147,7 @@ def load_model_config(prefix: str, dotenv_path: "str | Path" = ".env") -> ModelC
         or config.get("OPENAI_MODEL")
         or _default_model(prefix)
     )
+    generation_params = _load_generation_params(prefix, config)
     return ModelConfig(
         enabled=enabled,
         api_key=api_key,
@@ -156,6 +162,7 @@ def load_model_config(prefix: str, dotenv_path: "str | Path" = ".env") -> ModelC
         stop=_optional_list(config.get(f"{prefix}_STOP")),
         provider_sort=config.get(f"{prefix}_PROVIDER_SORT") or config.get("OPENROUTER_PROVIDER_SORT") or "latency",
         max_tokens=_optional_int(config.get(f"{prefix}_MAX_TOKENS")),
+        generation_params=generation_params,
     )
 
 
@@ -185,6 +192,26 @@ def get_env_api_key(provider: str) -> str | None:
 
 def get_default_model_for_provider(provider: str) -> str | None:
     return DEFAULT_MODEL_PER_PROVIDER.get(provider)
+
+
+def _load_generation_params(prefix: str, config: dict[str, str]) -> GenerationParams:
+    try:
+        return params_from_mapping(
+            {
+                "temperature": config.get(f"{prefix}_TEMPERATURE"),
+                "top_p": config.get(f"{prefix}_TOP_P"),
+                "frequency_penalty": config.get(f"{prefix}_FREQUENCY_PENALTY"),
+                "presence_penalty": config.get(f"{prefix}_PRESENCE_PENALTY"),
+                "seed": config.get(f"{prefix}_SEED"),
+                "stop": config.get(f"{prefix}_STOP"),
+                "provider_sort": config.get(f"{prefix}_PROVIDER_SORT") or config.get("OPENROUTER_PROVIDER_SORT"),
+                "max_tokens": config.get(f"{prefix}_MAX_TOKENS"),
+                "timeout_seconds": config.get(f"{prefix}_TIMEOUT_SECONDS"),
+            },
+            source="env",
+        )
+    except ValueError:
+        return GenerationParams()
 
 
 def _default_model(prefix: str) -> str | None:

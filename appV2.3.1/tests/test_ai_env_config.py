@@ -4,10 +4,31 @@ from pathlib import Path
 
 from appv231.ai.env_config import (
     DEFAULT_MODEL_PER_PROVIDER,
+    find_env_keys,
     get_default_model_for_provider,
     load_dotenv_values,
     load_model_config,
 )
+from appv231.ai.providers.params import GenerationParams
+
+
+PARAM_ENV_KEYS = (
+    "APPV2_WORKER_LLM_TEMPERATURE",
+    "APPV2_WORKER_LLM_TOP_P",
+    "APPV2_WORKER_LLM_FREQUENCY_PENALTY",
+    "APPV2_WORKER_LLM_PRESENCE_PENALTY",
+    "APPV2_WORKER_LLM_SEED",
+    "APPV2_WORKER_LLM_STOP",
+    "APPV2_WORKER_LLM_PROVIDER_SORT",
+    "APPV2_WORKER_LLM_MAX_TOKENS",
+    "APPV2_WORKER_LLM_TIMEOUT_SECONDS",
+    "OPENROUTER_PROVIDER_SORT",
+)
+
+
+def _clear_param_env(monkeypatch) -> None:
+    for key in PARAM_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
 
 
 def test_load_dotenv_values_strips_quotes_and_comments(tmp_path: Path) -> None:
@@ -24,6 +45,7 @@ def test_load_dotenv_values_strips_quotes_and_comments(tmp_path: Path) -> None:
 
 
 def test_load_model_config_resolves_prefix_then_fallbacks(tmp_path: Path, monkeypatch) -> None:
+    _clear_param_env(monkeypatch)
     env = tmp_path / ".env"
     env.write_text(
         "APPV2_WORKER_LLM_ENABLED=true\n"
@@ -42,6 +64,7 @@ def test_load_model_config_resolves_prefix_then_fallbacks(tmp_path: Path, monkey
 
 
 def test_disabled_when_flag_absent(tmp_path: Path, monkeypatch) -> None:
+    _clear_param_env(monkeypatch)
     monkeypatch.delenv("APPV2_WORKER_LLM_ENABLED", raising=False)
     monkeypatch.delenv("APPV2_WORKER_LLM_MODEL", raising=False)
     monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
@@ -64,3 +87,71 @@ def test_default_model_per_provider_tracks_pi_defaults() -> None:
     assert DEFAULT_MODEL_PER_PROVIDER["vercel-ai-gateway"] == "zai/glm-5.1"
     assert get_default_model_for_provider("openrouter") == "moonshotai/kimi-k2.6"
     assert get_default_model_for_provider("unknown-provider") is None
+
+
+def test_stepfun_env_metadata_is_registered(monkeypatch) -> None:
+    monkeypatch.delenv("STEPFUN_API_KEY", raising=False)
+
+    assert get_default_model_for_provider("stepfun") == "step-3.7-flash"
+    assert find_env_keys("stepfun") is None
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    assert find_env_keys("stepfun") == ["STEPFUN_API_KEY"]
+
+
+def test_model_config_exposes_generation_params(tmp_path: Path, monkeypatch) -> None:
+    _clear_param_env(monkeypatch)
+    dotenv = tmp_path / ".env"
+    dotenv.write_text(
+        "\n".join(
+            [
+                "APPV2_WORKER_LLM_ENABLED=true",
+                "APPV2_WORKER_LLM_API_KEY=test-key",
+                "APPV2_WORKER_LLM_PROVIDER_SORT=throughput",
+                "APPV2_WORKER_LLM_TEMPERATURE=0.2",
+                "APPV2_WORKER_LLM_TOP_P=0.9",
+                "APPV2_WORKER_LLM_MAX_TOKENS=4096",
+                "APPV2_WORKER_LLM_STOP=END,STOP",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_model_config("APPV2_WORKER_LLM", dotenv)
+
+    assert config.generation_params == GenerationParams(
+        temperature=0.2,
+        top_p=0.9,
+        max_tokens=4096,
+        stop=("END", "STOP"),
+        provider_sort="throughput",
+        sources={
+            "temperature": "env",
+            "top_p": "env",
+            "max_tokens": "env",
+            "stop": "env",
+            "provider_sort": "env",
+        },
+    )
+
+
+def test_model_config_generation_params_do_not_source_legacy_defaults(tmp_path: Path, monkeypatch) -> None:
+    _clear_param_env(monkeypatch)
+    env = tmp_path / ".env"
+    env.write_text("OPENROUTER_API_KEY=k\n", encoding="utf-8")
+
+    config = load_model_config("APPV2_WORKER_LLM", env)
+
+    assert config.temperature == 0
+    assert config.provider_sort == "latency"
+    assert config.generation_params == GenerationParams()
+
+
+def test_generation_params_do_not_make_legacy_temperature_invalid(tmp_path: Path, monkeypatch) -> None:
+    _clear_param_env(monkeypatch)
+    env = tmp_path / ".env"
+    env.write_text("APPV2_WORKER_LLM_TEMPERATURE=3\n", encoding="utf-8")
+
+    config = load_model_config("APPV2_WORKER_LLM", env)
+
+    assert config.temperature == 3
+    assert config.generation_params == GenerationParams()
