@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from argparse import Namespace
 from pathlib import Path
 
 import appv231.cli as cli
+from appv231.ai.env_config import ModelConfig
 from appv231.app import CodingApp
 from appv231.ai.models import get_api_key_for_provider, register_model, reset_models
 from appv231.ai.types import Model
@@ -43,7 +45,7 @@ def test_cli_without_prompt_starts_interactive_tui(monkeypatch, tmp_path) -> Non
         def run(self):
             return 17
 
-    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path: None)
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
     monkeypatch.setattr(
         cli,
         "_model_from_env",
@@ -105,7 +107,7 @@ def test_cli_provider_and_model_flags_resolve_registered_model(monkeypatch, tmp_
             created["prompt"] = prompt
 
     register_model(selected_model)
-    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path: None)
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
     monkeypatch.setattr(cli, "CodingApp", FakeApp)
 
     exit_code = cli.main(
@@ -176,7 +178,7 @@ def test_cli_loads_persisted_auth_before_model_selection(monkeypatch, tmp_path) 
             )
         )
 
-    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path: None)
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
     monkeypatch.setattr(cli, "_startup_model_from_env", record_startup)
     monkeypatch.setattr(cli, "CodingApp", FakeApp)
 
@@ -216,7 +218,7 @@ def test_cli_passes_hermes_loop_runtime_options(monkeypatch, tmp_path) -> None:
         def run_turn(self, prompt):
             created["prompt"] = prompt
 
-    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path: None)
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
     monkeypatch.setattr(
         cli,
         "_startup_model_from_env",
@@ -275,7 +277,7 @@ def test_cli_default_dotenv_searches_parent_dirs_for_npm_prefix_cwd(monkeypatch,
         def run_turn(self, prompt):
             observed["prompt"] = prompt
 
-    def record_provider_registration(dotenv_path):
+    def record_provider_registration(dotenv_path, config=None):
         observed["registered_dotenv"] = Path(dotenv_path)
 
     def record_startup(dotenv_path, **kwargs):
@@ -321,7 +323,7 @@ def test_cli_default_cwd_uses_npm_initial_cwd_for_prefix_wrapper(monkeypatch, tm
     monkeypatch.chdir(app_dir)
     monkeypatch.setenv("INIT_CWD", str(repo))
     monkeypatch.setenv("npm_lifecycle_event", "tui")
-    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path: None)
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
     monkeypatch.setattr(
         cli,
         "_startup_model_from_env",
@@ -358,7 +360,7 @@ def test_cli_explicit_relative_dotenv_uses_npm_initial_cwd(monkeypatch, tmp_path
     monkeypatch.chdir(app_dir)
     monkeypatch.setenv("INIT_CWD", str(repo))
     monkeypatch.setenv("npm_lifecycle_event", "tui")
-    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path: observed.setdefault("dotenv", dotenv_path))
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: observed.setdefault("dotenv", dotenv_path))
     monkeypatch.setattr(
         cli,
         "_startup_model_from_env",
@@ -402,7 +404,7 @@ def test_cli_model_thinking_suffix_sets_initial_thinking_level(monkeypatch, tmp_
             created["prompt"] = prompt
 
     register_model(selected_model)
-    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path: None)
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
     monkeypatch.setattr(cli, "CodingApp", FakeApp)
 
     exit_code = cli.main(
@@ -452,7 +454,7 @@ def test_cli_thinking_flag_overrides_model_suffix(monkeypatch, tmp_path) -> None
             created["prompt"] = prompt
 
     register_model(selected_model)
-    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path: None)
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
     monkeypatch.setattr(cli, "CodingApp", FakeApp)
 
     exit_code = cli.main(
@@ -493,7 +495,7 @@ def test_cli_invalid_thinking_level_warns_and_uses_default(monkeypatch, tmp_path
         def run_turn(self, prompt):
             created["prompt"] = prompt
 
-    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path: None)
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
     monkeypatch.setattr(cli, "CodingApp", FakeApp)
 
     exit_code = cli.main(
@@ -580,7 +582,7 @@ def test_cli_models_flag_sets_scoped_models_and_initial_model(monkeypatch, tmp_p
 
     register_model(sonnet)
     register_model(qwen)
-    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path: None)
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
     monkeypatch.setattr(cli, "CodingApp", FakeApp)
 
     exit_code = cli.main(
@@ -605,3 +607,138 @@ def test_cli_models_flag_sets_scoped_models_and_initial_model(monkeypatch, tmp_p
         (sonnet, "high"),
         (qwen, "low"),
     ]
+
+
+def test_cli_list_models_exits_without_starting_app(monkeypatch, tmp_path, capsys) -> None:
+    register_model(
+        Model(
+            id="step-3.7-flash",
+            name="Step 3.7 Flash",
+            api="openai-completions",
+            provider="stepfun",
+            base_url="",
+        )
+    )
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
+    monkeypatch.setattr(
+        cli,
+        "CodingApp",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("app must not start")),
+    )
+
+    code = cli.main(["--cwd", str(tmp_path), "--list-models"])
+
+    assert code == 0
+    assert "stepfun/step-3.7-flash" in capsys.readouterr().out
+
+
+def test_cli_provider_stepfun_model_uses_custom_known_provider(monkeypatch, tmp_path) -> None:
+    observed: dict[str, object] = {}
+
+    class FakeApp:
+        def __init__(self, **kwargs):
+            observed.update(kwargs)
+            self.messages = []
+
+        def run_turn(self, prompt):
+            observed["prompt"] = prompt
+
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
+    monkeypatch.setattr(cli, "CodingApp", FakeApp)
+
+    code = cli.main(
+        [
+            "--cwd",
+            str(tmp_path),
+            "--provider",
+            "stepfun",
+            "--model",
+            "step-3.7-flash",
+            "--plain",
+            "noop",
+        ]
+    )
+
+    assert code == 0
+    model = observed["model"]
+    assert model.provider == "stepfun"
+    assert model.id == "step-3.7-flash"
+
+
+def test_cli_generation_flags_are_passed_to_registered_provider(monkeypatch, tmp_path) -> None:
+    observed: dict[str, object] = {}
+
+    def record_registration(dotenv_path, config=None):
+        observed["config"] = config
+
+    class FakeApp:
+        def __init__(self, **kwargs):
+            self.messages = []
+
+        def run_turn(self, prompt):
+            observed["prompt"] = prompt
+
+    monkeypatch.setattr(cli, "register_builtin_providers", record_registration)
+    monkeypatch.setattr(cli, "CodingApp", FakeApp)
+
+    code = cli.main(
+        [
+            "--cwd",
+            str(tmp_path),
+            "--model",
+            "stepfun/step-3.7-flash",
+            "--temperature",
+            "0.2",
+            "--top-p",
+            "0.9",
+            "--max-tokens",
+            "4096",
+            "--provider-sort",
+            "throughput",
+            "--stop",
+            "END,STOP",
+            "--plain",
+            "noop",
+        ]
+    )
+
+    assert code == 0
+    params = observed["config"].generation_params
+    assert params.temperature == 0.2
+    assert params.top_p == 0.9
+    assert params.max_tokens == 4096
+    assert params.provider_sort == "throughput"
+    assert params.stop == ("END", "STOP")
+
+
+def test_cli_generation_merge_preserves_legacy_config_fields_when_flags_absent() -> None:
+    config = ModelConfig(
+        enabled=True,
+        api_key="k",
+        model="m",
+        base_url="https://example.test/v1",
+        timeout_seconds=45,
+        temperature=0,
+        top_p=0.8,
+        frequency_penalty=None,
+        presence_penalty=None,
+        seed=None,
+        stop=["END"],
+        provider_sort="latency",
+        max_tokens=2048,
+    )
+    args = Namespace(
+        temperature=None,
+        top_p=None,
+        max_tokens=None,
+        timeout_seconds=None,
+        provider_sort=None,
+        stop=None,
+    )
+
+    merged = cli._config_with_cli_generation_params(config, args)
+
+    assert merged.top_p == 0.8
+    assert merged.max_tokens == 2048
+    assert merged.provider_sort == "latency"
+    assert merged.stop == ["END"]

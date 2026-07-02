@@ -5,14 +5,16 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from dataclasses import field
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
 import sys
 
-from appv231.ai.env_config import get_default_model_for_provider, load_model_config
+from appv231.ai.env_config import ModelConfig, get_default_model_for_provider, load_model_config
 from appv231.ai.model_resolver import ScopedModel, resolve_cli_model, resolve_model_scope
 from appv231.ai.models import get_model, get_models, get_providers, has_configured_auth, set_auth_credential
+from appv231.ai.providers.params import GenerationParams, merge_generation_params, params_from_mapping
 from appv231.ai.register_builtins import register_builtin_providers
 from appv231.ai.types import Model
 from appv231.app import CodingApp
@@ -118,6 +120,7 @@ class _StartupModelSelection:
 def _model_from_env(
     dotenv_path: str | Path,
     *,
+    config: ModelConfig | None = None,
     cli_provider: str | None = None,
     cli_model: str | None = None,
     cli_thinking: str | None = None,
@@ -125,6 +128,7 @@ def _model_from_env(
 ) -> Model:
     return _startup_model_from_env(
         dotenv_path,
+        config=config,
         cli_provider=cli_provider,
         cli_model=cli_model,
         cli_thinking=cli_thinking,
@@ -135,12 +139,13 @@ def _model_from_env(
 def _startup_model_from_env(
     dotenv_path: str | Path,
     *,
+    config: ModelConfig | None = None,
     cli_provider: str | None = None,
     cli_model: str | None = None,
     cli_thinking: str | None = None,
     cli_models: list[str] | None = None,
 ) -> _StartupModelSelection:
-    config = load_model_config("APPV2_WORKER_LLM", dotenv_path)
+    config = config or load_model_config("APPV2_WORKER_LLM", dotenv_path)
     model_id = config.model or get_default_model_for_provider("openrouter") or "moonshotai/kimi-k2.6"
     env_model = Model(
         id=model_id,
@@ -203,6 +208,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", help='Model pattern or ID, including optional "provider/id" form')
     parser.add_argument("--models", help="Comma-separated model patterns for scoped cycling")
     parser.add_argument("--thinking", help="Set thinking level: off, minimal, low, medium, high, xhigh")
+    parser.add_argument("--list-models", action="store_true", help="List available provider/model IDs and exit")
+    parser.add_argument("--list-providers", action="store_true", help="List available providers and exit")
+    parser.add_argument("--temperature", help="Override generation temperature")
+    parser.add_argument("--top-p", help="Override nucleus sampling top_p")
+    parser.add_argument("--max-tokens", type=_positive_int_arg, help="Override generation max tokens")
+    parser.add_argument("--timeout-seconds", help="Override provider request timeout")
+    parser.add_argument("--provider-sort", help="Override provider routing sort preference where supported")
+    parser.add_argument("--stop", help="Comma-separated or JSON-array stop sequences")
     parser.add_argument("--tui", action="store_true", help="Render live agent events with the ported differential TUI")
     parser.add_argument("--plain", action="store_true", help="Use the plain stdin loop instead of the interactive TUI")
     parser.add_argument(
@@ -245,11 +258,22 @@ def main(argv: list[str] | None = None) -> int:
         args.thinking = None
 
     dotenv_path = _resolve_dotenv_path(args.dotenv, search_start=cwd_path)
-    register_builtin_providers(dotenv_path=dotenv_path)
+    try:
+        config = _config_with_cli_generation_params(load_model_config("APPV2_WORKER_LLM", dotenv_path), args)
+    except ValueError as error:
+        parser.error(str(error))
+    register_builtin_providers(dotenv_path=dotenv_path, config=config)
     _load_persisted_auth_credentials()
+    if args.list_providers:
+        _print_provider_list()
+        return 0
+    if args.list_models:
+        _print_model_list()
+        return 0
     try:
         startup = _startup_model_from_env(
             dotenv_path,
+            config=config,
             cli_provider=args.provider,
             cli_model=args.model,
             cli_thinking=args.thinking,
@@ -303,6 +327,45 @@ def _split_models_arg(value: str | None) -> list[str] | None:
     if value is None:
         return None
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _generation_params_from_args(args: argparse.Namespace) -> GenerationParams:
+    values = {
+        "temperature": args.temperature,
+        "top_p": args.top_p,
+        "max_tokens": args.max_tokens,
+        "timeout_seconds": args.timeout_seconds,
+        "provider_sort": args.provider_sort,
+        "stop": args.stop,
+    }
+    return params_from_mapping(values, source="cli")
+
+
+def _config_with_cli_generation_params(config: ModelConfig, args: argparse.Namespace) -> ModelConfig:
+    cli_params = _generation_params_from_args(args)
+    merged = merge_generation_params(config.generation_params, cli_params)
+    return replace(
+        config,
+        temperature=merged.temperature if merged.temperature is not None else config.temperature,
+        top_p=merged.top_p if merged.top_p is not None else config.top_p,
+        max_tokens=merged.max_tokens if merged.max_tokens is not None else config.max_tokens,
+        timeout_seconds=merged.timeout_seconds if merged.timeout_seconds is not None else config.timeout_seconds,
+        provider_sort=merged.provider_sort if merged.provider_sort is not None else config.provider_sort,
+        stop=list(merged.stop) if merged.stop else list(config.stop),
+        generation_params=merged,
+    )
+
+
+def _print_provider_list() -> None:
+    providers = sorted(set(get_providers()))
+    for provider in providers:
+        print(provider)
+
+
+def _print_model_list() -> None:
+    for provider in sorted(get_providers()):
+        for model in sorted(get_models(provider), key=lambda item: item.id):
+            print(f"{provider}/{model.id}")
 
 
 def _print_last_assistant(app: CodingApp) -> None:

@@ -2072,7 +2072,12 @@ class RuntimeAuthProvider:
     stream_simple = stream
 
 
-def create_appv2_env_provider(prefix: str = "APPV2_WORKER_LLM", dotenv_path: "str" = ".env") -> ApiProvider:
-    config = load_model_config(prefix, dotenv_path)
+def create_appv2_env_provider(
+    prefix: str = "APPV2_WORKER_LLM",
+    dotenv_path: "str" = ".env",
+    *,
+    config: ModelConfig | None = None,
+) -> ApiProvider:
+    config = config or load_model_config(prefix, dotenv_path)
     impl = AppV2EnvProvider(config) if config.enabled else RuntimeAuthProvider(config)
     return ApiProvider(api=PROVIDER_API, stream=impl.stream, stream_simple=impl.stream_simple)
