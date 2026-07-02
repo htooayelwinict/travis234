@@ -14,6 +14,8 @@ import sys
 from appv231.ai.env_config import ModelConfig, get_default_model_for_provider, load_model_config
 from appv231.ai.model_resolver import ScopedModel, resolve_cli_model, resolve_model_scope
 from appv231.ai.models import get_model, get_models, get_providers, has_configured_auth, set_auth_credential
+from appv231.ai.providers.capabilities import ProviderParamWarning, build_generation_payload
+from appv231.ai.providers.catalog import determine_api_mode
 from appv231.ai.providers.params import GenerationParams, merge_generation_params, params_from_mapping
 from appv231.ai.register_builtins import register_builtin_providers
 from appv231.ai.types import Model
@@ -281,6 +283,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ValueError as error:
         parser.error(str(error))
+    generation_warnings = _generation_param_warnings_for_model(startup.model, config.generation_params)
+    _print_generation_param_warnings(generation_warnings)
     runtime_options: dict[str, object] = {}
     if args.max_iterations is not None:
         runtime_options["max_iterations"] = args.max_iterations
@@ -308,7 +312,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if not args.plain:
-        return InteractiveMode(app, generation_params=config.generation_params).run()
+        return InteractiveMode(
+            app,
+            generation_params=config.generation_params,
+            generation_param_warnings=generation_warnings,
+        ).run()
 
     while True:
         try:
@@ -366,6 +374,30 @@ def _print_model_list() -> None:
     for provider in sorted(get_providers()):
         for model in sorted(get_models(provider), key=lambda item: item.id):
             print(f"{provider}/{model.id}")
+
+
+def _generation_param_warnings_for_model(
+    model: Model,
+    params: GenerationParams,
+) -> list[ProviderParamWarning]:
+    try:
+        payload = build_generation_payload(
+            provider=model.provider,
+            api_mode=determine_api_mode(model.provider, model.base_url),
+            params=params,
+            tools_enabled=True,
+        )
+    except ValueError:
+        return []
+    return list(payload.warnings)
+
+
+def _print_generation_param_warnings(warnings: list[ProviderParamWarning]) -> None:
+    for warning in warnings:
+        print(
+            f"Warning: generation parameter {warning.param} {warning.action}: {warning.reason}",
+            file=sys.stderr,
+        )
 
 
 def _print_last_assistant(app: CodingApp) -> None:

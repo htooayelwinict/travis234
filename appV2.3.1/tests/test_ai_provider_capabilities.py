@@ -155,3 +155,17 @@ def test_openrouter_merges_explicit_provider_preferences() -> None:
         "allow_fallbacks": False,
         "sort": "latency",
     }
+
+
+def test_chat_payload_warns_when_provider_sort_is_unsupported() -> None:
+    payload = build_generation_payload(
+        provider="stepfun",
+        api_mode="chat_completions",
+        params=GenerationParams(provider_sort="latency"),
+        tools_enabled=True,
+    )
+
+    assert payload.provider_preferences is None
+    assert [(warning.param, warning.action) for warning in payload.warnings] == [
+        ("provider_sort", "dropped")
+    ]

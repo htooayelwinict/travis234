@@ -134,6 +134,27 @@ def test_model_config_exposes_generation_params(tmp_path: Path, monkeypatch) -> 
     )
 
 
+def test_generation_params_process_env_overrides_dotenv(tmp_path: Path, monkeypatch) -> None:
+    _clear_param_env(monkeypatch)
+    dotenv = tmp_path / ".env"
+    dotenv.write_text(
+        "\n".join(
+            [
+                "APPV2_WORKER_LLM_TEMPERATURE=0.2",
+                "APPV2_WORKER_LLM_MAX_TOKENS=4096",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("APPV2_WORKER_LLM_TEMPERATURE", "0.4")
+    monkeypatch.setenv("APPV2_WORKER_LLM_MAX_TOKENS", "8192")
+
+    config = load_model_config("APPV2_WORKER_LLM", dotenv)
+
+    assert config.generation_params.temperature == 0.4
+    assert config.generation_params.max_tokens == 8192
+
+
 def test_model_config_generation_params_do_not_source_legacy_defaults(tmp_path: Path, monkeypatch) -> None:
     _clear_param_env(monkeypatch)
     env = tmp_path / ".env"
@@ -155,3 +176,27 @@ def test_generation_params_do_not_make_legacy_temperature_invalid(tmp_path: Path
 
     assert config.temperature == 3
     assert config.generation_params == GenerationParams()
+
+
+def test_invalid_generation_param_does_not_drop_valid_sibling_params(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _clear_param_env(monkeypatch)
+    env = tmp_path / ".env"
+    env.write_text(
+        "\n".join(
+            [
+                "APPV2_WORKER_LLM_TEMPERATURE=3",
+                "APPV2_WORKER_LLM_MAX_TOKENS=4096",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_model_config("APPV2_WORKER_LLM", env)
+
+    assert config.generation_params == GenerationParams(
+        max_tokens=4096,
+        sources={"max_tokens": "env"},
+    )

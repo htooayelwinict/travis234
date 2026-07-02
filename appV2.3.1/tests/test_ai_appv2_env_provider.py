@@ -1627,6 +1627,72 @@ def test_appv2_env_provider_applies_generation_params_to_payload(monkeypatch) ->
     assert body["provider"] == {"sort": "throughput", "allow_fallbacks": True}
 
 
+def test_appv2_env_provider_surfaces_generation_param_warnings(monkeypatch) -> None:
+    warnings = []
+
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def iter_lines(self):
+            return iter(
+                [
+                    'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":null}]}',
+                    'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+                    "data: [DONE]",
+                ]
+            )
+
+    class FakeClient:
+        def __init__(self, timeout):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def stream(self, method, url, json, headers):
+            return FakeResponse()
+
+    monkeypatch.setattr(appv2_env.httpx, "Client", FakeClient)
+    provider = AppV2EnvProvider(
+        ModelConfig(
+            enabled=True,
+            api_key="test-key",
+            model="acme/x",
+            base_url="https://openrouter.ai/api/v1",
+            timeout_seconds=55,
+            temperature=0,
+            top_p=None,
+            frequency_penalty=None,
+            presence_penalty=None,
+            seed=None,
+            generation_params=GenerationParams(parallel_tool_calls=True),
+        )
+    )
+
+    provider.stream(
+        _model(),
+        Context(messages=[UserMessage(content="hi")]),
+        SimpleNamespace(on_generation_warning=warnings.append),
+    ).result_sync()
+
+    assert [(warning.param, warning.action) for warning in warnings] == [
+        ("parallel_tool_calls", "dropped")
+    ]
+
+
 def test_appv2_env_provider_runtime_model_overrides_env_config_model(monkeypatch) -> None:
     captured_body: dict = {}
 

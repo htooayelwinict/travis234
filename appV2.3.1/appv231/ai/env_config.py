@@ -7,7 +7,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from appv231.ai.providers.params import GenerationParams, params_from_mapping
+from appv231.ai.providers.params import GenerationParams, merge_generation_params, params_from_mapping
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
 DEFAULT_MODEL_PER_PROVIDER = {
@@ -195,23 +195,23 @@ def get_default_model_for_provider(provider: str) -> str | None:
 
 
 def _load_generation_params(prefix: str, config: dict[str, str]) -> GenerationParams:
-    try:
-        return params_from_mapping(
-            {
-                "temperature": config.get(f"{prefix}_TEMPERATURE"),
-                "top_p": config.get(f"{prefix}_TOP_P"),
-                "frequency_penalty": config.get(f"{prefix}_FREQUENCY_PENALTY"),
-                "presence_penalty": config.get(f"{prefix}_PRESENCE_PENALTY"),
-                "seed": config.get(f"{prefix}_SEED"),
-                "stop": config.get(f"{prefix}_STOP"),
-                "provider_sort": config.get(f"{prefix}_PROVIDER_SORT") or config.get("OPENROUTER_PROVIDER_SORT"),
-                "max_tokens": config.get(f"{prefix}_MAX_TOKENS"),
-                "timeout_seconds": config.get(f"{prefix}_TIMEOUT_SECONDS"),
-            },
-            source="env",
-        )
-    except ValueError:
-        return GenerationParams()
+    parsed_params: list[GenerationParams] = []
+    for key, value in {
+        "temperature": config.get(f"{prefix}_TEMPERATURE"),
+        "top_p": config.get(f"{prefix}_TOP_P"),
+        "frequency_penalty": config.get(f"{prefix}_FREQUENCY_PENALTY"),
+        "presence_penalty": config.get(f"{prefix}_PRESENCE_PENALTY"),
+        "seed": config.get(f"{prefix}_SEED"),
+        "stop": config.get(f"{prefix}_STOP"),
+        "provider_sort": config.get(f"{prefix}_PROVIDER_SORT") or config.get("OPENROUTER_PROVIDER_SORT"),
+        "max_tokens": config.get(f"{prefix}_MAX_TOKENS"),
+        "timeout_seconds": config.get(f"{prefix}_TIMEOUT_SECONDS"),
+    }.items():
+        try:
+            parsed_params.append(params_from_mapping({key: value}, source="env"))
+        except ValueError:
+            continue
+    return merge_generation_params(*parsed_params)
 
 
 def _default_model(prefix: str) -> str | None:

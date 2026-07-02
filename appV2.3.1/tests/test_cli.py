@@ -632,6 +632,29 @@ def test_cli_list_models_exits_without_starting_app(monkeypatch, tmp_path, capsy
     assert "stepfun/step-3.7-flash" in capsys.readouterr().out
 
 
+def test_cli_list_providers_exits_without_starting_app(monkeypatch, tmp_path, capsys) -> None:
+    register_model(
+        Model(
+            id="step-3.7-flash",
+            name="Step 3.7 Flash",
+            api="openai-completions",
+            provider="stepfun",
+            base_url="",
+        )
+    )
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
+    monkeypatch.setattr(
+        cli,
+        "CodingApp",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("app must not start")),
+    )
+
+    code = cli.main(["--cwd", str(tmp_path), "--list-providers"])
+
+    assert code == 0
+    assert "stepfun" in capsys.readouterr().out.splitlines()
+
+
 def test_cli_provider_stepfun_model_uses_custom_known_provider(monkeypatch, tmp_path) -> None:
     observed: dict[str, object] = {}
 
@@ -665,7 +688,7 @@ def test_cli_provider_stepfun_model_uses_custom_known_provider(monkeypatch, tmp_
     assert model.id == "step-3.7-flash"
 
 
-def test_cli_generation_flags_are_passed_to_registered_provider(monkeypatch, tmp_path) -> None:
+def test_cli_generation_flags_are_passed_to_registered_provider(monkeypatch, tmp_path, capsys) -> None:
     observed: dict[str, object] = {}
 
     def record_registration(dotenv_path, config=None):
@@ -693,6 +716,8 @@ def test_cli_generation_flags_are_passed_to_registered_provider(monkeypatch, tmp
             "0.9",
             "--max-tokens",
             "4096",
+            "--timeout-seconds",
+            "75",
             "--provider-sort",
             "throughput",
             "--stop",
@@ -707,8 +732,11 @@ def test_cli_generation_flags_are_passed_to_registered_provider(monkeypatch, tmp
     assert params.temperature == 0.2
     assert params.top_p == 0.9
     assert params.max_tokens == 4096
+    assert params.timeout_seconds == 75
     assert params.provider_sort == "throughput"
     assert params.stop == ("END", "STOP")
+    assert observed["config"].timeout_seconds == 75
+    assert "Warning: generation parameter provider_sort dropped:" in capsys.readouterr().err
 
 
 def test_cli_passes_generation_params_to_interactive_mode(monkeypatch, tmp_path) -> None:

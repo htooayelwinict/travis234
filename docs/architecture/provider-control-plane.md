@@ -30,6 +30,8 @@ Direct providers use explicit capability policy. Unsupported user parameters are
 
 Routing aggregators such as OpenRouter can receive provider-routing preferences through the provider payload object.
 
+Warnings are surfaced at the CLI boundary for the selected startup model, shown in the TUI `/params` command, and exposed to provider runtime callers through the optional `on_generation_warning` option callback.
+
 ## Merge Order
 
 ```text

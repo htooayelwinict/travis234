@@ -84,6 +84,7 @@ from appv231.agent.types import (
     TurnEndEvent,
 )
 from appv231.agent.types import AgentTool, AgentToolResult
+from appv231.ai.providers.capabilities import ProviderParamWarning
 from appv231.ai.providers.faux import create_faux_provider, faux_model, text_response_events, tool_call_response_events
 from appv231.ai.providers.params import GenerationParams
 from appv231.ai.models import get_api_key_for_provider, get_provider_auth_status, register_model, reset_models
@@ -5920,3 +5921,41 @@ def test_interactive_mode_params_command_displays_constructor_params(monkeypatch
 
     assert shown["kind"] == "model"
     assert shown["message"] == "stepfun/step-3.7-flash: temperature=0.2 (cli), max_tokens=4096 (cli)"
+
+
+def test_interactive_mode_params_command_displays_generation_param_warnings(monkeypatch) -> None:
+    class FakeSession:
+        model = Model(id="step-3.7-flash", name="Step", api="openai-completions", provider="stepfun", base_url="")
+        thinking_level = "off"
+        session_name = "test"
+
+        def subscribe(self, callback):
+            return lambda: None
+
+    class FakeApp:
+        cwd = "."
+        tui = TUI(FakeTerminal())
+        session = FakeSession()
+        messages = []
+
+    mode = InteractiveMode(
+        FakeApp(),
+        generation_params=GenerationParams(provider_sort="latency"),
+        generation_param_warnings=[
+            ProviderParamWarning(
+                param="provider_sort",
+                action="dropped",
+                reason="stepfun does not support provider routing sort preferences.",
+            )
+        ],
+    )
+    shown: dict[str, str] = {}
+    monkeypatch.setattr(mode, "_show_status", lambda message, kind="info": shown.update(message=message, kind=kind))
+
+    mode._run_params_command("")
+
+    assert shown["kind"] == "model"
+    assert shown["message"] == (
+        "stepfun/step-3.7-flash: provider_sort=latency; "
+        "warnings: provider_sort dropped"
+    )

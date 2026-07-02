@@ -1978,6 +1978,12 @@ class AppV2EnvProvider:
                 params=generation_params,
                 tools_enabled=bool(tools),
             )
+            on_generation_warning = (
+                getattr(options, "on_generation_warning", None) if options is not None else None
+            )
+            if callable(on_generation_warning):
+                for warning in generation_payload.warnings:
+                    on_generation_warning(warning)
             transport_kwargs = {
                 "model": model.id or self.config.model,
                 "messages": messages,

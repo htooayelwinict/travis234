@@ -33,6 +33,7 @@ from appv231.ai import (
     logout_provider,
     set_auth_credential,
 )
+from appv231.ai.providers.capabilities import ProviderParamWarning
 from appv231.ai.providers.params import GenerationParams, compact_generation_params_display
 from appv231.coding_agent.config import get_agent_dir
 from appv231.compaction import estimate_tokens
@@ -72,6 +73,10 @@ def _short_status_text(text: str, *, limit: int) -> str:
     if len(value) <= limit:
         return value
     return value[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _compact_generation_param_warnings(warnings: list[ProviderParamWarning]) -> str:
+    return ", ".join(f"{warning.param} {warning.action}" for warning in warnings)
 
 
 def _auth_json_path() -> Path:
@@ -121,9 +126,11 @@ class InteractiveMode:
         input_fn: InputFn | None = None,
         prompt_label: str = "appv231> ",
         generation_params: GenerationParams | None = None,
+        generation_param_warnings: list[ProviderParamWarning] | None = None,
     ) -> None:
         self.app = app
         self.generation_params = generation_params
+        self.generation_param_warnings = list(generation_param_warnings or [])
         self.tui = app.tui
         self.input_fn = input_fn or input
         self._line_input_mode = input_fn is not None
@@ -930,10 +937,21 @@ class InteractiveMode:
             self._show_status(f"{provider}/{model_id}: default generation parameters", kind="model")
             return
         display = compact_generation_params_display(params)
+        warning_display = _compact_generation_param_warnings(self.generation_param_warnings)
         if query:
             normalized = query.strip().lower()
             pieces = [part for part in display.split(", ") if normalized in part.lower()]
-            display = ", ".join(pieces) if pieces else f"no generation parameter matching {query}"
+            warning_pieces = [part for part in warning_display.split(", ") if normalized in part.lower()]
+            if pieces:
+                display = ", ".join(pieces)
+            elif warning_pieces:
+                display = f"warnings: {', '.join(warning_pieces)}"
+            else:
+                display = f"no generation parameter matching {query}"
+            self._show_status(f"{provider}/{model_id}: {display}", kind="model")
+            return
+        if warning_display:
+            display = f"{display}; warnings: {warning_display}"
         self._show_status(f"{provider}/{model_id}: {display}", kind="model")
 
     def _show_model_list(self, models) -> None:

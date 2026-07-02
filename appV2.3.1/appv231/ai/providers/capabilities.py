@@ -127,7 +127,7 @@ def build_generation_payload(
         raise ValueError(f"Unsupported api_mode for generation payload: {api_mode}")
 
     _copy_supported(params, request_overrides, _CHAT_COMMON)
-    provider_preferences = _provider_preferences_for(provider_id, params)
+    provider_preferences = _provider_preferences_for(provider_id, params, warnings)
     if params.stop:
         request_overrides["stop"] = list(params.stop)
     _drop_parallel_tools_without_tools(params, request_overrides, warnings, tools_enabled=tools_enabled)
@@ -140,8 +140,28 @@ def build_generation_payload(
     )
 
 
-def _provider_preferences_for(provider_id: str, params: GenerationParams) -> dict[str, Any] | None:
+def _provider_preferences_for(
+    provider_id: str,
+    params: GenerationParams,
+    warnings: list[ProviderParamWarning],
+) -> dict[str, Any] | None:
     if provider_id != "openrouter":
+        if params.provider_sort:
+            warnings.append(
+                ProviderParamWarning(
+                    param="provider_sort",
+                    action="dropped",
+                    reason=f"{provider_id} does not support provider routing sort preferences.",
+                )
+            )
+        if params.provider_preferences:
+            warnings.append(
+                ProviderParamWarning(
+                    param="provider_preferences",
+                    action="dropped",
+                    reason=f"{provider_id} does not support provider routing preferences.",
+                )
+            )
         return None
 
     preferences = dict(params.provider_preferences or {})
