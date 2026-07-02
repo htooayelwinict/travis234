@@ -116,6 +116,64 @@ def test_resolve_cli_model_builds_custom_provider_model_and_strips_valid_thinkin
     assert result.thinking_level == "high"
 
 
+def test_resolve_cli_model_builds_known_provider_custom_model_without_registered_models() -> None:
+    registry = Registry([])
+
+    result = resolve_cli_model(
+        cli_provider="stepfun",
+        cli_model="step-3.7-flash",
+        model_registry=registry,
+    )
+
+    assert result.error is None
+    assert result.warning == 'Model "step-3.7-flash" not found for provider "stepfun". Using custom model id.'
+    assert result.model is not None
+    assert result.model.provider == "stepfun"
+    assert result.model.id == "step-3.7-flash"
+    assert result.model.api == "openai-completions"
+    assert result.model.base_url == "https://api.stepfun.ai/step_plan/v1"
+
+
+def test_resolve_cli_model_infers_known_provider_from_slash_reference_without_registered_models() -> None:
+    registry = Registry([])
+
+    result = resolve_cli_model(
+        cli_model="stepfun/step-3.7-flash",
+        model_registry=registry,
+    )
+
+    assert result.error is None
+    assert result.warning == 'Model "step-3.7-flash" not found for provider "stepfun". Using custom model id.'
+    assert result.model is not None
+    assert result.model.provider == "stepfun"
+    assert result.model.id == "step-3.7-flash"
+
+
+def test_resolve_cli_model_normalizes_known_provider_alias_from_slash_reference() -> None:
+    registry = Registry([])
+
+    result = resolve_cli_model(
+        cli_model="step/step-3.7-flash",
+        model_registry=registry,
+    )
+
+    assert result.error is None
+    assert result.model is not None
+    assert result.model.provider == "stepfun"
+    assert result.model.id == "step-3.7-flash"
+
+
+def test_resolve_cli_model_keeps_unknown_provider_error_without_registered_models() -> None:
+    result = resolve_cli_model(
+        cli_provider="unknown-provider",
+        cli_model="model-x",
+        model_registry=Registry([]),
+    )
+
+    assert result.model is None
+    assert result.error == 'Unknown provider "unknown-provider". Use --list-models to see available providers/models.'
+
+
 def test_find_initial_model_uses_cli_scoped_saved_then_available_default_order() -> None:
     openrouter_default = _model("openrouter", "moonshotai/kimi-k2.6")
     fallback = _model("custom", "first")

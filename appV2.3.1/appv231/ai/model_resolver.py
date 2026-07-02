@@ -10,6 +10,7 @@ from fnmatch import fnmatchcase
 from typing import Protocol
 
 from appv231.ai.env_config import DEFAULT_MODEL_PER_PROVIDER
+from appv231.ai.providers.catalog import get_provider_profile, list_provider_profiles, normalize_provider
 from appv231.ai.types import Model
 
 DEFAULT_THINKING_LEVEL = "off"
@@ -186,13 +187,14 @@ def resolve_cli_model(
         return ResolveCliModelResult(model=None)
 
     available_models = _registry_get_all(model_registry)
-    if not available_models:
-        return ResolveCliModelResult(
-            model=None,
-            error="No models available. Check your installation or add models to models.json.",
-        )
-
     provider_map = {model.provider.lower(): model.provider for model in available_models}
+    known_provider_profiles = {profile.name.lower(): profile.name for profile in list_provider_profiles()}
+    provider_map.update({key: value for key, value in known_provider_profiles.items() if key not in provider_map})
+    if cli_provider:
+        normalized_cli_provider = normalize_provider(cli_provider)
+        if get_provider_profile(normalized_cli_provider):
+            provider_map.setdefault(cli_provider.lower(), normalized_cli_provider)
+            provider_map.setdefault(normalized_cli_provider.lower(), normalized_cli_provider)
     provider = provider_map.get(cli_provider.lower()) if cli_provider else None
     if cli_provider and not provider:
         return ResolveCliModelResult(
@@ -207,6 +209,10 @@ def resolve_cli_model(
         if slash_index != -1:
             maybe_provider = cli_model[:slash_index]
             canonical = provider_map.get(maybe_provider.lower())
+            if canonical is None:
+                normalized = normalize_provider(maybe_provider)
+                if get_provider_profile(normalized):
+                    canonical = provider_map.get(normalized.lower()) or normalized
             if canonical:
                 provider = canonical
                 pattern = cli_model[slash_index + 1 :]
@@ -368,11 +374,25 @@ def _try_match_model(model_pattern: str, available_models: list[Model]) -> Model
 
 def _build_fallback_model(provider: str, model_id: str, available_models: list[Model]) -> Model | None:
     provider_models = [model for model in available_models if model.provider == provider]
-    if not provider_models:
+    if provider_models:
+        default_id = DEFAULT_MODEL_PER_PROVIDER.get(provider)
+        base_model = next((model for model in provider_models if model.id == default_id), provider_models[0])
+        return replace(base_model, id=model_id, name=model_id)
+
+    profile = get_provider_profile(provider)
+    if profile is None:
         return None
-    default_id = DEFAULT_MODEL_PER_PROVIDER.get(provider)
-    base_model = next((model for model in provider_models if model.id == default_id), provider_models[0])
-    return replace(base_model, id=model_id, name=model_id)
+    return Model(
+        id=model_id,
+        name=model_id,
+        api="openai-completions",
+        provider=provider,
+        base_url=profile.base_url or "",
+        reasoning=False,
+        input=["text"],
+        context_window=128000,
+        max_tokens=profile.default_max_tokens or 8192,
+    )
 
 
 def _first_default_model(models: list[Model]) -> Model | None:
