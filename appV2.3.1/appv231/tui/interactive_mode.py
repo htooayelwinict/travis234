@@ -33,6 +33,7 @@ from appv231.ai import (
     logout_provider,
     set_auth_credential,
 )
+from appv231.ai.providers.params import GenerationParams, compact_generation_params_display
 from appv231.coding_agent.config import get_agent_dir
 from appv231.compaction import estimate_tokens
 from appv231.tui.component import (
@@ -119,8 +120,10 @@ class InteractiveMode:
         *,
         input_fn: InputFn | None = None,
         prompt_label: str = "appv231> ",
+        generation_params: GenerationParams | None = None,
     ) -> None:
         self.app = app
+        self.generation_params = generation_params
         self.tui = app.tui
         self.input_fn = input_fn or input
         self._line_input_mode = input_fn is not None
@@ -241,6 +244,7 @@ class InteractiveMode:
             {"name": "logout", "description": "Remove provider authentication"},
             {"name": "model", "description": "Switch model"},
             {"name": "models", "description": "List available models"},
+            {"name": "params", "description": "Show active provider generation parameters"},
             {"name": "quit", "description": "Exit the interactive session"},
         ]
         runner = getattr(self.app.session, "extension_runner", None)
@@ -381,6 +385,10 @@ class InteractiveMode:
                 model_command = _parse_model_command(prompt)
                 if model_command:
                     self._run_model_command(model_command[0], model_command[1])
+                    continue
+                params_query = _parse_params_command(prompt)
+                if params_query is not None:
+                    self._run_params_command(params_query)
                     continue
                 if self._dispatch_extension_command(prompt):
                     self._refresh_footer()
@@ -808,6 +816,7 @@ class InteractiveMode:
             "/help - Show this help.",
             "/model - Switch model.",
             "/models - List available models.",
+            "/params - Show active provider generation parameters.",
             "/login - Configure provider authentication.",
             "/logout - Remove provider authentication.",
             "/compact or /compress - Safely compress conversation context.",
@@ -912,6 +921,20 @@ class InteractiveMode:
         model = label_to_model.get(selected)
         if model is not None:
             self._switch_model(model)
+
+    def _run_params_command(self, query: str | None = None) -> None:
+        provider = getattr(self.app.session.model, "provider", "")
+        model_id = getattr(self.app.session.model, "id", "")
+        params = self.generation_params
+        if params is None:
+            self._show_status(f"{provider}/{model_id}: default generation parameters", kind="model")
+            return
+        display = compact_generation_params_display(params)
+        if query:
+            normalized = query.strip().lower()
+            pieces = [part for part in display.split(", ") if normalized in part.lower()]
+            display = ", ".join(pieces) if pieces else f"no generation parameter matching {query}"
+        self._show_status(f"{provider}/{model_id}: {display}", kind="model")
 
     def _show_model_list(self, models) -> None:
         if not models:
@@ -1716,6 +1739,14 @@ def _parse_model_command(prompt: str) -> tuple[str, str | None] | None:
         return "select", None
     if prompt.startswith("/model "):
         return "select", prompt[len("/model ") :].strip()
+    return None
+
+
+def _parse_params_command(prompt: str) -> str | None:
+    if prompt == "/params":
+        return ""
+    if prompt.startswith("/params "):
+        return prompt[len("/params ") :].strip()
     return None
 
 

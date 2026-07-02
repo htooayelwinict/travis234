@@ -39,7 +39,7 @@ def test_cli_without_prompt_starts_interactive_tui(monkeypatch, tmp_path) -> Non
             created["app"] = self
 
     class FakeInteractiveMode:
-        def __init__(self, app):
+        def __init__(self, app, **kwargs):
             created["mode_app"] = app
 
         def run(self):
@@ -709,6 +709,56 @@ def test_cli_generation_flags_are_passed_to_registered_provider(monkeypatch, tmp
     assert params.max_tokens == 4096
     assert params.provider_sort == "throughput"
     assert params.stop == ("END", "STOP")
+
+
+def test_cli_passes_generation_params_to_interactive_mode(monkeypatch, tmp_path) -> None:
+    observed: dict[str, object] = {}
+
+    class FakeApp:
+        def __init__(self, **kwargs):
+            self.messages = []
+            self.cwd = kwargs["cwd"]
+            self.session = type(
+                "FakeSession",
+                (),
+                {
+                    "model": kwargs["model"],
+                    "thinking_level": kwargs["thinking_level"],
+                    "session_name": "test",
+                    "subscribe": lambda self, callback: (lambda: None),
+                },
+            )()
+            self.tui = None
+
+    class FakeInteractiveMode:
+        def __init__(self, app, *, generation_params=None, **kwargs):
+            observed["generation_params"] = generation_params
+
+        def run(self):
+            return 0
+
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
+    monkeypatch.setattr(cli, "CodingApp", FakeApp)
+    monkeypatch.setattr(cli, "InteractiveMode", FakeInteractiveMode)
+
+    code = cli.main(
+        [
+            "--cwd",
+            str(tmp_path),
+            "--model",
+            "stepfun/step-3.7-flash",
+            "--temperature",
+            "0.2",
+            "--max-tokens",
+            "4096",
+            "--tui",
+        ]
+    )
+
+    assert code == 0
+    params = observed["generation_params"]
+    assert params.temperature == 0.2
+    assert params.max_tokens == 4096
 
 
 def test_cli_generation_merge_preserves_legacy_config_fields_when_flags_absent() -> None:

@@ -85,6 +85,7 @@ from appv231.agent.types import (
 )
 from appv231.agent.types import AgentTool, AgentToolResult
 from appv231.ai.providers.faux import create_faux_provider, faux_model, text_response_events, tool_call_response_events
+from appv231.ai.providers.params import GenerationParams
 from appv231.ai.models import get_api_key_for_provider, get_provider_auth_status, register_model, reset_models
 from appv231.ai.stream import register_api_provider, reset_api_providers
 from appv231.ai.types import (
@@ -5875,3 +5876,47 @@ def test_input_render_avoids_full_width_scan_for_long_ascii_tail(monkeypatch) ->
     assert len(rendered) == 1
     assert "x" in strip_ansi(rendered[0])
     assert max(checked_lengths) < 500
+
+
+def test_interactive_mode_parses_params_command() -> None:
+    from appv231.tui.interactive_mode import _parse_params_command
+
+    assert _parse_params_command("/params") == ""
+
+
+def test_interactive_mode_parses_params_filter() -> None:
+    from appv231.tui.interactive_mode import _parse_params_command
+
+    assert _parse_params_command("/params temperature") == "temperature"
+
+
+def test_interactive_mode_params_command_displays_constructor_params(monkeypatch) -> None:
+    class FakeSession:
+        model = Model(id="step-3.7-flash", name="Step", api="openai-completions", provider="stepfun", base_url="")
+        thinking_level = "off"
+        session_name = "test"
+
+        def subscribe(self, callback):
+            return lambda: None
+
+    class FakeApp:
+        cwd = "."
+        tui = TUI(FakeTerminal())
+        session = FakeSession()
+        messages = []
+
+    mode = InteractiveMode(
+        FakeApp(),
+        generation_params=GenerationParams(
+            temperature=0.2,
+            max_tokens=4096,
+            sources={"temperature": "cli", "max_tokens": "cli"},
+        ),
+    )
+    shown: dict[str, str] = {}
+    monkeypatch.setattr(mode, "_show_status", lambda message, kind="info": shown.update(message=message, kind=kind))
+
+    mode._run_params_command("")
+
+    assert shown["kind"] == "model"
+    assert shown["message"] == "stepfun/step-3.7-flash: temperature=0.2 (cli), max_tokens=4096 (cli)"

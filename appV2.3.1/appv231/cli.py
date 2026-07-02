@@ -308,7 +308,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if not args.plain:
-        return InteractiveMode(app).run()
+        return InteractiveMode(app, generation_params=config.generation_params).run()
 
     while True:
         try:
