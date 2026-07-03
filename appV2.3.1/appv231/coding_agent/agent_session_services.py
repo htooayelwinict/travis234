@@ -404,7 +404,7 @@ def _is_cloudflare_model(model: Model) -> bool:
 
 
 def _is_install_telemetry_enabled(settings_manager: object) -> bool:
-    telemetry_env = os.environ.get("PI_TELEMETRY")
+    telemetry_env = os.environ.get("APPV231_TELEMETRY")
     if telemetry_env is not None:
         return bool(telemetry_env) and telemetry_env.lower() in {"1", "true", "yes"}
     enabled = _call_or_none(settings_manager, "getEnableInstallTelemetry", "get_enable_install_telemetry")
@@ -416,14 +416,14 @@ def _default_attribution_headers(model: Model, settings_manager: object) -> dict
         return None
     if _is_openrouter_model(model):
         return {
-            "HTTP-Referer": "https://pi.dev",
-            "X-OpenRouter-Title": "pi",
+            "HTTP-Referer": "https://appv231.local",
+            "X-OpenRouter-Title": "appv231",
             "X-OpenRouter-Categories": "cli-agent",
         }
     if _is_nvidia_nim_model(model):
-        return {"X-BILLING-INVOKE-ORIGIN": "Pi"}
+        return {"X-BILLING-INVOKE-ORIGIN": "appv231"}
     if _is_cloudflare_model(model):
-        return {"User-Agent": "pi-coding-agent"}
+        return {"User-Agent": "appv231-coding-agent"}
     return None
 
 

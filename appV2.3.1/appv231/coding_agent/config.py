@@ -1,4 +1,4 @@
-"""Pi-style coding-agent package and user config paths."""
+"""appv231 coding-agent package and user config paths."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ def _normalize_path(path: str) -> str:
 
 
 def _find_package_dir() -> Path:
-    env_dir = os.environ.get("PI_PACKAGE_DIR")
+    env_dir = os.environ.get("APPV231_PACKAGE_DIR")
     if env_dir:
         return Path(_normalize_path(env_dir)).resolve()
     current = Path(__file__).resolve()
@@ -77,16 +77,16 @@ def _read_package_json() -> dict[str, Any]:
 
 
 _PKG = _read_package_json()
-_PI_CONFIG = _PKG.get("piConfig") if isinstance(_PKG.get("piConfig"), dict) else {}
+_APPV231_CONFIG = _PKG.get("appv231Config") if isinstance(_PKG.get("appv231Config"), dict) else {}
 
-PACKAGE_NAME = str(_PKG.get("name") or "@earendil-works/pi-coding-agent")
-APP_NAME = str(_PI_CONFIG.get("name") or "pi")
-APP_TITLE = APP_NAME if _PI_CONFIG.get("name") else "\u03c0"
-CONFIG_DIR_NAME = str(_PI_CONFIG.get("configDir") or ".pi")
+PACKAGE_NAME = str(_PKG.get("name") or "@htooayelwinict/appv231")
+APP_NAME = str(_APPV231_CONFIG.get("name") or "appv231")
+APP_TITLE = APP_NAME
+CONFIG_DIR_NAME = str(_APPV231_CONFIG.get("configDir") or ".appv231")
 VERSION = str(_PKG.get("version") or "0.0.0")
 ENV_AGENT_DIR = f"{APP_NAME.upper()}_CODING_AGENT_DIR"
 ENV_SESSION_DIR = f"{APP_NAME.upper()}_CODING_AGENT_SESSION_DIR"
-DEFAULT_SHARE_VIEWER_URL = "https://pi.dev/session/"
+DEFAULT_SHARE_VIEWER_URL = "https://appv231.local/session/"
 
 
 def expand_tilde_path(path: str) -> str:
@@ -94,7 +94,7 @@ def expand_tilde_path(path: str) -> str:
 
 
 def get_share_viewer_url(gist_id: str) -> str:
-    base_url = os.environ.get("PI_SHARE_VIEWER_URL") or DEFAULT_SHARE_VIEWER_URL
+    base_url = os.environ.get("APPV231_SHARE_VIEWER_URL") or DEFAULT_SHARE_VIEWER_URL
     return f"{base_url}#{gist_id}"
 
 

@@ -27,7 +27,7 @@ _PROVIDER_ENV_PREFIXES = (
     "ANTHROPIC_",
     "GEMINI_",
     "GOOGLE_",
-    "APPV2_WORKER_LLM_",
+    "APPV231_WORKER_LLM_",
 )
 
 _STRIP_FLAGS_WITH_VALUE = {"--cwd", "--dotenv"}
@@ -170,7 +170,7 @@ def build_docker_command(config: SandboxConfig) -> list[str]:
         "-e",
         f"HOME={config.container_agent_home}",
         "-e",
-        f"PI_CODING_AGENT_DIR={config.container_agent_home}/agent",
+        f"APPV231_CODING_AGENT_DIR={config.container_agent_home}/agent",
         "-e",
         "APPV231_SANDBOX=1",
         "-e",

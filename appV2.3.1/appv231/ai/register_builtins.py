@@ -8,7 +8,7 @@ from appv231.ai.stream import register_api_provider
 
 
 def register_builtin_providers(
-    prefix: str = "APPV2_WORKER_LLM",
+    prefix: str = "APPV231_WORKER_LLM",
     dotenv_path: str = ".env",
     *,
     config: ModelConfig | None = None,

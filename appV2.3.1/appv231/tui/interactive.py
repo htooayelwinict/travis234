@@ -93,7 +93,8 @@ class AssistantMessageComponent(Container):
             elif isinstance(block, ThinkingContent):
                 if block.thinking.strip():
                     if self.hide_thinking_block:
-                        self.add(Text(self.hidden_thinking_label))
+                        if self.hidden_thinking_label.strip():
+                            self.add(Text(self.hidden_thinking_label))
                     else:
                         self.add(Markdown(f"Thinking:\n{block.thinking.strip()}"))
         if getattr(message, "stop_reason", None) == "error":
@@ -639,8 +640,8 @@ class InteractiveRenderer:
         self.cwd = cwd
         self._current_assistant: AssistantMessageComponent | None = None
         self._tool_components: dict[str, ToolExecutionComponent] = {}
-        self.hide_thinking_block = False
-        self.hidden_thinking_label = "Thinking..."
+        self.hide_thinking_block = True
+        self.hidden_thinking_label = ""
 
     def set_output_container(self, output_container: Container) -> None:
         self.output_container = output_container

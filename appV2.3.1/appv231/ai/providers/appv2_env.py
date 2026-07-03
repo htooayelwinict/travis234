@@ -108,6 +108,7 @@ _PROVIDER_ERROR_DETAIL_TAIL_CHARS = 300
 _PROVIDER_ERROR_DETAIL_TRUNCATION_MARKER = "... [truncated provider error body] ..."
 _NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)"
 _NON_VISION_TOOL_IMAGE_PLACEHOLDER = "(tool image omitted: model does not support images)"
+_STREAMING_TOOL_ARGUMENT_PREVIEW_MAX_CHARS = 8_192
 
 
 def _has_tool_history(messages: list[Message]) -> bool:
@@ -645,21 +646,21 @@ def _escape_control_character(char: str) -> str:
 
 
 def _repair_json(json_text: str) -> str:
-    repaired = ""
+    repaired: list[str] = []
     in_string = False
     index = 0
     while index < len(json_text):
         char = json_text[index]
 
         if not in_string:
-            repaired += char
+            repaired.append(char)
             if char == '"':
                 in_string = True
             index += 1
             continue
 
         if char == '"':
-            repaired += char
+            repaired.append(char)
             in_string = False
             index += 1
             continue
@@ -667,30 +668,30 @@ def _repair_json(json_text: str) -> str:
         if char == "\\":
             next_char = json_text[index + 1] if index + 1 < len(json_text) else None
             if next_char is None:
-                repaired += "\\\\"
+                repaired.append("\\\\")
                 index += 1
                 continue
 
             if next_char == "u":
                 unicode_digits = json_text[index + 2 : index + 6]
                 if len(unicode_digits) == 4 and all(digit in "0123456789abcdefABCDEF" for digit in unicode_digits):
-                    repaired += "\\u" + unicode_digits
+                    repaired.append("\\u" + unicode_digits)
                     index += 6
                     continue
 
             if next_char in _VALID_JSON_ESCAPES:
-                repaired += "\\" + next_char
+                repaired.append("\\" + next_char)
                 index += 2
                 continue
 
-            repaired += "\\\\"
+            repaired.append("\\\\")
             index += 1
             continue
 
-        repaired += _escape_control_character(char) if _is_control_character(char) else char
+        repaired.append(_escape_control_character(char) if _is_control_character(char) else char)
         index += 1
 
-    return repaired
+    return "".join(repaired)
 
 
 def _parse_json_with_repair(json_text: str) -> Any:
@@ -869,6 +870,16 @@ def _parse_streaming_json(partial_json: str | None) -> dict:
             except Exception:
                 return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _parse_streaming_json_preview(partial_json: str | None, previous: dict | None = None) -> dict:
+    if not partial_json or not partial_json.strip():
+        return {}
+    if len(partial_json) <= _STREAMING_TOOL_ARGUMENT_PREVIEW_MAX_CHARS:
+        return _parse_streaming_json(partial_json)
+    if previous:
+        return previous
+    return _parse_streaming_json(partial_json[:_STREAMING_TOOL_ARGUMENT_PREVIEW_MAX_CHARS])
 
 
 def _repair_complete_tool_arguments(raw_arguments: str | None) -> dict | None:
@@ -1051,6 +1062,7 @@ def parse_sse_chunks(
     tool_call_blocks_by_id: dict[str, ToolCall] = {}
     pending_tool_call_parts: dict[tuple[str, int | str], dict[str, str]] = {}
     tool_arg_bufs: dict[int, str] = {}
+    tool_arg_previews: dict[int, dict] = {}
     finish_reason = "stop"
     has_finish_reason = False
     stream_leaked_tool_protocol_text = False
@@ -1187,6 +1199,7 @@ def parse_sse_chunks(
                     "tool_call_blocks_by_id": tool_call_blocks_by_id,
                     "pending_tool_call_parts": pending_tool_call_parts,
                     "tool_arg_bufs": tool_arg_bufs,
+                    "tool_arg_previews": tool_arg_previews,
                     "leaked_tool_protocol_text": stream_leaked_tool_protocol_text,
                     "content_index_of": content_index_of,
                     "ensure_start": ensure_start,
@@ -1259,6 +1272,7 @@ def _parse_codex_responses_sse_chunks(
     usage = empty_usage()
     output_slots: dict[int, tuple[str, int]] = {}
     tool_arg_bufs: dict[int, str] = {}
+    tool_arg_previews: dict[int, dict] = {}
     completed = False
 
     def ensure_start():
@@ -1299,14 +1313,16 @@ def _parse_codex_responses_sse_chunks(
             if start:
                 yield start
             content_index = len(message.content)
+            arguments_preview = _parse_streaming_json_preview(raw_arguments)
             block = ToolCall(
                 id=_responses_tool_call_id(call_id, item_id),
                 name=name,
-                arguments=_parse_streaming_json(raw_arguments),
+                arguments=arguments_preview,
             )
             message.content.append(block)
             output_slots[output_index] = ("toolCall", content_index)
             tool_arg_bufs[content_index] = raw_arguments
+            tool_arg_previews[content_index] = arguments_preview
             yield ToolcallStartEvent(content_index=content_index, partial=message)
 
     def get_slot(output_index: int, item: dict[str, Any] | None = None) -> tuple[str, int] | None:
@@ -1389,7 +1405,12 @@ def _parse_codex_responses_sse_chunks(
                 if not isinstance(delta, str):
                     continue
                 tool_arg_bufs[content_index] = tool_arg_bufs.get(content_index, "") + delta
-                message.content[content_index].arguments = _parse_streaming_json(tool_arg_bufs[content_index])
+                arguments_preview = _parse_streaming_json_preview(
+                    tool_arg_bufs[content_index],
+                    tool_arg_previews.get(content_index),
+                )
+                tool_arg_previews[content_index] = arguments_preview
+                message.content[content_index].arguments = arguments_preview
                 yield ToolcallDeltaEvent(content_index=content_index, delta=delta, partial=message)
                 continue
             if event_type == "response.function_call_arguments.done":
@@ -1406,6 +1427,7 @@ def _parse_codex_responses_sse_chunks(
                 if isinstance(arguments, str):
                     tool_arg_bufs[content_index] = arguments
                     message.content[content_index].arguments = _parse_streaming_json(arguments)
+                    tool_arg_previews.pop(content_index, None)
                 continue
             if event_type == "response.output_item.done":
                 item = event.get("item")
@@ -1549,6 +1571,7 @@ def _parse_anthropic_messages_sse_chunks(
     usage = empty_usage()
     block_slots: dict[int, tuple[str, int]] = {}
     tool_arg_bufs: dict[int, str] = {}
+    tool_arg_previews: dict[int, dict] = {}
     stop_reason = "stop"
     error_message: str | None = None
     saw_message_start = False
@@ -1620,6 +1643,7 @@ def _parse_anthropic_messages_sse_chunks(
                     )
                     block_slots[index] = ("toolCall", content_index)
                     tool_arg_bufs[content_index] = raw_arguments
+                    tool_arg_previews[content_index] = initial_args
                     yield ToolcallStartEvent(content_index=content_index, partial=message)
                 continue
             if event_type == "content_block_delta":
@@ -1663,7 +1687,12 @@ def _parse_anthropic_messages_sse_chunks(
                     partial_json = delta.get("partial_json")
                     if isinstance(partial_json, str):
                         tool_arg_bufs[content_index] = tool_arg_bufs.get(content_index, "") + partial_json
-                        message.content[content_index].arguments = _parse_streaming_json(tool_arg_bufs[content_index])
+                        arguments_preview = _parse_streaming_json_preview(
+                            tool_arg_bufs[content_index],
+                            tool_arg_previews.get(content_index),
+                        )
+                        tool_arg_previews[content_index] = arguments_preview
+                        message.content[content_index].arguments = arguments_preview
                         yield ToolcallDeltaEvent(content_index=content_index, delta=partial_json, partial=message)
                 continue
             if event_type == "content_block_stop":
@@ -1752,6 +1781,7 @@ def _parse_sse_payload(
         return
     usage = usage_ref["usage"]
     tool_arg_bufs = state["tool_arg_bufs"]
+    tool_arg_previews = state["tool_arg_previews"]
     tool_call_blocks_by_index = state["tool_call_blocks_by_index"]
     tool_call_blocks_by_id = state["tool_call_blocks_by_id"]
     pending_tool_call_parts = state.setdefault("pending_tool_call_parts", {})
@@ -1866,14 +1896,16 @@ def _parse_sse_payload(
             if start:
                 state["started"] = True
                 yield start
+            arguments_preview = _parse_streaming_json_preview(pending["arguments"])
             tool_call = ToolCall(
                 id=pending["id"],
                 name=pending["name"],
-                arguments=_parse_streaming_json(pending["arguments"]),
+                arguments=arguments_preview,
             )
             content_index = len(message.content)
             message.content.append(tool_call)
             tool_arg_bufs[content_index] = pending["arguments"]
+            tool_arg_previews[content_index] = arguments_preview
             if stream_index is not None:
                 tool_call_blocks_by_index[stream_index] = tool_call
             if tool_call.id:
@@ -1902,7 +1934,12 @@ def _parse_sse_payload(
             tool_call.name = name_fragment
         if arg_fragment:
             tool_arg_bufs[content_index] = tool_arg_bufs.get(content_index, "") + arg_fragment
-            tool_call.arguments = _parse_streaming_json(tool_arg_bufs[content_index])
+            arguments_preview = _parse_streaming_json_preview(
+                tool_arg_bufs[content_index],
+                tool_arg_previews.get(content_index),
+            )
+            tool_arg_previews[content_index] = arguments_preview
+            tool_call.arguments = arguments_preview
         yield ToolcallDeltaEvent(content_index=content_index, delta=arg_fragment, partial=message)
 
     usage_ref["usage"] = usage
@@ -2079,7 +2116,7 @@ class RuntimeAuthProvider:
 
 
 def create_appv2_env_provider(
-    prefix: str = "APPV2_WORKER_LLM",
+    prefix: str = "APPV231_WORKER_LLM",
     dotenv_path: "str" = ".env",
     *,
     config: ModelConfig | None = None,

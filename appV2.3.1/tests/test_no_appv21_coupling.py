@@ -57,7 +57,7 @@ def test_new_ai_provider_returns_null_when_disabled(tmp_path: Path, monkeypatch)
     from appv231.ai.providers.appv2_env import create_appv2_env_provider
     from appv231.ai.types import Context, Model
 
-    for key in ("APPV2_WORKER_LLM_ENABLED", "APPV2_WORKER_LLM_API_KEY"):
+    for key in ("APPV231_WORKER_LLM_ENABLED", "APPV231_WORKER_LLM_API_KEY"):
         monkeypatch.delenv(key, raising=False)
     env = tmp_path / ".env"
     env.write_text("OPENROUTER_API_KEY=k\n", encoding="utf-8")  # not enabled

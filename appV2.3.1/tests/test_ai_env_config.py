@@ -13,15 +13,15 @@ from appv231.ai.providers.params import GenerationParams
 
 
 PARAM_ENV_KEYS = (
-    "APPV2_WORKER_LLM_TEMPERATURE",
-    "APPV2_WORKER_LLM_TOP_P",
-    "APPV2_WORKER_LLM_FREQUENCY_PENALTY",
-    "APPV2_WORKER_LLM_PRESENCE_PENALTY",
-    "APPV2_WORKER_LLM_SEED",
-    "APPV2_WORKER_LLM_STOP",
-    "APPV2_WORKER_LLM_PROVIDER_SORT",
-    "APPV2_WORKER_LLM_MAX_TOKENS",
-    "APPV2_WORKER_LLM_TIMEOUT_SECONDS",
+    "APPV231_WORKER_LLM_TEMPERATURE",
+    "APPV231_WORKER_LLM_TOP_P",
+    "APPV231_WORKER_LLM_FREQUENCY_PENALTY",
+    "APPV231_WORKER_LLM_PRESENCE_PENALTY",
+    "APPV231_WORKER_LLM_SEED",
+    "APPV231_WORKER_LLM_STOP",
+    "APPV231_WORKER_LLM_PROVIDER_SORT",
+    "APPV231_WORKER_LLM_MAX_TOKENS",
+    "APPV231_WORKER_LLM_TIMEOUT_SECONDS",
     "OPENROUTER_PROVIDER_SORT",
 )
 
@@ -34,29 +34,29 @@ def _clear_param_env(monkeypatch) -> None:
 def test_load_dotenv_values_strips_quotes_and_comments(tmp_path: Path) -> None:
     env = tmp_path / ".env"
     env.write_text(
-        'APPV2_WORKER_LLM_API_KEY="secret"  # inline comment\n'
-        "APPV2_WORKER_LLM_MODEL=acme/model-x\n"
+        'APPV231_WORKER_LLM_API_KEY="secret"  # inline comment\n'
+        "APPV231_WORKER_LLM_MODEL=acme/model-x\n"
         "# full comment line\n",
         encoding="utf-8",
     )
     values = load_dotenv_values(env)
-    assert values["APPV2_WORKER_LLM_API_KEY"] == "secret"
-    assert values["APPV2_WORKER_LLM_MODEL"] == "acme/model-x"
+    assert values["APPV231_WORKER_LLM_API_KEY"] == "secret"
+    assert values["APPV231_WORKER_LLM_MODEL"] == "acme/model-x"
 
 
 def test_load_model_config_resolves_prefix_then_fallbacks(tmp_path: Path, monkeypatch) -> None:
     _clear_param_env(monkeypatch)
     env = tmp_path / ".env"
     env.write_text(
-        "APPV2_WORKER_LLM_ENABLED=true\n"
+        "APPV231_WORKER_LLM_ENABLED=true\n"
         "OPENROUTER_API_KEY=fallback-key\n"
-        "APPV2_WORKER_LLM_MODEL=acme/model-x\n",
+        "APPV231_WORKER_LLM_MODEL=acme/model-x\n",
         encoding="utf-8",
     )
-    monkeypatch.delenv("APPV2_WORKER_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("APPV231_WORKER_LLM_API_KEY", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    config = load_model_config("APPV2_WORKER_LLM", env)
+    config = load_model_config("APPV231_WORKER_LLM", env)
     assert config.enabled is True
     assert config.api_key == "fallback-key"
     assert config.model == "acme/model-x"
@@ -65,13 +65,13 @@ def test_load_model_config_resolves_prefix_then_fallbacks(tmp_path: Path, monkey
 
 def test_disabled_when_flag_absent(tmp_path: Path, monkeypatch) -> None:
     _clear_param_env(monkeypatch)
-    monkeypatch.delenv("APPV2_WORKER_LLM_ENABLED", raising=False)
-    monkeypatch.delenv("APPV2_WORKER_LLM_MODEL", raising=False)
+    monkeypatch.delenv("APPV231_WORKER_LLM_ENABLED", raising=False)
+    monkeypatch.delenv("APPV231_WORKER_LLM_MODEL", raising=False)
     monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
     monkeypatch.delenv("OPENAI_MODEL", raising=False)
     env = tmp_path / ".env"
     env.write_text("OPENROUTER_API_KEY=k\n", encoding="utf-8")
-    config = load_model_config("APPV2_WORKER_LLM", env)
+    config = load_model_config("APPV231_WORKER_LLM", env)
     assert config.enabled is False
     assert config.model == "moonshotai/kimi-k2.6"
 
@@ -104,19 +104,19 @@ def test_model_config_exposes_generation_params(tmp_path: Path, monkeypatch) -> 
     dotenv.write_text(
         "\n".join(
             [
-                "APPV2_WORKER_LLM_ENABLED=true",
-                "APPV2_WORKER_LLM_API_KEY=test-key",
-                "APPV2_WORKER_LLM_PROVIDER_SORT=throughput",
-                "APPV2_WORKER_LLM_TEMPERATURE=0.2",
-                "APPV2_WORKER_LLM_TOP_P=0.9",
-                "APPV2_WORKER_LLM_MAX_TOKENS=4096",
-                "APPV2_WORKER_LLM_STOP=END,STOP",
+                "APPV231_WORKER_LLM_ENABLED=true",
+                "APPV231_WORKER_LLM_API_KEY=test-key",
+                "APPV231_WORKER_LLM_PROVIDER_SORT=throughput",
+                "APPV231_WORKER_LLM_TEMPERATURE=0.2",
+                "APPV231_WORKER_LLM_TOP_P=0.9",
+                "APPV231_WORKER_LLM_MAX_TOKENS=4096",
+                "APPV231_WORKER_LLM_STOP=END,STOP",
             ]
         ),
         encoding="utf-8",
     )
 
-    config = load_model_config("APPV2_WORKER_LLM", dotenv)
+    config = load_model_config("APPV231_WORKER_LLM", dotenv)
 
     assert config.generation_params == GenerationParams(
         temperature=0.2,
@@ -140,16 +140,16 @@ def test_generation_params_process_env_overrides_dotenv(tmp_path: Path, monkeypa
     dotenv.write_text(
         "\n".join(
             [
-                "APPV2_WORKER_LLM_TEMPERATURE=0.2",
-                "APPV2_WORKER_LLM_MAX_TOKENS=4096",
+                "APPV231_WORKER_LLM_TEMPERATURE=0.2",
+                "APPV231_WORKER_LLM_MAX_TOKENS=4096",
             ]
         ),
         encoding="utf-8",
     )
-    monkeypatch.setenv("APPV2_WORKER_LLM_TEMPERATURE", "0.4")
-    monkeypatch.setenv("APPV2_WORKER_LLM_MAX_TOKENS", "8192")
+    monkeypatch.setenv("APPV231_WORKER_LLM_TEMPERATURE", "0.4")
+    monkeypatch.setenv("APPV231_WORKER_LLM_MAX_TOKENS", "8192")
 
-    config = load_model_config("APPV2_WORKER_LLM", dotenv)
+    config = load_model_config("APPV231_WORKER_LLM", dotenv)
 
     assert config.generation_params.temperature == 0.4
     assert config.generation_params.max_tokens == 8192
@@ -160,7 +160,7 @@ def test_model_config_generation_params_do_not_source_legacy_defaults(tmp_path: 
     env = tmp_path / ".env"
     env.write_text("OPENROUTER_API_KEY=k\n", encoding="utf-8")
 
-    config = load_model_config("APPV2_WORKER_LLM", env)
+    config = load_model_config("APPV231_WORKER_LLM", env)
 
     assert config.temperature == 0
     assert config.provider_sort == "latency"
@@ -170,9 +170,9 @@ def test_model_config_generation_params_do_not_source_legacy_defaults(tmp_path: 
 def test_generation_params_do_not_make_legacy_temperature_invalid(tmp_path: Path, monkeypatch) -> None:
     _clear_param_env(monkeypatch)
     env = tmp_path / ".env"
-    env.write_text("APPV2_WORKER_LLM_TEMPERATURE=3\n", encoding="utf-8")
+    env.write_text("APPV231_WORKER_LLM_TEMPERATURE=3\n", encoding="utf-8")
 
-    config = load_model_config("APPV2_WORKER_LLM", env)
+    config = load_model_config("APPV231_WORKER_LLM", env)
 
     assert config.temperature == 3
     assert config.generation_params == GenerationParams()
@@ -187,14 +187,14 @@ def test_invalid_generation_param_does_not_drop_valid_sibling_params(
     env.write_text(
         "\n".join(
             [
-                "APPV2_WORKER_LLM_TEMPERATURE=3",
-                "APPV2_WORKER_LLM_MAX_TOKENS=4096",
+                "APPV231_WORKER_LLM_TEMPERATURE=3",
+                "APPV231_WORKER_LLM_MAX_TOKENS=4096",
             ]
         ),
         encoding="utf-8",
     )
 
-    config = load_model_config("APPV2_WORKER_LLM", env)
+    config = load_model_config("APPV231_WORKER_LLM", env)
 
     assert config.generation_params == GenerationParams(
         max_tokens=4096,

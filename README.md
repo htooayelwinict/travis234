@@ -13,7 +13,7 @@
 
 **A self-contained Python port of the Pi coding agent, fused with Hermes-style context compaction and runtime guardrails.**
 
-**Status:** `appV2.2` is sealed at tag `v2.2`. Active next-version work now lives in `appV2.3/appv23/` on the `next/appv23` branch.
+**Status:** `appV2.2` is sealed at tag `v2.2`. Active next-version work now lives in `appV2.3.1/appv231/` on the `next/appv231.1` branch.
 
 </div>
 
@@ -21,20 +21,20 @@
 
 ## What is this?
 
-`allthebest` is an agent-runtime research workspace. Its active next-version component, **`appv23`** (`appV2.3/appv23/`), is branched from the sealed `appV2.2` Python rewrite that combines two influential agent designs:
+`allthebest` is an agent-runtime research workspace. Its active next-version component, **`appv231`** (`appV2.3.1/appv231/`), is branched from the sealed `appV2.2` Python rewrite that combines two influential agent designs:
 
 - **Pi** — the interactive coding-agent loop, differential TUI, and multi-provider LLM abstraction.
 - **Hermes** — deterministic + LLM-based context compaction, tool-loop guardrails, and overflow/output-cap recovery.
 
 The result is a terminal-native coding assistant that can read files, run bash commands, edit code, and carry on long multi-turn sessions while keeping context windows under control.
 
-> This repo also houses reference copies of the upstream [`hermes-agent/`](hermes-agent/) and [`pi/`](pi/) codebases for comparison and porting. They are **not** runtime dependencies of `appv23`.
+> This repo also houses reference copies of the upstream [`hermes-agent/`](hermes-agent/) and [`pi/`](pi/) codebases for comparison and porting. They are **not** runtime dependencies of `appv231`.
 
 ---
 
 ## Why It Exists
 
-Most agent runtimes either couple tightly to a single framework or hide their boundaries behind opaque abstractions. `appv23` continues the `appv22` line to:
+Most agent runtimes either couple tightly to a single framework or hide their boundaries behind opaque abstractions. `appv231` continues the `appv22` line to:
 
 - Keep the runtime **self-contained** and auditable in pure Python.
 - Port proven patterns from Pi and Hermes **without importing their source**.
@@ -62,7 +62,7 @@ Most agent runtimes either couple tightly to a single framework or hide their bo
 ## Architecture Snapshot
 
 ```text
-appV2.3/appv23/
+appV2.3.1/appv231/
 ├── ai/                 # Multi-provider LLM registry, streaming, env config
 │   ├── models.py
 │   ├── providers/appv2_env.py
@@ -100,56 +100,56 @@ User Input → Agent Loop → LLM Worker → Tool Calls → Tool Results → ...
 
 ### Install the sandboxed app globally
 
-This is the recommended user-side install path for `appv23`.
+This is the recommended user-side install path for `appv231`.
 
 Run directly with npm once the package is published:
 
 ```bash
-npx @htooayelwinict/appv23 --cwd .
+npx @htooayelwinict/appv231 --cwd .
 ```
 
 Or install the npm launcher globally:
 
 ```bash
-npm install -g @htooayelwinict/appv23
-appv23 --cwd .
+npm install -g @htooayelwinict/appv231
+appv231 --cwd .
 ```
 
-The npm launcher pulls and runs `ghcr.io/htooayelwinict/appv23:production`.
+The npm launcher pulls and runs `ghcr.io/htooayelwinict/appv231:production`.
 
 Repo-local installer:
 
 ```bash
-npm run install:appv23
+npm run install:appv231
 ```
 
-The installer pulls `ghcr.io/htooayelwinict/appv23:production`, installs the global `appv23-sandbox` command, and verifies the command with a dry run. After installation, run from any directory:
+The installer pulls `ghcr.io/htooayelwinict/appv231:production`, installs the global `appv231-sandbox` command, and verifies the command with a dry run. After installation, run from any directory:
 
 ```bash
-appv23-sandbox --cwd .
+appv231-sandbox --cwd .
 ```
 
-Publish the production image first with the `appv23 release image` GitHub Actions workflow, or use the local development fallback below until that image exists.
+Publish the production image first with the `appv231 release image` GitHub Actions workflow, or use the local development fallback below until that image exists.
 
 If your npm global prefix is not writable:
 
 ```bash
-APPV23_NPM_PREFIX="$HOME/.local" npm run install:appv23
+APPV231_NPM_PREFIX="$HOME/.local" npm run install:appv231
 ```
 
 Use a specific release image:
 
 ```bash
-APPV23_IMAGE=ghcr.io/htooayelwinict/appv23:2.3.0 npm run install:appv23
+APPV231_IMAGE=ghcr.io/htooayelwinict/appv231:2.3.1 npm run install:appv231
 ```
 
 Development fallback, build the image locally from this checkout instead of pulling:
 
 ```bash
-APPV23_IMAGE=appv23:local APPV23_BUILD_LOCAL=1 npm run install:appv23
+APPV231_IMAGE=appv231:local APPV231_BUILD_LOCAL=1 npm run install:appv231
 ```
 
-Playwright is not installed in the base appv23 package or sandbox image. For browser automation development, install the optional extra from `appV2.3`:
+Playwright is not installed in the base appv231 package or sandbox image. For browser automation development, install the optional extra from `appV2.3.1`:
 
 ```bash
 python -m pip install ".[browser]"
@@ -167,17 +167,17 @@ cp .env.example .env
 Edit `.env` and set at least:
 
 ```text
-APPV2_WORKER_LLM_ENABLED=true
-APPV2_WORKER_LLM_API_KEY=sk-or-v1-...
-APPV2_WORKER_LLM_BASE_URL=https://openrouter.ai/api/v1
+APPV231_WORKER_LLM_ENABLED=true
+APPV231_WORKER_LLM_API_KEY=sk-or-v1-...
+APPV231_WORKER_LLM_BASE_URL=https://openrouter.ai/api/v1
 ```
 
 Optional:
 
 ```text
-APPV2_WORKER_LLM_MODEL=qwen/qwen3-coder-next
-APPV2_WORKER_LLM_PROVIDER_SORT=latency
-APPV2_WORKER_LLM_MAX_TOKENS=8192
+APPV231_WORKER_LLM_MODEL=qwen/qwen3-coder-next
+APPV231_WORKER_LLM_PROVIDER_SORT=latency
+APPV231_WORKER_LLM_MAX_TOKENS=8192
 ```
 
 ### 2. Install
@@ -189,7 +189,7 @@ uv sync
 ### 3. Run the Interactive TUI
 
 ```bash
-uv run python appV2.3/scripts/appv23_tui.py --cwd ./your-project
+uv run python appV2.3.1/scripts/appv231_tui.py --cwd ./your-project
 ```
 
 Or via the npm wrapper:
@@ -203,7 +203,7 @@ When `--dotenv` is omitted, the CLI uses the nearest `.env` in the working direc
 ### 4. Run Tests
 
 ```bash
-PYTHONPATH=appV2.3 .venv/bin/python -m pytest appV2.3/tests -q
+PYTHONPATH=appV2.3.1 .venv/bin/python -m pytest appV2.3.1/tests -q
 ```
 
 Expected: **723 passing**.
@@ -215,19 +215,19 @@ Expected: **723 passing**.
 ### One-shot prompt
 
 ```bash
-uv run python appV2.3/scripts/appv23_tui.py --tui --cwd ./my-project "refactor src/utils.py"
+uv run python appV2.3.1/scripts/appv231_tui.py --tui --cwd ./my-project "refactor src/utils.py"
 ```
 
 ### Plain REPL loop
 
 ```bash
-uv run python appV2.3/scripts/appv23_tui.py --plain --cwd ./my-project
+uv run python appV2.3.1/scripts/appv231_tui.py --plain --cwd ./my-project
 ```
 
 ### Override model and thinking level
 
 ```bash
-uv run python appV2.3/scripts/appv23_tui.py \
+uv run python appV2.3.1/scripts/appv231_tui.py \
   --model openrouter/moonshotai/kimi-k2.6 \
   --thinking medium \
   --cwd ./my-project
@@ -236,7 +236,7 @@ uv run python appV2.3/scripts/appv23_tui.py \
 ### Export a session to HTML
 
 ```bash
-uv run python appV2.3/scripts/appv23_tui.py \
+uv run python appV2.3.1/scripts/appv231_tui.py \
   --export session.jsonl \
   output.html
 ```
@@ -244,7 +244,7 @@ uv run python appV2.3/scripts/appv23_tui.py \
 ### Enable tool-loop hard-stop guardrails for debugging
 
 ```bash
-uv run python appV2.3/scripts/appv23_tui.py \
+uv run python appV2.3.1/scripts/appv231_tui.py \
   --tool-loop-hard-stop \
   --cwd ./my-project
 ```
@@ -254,14 +254,14 @@ uv run python appV2.3/scripts/appv23_tui.py \
 ## Example Runtime Invocation
 
 ```python
-from appv23.app import CodingApp
-from appv23.ai.env_config import load_model_config
-from appv23.ai.models import get_default_model_for_provider
-from appv23.ai.register_builtins import register_builtin_providers
-from appv23.ai.types import Model
+from appv231.app import CodingApp
+from appv231.ai.env_config import load_model_config
+from appv231.ai.models import get_default_model_for_provider
+from appv231.ai.register_builtins import register_builtin_providers
+from appv231.ai.types import Model
 
 register_builtin_providers(dotenv_path=".env")
-config = load_model_config("APPV2_WORKER_LLM", ".env")
+config = load_model_config("APPV231_WORKER_LLM", ".env")
 model_id = config.model or get_default_model_for_provider("openrouter") or "moonshotai/kimi-k2.6"
 model = Model(
     id=model_id,
@@ -285,18 +285,18 @@ app.run_turn("List the 5 largest Python files")
 - **Framework:** pytest
 - **Total tests:** 723 passing
 - **Offline coverage:** faux provider enables full test runs without API keys
-- **Coupling guard:** `appV2.3/tests/test_no_appv21_coupling.py` ensures `appv23` never imports from `pi/` or `hermes-agent/`
+- **Coupling guard:** `appV2.3.1/tests/test_no_appv21_coupling.py` ensures `appv231` never imports from `pi/` or `hermes-agent/`
 
 Run the suite:
 
 ```bash
-PYTHONPATH=appV2.3 .venv/bin/python -m pytest appV2.3/tests -q
+PYTHONPATH=appV2.3.1 .venv/bin/python -m pytest appV2.3.1/tests -q
 ```
 
 Run with coverage:
 
 ```bash
-PYTHONPATH=appV2.3 .venv/bin/python -m pytest appV2.3/tests --cov=appV2.3/appv23 --cov-report=term-missing
+PYTHONPATH=appV2.3.1 .venv/bin/python -m pytest appV2.3.1/tests --cov=appV2.3.1/appv231 --cov-report=term-missing
 ```
 
 ---
@@ -309,10 +309,10 @@ allthebest/
 │   ├── appv22/                 # Source package
 │   ├── scripts/appv22_tui.py   # Main runtime launcher
 │   └── tests/                  # 583 pytest cases
-├── appV2.3/                    # Active next-version app (appv23)
-│   ├── appv23/                 # Source package
-│   ├── scripts/appv23_tui.py   # Main runtime launcher
-│   └── tests/                  # Current appV2.3 suite (723 pytest cases)
+├── appV2.3.1/                  # Active next-version app (appv231)
+│   ├── appv231/                # Source package
+│   ├── scripts/appv231_tui.py  # Main runtime launcher
+│   └── tests/                  # Current appV2.3.1 suite
 ├── docs/                       # Local/reference documentation and reports
 ├── hermes-agent/               # Reference: upstream Hermes Agent (untracked)
 ├── pi/                         # Reference: upstream Pi monorepo (untracked)
@@ -327,17 +327,17 @@ allthebest/
 
 ## Design Notes
 
-- **`appv23` is intentionally descriptive at the boundaries.** The decompressor/planner/worker pipeline from earlier iterations has been superseded by the agent loop.
+- **`appv231` is intentionally descriptive at the boundaries.** The decompressor/planner/worker pipeline from earlier iterations has been superseded by the agent loop.
 - **The agent loop is bounded.** Iteration budgets, tool-loop hard stops, and explicit step types prevent runaway behavior.
 - **Compaction is first-class.** Context is compressed preflight, post-response, and on overflow, not just as a last resort.
 - **Provider errors are recoverable.** Context-overflow and output-cap errors trigger shrink-and-resume rather than crashing the session.
-- **No upstream source coupling.** `appv23` does not import TypeScript code from `pi/` or Python code from `hermes-agent/`.
+- **No upstream source coupling.** `appv231` does not import TypeScript code from `pi/` or Python code from `hermes-agent/`.
 
 ---
 
 ## Release Boundary
 
-`appV2.2` is the sealed stable line for the Python Pi/Hermes runtime in this repository. `appV2.3` is the active next-version line.
+`appV2.2` is the sealed stable line for the Python Pi/Hermes runtime in this repository. `appV2.3.1` is the active appv231 next-version line.
 
 Allowed changes in this line:
 
@@ -352,7 +352,7 @@ Not allowed in this line:
 - Runtime architecture rewrites
 - New version experiments
 
-Start those in `appV2.3` so `appV2.2` remains a known-good baseline.
+Start those in `appV2.3.1` so `appV2.2` remains a known-good baseline.
 
 ## Documentation
 
@@ -370,8 +370,8 @@ Start those in `appV2.3` so `appV2.2` remains a known-good baseline.
 - [x] Tool-loop guardrails
 - [x] 723 offline pytest tests
 - [x] Seal `appV2.2` as the stable baseline
-- [x] Create `appV2.3/appv23` as the next version line
-- [ ] Move advanced features into `appV2.3`
+- [x] Create `appV2.3.1/appv231` as the next version line
+- [ ] Move advanced features into `appV2.3.1`
 
 ---
 
@@ -379,6 +379,6 @@ Start those in `appV2.3` so `appV2.2` remains a known-good baseline.
 
 **Built for fast iteration, clear boundaries, and zero hand-wavy runtime behavior.**
 
-<sub>Reference upstream code lives in <code>hermes-agent/</code> and <code>pi/</code>; the active runtime is <code>appV2.3/appv23/</code>. The sealed baseline remains <code>appV2.2/appv22/</code>.</sub>
+<sub>Reference upstream code lives in <code>hermes-agent/</code> and <code>pi/</code>; the active runtime is <code>appV2.3.1/appv231/</code>. The sealed baseline remains <code>appV2.2/appv22/</code>.</sub>
 
 </div>

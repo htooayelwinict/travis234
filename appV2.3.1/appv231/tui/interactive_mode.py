@@ -19,8 +19,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
-import httpx
-
 from appv231.ai import (
     get_auth_credential,
     get_models,
@@ -34,6 +32,7 @@ from appv231.ai import (
     set_auth_credential,
 )
 from appv231.ai.providers.capabilities import ProviderParamWarning
+from appv231.ai.providers.model_catalog import get_last_openrouter_live_catalog_error, get_live_openrouter_models
 from appv231.ai.providers.params import GenerationParams, compact_generation_params_display
 from appv231.coding_agent.config import get_agent_dir
 from appv231.compaction import estimate_tokens
@@ -58,11 +57,8 @@ from appv231.tui.interactive import (
 
 
 InputFn = Callable[[str], str]
-OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 OPENROUTER_MODEL_CACHE_TTL_SECONDS = 300
 OPENROUTER_MODEL_PICKER_LIMIT = 50
-OPENROUTER_MODEL_PICKER_MAX_COMPLETION_TOKENS = 16_384
-OPENROUTER_MODEL_PICKER_CONTEXT_RESERVE_TOKENS = 2_048
 LATE_ABORT_GRACE_SECONDS = 1.0
 IDLE_CTRL_C_EXIT_WINDOW_SECONDS = 1.5
 _SIGINT_HANDLER_UNCHANGED = object()
@@ -138,9 +134,9 @@ class InteractiveMode:
         self.history = Container()
         self.status = StatusLine("Idle")
         self.default_working_message = "Idle"
-        self.default_hidden_thinking_label = "Thinking..."
+        self.default_hidden_thinking_label = ""
         self.hidden_thinking_label = self.default_hidden_thinking_label
-        self.hide_thinking_block = False
+        self.hide_thinking_block = True
         self.editor_text = ""
         self.prompt_history: list[str] = []
         self.active_editor: Input | None = None
@@ -620,14 +616,13 @@ class InteractiveMode:
         ):
             return list(self._openrouter_model_cache[1]), None
         try:
-            items = _fetch_openrouter_model_catalog(active_model)
-            models = [
-                model
-                for item in items
-                if (model := _openrouter_catalog_item_to_model(item, active_model)) is not None
-            ]
+            models = get_live_openrouter_models(base_model=active_model)
         except Exception as error:  # noqa: BLE001 - model picker should fall back to local models.
             return [], error
+        if not models:
+            error = get_last_openrouter_live_catalog_error()
+            if error is not None:
+                return [], error
         self._openrouter_model_cache = (now, models)
         return list(models), None
 
@@ -918,7 +913,7 @@ class InteractiveMode:
             if self._last_openrouter_model_fetch_error is not None:
                 self._show_status("Could not fetch OpenRouter models; showing local models only.", kind="model")
         if not candidates:
-            self._show_status("No models available. Configure APPV2_WORKER_LLM_MODEL or models.json.", kind="error")
+            self._show_status("No models available. Configure APPV231_WORKER_LLM_MODEL or models.json.", kind="error")
             return
         labels = [_model_label(model, self.app.session.model) for model in candidates]
         selected = self.prompt_extension_select("Select model:", labels, kind="model")
@@ -956,7 +951,7 @@ class InteractiveMode:
 
     def _show_model_list(self, models) -> None:
         if not models:
-            self._show_status("No models available. Configure APPV2_WORKER_LLM_MODEL or models.json.", kind="error")
+            self._show_status("No models available. Configure APPV231_WORKER_LLM_MODEL or models.json.", kind="error")
             return
         self.history.add(StatusLine("Available models", kind="model"))
         for model in models:
@@ -1816,72 +1811,6 @@ def _models_with_active_fallback(active_model):
 
 def _is_openrouter_model(model) -> bool:
     return getattr(model, "provider", "") == "openrouter" or "openrouter.ai" in str(getattr(model, "base_url", ""))
-
-
-def _fetch_openrouter_model_catalog(base_model) -> list[dict]:
-    response = httpx.get(
-        OPENROUTER_MODELS_URL,
-        headers={"Accept": "application/json"},
-        timeout=10.0,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    data = payload.get("data") if isinstance(payload, dict) else payload
-    if not isinstance(data, list):
-        return []
-    return [item for item in data if isinstance(item, dict)]
-
-
-def _openrouter_catalog_item_to_model(item: dict, base_model):
-    model_id = str(item.get("id") or "").strip()
-    if not model_id:
-        return None
-    architecture = item.get("architecture") if isinstance(item.get("architecture"), dict) else {}
-    top_provider = item.get("top_provider") if isinstance(item.get("top_provider"), dict) else {}
-    modalities = architecture.get("input_modalities", architecture.get("inputModalities", []))
-    input_types = ["text"]
-    if isinstance(modalities, list) and any(str(value).lower() == "image" for value in modalities):
-        input_types.append("image")
-    supported_parameters = item.get("supported_parameters", item.get("supportedParameters", []))
-    reasoning = bool(getattr(base_model, "reasoning", False) or item.get("reasoning"))
-    if isinstance(supported_parameters, list) and any("reason" in str(value).lower() for value in supported_parameters):
-        reasoning = True
-    context_window = _positive_int_or(item.get("context_length", item.get("contextLength")), base_model.context_window)
-    max_completion_tokens = _safe_openrouter_completion_tokens(
-        top_provider.get("max_completion_tokens", top_provider.get("maxCompletionTokens")),
-        context_window,
-        base_model.max_tokens,
-    )
-    return replace(
-        base_model,
-        id=model_id,
-        name=str(item.get("name") or model_id),
-        provider="openrouter",
-        context_window=context_window,
-        max_tokens=max_completion_tokens,
-        reasoning=reasoning,
-        input=input_types,
-    )
-
-
-def _safe_openrouter_completion_tokens(value, context_window: int, fallback: int) -> int:
-    parsed = _positive_int_or(value, fallback)
-    if parsed <= 0:
-        return fallback
-    capped = min(parsed, OPENROUTER_MODEL_PICKER_MAX_COMPLETION_TOKENS)
-    if context_window > OPENROUTER_MODEL_PICKER_CONTEXT_RESERVE_TOKENS:
-        capped = min(capped, context_window - OPENROUTER_MODEL_PICKER_CONTEXT_RESERVE_TOKENS)
-    elif context_window > 0:
-        capped = min(capped, max(1, context_window // 2))
-    return max(1, capped)
-
-
-def _positive_int_or(value, fallback: int) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return fallback
-    return parsed if parsed > 0 else fallback
 
 
 def _dedupe_models(models) -> list:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "appv231"
-version = "2.3.0"
+version = "2.3.1"
 description = "Pi-style coding agent with Hermes-style compaction."
 readme = "README.md"
 license = "MIT"

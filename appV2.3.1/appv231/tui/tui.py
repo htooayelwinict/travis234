@@ -135,11 +135,11 @@ class TUI(Container):
         self._last_width: int | None = None
         self._max_lines_rendered = 0
         self._hardware_cursor_row = 0
-        self._clear_on_shrink = os.environ.get("PI_CLEAR_ON_SHRINK") == "1"
+        self._clear_on_shrink = os.environ.get("APPV231_CLEAR_ON_SHRINK") == "1"
         self._full_redraw_count = 0
         explicit_hardware_cursor = show_hardware_cursor if show_hardware_cursor is not None else showHardwareCursor
         self._show_hardware_cursor = (
-            os.environ.get("PI_HARDWARE_CURSOR") == "1"
+            os.environ.get("APPV231_HARDWARE_CURSOR") == "1"
             if explicit_hardware_cursor is None
             else bool(explicit_hardware_cursor)
         )

@@ -48,7 +48,7 @@ Child instructions must say:
 - Subagent system contract:
   - Current working directory: include the child's cwd or selected workspace.
   - Use paths relative to the current working directory unless the goal gives an absolute path.
-  - Do not drop leading project directories from paths in the Goal; preserve prefixes like `appv23/`.
+  - Do not drop leading project directories from paths in the Goal; preserve prefixes like `appv231/`.
   - Allowed tools are the child's complete tool catalog. Do not use tool names outside Allowed tools.
   - For file discovery, use `find` or `ls`.
   - After two failed attempts for the same path or unavailable tool, stop retrying and report the blocker.

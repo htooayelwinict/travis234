@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 from argparse import Namespace
 from pathlib import Path
+
+import pytest
 
 import appv231.cli as cli
 from appv231.ai.env_config import ModelConfig
 from appv231.app import CodingApp
+from appv231.coding_agent.config import ENV_AGENT_DIR, get_agent_dir
 from appv231.ai.models import get_api_key_for_provider, register_model, reset_models
 from appv231.ai.types import Model
 from appv231.ai.providers.faux import create_faux_provider, faux_model, text_response_events
@@ -15,6 +19,11 @@ from appv231.ai.stream import register_api_provider, reset_api_providers
 def setup_function() -> None:
     reset_api_providers()
     reset_models()
+
+
+@pytest.fixture(autouse=True)
+def _disable_real_startup_live_catalog_fetch(monkeypatch) -> None:
+    monkeypatch.setenv("APPV231_MODEL_CATALOG_STARTUP_FETCH", "false")
 
 
 def test_coding_app_plain_mode_does_not_render_live_tui(tmp_path, capsys) -> None:
@@ -81,7 +90,7 @@ def test_cli_rejects_missing_cwd_before_starting_app(monkeypatch, tmp_path, caps
     assert f"Error: working directory does not exist: {missing_cwd.resolve()}" in captured.err
 
 
-def test_cli_provider_and_model_flags_resolve_registered_model(monkeypatch, tmp_path) -> None:
+def test_cli_provider_and_model_flags_resolve_registered_model_when_live_catalog_misses(monkeypatch, tmp_path) -> None:
     created: dict[str, object] = {}
     selected_model = Model(
         id="qwen/qwen3-coder:exacto",
@@ -109,6 +118,7 @@ def test_cli_provider_and_model_flags_resolve_registered_model(monkeypatch, tmp_
     register_model(selected_model)
     monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
     monkeypatch.setattr(cli, "CodingApp", FakeApp)
+    monkeypatch.setattr(cli, "get_live_openrouter_models", lambda **kwargs: [])
 
     exit_code = cli.main(
         [
@@ -131,7 +141,356 @@ def test_cli_provider_and_model_flags_resolve_registered_model(monkeypatch, tmp_
     assert app.model is selected_model
     assert app.enable_tui is False
     assert app.thinking_level == "off"
+
+
+def test_cli_exact_registered_openrouter_model_prefers_live_metadata(monkeypatch, tmp_path, capsys) -> None:
+    created: dict[str, object] = {}
+    monkeypatch.setenv("APPV231_MODEL_CATALOG_STARTUP_FETCH", "true")
+    registered_model = Model(
+        id="openai/gpt-5.4-mini",
+        name="Old Registered Metadata",
+        api="openai-completions",
+        provider="openrouter",
+        base_url="https://openrouter.example.test/api",
+        context_window=128000,
+        max_tokens=8192,
+    )
+    live_model = Model(
+        id="openai/gpt-5.4-mini",
+        name="OpenAI: GPT-5.4 Mini",
+        api="openai-completions",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        context_window=400000,
+        max_tokens=128000,
+        reasoning=True,
+    )
+
+    class FakeApp:
+        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models, **kwargs):
+            self.model = model
+            self.scoped_models = scoped_models
+            self.messages = []
+            created["app"] = self
+
+        def run_turn(self, prompt):
+            created["prompt"] = prompt
+
+    register_model(registered_model)
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
+    monkeypatch.setattr(cli, "CodingApp", FakeApp)
+    monkeypatch.setattr(cli, "get_live_openrouter_models", lambda **kwargs: [live_model])
+
+    exit_code = cli.main(
+        [
+            "--cwd",
+            str(tmp_path),
+            "--dotenv",
+            str(tmp_path / "missing.env"),
+            "--provider",
+            "openrouter",
+            "--model",
+            "openai/gpt-5.4-mini",
+            "--plain",
+            "inspect",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    app = created["app"]
+    assert exit_code == 0
+    assert created["prompt"] == "inspect"
+    assert app.model is live_model
+    assert app.model.context_window == 400000
+    assert app.model.max_tokens == 128000
+    assert "Using custom model id" not in captured.err
     assert app.scoped_models == []
+
+
+def test_cli_startup_live_catalog_force_refreshes_before_stale_cache_fallback(monkeypatch, tmp_path, capsys) -> None:
+    created: dict[str, object] = {}
+    observed_kwargs: list[dict[str, object]] = []
+    monkeypatch.setenv("APPV231_MODEL_CATALOG_STARTUP_FETCH", "true")
+    live_model = Model(
+        id="openai/gpt-5.4-mini",
+        name="OpenAI: GPT-5.4 Mini",
+        api="openai-completions",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        context_window=400000,
+        max_tokens=128000,
+    )
+
+    class FakeApp:
+        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models, **kwargs):
+            self.model = model
+            self.messages = []
+            created["app"] = self
+
+        def run_turn(self, prompt):
+            created["prompt"] = prompt
+
+    def fake_live_catalog(**kwargs):
+        observed_kwargs.append(dict(kwargs))
+        return [live_model]
+
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
+    monkeypatch.setattr(cli, "CodingApp", FakeApp)
+    monkeypatch.setattr(cli, "get_live_openrouter_models", fake_live_catalog)
+
+    code = cli.main(
+        [
+            "--cwd",
+            str(tmp_path),
+            "--dotenv",
+            str(tmp_path / "missing.env"),
+            "--provider",
+            "openrouter",
+            "--model",
+            "openai/gpt-5.4-mini",
+            "--plain",
+            "inspect",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert created["app"].model is live_model
+    assert observed_kwargs and observed_kwargs[0]["force_refresh"] is True
+    assert "Using custom model id" not in captured.err
+
+
+def test_cli_unqualified_openrouter_model_id_hydrates_live_catalog(monkeypatch, tmp_path, capsys) -> None:
+    created: dict[str, object] = {}
+    monkeypatch.setenv("APPV231_MODEL_CATALOG_STARTUP_FETCH", "true")
+    live_model = Model(
+        id="openai/gpt-5.4-mini",
+        name="OpenAI: GPT-5.4 Mini",
+        api="openai-completions",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        context_window=400000,
+        max_tokens=128000,
+    )
+
+    class FakeApp:
+        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models, **kwargs):
+            self.model = model
+            self.messages = []
+            created["app"] = self
+
+        def run_turn(self, prompt):
+            created["prompt"] = prompt
+
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
+    monkeypatch.setattr(cli, "CodingApp", FakeApp)
+    monkeypatch.setattr(cli, "get_live_openrouter_models", lambda **kwargs: [live_model])
+
+    code = cli.main(
+        [
+            "--cwd",
+            str(tmp_path),
+            "--dotenv",
+            str(tmp_path / "missing.env"),
+            "--model",
+            "openai/gpt-5.4-mini",
+            "--plain",
+            "inspect",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert created["prompt"] == "inspect"
+    assert created["app"].model is live_model
+    assert "Using custom model id" not in captured.err
+
+
+def test_cli_startup_fetch_flag_disables_startup_live_catalog(monkeypatch, tmp_path, capsys) -> None:
+    created: dict[str, object] = {}
+
+    class FakeApp:
+        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models, **kwargs):
+            self.model = model
+            self.messages = []
+            created["app"] = self
+
+        def run_turn(self, prompt):
+            created["prompt"] = prompt
+
+    def fail_live_catalog(**kwargs):
+        raise AssertionError("startup live catalog should be disabled")
+
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
+    monkeypatch.setattr(cli, "CodingApp", FakeApp)
+    monkeypatch.setattr(cli, "get_live_openrouter_models", fail_live_catalog)
+
+    code = cli.main(
+        [
+            "--cwd",
+            str(tmp_path),
+            "--dotenv",
+            str(tmp_path / "missing.env"),
+            "--provider",
+            "openrouter",
+            "--model",
+            "unknown/vendor-model",
+            "--plain",
+            "inspect",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert created["app"].model.provider == "openrouter"
+    assert created["app"].model.id == "unknown/vendor-model"
+    assert "Using custom model id" in captured.err
+
+
+def test_cli_model_registry_find_prefers_live_override_over_global_registered_model() -> None:
+    registered_model = Model(
+        id="openai/gpt-5.4-mini",
+        name="Old Registered Metadata",
+        api="openai-completions",
+        provider="openrouter",
+        base_url="https://openrouter.example.test/api",
+        context_window=128000,
+        max_tokens=8192,
+    )
+    live_model = Model(
+        id="openai/gpt-5.4-mini",
+        name="OpenAI: GPT-5.4 Mini",
+        api="openai-completions",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        context_window=400000,
+        max_tokens=128000,
+    )
+
+    register_model(registered_model)
+    registry = cli._CliModelRegistry([live_model])
+
+    assert registry.find("openrouter", "openai/gpt-5.4-mini") is live_model
+
+
+def test_cli_matching_live_model_is_case_insensitive() -> None:
+    env_model = Model(
+        id="OpenAI/GPT-5.4-MINI",
+        name="OpenAI/GPT-5.4-MINI",
+        api="openai-completions",
+        provider="OpenRouter",
+        base_url="https://openrouter.example.test/api",
+    )
+    live_model = Model(
+        id="openai/gpt-5.4-mini",
+        name="OpenAI: GPT-5.4 Mini",
+        api="openai-completions",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+    )
+
+    assert cli._matching_live_model(env_model, [live_model]) is live_model
+
+
+def test_cli_default_openrouter_startup_prefers_live_env_model_metadata(monkeypatch, tmp_path, capsys) -> None:
+    created: dict[str, object] = {}
+    monkeypatch.setenv("APPV231_MODEL_CATALOG_STARTUP_FETCH", "true")
+
+    live_model = Model(
+        id="moonshotai/kimi-k2.6",
+        name="Kimi K2.6 Live",
+        api="openai-completions",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        context_window=256000,
+        max_tokens=16384,
+        reasoning=True,
+    )
+
+    class FakeApp:
+        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models, **kwargs):
+            self.model = model
+            self.scoped_models = scoped_models
+            self.messages = []
+            created["app"] = self
+
+        def run_turn(self, prompt):
+            created["prompt"] = prompt
+
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
+    monkeypatch.setattr(cli, "CodingApp", FakeApp)
+    monkeypatch.setattr(cli, "get_live_openrouter_models", lambda **kwargs: [live_model])
+
+    exit_code = cli.main(
+        [
+            "--cwd",
+            str(tmp_path),
+            "--dotenv",
+            str(tmp_path / "missing.env"),
+            "--provider",
+            "openrouter",
+            "--plain",
+            "inspect",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    app = created["app"]
+    assert exit_code == 0
+    assert created["prompt"] == "inspect"
+    assert app.model is live_model
+    assert app.model.context_window == 256000
+    assert app.model.max_tokens == 16384
+    assert app.scoped_models == []
+    assert "Using custom model id" not in captured.err
+
+
+def test_cli_implicit_default_openrouter_startup_prefers_live_env_model_metadata(monkeypatch, tmp_path, capsys) -> None:
+    created: dict[str, object] = {}
+    monkeypatch.setenv("APPV231_MODEL_CATALOG_STARTUP_FETCH", "true")
+    live_model = Model(
+        id="moonshotai/kimi-k2.6",
+        name="Kimi K2.6 Live",
+        api="openai-completions",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        context_window=256000,
+        max_tokens=16384,
+        reasoning=True,
+    )
+
+    class FakeApp:
+        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models, **kwargs):
+            self.model = model
+            self.scoped_models = scoped_models
+            self.messages = []
+            created["app"] = self
+
+        def run_turn(self, prompt):
+            created["prompt"] = prompt
+
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
+    monkeypatch.setattr(cli, "CodingApp", FakeApp)
+    monkeypatch.setattr(cli, "get_live_openrouter_models", lambda **kwargs: [live_model])
+
+    exit_code = cli.main(
+        [
+            "--cwd",
+            str(tmp_path),
+            "--dotenv",
+            str(tmp_path / "missing.env"),
+            "--plain",
+            "inspect",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    app = created["app"]
+    assert exit_code == 0
+    assert created["prompt"] == "inspect"
+    assert app.model is live_model
+    assert app.scoped_models == []
+    assert "Using custom model id" not in captured.err
 
 
 def test_cli_loads_persisted_auth_before_model_selection(monkeypatch, tmp_path) -> None:
@@ -142,7 +501,7 @@ def test_cli_loads_persisted_auth_before_model_selection(monkeypatch, tmp_path) 
         '{"openrouter": {"type": "api_key", "key": "persisted-key"}}',
         encoding="utf-8",
     )
-    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(agent_dir))
+    monkeypatch.setenv("APPV231_CODING_AGENT_DIR", str(agent_dir))
 
     class FakeApp:
         def __init__(
@@ -187,6 +546,16 @@ def test_cli_loads_persisted_auth_before_model_selection(monkeypatch, tmp_path) 
     assert exit_code == 0
     assert observed["prompt"] == "hi"
     assert observed["api_key"] == "persisted-key"
+
+
+def test_appv231_config_reads_appv231_agent_dir(monkeypatch, tmp_path) -> None:
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+
+    monkeypatch.delenv(ENV_AGENT_DIR, raising=False)
+    monkeypatch.setenv("APPV231_CODING_AGENT_DIR", str(agent_dir))
+
+    assert get_agent_dir() == str(agent_dir)
 
 
 def test_cli_passes_hermes_loop_runtime_options(monkeypatch, tmp_path) -> None:
@@ -255,11 +624,11 @@ def test_cli_default_dotenv_searches_parent_dirs_for_npm_prefix_cwd(monkeypatch,
     project.mkdir()
     env_path = repo / ".env"
     env_path.write_text(
-        "APPV2_WORKER_LLM_ENABLED=true\nOPENROUTER_API_KEY=test-key\n",
+        "APPV231_WORKER_LLM_ENABLED=true\nOPENROUTER_API_KEY=test-key\n",
         encoding="utf-8",
     )
     (app_dir / ".env").write_text(
-        "APPV2_WORKER_LLM_ENABLED=true\nOPENROUTER_API_KEY=wrong-prefix-key\n",
+        "APPV231_WORKER_LLM_ENABLED=true\nOPENROUTER_API_KEY=wrong-prefix-key\n",
         encoding="utf-8",
     )
     observed: dict[str, object] = {}
@@ -346,8 +715,8 @@ def test_cli_explicit_relative_dotenv_uses_npm_initial_cwd(monkeypatch, tmp_path
     app_dir = repo / "appV2.3.1"
     app_dir.mkdir(parents=True)
     env_path = repo / ".env"
-    env_path.write_text("APPV2_WORKER_LLM_ENABLED=true\n", encoding="utf-8")
-    (app_dir / ".env").write_text("APPV2_WORKER_LLM_ENABLED=false\n", encoding="utf-8")
+    env_path.write_text("APPV231_WORKER_LLM_ENABLED=true\n", encoding="utf-8")
+    (app_dir / ".env").write_text("APPV231_WORKER_LLM_ENABLED=false\n", encoding="utf-8")
     observed: dict[str, object] = {}
 
     class FakeApp:
@@ -584,6 +953,7 @@ def test_cli_models_flag_sets_scoped_models_and_initial_model(monkeypatch, tmp_p
     register_model(qwen)
     monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
     monkeypatch.setattr(cli, "CodingApp", FakeApp)
+    monkeypatch.setattr(cli, "get_live_openrouter_models", lambda **kwargs: [])
 
     exit_code = cli.main(
         [
@@ -609,6 +979,57 @@ def test_cli_models_flag_sets_scoped_models_and_initial_model(monkeypatch, tmp_p
     ]
 
 
+def test_cli_models_unqualified_openrouter_model_id_hydrates_live_catalog(monkeypatch, tmp_path, capsys) -> None:
+    created: dict[str, object] = {}
+    monkeypatch.setenv("APPV231_MODEL_CATALOG_STARTUP_FETCH", "true")
+    live_model = Model(
+        id="openai/gpt-5.4-mini",
+        name="OpenAI: GPT-5.4 Mini",
+        api="openai-completions",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        context_window=400000,
+        max_tokens=128000,
+    )
+
+    class FakeApp:
+        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models, **kwargs):
+            self.model = model
+            self.thinking_level = thinking_level
+            self.scoped_models = scoped_models
+            self.messages = []
+            created["app"] = self
+
+        def run_turn(self, prompt):
+            created["prompt"] = prompt
+
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
+    monkeypatch.setattr(cli, "CodingApp", FakeApp)
+    monkeypatch.setattr(cli, "get_live_openrouter_models", lambda **kwargs: [live_model])
+
+    exit_code = cli.main(
+        [
+            "--cwd",
+            str(tmp_path),
+            "--dotenv",
+            str(tmp_path / "missing.env"),
+            "--models",
+            "openai/gpt-5.4-mini:medium",
+            "--plain",
+            "inspect",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    app = created["app"]
+    assert exit_code == 0
+    assert created["prompt"] == "inspect"
+    assert app.model is live_model
+    assert app.thinking_level == "medium"
+    assert [(item.model, item.thinking_level) for item in app.scoped_models] == [(live_model, "medium")]
+    assert "Using custom model id" not in captured.err
+
+
 def test_cli_list_models_exits_without_starting_app(monkeypatch, tmp_path, capsys) -> None:
     register_model(
         Model(
@@ -630,6 +1051,135 @@ def test_cli_list_models_exits_without_starting_app(monkeypatch, tmp_path, capsy
 
     assert code == 0
     assert "stepfun/step-3.7-flash" in capsys.readouterr().out
+
+
+def test_cli_list_models_without_openrouter_provider_does_not_fetch_live_catalog(monkeypatch, tmp_path, capsys) -> None:
+    register_model(
+        Model(
+            id="step-3.7-flash",
+            name="Step 3.7 Flash",
+            api="openai-completions",
+            provider="stepfun",
+            base_url="",
+        )
+    )
+
+    calls = {"count": 0}
+
+    def fail_live_fetch(*args, **kwargs):
+        calls["count"] += 1
+        raise AssertionError("unqualified --list-models should not fetch live OpenRouter catalog")
+
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
+    monkeypatch.setattr(cli, "get_live_openrouter_models", fail_live_fetch)
+
+    code = cli.main(["--cwd", str(tmp_path), "--list-models"])
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "stepfun/step-3.7-flash" in captured.out
+    assert captured.err == ""
+    assert calls["count"] == 0
+
+
+def test_cli_list_models_includes_live_openrouter_catalog(monkeypatch, tmp_path, capsys) -> None:
+    live_model = Model(
+        id="openai/gpt-5.4-mini",
+        name="OpenAI: GPT-5.4 Mini",
+        api="openai-completions",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        context_window=400000,
+        max_tokens=128000,
+    )
+
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
+    monkeypatch.setattr(cli, "_load_live_startup_models", lambda env_model, **kwargs: [live_model])
+    monkeypatch.setattr(
+        cli,
+        "CodingApp",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("app must not start")),
+    )
+
+    code = cli.main(["--cwd", str(tmp_path), "--provider", "openrouter", "--list-models"])
+
+    assert code == 0
+    assert "openrouter/openai/gpt-5.4-mini" in capsys.readouterr().out
+
+
+def test_cli_list_models_warns_when_openrouter_live_catalog_unavailable(monkeypatch, tmp_path, capsys) -> None:
+    monkeypatch.setenv("APPV231_MODEL_CATALOG_STARTUP_FETCH", "true")
+    register_model(
+        Model(
+            id="known-local",
+            name="Known Local",
+            api="openai-completions",
+            provider="openrouter",
+            base_url="https://openrouter.ai/api/v1",
+        )
+    )
+
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
+    monkeypatch.setattr(cli, "_load_live_startup_models", lambda env_model, **kwargs: [])
+
+    code = cli.main(["--cwd", str(tmp_path), "--provider", "openrouter", "--list-models"])
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "openrouter/known-local" in captured.out
+    assert "OpenRouter live model catalog unavailable" in captured.err
+
+
+def test_cli_list_models_does_not_warn_when_startup_live_catalog_disabled(monkeypatch, tmp_path, capsys) -> None:
+    register_model(
+        Model(
+            id="known-local",
+            name="Known Local",
+            api="openai-completions",
+            provider="openrouter",
+            base_url="https://openrouter.ai/api/v1",
+        )
+    )
+
+    def fail_live_fetch(*args, **kwargs):
+        raise AssertionError("disabled startup live catalog should not fetch")
+
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
+    monkeypatch.setattr(cli, "get_live_openrouter_models", fail_live_fetch)
+
+    code = cli.main(["--cwd", str(tmp_path), "--provider", "openrouter", "--list-models"])
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "openrouter/known-local" in captured.out
+    assert captured.err == ""
+
+
+def test_cli_list_models_verbose_shows_live_metadata(monkeypatch, tmp_path, capsys) -> None:
+    live_model = Model(
+        id="openai/gpt-5.4-mini",
+        name="OpenAI: GPT-5.4 Mini",
+        api="openai-completions",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        context_window=400000,
+        max_tokens=128000,
+        reasoning=True,
+        input=["text", "image"],
+    )
+
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
+    monkeypatch.setattr(cli, "_load_live_startup_models", lambda env_model, **kwargs: [live_model])
+
+    code = cli.main(["--cwd", str(tmp_path), "--provider", "openrouter", "--list-models", "--verbose-models"])
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "openrouter/openai/gpt-5.4-mini" in captured.out
+    assert "context=400000" in captured.out
+    assert "max_tokens=128000" in captured.out
+    assert "reasoning=true" in captured.out
+    assert "input=text,image" in captured.out
 
 
 def test_cli_list_providers_exits_without_starting_app(monkeypatch, tmp_path, capsys) -> None:
@@ -686,6 +1236,293 @@ def test_cli_provider_stepfun_model_uses_custom_known_provider(monkeypatch, tmp_
     model = observed["model"]
     assert model.provider == "stepfun"
     assert model.id == "step-3.7-flash"
+
+
+def test_cli_reads_appv231_worker_llm_prefix(monkeypatch, tmp_path, capsys) -> None:
+    created: dict[str, object] = {}
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "APPV231_WORKER_LLM_ENABLED=true\n"
+        "APPV231_WORKER_LLM_MODEL=openai/gpt-5.4-mini\n"
+        "APPV231_WORKER_LLM_BASE_URL=https://openrouter.ai/api/v1\n",
+        encoding="utf-8",
+    )
+
+    class FakeApp:
+        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models, **kwargs):
+            self.model = model
+            self.messages = []
+            created["app"] = self
+
+        def run_turn(self, prompt):
+            created["prompt"] = prompt
+
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
+    monkeypatch.setattr(cli, "CodingApp", FakeApp)
+    monkeypatch.setattr(cli, "get_live_openrouter_models", lambda **kwargs: [])
+
+    code = cli.main(["--cwd", str(tmp_path), "--dotenv", str(env_path), "--plain", "inspect"])
+
+    captured = capsys.readouterr()
+    app = created["app"]
+    assert code == 0
+    assert app.model.provider == "openrouter"
+    assert app.model.id == "openai/gpt-5.4-mini"
+    assert "APPV231_WORKER_LLM" not in captured.err
+
+
+def test_cli_startup_hydrates_live_openrouter_model_before_custom_fallback(monkeypatch, tmp_path, capsys) -> None:
+    created: dict[str, object] = {}
+
+    class FakeApp:
+        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models, **kwargs):
+            self.cwd = cwd
+            self.model = model
+            self.enable_tui = enable_tui
+            self.thinking_level = thinking_level
+            self.scoped_models = scoped_models
+            self.messages = []
+            created["app"] = self
+
+        def run_turn(self, prompt):
+            created["prompt"] = prompt
+
+    live_model = Model(
+        id="openai/gpt-5.4-mini",
+        name="OpenAI: GPT-5.4 Mini",
+        api="openai-completions",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        context_window=400000,
+        max_tokens=128000,
+        reasoning=True,
+    )
+
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
+    monkeypatch.setattr(cli, "CodingApp", FakeApp)
+    monkeypatch.setattr(cli, "_load_live_startup_models", lambda env_model, **kwargs: [live_model])
+
+    code = cli.main(
+        [
+            "--cwd",
+            str(tmp_path),
+            "--dotenv",
+            str(tmp_path / "missing.env"),
+            "--provider",
+            "openrouter",
+            "--model",
+            "openai/gpt-5.4-mini",
+            "--plain",
+            "inspect",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    app = created["app"]
+    assert code == 0
+    assert created["prompt"] == "inspect"
+    assert app.model is live_model
+    assert app.model.context_window == 400000
+    assert app.model.max_tokens == 128000
+    assert "Using custom model id" not in captured.err
+
+
+def test_cli_scoped_models_hydrates_exact_live_openrouter_model(monkeypatch, tmp_path, capsys) -> None:
+    created: dict[str, object] = {}
+    monkeypatch.setenv("APPV231_MODEL_CATALOG_STARTUP_FETCH", "true")
+
+    class FakeApp:
+        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models, **kwargs):
+            self.model = model
+            self.thinking_level = thinking_level
+            self.scoped_models = scoped_models
+            self.messages = []
+            created["app"] = self
+
+        def run_turn(self, prompt):
+            created["prompt"] = prompt
+
+    live_model = Model(
+        id="openai/gpt-5.4-mini",
+        name="OpenAI: GPT-5.4 Mini",
+        api="openai-completions",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        context_window=400000,
+        max_tokens=128000,
+        reasoning=True,
+    )
+
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
+    monkeypatch.setattr(cli, "CodingApp", FakeApp)
+    monkeypatch.setattr(cli, "get_live_openrouter_models", lambda **kwargs: [live_model])
+
+    code = cli.main(
+        [
+            "--cwd",
+            str(tmp_path),
+            "--dotenv",
+            str(tmp_path / "missing.env"),
+            "--models",
+            "openrouter/openai/gpt-5.4-mini",
+            "--plain",
+            "inspect",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    app = created["app"]
+    assert code == 0
+    assert created["prompt"] == "inspect"
+    assert app.model is live_model
+    assert app.thinking_level == "off"
+    assert [(item.model, item.thinking_level) for item in app.scoped_models] == [(live_model, None)]
+    assert "No models match" not in captured.err
+    assert "Using custom model id" not in captured.err
+
+
+def test_cli_scoped_models_hydrates_unqualified_live_openrouter_model_with_thinking(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    created: dict[str, object] = {}
+    monkeypatch.setenv("APPV231_MODEL_CATALOG_STARTUP_FETCH", "true")
+
+    class FakeApp:
+        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models, **kwargs):
+            self.model = model
+            self.thinking_level = thinking_level
+            self.scoped_models = scoped_models
+            self.messages = []
+            created["app"] = self
+
+        def run_turn(self, prompt):
+            created["prompt"] = prompt
+
+    live_model = Model(
+        id="openai/gpt-5.4-mini",
+        name="OpenAI: GPT-5.4 Mini",
+        api="openai-completions",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        context_window=400000,
+        max_tokens=128000,
+        reasoning=True,
+    )
+
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
+    monkeypatch.setattr(cli, "CodingApp", FakeApp)
+    monkeypatch.setattr(cli, "get_live_openrouter_models", lambda **kwargs: [live_model])
+
+    code = cli.main(
+        [
+            "--cwd",
+            str(tmp_path),
+            "--dotenv",
+            str(tmp_path / "missing.env"),
+            "--models",
+            "openai/gpt-5.4-mini:medium",
+            "--plain",
+            "inspect",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    app = created["app"]
+    assert code == 0
+    assert created["prompt"] == "inspect"
+    assert app.model is live_model
+    assert app.thinking_level == "medium"
+    assert [(item.model, item.thinking_level) for item in app.scoped_models] == [(live_model, "medium")]
+    assert "No models match" not in captured.err
+    assert "Using custom model id" not in captured.err
+
+
+def test_cli_startup_preserves_custom_model_fallback_when_live_catalog_misses(monkeypatch, tmp_path, capsys) -> None:
+    created: dict[str, object] = {}
+
+    class FakeApp:
+        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models, **kwargs):
+            self.model = model
+            self.messages = []
+            created["app"] = self
+
+        def run_turn(self, prompt):
+            created["prompt"] = prompt
+
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
+    monkeypatch.setattr(cli, "CodingApp", FakeApp)
+    monkeypatch.setattr(cli, "_load_live_startup_models", lambda env_model, **kwargs: [])
+
+    code = cli.main(
+        [
+            "--cwd",
+            str(tmp_path),
+            "--dotenv",
+            str(tmp_path / "missing.env"),
+            "--provider",
+            "openrouter",
+            "--model",
+            "unknown/vendor-model",
+            "--plain",
+            "inspect",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    app = created["app"]
+    assert code == 0
+    assert app.model.provider == "openrouter"
+    assert app.model.id == "unknown/vendor-model"
+    assert 'Model "unknown/vendor-model" not found for provider "openrouter". Using custom model id.' in captured.err
+
+
+def test_cli_startup_preserves_custom_model_fallback_when_live_catalog_raises(
+    monkeypatch, tmp_path, capsys, caplog
+) -> None:
+    created: dict[str, object] = {}
+    monkeypatch.setenv("APPV231_MODEL_CATALOG_STARTUP_FETCH", "true")
+
+    class FakeApp:
+        def __init__(self, *, cwd, model, enable_tui, thinking_level, scoped_models, **kwargs):
+            self.model = model
+            self.messages = []
+            created["app"] = self
+
+        def run_turn(self, prompt):
+            created["prompt"] = prompt
+
+    def fail_live_catalog(*args, **kwargs):
+        raise RuntimeError("catalog boom")
+
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
+    monkeypatch.setattr(cli, "CodingApp", FakeApp)
+    monkeypatch.setattr(cli, "get_live_openrouter_models", fail_live_catalog)
+
+    with caplog.at_level(logging.WARNING, logger="appv231.cli"):
+        code = cli.main(
+            [
+                "--cwd",
+                str(tmp_path),
+                "--dotenv",
+                str(tmp_path / "missing.env"),
+                "--provider",
+                "openrouter",
+                "--model",
+                "unknown/vendor-model",
+                "--plain",
+                "inspect",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    app = created["app"]
+    assert code == 0
+    assert created["prompt"] == "inspect"
+    assert app.model.provider == "openrouter"
+    assert app.model.id == "unknown/vendor-model"
+    assert 'Model "unknown/vendor-model" not found for provider "openrouter". Using custom model id.' in captured.err
+    assert "OpenRouter live model catalog unavailable during startup" in caplog.text
+    assert "catalog boom" in caplog.text
 
 
 def test_cli_generation_flags_are_passed_to_registered_provider(monkeypatch, tmp_path, capsys) -> None:

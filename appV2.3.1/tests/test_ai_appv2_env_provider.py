@@ -543,6 +543,219 @@ def test_parse_streaming_json_preserves_valid_prefix_before_hanging_property_lik
     assert appv2_env._parse_streaming_json(raw) == {"path": "protocol_fixture.md", "content": ""}
 
 
+def test_parse_sse_chunks_bounds_large_streamed_tool_argument_preview_parsing(monkeypatch) -> None:
+    content = "\n".join(f"def test_{index}(): assert {index} == {index}" for index in range(2_000))
+    raw_arguments = json.dumps({"path": "eventforge/tests/test_edge_cases.py", "content": content})
+    deltas = [raw_arguments[index : index + 512] for index in range(0, len(raw_arguments), 512)]
+    full_parse_lengths: list[int] = []
+    original_parse_streaming_json = appv2_env._parse_streaming_json
+
+    def recording_parse_streaming_json(raw: str | None) -> dict:
+        if isinstance(raw, str) and len(raw) > 16_384:
+            full_parse_lengths.append(len(raw))
+        return original_parse_streaming_json(raw)
+
+    monkeypatch.setattr(appv2_env, "_parse_streaming_json", recording_parse_streaming_json)
+
+    lines = []
+    for index, delta in enumerate(deltas):
+        function: dict[str, str] = {"arguments": delta}
+        if index == 0:
+            function["name"] = "write"
+        lines.append(
+            "data: "
+            + json.dumps(
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "id": "call_1",
+                                        "function": function,
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            )
+        )
+    lines.append("data: " + json.dumps({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}))
+
+    events = list(parse_sse_chunks(lines, _model()))
+
+    done = events[-1]
+    assert done.type == "done"
+    tool_call = next(block for block in done.message.content if isinstance(block, ToolCall))
+    assert tool_call.arguments == {"path": "eventforge/tests/test_edge_cases.py", "content": content}
+    assert len(full_parse_lengths) <= 2
+
+
+def test_parse_sse_chunks_bounds_large_responses_tool_argument_preview_parsing(monkeypatch) -> None:
+    content = "\n".join(f"def test_{index}(): assert {index} == {index}" for index in range(2_000))
+    raw_arguments = json.dumps({"path": "eventforge/tests/test_edge_cases.py", "content": content})
+    deltas = [raw_arguments[index : index + 512] for index in range(0, len(raw_arguments), 512)]
+    full_parse_lengths: list[int] = []
+    original_parse_streaming_json = appv2_env._parse_streaming_json
+
+    def recording_parse_streaming_json(raw: str | None) -> dict:
+        if isinstance(raw, str) and len(raw) > 16_384:
+            full_parse_lengths.append(len(raw))
+        return original_parse_streaming_json(raw)
+
+    monkeypatch.setattr(appv2_env, "_parse_streaming_json", recording_parse_streaming_json)
+
+    lines = [
+        "data: " + json.dumps({"type": "response.created", "response": {"id": "resp_1"}}),
+        "data: "
+        + json.dumps(
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "write",
+                    "arguments": "",
+                },
+            }
+        ),
+    ]
+    for delta in deltas:
+        lines.append(
+            "data: "
+            + json.dumps(
+                {
+                    "type": "response.function_call_arguments.delta",
+                    "output_index": 0,
+                    "delta": delta,
+                }
+            )
+        )
+    lines.extend(
+        [
+            "data: "
+            + json.dumps(
+                {
+                    "type": "response.function_call_arguments.done",
+                    "output_index": 0,
+                    "arguments": raw_arguments,
+                }
+            ),
+            "data: "
+            + json.dumps(
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_1",
+                        "status": "completed",
+                        "usage": {"input_tokens": 5, "output_tokens": 2, "total_tokens": 7},
+                    },
+                }
+            ),
+        ]
+    )
+
+    events = list(parse_sse_chunks(lines, _model(), api_mode="codex_responses"))
+
+    done = events[-1]
+    assert done.type == "done"
+    tool_call = next(block for block in done.message.content if isinstance(block, ToolCall))
+    assert tool_call.arguments == {"path": "eventforge/tests/test_edge_cases.py", "content": content}
+    assert len(full_parse_lengths) <= 2
+
+
+def test_parse_sse_chunks_bounds_large_anthropic_tool_argument_preview_parsing(monkeypatch) -> None:
+    content = "\n".join(f"def test_{index}(): assert {index} == {index}" for index in range(2_000))
+    raw_arguments = json.dumps({"path": "eventforge/tests/test_edge_cases.py", "content": content})
+    deltas = [raw_arguments[index : index + 512] for index in range(0, len(raw_arguments), 512)]
+    full_parse_lengths: list[int] = []
+    original_parse_streaming_json = appv2_env._parse_streaming_json
+
+    def recording_parse_streaming_json(raw: str | None) -> dict:
+        if isinstance(raw, str) and len(raw) > 16_384:
+            full_parse_lengths.append(len(raw))
+        return original_parse_streaming_json(raw)
+
+    monkeypatch.setattr(appv2_env, "_parse_streaming_json", recording_parse_streaming_json)
+
+    lines = [
+        "event: message_start",
+        "data: "
+        + json.dumps(
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_1",
+                    "usage": {"input_tokens": 4, "output_tokens": 0},
+                },
+            }
+        ),
+        "",
+        "event: content_block_start",
+        "data: "
+        + json.dumps(
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "write",
+                    "input": {},
+                },
+            }
+        ),
+        "",
+    ]
+    for delta in deltas:
+        lines.extend(
+            [
+                "event: content_block_delta",
+                "data: "
+                + json.dumps(
+                    {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {"type": "input_json_delta", "partial_json": delta},
+                    }
+                ),
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "event: content_block_stop",
+            "data: " + json.dumps({"type": "content_block_stop", "index": 0}),
+            "",
+            "event: message_delta",
+            "data: "
+            + json.dumps(
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "tool_use"},
+                    "usage": {"output_tokens": 2},
+                }
+            ),
+            "",
+            "event: message_stop",
+            "data: " + json.dumps({"type": "message_stop"}),
+            "",
+        ]
+    )
+
+    events = list(parse_sse_chunks(lines, _model(), api_mode="anthropic_messages"))
+
+    done = events[-1]
+    assert done.type == "done"
+    tool_call = next(block for block in done.message.content if isinstance(block, ToolCall))
+    assert tool_call.arguments == {"path": "eventforge/tests/test_edge_cases.py", "content": content}
+    assert len(full_parse_lengths) <= 2
+
+
 def test_parse_sse_chunks_preserves_finished_write_arguments_for_agent_validation_like_pi() -> None:
     raw_arguments = json.dumps(
         {
@@ -1055,8 +1268,8 @@ def test_appv2_env_provider_factory_allows_runtime_login_key_without_startup_tra
     dotenv.write_text(
         "\n".join(
             [
-                "APPV2_WORKER_LLM_MODEL=qwen/qwen3.6-flash",
-                "APPV2_WORKER_LLM_BASE_URL=https://openrouter.ai/api/v1",
+                "APPV231_WORKER_LLM_MODEL=qwen/qwen3.6-flash",
+                "APPV231_WORKER_LLM_BASE_URL=https://openrouter.ai/api/v1",
             ]
         ),
         encoding="utf-8",

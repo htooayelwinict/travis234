@@ -34,8 +34,6 @@ def _env_flag_disabled(name: str) -> bool:
 def _mouse_tracking_enabled() -> bool:
     if "APPV231_TUI_MOUSE" in os.environ:
         return _env_flag_enabled("APPV231_TUI_MOUSE") and not _env_flag_disabled("APPV231_TUI_MOUSE")
-    if "PI_TUI_MOUSE" in os.environ:
-        return _env_flag_enabled("PI_TUI_MOUSE") and not _env_flag_disabled("PI_TUI_MOUSE")
     return _env_flag_enabled("APPV231_SANDBOX")
 
 

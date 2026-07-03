@@ -2935,7 +2935,7 @@ def test_create_agent_session_ports_pi_settings_request_options_to_agent_loop(tm
     }
 
 
-def test_pi_sdk_provider_attribution_headers_match_pi_precedence(monkeypatch) -> None:
+def test_appv231_provider_attribution_headers_match_appv231_precedence(monkeypatch) -> None:
     from appv231.coding_agent.agent_session_services import merge_provider_attribution_headers
 
     settings = SettingsManager.inMemory()
@@ -2963,11 +2963,11 @@ def test_pi_sdk_provider_attribution_headers_match_pi_precedence(monkeypatch) ->
 
     settings.setEnableInstallTelemetry(False)
     assert merge_provider_attribution_headers(openrouter, settings, None) is None
-    monkeypatch.setenv("PI_TELEMETRY", "YES")
-    assert merge_provider_attribution_headers(openrouter, settings, None)["X-OpenRouter-Title"] == "pi"
+    monkeypatch.setenv("APPV231_TELEMETRY", "YES")
+    assert merge_provider_attribution_headers(openrouter, settings, None)["X-OpenRouter-Title"] == "appv231"
 
     nvidia = Model(id="m", name="m", api="faux", provider="nvidia", base_url="https://example.test/v1")
-    assert merge_provider_attribution_headers(nvidia, settings, None)["X-BILLING-INVOKE-ORIGIN"] == "Pi"
+    assert merge_provider_attribution_headers(nvidia, settings, None)["X-BILLING-INVOKE-ORIGIN"] == "appv231"
 
     opencode = Model(id="m", name="m", api="faux", provider="opencode", base_url="https://opencode.ai/zen/v1")
     assert merge_provider_attribution_headers(opencode, settings, "session-1") == {
@@ -7842,13 +7842,13 @@ def test_pi_execute_bash_with_operations_is_public_and_sanitizes_streamed_output
 def test_pi_experimental_feature_gate_uses_pi_experimental_env(monkeypatch: pytest.MonkeyPatch) -> None:
     from appv231.coding_agent import areExperimentalFeaturesEnabled, are_experimental_features_enabled
 
-    monkeypatch.delenv("PI_EXPERIMENTAL", raising=False)
+    monkeypatch.delenv("APPV231_EXPERIMENTAL", raising=False)
     assert are_experimental_features_enabled() is False
 
-    monkeypatch.setenv("PI_EXPERIMENTAL", "0")
+    monkeypatch.setenv("APPV231_EXPERIMENTAL", "0")
     assert are_experimental_features_enabled() is False
 
-    monkeypatch.setenv("PI_EXPERIMENTAL", "1")
+    monkeypatch.setenv("APPV231_EXPERIMENTAL", "1")
     assert are_experimental_features_enabled() is True
     assert areExperimentalFeaturesEnabled is are_experimental_features_enabled
 
@@ -10010,7 +10010,7 @@ def test_agent_session_runtime_import_from_jsonl_copies_and_replaces_session(tmp
     assert ("start", "resume", str(initial_path)) in events
 
 
-def test_coding_agent_package_exports_pi_runtime_factory_aliases(tmp_path: Path) -> None:
+def test_coding_agent_package_exports_appv231_runtime_factory_aliases(tmp_path: Path) -> None:
     from appv231.coding_agent import (
         AgentSessionRuntime,
         AgentSessionRuntimeDiagnostic,
@@ -10123,7 +10123,7 @@ def test_tui_exports_pi_parse_skill_block_alias() -> None:
     assert parseSkillBlock is parse_skill_block
 
 
-def test_coding_agent_package_exports_pi_tool_factory_surface(tmp_path: Path) -> None:
+def test_coding_agent_package_exports_appv231_tool_factory_surface(tmp_path: Path) -> None:
     from appv231.coding_agent import (
         allToolNames,
         createAllToolDefinitions,
@@ -10177,7 +10177,7 @@ def test_coding_agent_package_exports_pi_tool_factory_surface(tmp_path: Path) ->
     assert set(createAllToolDefinitions(cwd)) == allToolNames
 
 
-def test_coding_agent_package_exports_pi_config_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_coding_agent_package_exports_appv231_config_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import importlib
     import sys
 
@@ -10185,42 +10185,54 @@ def test_coding_agent_package_exports_pi_config_paths(tmp_path: Path, monkeypatc
     agent_dir = tmp_path / "agent-dir"
     package_dir.mkdir()
     (package_dir / "package.json").write_text(
-        json.dumps({"name": "@example/appv231", "version": "9.8.7", "piConfig": {"configDir": ".custom-pi"}}),
+        json.dumps(
+            {
+                "name": "@example/appv231",
+                "version": "9.8.7",
+                "appv231Config": {"name": "appv231", "configDir": ".custom-appv231"},
+            }
+        ),
         encoding="utf-8",
     )
-    monkeypatch.setenv("PI_PACKAGE_DIR", str(package_dir))
-    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(agent_dir))
-    if "appv231.coding_agent.config" in sys.modules:
-        importlib.reload(sys.modules["appv231.coding_agent.config"])
     import appv231.coding_agent as coding_agent
 
+    with monkeypatch.context() as package_env:
+        package_env.setenv("APPV231_PACKAGE_DIR", str(package_dir))
+        package_env.setenv("APPV231_CODING_AGENT_DIR", str(agent_dir))
+        if "appv231.coding_agent.config" in sys.modules:
+            importlib.reload(sys.modules["appv231.coding_agent.config"])
+
+        importlib.reload(coding_agent)
+
+        from appv231.coding_agent import (
+            APP_NAME,
+            CONFIG_DIR_NAME,
+            ENV_AGENT_DIR,
+            VERSION,
+            getAgentDir,
+            getDocsPath,
+            getExamplesPath,
+            getPackageDir,
+            getReadmePath,
+            get_agent_dir,
+            get_package_dir,
+        )
+
+        assert APP_NAME == "appv231"
+        assert CONFIG_DIR_NAME == ".custom-appv231"
+        assert ENV_AGENT_DIR == "APPV231_CODING_AGENT_DIR"
+        assert VERSION == "9.8.7"
+        assert getPackageDir() == str(package_dir.resolve())
+        assert get_package_dir() == str(package_dir.resolve())
+        assert getReadmePath() == str((package_dir / "README.md").resolve())
+        assert getDocsPath() == str((package_dir / "docs").resolve())
+        assert getExamplesPath() == str((package_dir / "examples").resolve())
+        assert getAgentDir() == str(agent_dir)
+        assert get_agent_dir() == str(agent_dir)
+
+    if "appv231.coding_agent.config" in sys.modules:
+        importlib.reload(sys.modules["appv231.coding_agent.config"])
     importlib.reload(coding_agent)
-
-    from appv231.coding_agent import (
-        APP_NAME,
-        CONFIG_DIR_NAME,
-        ENV_AGENT_DIR,
-        VERSION,
-        getAgentDir,
-        getDocsPath,
-        getExamplesPath,
-        getPackageDir,
-        getReadmePath,
-        get_agent_dir,
-        get_package_dir,
-    )
-
-    assert APP_NAME == "pi"
-    assert CONFIG_DIR_NAME == ".custom-pi"
-    assert ENV_AGENT_DIR == "PI_CODING_AGENT_DIR"
-    assert VERSION == "9.8.7"
-    assert getPackageDir() == str(package_dir.resolve())
-    assert get_package_dir() == str(package_dir.resolve())
-    assert getReadmePath() == str((package_dir / "README.md").resolve())
-    assert getDocsPath() == str((package_dir / "docs").resolve())
-    assert getExamplesPath() == str((package_dir / "examples").resolve())
-    assert getAgentDir() == str(agent_dir)
-    assert get_agent_dir() == str(agent_dir)
 
 
 def test_coding_agent_exports_pi_event_bus_and_resource_loader_uses_it(tmp_path: Path) -> None:

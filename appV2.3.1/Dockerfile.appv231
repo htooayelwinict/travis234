@@ -3,7 +3,7 @@ FROM python:3.13-slim
 ENV PYTHONUNBUFFERED=1 \
     APPV231_NO_VENV_REEXEC=1 \
     HOME=/agent-home \
-    PI_CODING_AGENT_DIR=/agent-home/agent
+    APPV231_CODING_AGENT_DIR=/agent-home/agent
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

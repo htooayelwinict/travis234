@@ -6,6 +6,7 @@ from appv231.sandbox_launcher import (
     SandboxConfig,
     build_docker_command,
     prepare_sandbox_imports,
+    provider_env_names_present,
     resolve_host_path,
     resolve_sandbox_config,
 )
@@ -58,7 +59,8 @@ def test_docker_command_mounts_only_workspace_app_and_agent_home(tmp_path: Path)
     assert "--env-file" not in command
     assert str(env_file) not in joined
     assert "OPENROUTER_API_KEY" not in joined
-    assert "PI_CODING_AGENT_DIR=/agent-home/agent" in command
+    assert "APPV231_CODING_AGENT_DIR=/agent-home/agent" in command
+    assert not any(value.startswith("APPV23_") for value in command)
     assert "APPV231_SANDBOX=1" in command
     assert "--cwd" in command
     assert "/workspace" in command
@@ -86,6 +88,16 @@ def test_docker_command_rejects_parent_dotenv_args(tmp_path: Path) -> None:
     assert "--dotenv" not in command
     assert "../.env" not in command
     assert command[-2:] == ["--plain", "hi"]
+
+
+def test_provider_env_detection_uses_appv231_worker_prefix_only(monkeypatch) -> None:
+    monkeypatch.setenv("APPV231_WORKER_LLM_API_KEY", "new-secret")
+    monkeypatch.setenv("APPV2_WORKER_LLM_API_KEY", "old-secret")
+
+    names = provider_env_names_present()
+
+    assert "APPV231_WORKER_LLM_API_KEY" in names
+    assert "APPV2_WORKER_LLM_API_KEY" not in names
 
 
 def test_prepare_sandbox_imports_copies_user_agents_skills(tmp_path: Path, monkeypatch) -> None:

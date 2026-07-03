@@ -11,26 +11,26 @@ const {
   parseArgs,
   prepareSandboxImports,
   shouldUseIsolatedDockerConfig,
-} = require("../bin/appv23-sandbox.js");
+} = require("../bin/appv231-sandbox.js");
 
-test("global wrapper defaults to production GHCR image and pull", () => {
+test("global wrapper defaults to appv231 production GHCR image and pull", () => {
   const config = parseArgs([]);
 
-  assert.equal(config.image, "ghcr.io/htooayelwinict/appv23:production");
+  assert.equal(config.image, "ghcr.io/htooayelwinict/appv231:production");
   assert.equal(config.pull, true);
-  assert.deepEqual(buildPullCommand(config), ["docker", "pull", "ghcr.io/htooayelwinict/appv23:production"]);
+  assert.deepEqual(buildPullCommand(config), ["docker", "pull", "ghcr.io/htooayelwinict/appv231:production"]);
 });
 
 test("global wrapper builds hardened docker command without host-home mounts", () => {
-  const workspace = path.join(os.tmpdir(), "appv23-workspace");
-  const agentHome = path.join(os.tmpdir(), "appv23-agent-home");
+  const workspace = path.join(os.tmpdir(), "appv231-workspace");
+  const agentHome = path.join(os.tmpdir(), "appv231-agent-home");
   const config = parseArgs([
     "--cwd",
     workspace,
     "--agent-home",
     agentHome,
     "--image",
-    "appv23:test",
+    "appv231:test",
     "--",
     "--model",
     "openrouter/qwen/qwen3.6-flash",
@@ -53,8 +53,9 @@ test("global wrapper builds hardened docker command without host-home mounts", (
   assert.ok(command.includes(`${workspace}:/workspace:rw`));
   assert.ok(command.includes(`${agentHome}:/agent-home:rw`));
   assert.ok(command.includes("HOME=/agent-home"));
-  assert.ok(command.includes("PI_CODING_AGENT_DIR=/agent-home/agent"));
-  assert.ok(command.includes("appv23:test"));
+  assert.ok(command.includes("APPV231_CODING_AGENT_DIR=/agent-home/agent"));
+  assert.equal(command.some((value) => value.startsWith("APPV23_")), false);
+  assert.ok(command.includes("appv231:test"));
   assert.ok(command.includes("--cwd"));
   assert.ok(command.includes("/workspace"));
   assert.ok(command.includes("--model"));
@@ -66,30 +67,28 @@ test("global wrapper builds hardened docker command without host-home mounts", (
 });
 
 test("global wrapper supports local image without pulling", () => {
-  const config = parseArgs(["--image", "appv23:local", "--no-pull"]);
+  const config = parseArgs(["--image", "appv231:local", "--no-pull"]);
 
-  assert.equal(config.image, "appv23:local");
+  assert.equal(config.image, "appv231:local");
   assert.equal(config.pull, false);
   assert.deepEqual(buildPullCommand(config), []);
 });
 
-test("global wrapper bypasses stale docker credentials only for public appv23 pulls", () => {
+test("global wrapper bypasses stale docker credentials only for public appv231 pulls", () => {
   const config = parseArgs([]);
-  const customImage = parseArgs(["--image", "example.com/private/appv23:latest"]);
+  const customImage = parseArgs(["--image", "example.com/private/appv231:latest"]);
 
   assert.equal(shouldUseIsolatedDockerConfig(config, {}), true);
   assert.equal(shouldUseIsolatedDockerConfig(config, { DOCKER_CONFIG: "/tmp/docker" }), false);
-  assert.equal(shouldUseIsolatedDockerConfig(config, { APPV23_DOCKER_CONFIG: "/tmp/docker" }), false);
+  assert.equal(shouldUseIsolatedDockerConfig(config, { APPV231_DOCKER_CONFIG: "/tmp/docker" }), false);
   assert.equal(shouldUseIsolatedDockerConfig(customImage, {}), false);
   assert.equal(buildPullEnv(config, "/tmp/docker", {}).DOCKER_CONFIG, "/tmp/docker");
-  assert.equal(
-    buildPullEnv(config, "/tmp/ignored", { APPV23_DOCKER_CONFIG: "/tmp/explicit" }).DOCKER_CONFIG,
-    "/tmp/explicit",
-  );
+  assert.equal(buildPullEnv(config, "/tmp/ignored", { APPV231_DOCKER_CONFIG: "/tmp/explicit" }).DOCKER_CONFIG, "/tmp/explicit");
+  assert.equal(buildPullEnv(config, "/tmp/isolated", {}).DOCKER_CONFIG, "/tmp/isolated");
 });
 
 test("global wrapper copies user agents skills into sandbox home", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "appv23-sandbox-global-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "appv231-sandbox-global-"));
   const hostHome = path.join(root, "host-home");
   const agentHome = path.join(root, "agent-home");
   const skills = path.join(hostHome, ".agents", "skills");
@@ -110,7 +109,7 @@ test("global wrapper copies user agents skills into sandbox home", () => {
 });
 
 test("global wrapper copies bundled skills before user skill overrides", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "appv23-sandbox-global-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "appv231-sandbox-global-"));
   const packageRoot = path.join(root, "package");
   const bundledSkill = path.join(packageRoot, "skills", "subagent-delegation");
   const hostHome = path.join(root, "host-home");
@@ -133,7 +132,7 @@ test("global wrapper copies bundled skills before user skill overrides", () => {
 });
 
 test("global wrapper copies bundled skills without host user skills", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "appv23-sandbox-global-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "appv231-sandbox-global-"));
   const packageRoot = path.join(root, "package");
   const bundledSkill = path.join(packageRoot, "skills", "subagent-delegation");
   const hostHome = path.join(root, "host-home");

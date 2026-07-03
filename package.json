@@ -1,14 +1,14 @@
 {
-  "name": "allthebest-appv23",
-  "version": "2.3.0",
-  "description": "Global launcher and installer wrapper for the appv23 Docker sandbox.",
+  "name": "allthebest-appv231",
+  "version": "2.3.1",
+  "description": "Global launcher and installer wrapper for the appv231 Docker sandbox.",
   "private": true,
   "license": "UNLICENSED",
   "bin": {
-    "appv23-sandbox": "bin/appv23-sandbox.js"
+    "appv231-sandbox": "bin/appv231-sandbox.js"
   },
   "files": [
-    "bin/appv23-sandbox.js",
+    "bin/appv231-sandbox.js",
     "skills/**/*.md",
     "README.md",
     "package.json"
@@ -17,14 +17,13 @@
     "node": ">=18"
   },
   "scripts": {
-    "install:appv23": "bash scripts/install-appv23-sandbox.sh",
-    "image:appv23:release": "docker build --pull=false -f Dockerfile.appv23.release -t ghcr.io/htooayelwinict/appv23:production .",
-    "qa:appv23-cli": "npm --prefix packages/appv23-cli test && npm --prefix packages/appv23-cli run pack:dry-run",
-    "qa:installer": "node --test tests/appv23-sandbox-global.test.js && npm --prefix packages/appv23-cli test && bash -n scripts/install-appv23-sandbox.sh && npm pack --dry-run",
-    "test:global-sandbox": "node --test tests/appv23-sandbox-global.test.js",
-    "tui": "npm --prefix appV2.3 run tui --",
-    "tui:v22": "npm --prefix appV2.2 run tui --",
-    "tui:v23": "npm --prefix appV2.3 run tui --",
-    "tui:v23:sandbox": "npm --prefix appV2.3 run tui:sandbox --"
+    "install:appv231": "bash scripts/install-appv231-sandbox.sh",
+    "image:appv231:release": "docker build --pull=false -f Dockerfile.appv231.release -t ghcr.io/htooayelwinict/appv231:production .",
+    "qa:appv231-cli": "npm --prefix packages/appv231-cli test && npm --prefix packages/appv231-cli run pack:dry-run",
+    "qa:installer": "node --test tests/appv231-sandbox-global.test.js && npm --prefix packages/appv231-cli test && bash -n scripts/install-appv231-sandbox.sh && npm pack --dry-run",
+    "test:global-sandbox": "node --test tests/appv231-sandbox-global.test.js",
+    "tui": "npm --prefix appV2.3.1 run tui --",
+    "tui:v231": "npm --prefix appV2.3.1 run tui --",
+    "tui:v231:sandbox": "npm --prefix appV2.3.1 run tui:sandbox --"
   }
 }

@@ -7,15 +7,17 @@ from dataclasses import dataclass
 from dataclasses import field
 from dataclasses import replace
 import json
+import logging
 import os
 from pathlib import Path
 import sys
 
 from appv231.ai.env_config import ModelConfig, get_default_model_for_provider, load_model_config
 from appv231.ai.model_resolver import ScopedModel, resolve_cli_model, resolve_model_scope
-from appv231.ai.models import get_model, get_models, get_providers, has_configured_auth, set_auth_credential
+from appv231.ai.models import get_model, get_models, get_providers, has_configured_auth, register_model, set_auth_credential
 from appv231.ai.providers.capabilities import ProviderParamWarning, build_generation_payload
-from appv231.ai.providers.catalog import determine_api_mode
+from appv231.ai.providers.catalog import determine_api_mode, normalize_provider
+from appv231.ai.providers.model_catalog import get_live_openrouter_models
 from appv231.ai.providers.params import GenerationParams, merge_generation_params, params_from_mapping
 from appv231.ai.register_builtins import register_builtin_providers
 from appv231.ai.types import Model
@@ -24,6 +26,9 @@ from appv231.coding_agent.config import get_agent_dir, get_auth_path
 from appv231.coding_agent.agent_session_services import _new_session_path
 from appv231.coding_agent.export_html import export_from_file
 from appv231.tui.interactive_mode import InteractiveMode
+
+
+logger = logging.getLogger(__name__)
 
 
 class _CliModelRegistry:
@@ -41,10 +46,13 @@ class _CliModelRegistry:
     getAvailable = get_available
 
     def find(self, provider: str, model_id: str) -> Model | None:
+        local = next((model for model in self._models if model.provider == provider and model.id == model_id), None)
+        if local is not None:
+            return local
         registered = get_model(provider, model_id)
         if registered is not None:
             return registered
-        return next((model for model in self._models if model.provider == provider and model.id == model_id), None)
+        return None
 
     def has_configured_auth(self, model: Model) -> bool:
         return has_configured_auth(model)
@@ -53,6 +61,7 @@ class _CliModelRegistry:
 
 
 _VALID_THINKING_LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh")
+_FALSE_ENV_VALUES = {"0", "false", "no", "off"}
 
 
 def _positive_int_arg(value: str) -> int:
@@ -147,19 +156,16 @@ def _startup_model_from_env(
     cli_thinking: str | None = None,
     cli_models: list[str] | None = None,
 ) -> _StartupModelSelection:
-    config = config or load_model_config("APPV2_WORKER_LLM", dotenv_path)
-    model_id = config.model or get_default_model_for_provider("openrouter") or "moonshotai/kimi-k2.6"
-    env_model = Model(
-        id=model_id,
-        name=model_id,
-        api="openai-completions",
-        provider="openrouter",
-        base_url=config.base_url,
-        reasoning=False,
-        context_window=128000,
-        max_tokens=config.max_tokens or 8192,
+    config = config or load_model_config("APPV231_WORKER_LLM", dotenv_path)
+    env_model = _env_model_from_config(config)
+    registered_models = _registered_models_with_env_fallback(env_model)
+    live_models = _load_live_startup_models(
+        env_model,
+        cli_provider=cli_provider,
+        cli_model=cli_model,
+        cli_models=cli_models,
     )
-    registry = _CliModelRegistry(_registered_models_with_env_fallback(env_model))
+    registry = _CliModelRegistry(_dedupe_startup_models([*registered_models, *live_models]))
     scoped_models = resolve_model_scope(cli_models or [], registry) if cli_models else []
     if not cli_model:
         if scoped_models:
@@ -169,7 +175,11 @@ def _startup_model_from_env(
                 thinking_level=cli_thinking or scoped.thinking_level,
                 scoped_models=scoped_models,
             )
-        return _StartupModelSelection(model=env_model, thinking_level=cli_thinking, scoped_models=scoped_models)
+        return _StartupModelSelection(
+            model=_matching_live_model(env_model, live_models) or env_model,
+            thinking_level=cli_thinking,
+            scoped_models=scoped_models,
+        )
 
     resolved = resolve_cli_model(
         cli_provider=cli_provider,
@@ -197,6 +207,149 @@ def _registered_models_with_env_fallback(env_model: Model) -> list[Model]:
     return models
 
 
+def _env_model_from_config(config: ModelConfig) -> Model:
+    model_id = config.model or get_default_model_for_provider("openrouter") or "moonshotai/kimi-k2.6"
+    return Model(
+        id=model_id,
+        name=model_id,
+        api="openai-completions",
+        provider="openrouter",
+        base_url=config.base_url,
+        reasoning=False,
+        context_window=128000,
+        max_tokens=config.max_tokens or 8192,
+    )
+
+
+def _load_live_startup_models(
+    env_model: Model,
+    *,
+    cli_provider: str | None,
+    cli_model: str | None,
+    cli_models: list[str] | None,
+    list_models: bool = False,
+) -> list[Model]:
+    should_fetch = _should_fetch_live_startup_models(
+        env_model=env_model,
+        cli_provider=cli_provider,
+        cli_model=cli_model,
+        cli_models=cli_models,
+        list_models=list_models,
+    ) or _implicit_default_openrouter_startup(
+        env_model,
+        cli_provider=cli_provider,
+        cli_model=cli_model,
+        cli_models=cli_models,
+        list_models=list_models,
+    )
+    if not should_fetch or not _startup_live_catalog_enabled():
+        return []
+    try:
+        return get_live_openrouter_models(base_model=env_model, force_refresh=True)
+    except Exception as exc:  # noqa: BLE001 - startup must preserve custom fallback when live catalog fails.
+        logger.warning("OpenRouter live model catalog unavailable during startup: %s", exc, exc_info=True)
+        return []
+
+
+def _should_fetch_live_startup_models(
+    *,
+    env_model: Model,
+    cli_provider: str | None,
+    cli_model: str | None,
+    cli_models: list[str] | None,
+    list_models: bool,
+) -> bool:
+    if cli_provider:
+        return normalize_provider(cli_provider) == "openrouter"
+    if list_models:
+        return False
+    if cli_model and _model_reference_points_to_openrouter(cli_model):
+        return True
+    if cli_model and "/" in cli_model and normalize_provider(env_model.provider) == "openrouter":
+        return True
+    return any(
+        _model_reference_points_to_openrouter(pattern) or _model_pattern_requests_live_catalog(pattern)
+        for pattern in cli_models or []
+    )
+
+
+def _startup_live_catalog_enabled() -> bool:
+    raw = os.environ.get("APPV231_MODEL_CATALOG_STARTUP_FETCH", "true").strip().lower()
+    return raw not in _FALSE_ENV_VALUES
+
+
+def _model_reference_points_to_openrouter(reference: str) -> bool:
+    text = reference.strip()
+    if "/" not in text:
+        return False
+    prefix = text.split("/", 1)[0].strip()
+    return bool(prefix) and normalize_provider(prefix) == "openrouter"
+
+
+def _model_pattern_requests_live_catalog(pattern: str) -> bool:
+    text = pattern.strip()
+    if "*" not in text and "?" not in text and "[" not in text:
+        return False
+    if "/" not in text:
+        return False
+    prefix = text.split("/", 1)[0].strip()
+    return bool(prefix) and normalize_provider(prefix) == "openrouter"
+
+
+def _implicit_default_openrouter_startup(
+    env_model: Model,
+    *,
+    cli_provider: str | None,
+    cli_model: str | None,
+    cli_models: list[str] | None,
+    list_models: bool,
+) -> bool:
+    return (
+        not list_models
+        and not cli_provider
+        and not cli_model
+        and not cli_models
+        and normalize_provider(env_model.provider) == "openrouter"
+    )
+
+
+def _dedupe_startup_models(models: list[Model]) -> list[Model]:
+    deduped: dict[tuple[str, str], Model] = {}
+    for model in models:
+        deduped[(model.provider, model.id)] = model
+    return list(deduped.values())
+
+
+def _matching_live_model(env_model: Model, live_models: list[Model]) -> Model | None:
+    wanted = (normalize_provider(env_model.provider), env_model.id.lower())
+    for model in live_models:
+        if (normalize_provider(model.provider), model.id.lower()) == wanted:
+            return model
+    return None
+
+
+def _hydrate_live_models_for_list(config: ModelConfig, args: argparse.Namespace) -> None:
+    env_model = _env_model_from_config(config)
+    cli_models = _split_models_arg(args.models)
+    live_models = _load_live_startup_models(
+        env_model,
+        cli_provider=args.provider,
+        cli_model=args.model,
+        cli_models=cli_models,
+        list_models=True,
+    )
+    if _startup_live_catalog_enabled() and not live_models and _should_fetch_live_startup_models(
+        env_model=env_model,
+        cli_provider=args.provider,
+        cli_model=args.model,
+        cli_models=cli_models,
+        list_models=True,
+    ):
+        print("OpenRouter live model catalog unavailable; showing registered models only.", file=sys.stderr)
+    for model in live_models:
+        register_model(model)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the appv231 pi+hermes coding app")
     parser.add_argument("prompt", nargs="*", help="Prompt to run. If omitted, starts the interactive TUI.")
@@ -204,13 +357,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--dotenv",
         default=None,
-        help="Dotenv file for APPV2_WORKER_LLM/OpenRouter settings; defaults to nearest .env in --cwd or parents",
+        help="Dotenv file for APPV231_WORKER_LLM/OpenRouter settings; defaults to nearest .env in --cwd or parents",
     )
     parser.add_argument("--provider", help="Provider name for --model resolution")
     parser.add_argument("--model", help='Model pattern or ID, including optional "provider/id" form')
     parser.add_argument("--models", help="Comma-separated model patterns for scoped cycling")
     parser.add_argument("--thinking", help="Set thinking level: off, minimal, low, medium, high, xhigh")
     parser.add_argument("--list-models", action="store_true", help="List available provider/model IDs and exit")
+    parser.add_argument("--verbose-models", action="store_true", help="Show model metadata with --list-models")
     parser.add_argument("--list-providers", action="store_true", help="List available providers and exit")
     parser.add_argument("--temperature", help="Override generation temperature")
     parser.add_argument("--top-p", help="Override nucleus sampling top_p")
@@ -261,7 +415,7 @@ def main(argv: list[str] | None = None) -> int:
 
     dotenv_path = _resolve_dotenv_path(args.dotenv, search_start=cwd_path)
     try:
-        config = _config_with_cli_generation_params(load_model_config("APPV2_WORKER_LLM", dotenv_path), args)
+        config = _config_with_cli_generation_params(load_model_config("APPV231_WORKER_LLM", dotenv_path), args)
     except ValueError as error:
         parser.error(str(error))
     register_builtin_providers(dotenv_path=dotenv_path, config=config)
@@ -270,7 +424,8 @@ def main(argv: list[str] | None = None) -> int:
         _print_provider_list()
         return 0
     if args.list_models:
-        _print_model_list()
+        _hydrate_live_models_for_list(config, args)
+        _print_model_list(verbose=args.verbose_models)
         return 0
     try:
         startup = _startup_model_from_env(
@@ -370,10 +525,21 @@ def _print_provider_list() -> None:
         print(provider)
 
 
-def _print_model_list() -> None:
+def _print_model_list(*, verbose: bool = False) -> None:
     for provider in sorted(get_providers()):
         for model in sorted(get_models(provider), key=lambda item: item.id):
-            print(f"{provider}/{model.id}")
+            if not verbose:
+                print(f"{provider}/{model.id}")
+                continue
+            input_types = ",".join(getattr(model, "input", []) or [])
+            reasoning = "true" if getattr(model, "reasoning", False) else "false"
+            print(
+                f"{provider}/{model.id} "
+                f"context={getattr(model, 'context_window', 0)} "
+                f"max_tokens={getattr(model, 'max_tokens', 0)} "
+                f"reasoning={reasoning} "
+                f"input={input_types or 'text'}"
+            )
 
 
 def _generation_param_warnings_for_model(

@@ -6,7 +6,7 @@ import os
 
 
 def are_experimental_features_enabled() -> bool:
-    return os.environ.get("PI_EXPERIMENTAL") == "1"
+    return os.environ.get("APPV231_EXPERIMENTAL") == "1"
 
 
 areExperimentalFeaturesEnabled = are_experimental_features_enabled

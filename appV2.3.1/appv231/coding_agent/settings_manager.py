@@ -535,7 +535,7 @@ class SettingsManager:
         terminal = self.settings.get("terminal", {})
         if "clearOnShrink" in terminal:
             return bool(terminal["clearOnShrink"])
-        return os.environ.get("PI_CLEAR_ON_SHRINK") == "1"
+        return os.environ.get("APPV231_CLEAR_ON_SHRINK") == "1"
 
     def setClearOnShrink(self, enabled: bool) -> None:
         self._set_global_nested("terminal", "clearOnShrink", enabled)
@@ -581,7 +581,7 @@ class SettingsManager:
         self._set_global("treeFilterMode", mode)
 
     def getShowHardwareCursor(self) -> bool:
-        return self.settings.get("showHardwareCursor", os.environ.get("PI_HARDWARE_CURSOR") == "1")
+        return self.settings.get("showHardwareCursor", os.environ.get("APPV231_HARDWARE_CURSOR") == "1")
 
     def setShowHardwareCursor(self, enabled: bool) -> None:
         self._set_global("showHardwareCursor", enabled)

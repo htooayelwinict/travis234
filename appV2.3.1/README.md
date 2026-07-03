@@ -321,7 +321,7 @@ docker run --rm -it \
   -v "$PWD:/workspace:rw" \
   -v "$HOME/.appv231/sandbox-home:/agent-home:rw" \
   -e HOME=/agent-home \
-  -e PI_CODING_AGENT_DIR=/agent-home/agent \
+  -e APPV231_CODING_AGENT_DIR=/agent-home/agent \
   -e APPV231_SANDBOX=1 \
   -e APPV231_NO_VENV_REEXEC=1 \
   ghcr.io/htooayelwinict/appv231:production \
@@ -497,9 +497,9 @@ cp .env.example .env
 Minimum live-run values for the local dev path:
 
 ```text
-APPV2_WORKER_LLM_ENABLED=true
-APPV2_WORKER_LLM_API_KEY=...
-APPV2_WORKER_LLM_BASE_URL=https://openrouter.ai/api/v1
+APPV231_WORKER_LLM_ENABLED=true
+APPV231_WORKER_LLM_API_KEY=...
+APPV231_WORKER_LLM_BASE_URL=https://openrouter.ai/api/v1
 ```
 
 Sandbox users should prefer `/login` and `/model` instead of `.env`.

@@ -7,8 +7,10 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const DEFAULT_IMAGE =
-  process.env.APPV23_IMAGE || process.env.APPV23_SANDBOX_IMAGE || "ghcr.io/htooayelwinict/appv23:production";
-const PUBLIC_APPV23_IMAGE_PREFIX = "ghcr.io/htooayelwinict/appv23:";
+  process.env.APPV231_IMAGE ||
+  process.env.APPV231_SANDBOX_IMAGE ||
+  "ghcr.io/htooayelwinict/appv231:production";
+const PUBLIC_APPV231_IMAGE_PREFIX = "ghcr.io/htooayelwinict/appv231:";
 const CONTAINER_WORKSPACE = "/workspace";
 const CONTAINER_AGENT_HOME = "/agent-home";
 const SKIP_IMPORT_NAMES = new Set([
@@ -29,7 +31,7 @@ function parseArgs(argv) {
   const config = {
     cwd: process.cwd(),
     image: DEFAULT_IMAGE,
-    agentHome: process.env.APPV23_SANDBOX_HOME || path.join(os.homedir(), ".appv23", "sandbox-home"),
+    agentHome: process.env.APPV231_SANDBOX_HOME || path.join(os.homedir(), ".appv231", "sandbox-home"),
     network: true,
     dryRun: false,
     pull: true,
@@ -165,7 +167,7 @@ function buildDockerCommand(config, runtime = {}) {
     "--rm",
     "-it",
     "--name",
-    `appv23-sandbox-${pid}`,
+    `appv231-sandbox-${pid}`,
     "--workdir",
     CONTAINER_WORKSPACE,
     "--cap-drop",
@@ -183,11 +185,11 @@ function buildDockerCommand(config, runtime = {}) {
     "-e",
     `HOME=${CONTAINER_AGENT_HOME}`,
     "-e",
-    `PI_CODING_AGENT_DIR=${CONTAINER_AGENT_HOME}/agent`,
+    `APPV231_CODING_AGENT_DIR=${CONTAINER_AGENT_HOME}/agent`,
     "-e",
-    "APPV23_SANDBOX=1",
+    "APPV231_SANDBOX=1",
     "-e",
-    "APPV23_NO_VENV_REEXEC=1",
+    "APPV231_NO_VENV_REEXEC=1",
     "-e",
     "PYTHONUNBUFFERED=1",
   ];
@@ -202,17 +204,22 @@ function buildPullCommand(config) {
   return config.pull ? ["docker", "pull", config.image] : [];
 }
 
-function isPublicAppv23Image(image) {
-  return image.startsWith(PUBLIC_APPV23_IMAGE_PREFIX);
+function isPublicAppv231Image(image) {
+  return image.startsWith(PUBLIC_APPV231_IMAGE_PREFIX);
 }
 
 function shouldUseIsolatedDockerConfig(config, env = process.env) {
-  return config.pull && isPublicAppv23Image(config.image) && !env.DOCKER_CONFIG && !env.APPV23_DOCKER_CONFIG;
+  return (
+    config.pull &&
+    isPublicAppv231Image(config.image) &&
+    !env.DOCKER_CONFIG &&
+    !env.APPV231_DOCKER_CONFIG
+  );
 }
 
 function buildPullEnv(config, dockerConfig, env = process.env) {
-  if (env.APPV23_DOCKER_CONFIG) {
-    return { ...env, DOCKER_CONFIG: env.APPV23_DOCKER_CONFIG };
+  if (env.APPV231_DOCKER_CONFIG) {
+    return { ...env, DOCKER_CONFIG: env.APPV231_DOCKER_CONFIG };
   }
   if (dockerConfig) {
     return { ...env, DOCKER_CONFIG: dockerConfig };
@@ -234,8 +241,8 @@ function prepareAgentsFiles(config) {
   }
   const target = path.join(config.agentHome, "agent", "AGENTS.md");
   const parts = [
-    "<!-- appv23-sandbox-imported-agents -->",
-    "# Imported appv23 sandbox instructions",
+    "<!-- appv231-sandbox-imported-agents -->",
+    "# Imported appv231 sandbox instructions",
     "",
     "These instructions were copied into the sandbox from explicit --agents-file arguments.",
     "",
@@ -342,17 +349,17 @@ function shouldSkipImport(filePath) {
 }
 
 function printHelp() {
-  process.stdout.write(`appv23-sandbox
+  process.stdout.write(`appv231-sandbox
 
-Run the prebuilt appv23 Docker image from any directory.
+Run the prebuilt appv231 Docker image from any directory.
 
 Usage:
-  appv23-sandbox [options] [-- appv23 args]
+  appv231-sandbox [options] [-- appv231 args]
 
 Options:
   --cwd <path>          Host workspace to mount as /workspace. Defaults to current directory.
-  --image <name>        Docker image. Defaults to APPV23_IMAGE, APPV23_SANDBOX_IMAGE, or ghcr.io/htooayelwinict/appv23:production.
-  --agent-home <path>   Sandbox state directory. Defaults to ~/.appv23/sandbox-home.
+  --image <name>        Docker image. Defaults to APPV231_IMAGE, APPV231_SANDBOX_IMAGE, or ghcr.io/htooayelwinict/appv231:production.
+  --agent-home <path>   Sandbox state directory. Defaults to ~/.appv231/sandbox-home.
   --agents-file <path>  Copy an explicit AGENTS.md-style file into sandbox context.
   --with-skills <path>  Copy an extra skill file or directory into sandbox ~/.agents/skills.
   --no-user-skills      Do not copy host ~/.agents/skills.
@@ -389,7 +396,7 @@ function main(argv = process.argv.slice(2)) {
       let dockerConfig;
       try {
         if (shouldUseIsolatedDockerConfig(config)) {
-          dockerConfig = fs.mkdtempSync(path.join(os.tmpdir(), "appv23-docker-config-"));
+          dockerConfig = fs.mkdtempSync(path.join(os.tmpdir(), "appv231-docker-config-"));
         }
         const pull = spawnSync(pullCommand[0], pullCommand.slice(1), {
           stdio: "inherit",

@@ -215,7 +215,7 @@ def _load_generation_params(prefix: str, config: dict[str, str]) -> GenerationPa
 
 
 def _default_model(prefix: str) -> str | None:
-    return get_default_model_for_provider("openrouter") if prefix == "APPV2_WORKER_LLM" else None
+    return get_default_model_for_provider("openrouter") if prefix == "APPV231_WORKER_LLM" else None
 
 
 def _strip_inline_comment(value: str) -> str:
