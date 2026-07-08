@@ -21,7 +21,7 @@ test("global wrapper defaults to appv231 production GHCR image and pull", () => 
   assert.deepEqual(buildPullCommand(config), ["docker", "pull", "ghcr.io/htooayelwinict/appv231:production"]);
 });
 
-test("global wrapper builds hardened docker command without host-home mounts", () => {
+test("global wrapper builds docker command with the image appv231 user contract", () => {
   const workspace = path.join(os.tmpdir(), "appv231-workspace");
   const agentHome = path.join(os.tmpdir(), "appv231-agent-home");
   const config = parseArgs([
@@ -42,18 +42,19 @@ test("global wrapper builds hardened docker command without host-home mounts", (
   const joined = command.join("\0");
 
   assert.deepEqual(command.slice(0, 5), ["docker", "run", "--rm", "-it", "--name"]);
-  assert.ok(command.includes("--cap-drop"));
-  assert.ok(command.includes("ALL"));
-  assert.ok(command.includes("--security-opt"));
-  assert.ok(command.includes("no-new-privileges"));
+  assert.equal(command.includes("--cap-drop"), false);
+  assert.equal(command.includes("ALL"), false);
+  assert.equal(command.includes("--security-opt"), false);
+  assert.equal(command.includes("no-new-privileges"), false);
   assert.ok(command.includes("--pids-limit"));
   assert.ok(command.includes("512"));
-  assert.ok(command.includes("--user"));
-  assert.ok(command.includes("501:20"));
+  assert.equal(command.includes("--user"), false);
+  assert.equal(command.includes("501:20"), false);
   assert.ok(command.includes(`${workspace}:/workspace:rw`));
   assert.ok(command.includes(`${agentHome}:/agent-home:rw`));
   assert.ok(command.includes("HOME=/agent-home"));
   assert.ok(command.includes("APPV231_CODING_AGENT_DIR=/agent-home/agent"));
+  assert.ok(command.includes("DEBIAN_FRONTEND=noninteractive"));
   assert.equal(command.some((value) => value.startsWith("APPV23_")), false);
   assert.ok(command.includes("appv231:test"));
   assert.ok(command.includes("--cwd"));

@@ -314,19 +314,21 @@ The image entrypoint is `appv231`.
 
 ```bash
 docker run --rm -it \
-  --cap-drop ALL \
-  --security-opt no-new-privileges \
   --pids-limit 512 \
-  --user "$(id -u):$(id -g)" \
   -v "$PWD:/workspace:rw" \
   -v "$HOME/.appv231/sandbox-home:/agent-home:rw" \
   -e HOME=/agent-home \
   -e APPV231_CODING_AGENT_DIR=/agent-home/agent \
   -e APPV231_SANDBOX=1 \
   -e APPV231_NO_VENV_REEXEC=1 \
+  -e DEBIAN_FRONTEND=noninteractive \
   ghcr.io/htooayelwinict/appv231:production \
   --cwd /workspace
 ```
+
+The image runs as the named `appv231` user. It has narrow passwordless sudo for
+`apt`, `apt-get`, and `dpkg`, so a session can install project tools such as
+Node.js or npm when needed.
 
 ## Local development from this repo
 

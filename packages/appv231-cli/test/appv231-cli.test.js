@@ -93,6 +93,17 @@ test("release image starts from python 3.13 slim and installs appv231", () => {
   assert.match(dockerfile, /USER appv231/);
 });
 
+test("local development image creates the appv231 user with apt sudo access", () => {
+  const dockerfile = fs.readFileSync(path.resolve(packageRoot, "..", "..", "appV2.3.1", "Dockerfile.appv231"), "utf8");
+
+  assert.match(dockerfile, /^FROM python:3\.13-slim/m);
+  assert.match(dockerfile, /\bsudo\b/);
+  assert.match(dockerfile, /useradd .*appv231/);
+  assert.match(dockerfile, /env_keep \+= "DEBIAN_FRONTEND"/);
+  assert.match(dockerfile, /appv231 ALL=.*NOPASSWD:.*apt-get/);
+  assert.match(dockerfile, /USER appv231/);
+});
+
 test("package defaults to appv231 production GHCR image and auto pull", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "appv231-cli-"));
   const config = parseArgs(["--agent-home", path.join(root, "agent-home")]);

@@ -158,8 +158,6 @@ function sanitizeAppArgs(args) {
 }
 
 function buildDockerCommand(config, runtime = {}) {
-  const uid = runtime.uid ?? (typeof process.getuid === "function" ? process.getuid() : 1000);
-  const gid = runtime.gid ?? (typeof process.getgid === "function" ? process.getgid() : 1000);
   const pid = runtime.pid ?? process.pid;
   const command = [
     "docker",
@@ -170,14 +168,8 @@ function buildDockerCommand(config, runtime = {}) {
     `appv231-sandbox-${pid}`,
     "--workdir",
     CONTAINER_WORKSPACE,
-    "--cap-drop",
-    "ALL",
-    "--security-opt",
-    "no-new-privileges",
     "--pids-limit",
     "512",
-    "--user",
-    `${uid}:${gid}`,
     "-v",
     `${config.cwd}:${CONTAINER_WORKSPACE}:rw`,
     "-v",
@@ -192,6 +184,8 @@ function buildDockerCommand(config, runtime = {}) {
     "APPV231_NO_VENV_REEXEC=1",
     "-e",
     "PYTHONUNBUFFERED=1",
+    "-e",
+    "DEBIAN_FRONTEND=noninteractive",
   ];
   if (!config.network) {
     command.push("--network=none");

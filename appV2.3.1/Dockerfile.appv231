@@ -2,6 +2,7 @@ FROM python:3.13-slim
 
 ENV PYTHONUNBUFFERED=1 \
     APPV231_NO_VENV_REEXEC=1 \
+    DEBIAN_FRONTEND=noninteractive \
     HOME=/agent-home \
     APPV231_CODING_AGENT_DIR=/agent-home/agent
 
@@ -12,7 +13,13 @@ RUN apt-get update \
         curl \
         git \
         ripgrep \
-    && rm -rf /var/lib/apt/lists/*
+        sudo \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --home-dir /agent-home --shell /bin/bash appv231 \
+    && mkdir -p /workspace /agent-home/agent \
+    && chown -R appv231:appv231 /workspace /agent-home \
+    && printf 'Defaults:appv231 env_keep += "DEBIAN_FRONTEND"\nappv231 ALL=(root) NOPASSWD: /usr/bin/apt-get, /usr/bin/apt, /usr/bin/dpkg\n' > /etc/sudoers.d/appv231-apt \
+    && chmod 0440 /etc/sudoers.d/appv231-apt
 
 WORKDIR /opt/appV2.3.1
 
@@ -24,6 +31,8 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir .
 
 WORKDIR /workspace
+
+USER appv231
 
 ENTRYPOINT ["appv231"]
 CMD ["--cwd", "/workspace"]
