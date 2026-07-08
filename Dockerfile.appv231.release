@@ -1,8 +1,5 @@
 FROM python:3.13-slim
 
-ARG APPV231_REPO=https://github.com/htooayelwinict/allthebest.git
-ARG APPV231_REF=next/appv23.1
-
 ENV PYTHONUNBUFFERED=1 \
     APPV231_NO_VENV_REEXEC=1 \
     DEBIAN_FRONTEND=noninteractive \
@@ -24,9 +21,9 @@ RUN apt-get update \
     && printf 'Defaults:appv231 env_keep += "DEBIAN_FRONTEND"\nappv231 ALL=(root) NOPASSWD: /usr/bin/apt-get, /usr/bin/apt, /usr/bin/dpkg\n' > /etc/sudoers.d/appv231-apt \
     && chmod 0440 /etc/sudoers.d/appv231-apt
 
+COPY appV2.3.1 /tmp/allthebest/appV2.3.1
+
 RUN python -m pip install --no-cache-dir --upgrade pip \
-    && git clone --depth 1 --filter=blob:none --sparse --branch "${APPV231_REF}" "${APPV231_REPO}" /tmp/allthebest \
-    && git -C /tmp/allthebest sparse-checkout set appV2.3.1 \
     && python -m pip install --no-cache-dir /tmp/allthebest/appV2.3.1 \
     && rm -rf /tmp/allthebest
 

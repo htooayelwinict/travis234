@@ -83,7 +83,8 @@ test("release image starts from python 3.13 slim and installs appv231", () => {
   const dockerfile = fs.readFileSync(path.resolve(packageRoot, "..", "..", "Dockerfile.appv231.release"), "utf8");
 
   assert.match(dockerfile, /^FROM python:3\.13-slim/m);
-  assert.match(dockerfile, /sparse-checkout set appV2\.3\.1/);
+  assert.match(dockerfile, /COPY appV2\.3\.1 \/tmp\/allthebest\/appV2\.3\.1/);
+  assert.doesNotMatch(dockerfile, /git clone/);
   assert.match(dockerfile, /pip install --no-cache-dir \/tmp\/allthebest\/appV2\.3\.1/);
   assert.match(dockerfile, /ENTRYPOINT \["appv231"\]/);
   assert.match(dockerfile, /\bsudo\b/);
