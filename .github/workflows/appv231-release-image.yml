@@ -1,4 +1,4 @@
-name: appv23 release image
+name: appv231 release image
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
       ref:
         description: "Git ref to build into the image"
         required: false
-        default: "next/appv23"
+        default: "next/appv23.1"
       image_tag:
         description: "GHCR image tag"
         required: false
@@ -22,12 +22,14 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     env:
-      IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/appv23
-      APPV23_REF: ${{ inputs.ref || github.event.release.tag_name || github.ref_name }}
+      IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/appv231
+      APPV231_REF: ${{ inputs.ref || github.event.release.tag_name || github.ref_name }}
       IMAGE_TAG: ${{ inputs.image_tag || github.event.release.tag_name || 'production' }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.APPV231_REF }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -42,16 +44,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push appv23 image
+      - name: Build and push appv231 image
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile.appv23.release
+          file: Dockerfile.appv231.release
           push: true
           platforms: linux/amd64,linux/arm64
-          build-args: |
-            APPV23_REPO=https://github.com/${{ github.repository }}.git
-            APPV23_REF=${{ env.APPV23_REF }}
           tags: |
             ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
             ${{ env.IMAGE_NAME }}:production

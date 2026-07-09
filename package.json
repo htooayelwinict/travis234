@@ -17,6 +17,7 @@
     "node": ">=18"
   },
   "scripts": {
+    "build": "npm --prefix packages/appv231-cli run build",
     "install:appv231": "bash scripts/install-appv231-sandbox.sh",
     "image:appv231:release": "docker build --pull=false -f Dockerfile.appv231.release -t ghcr.io/htooayelwinict/appv231:production .",
     "qa:appv231-cli": "npm --prefix packages/appv231-cli test && npm --prefix packages/appv231-cli run pack:dry-run",

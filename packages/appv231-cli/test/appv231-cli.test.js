@@ -88,6 +88,8 @@ test("release image starts from python 3.13 slim and installs appv231", () => {
   assert.match(dockerfile, /pip install --no-cache-dir \/tmp\/allthebest\/appV2\.3\.1/);
   assert.match(dockerfile, /ENTRYPOINT \["appv231"\]/);
   assert.match(dockerfile, /\bsudo\b/);
+  assert.match(dockerfile, /\bnodejs\b/);
+  assert.match(dockerfile, /\bnpm\b/);
   assert.match(dockerfile, /useradd .*appv231/);
   assert.match(dockerfile, /env_keep \+= "DEBIAN_FRONTEND"/);
   assert.match(dockerfile, /appv231 ALL=.*NOPASSWD:.*apt-get/);
@@ -99,10 +101,22 @@ test("local development image creates the appv231 user with apt sudo access", ()
 
   assert.match(dockerfile, /^FROM python:3\.13-slim/m);
   assert.match(dockerfile, /\bsudo\b/);
+  assert.match(dockerfile, /\bnodejs\b/);
+  assert.match(dockerfile, /\bnpm\b/);
   assert.match(dockerfile, /useradd .*appv231/);
   assert.match(dockerfile, /env_keep \+= "DEBIAN_FRONTEND"/);
   assert.match(dockerfile, /appv231 ALL=.*NOPASSWD:.*apt-get/);
   assert.match(dockerfile, /USER appv231/);
+});
+
+test("ghcr workflow targets appv231 production image", () => {
+  const workflow = fs.readFileSync(path.resolve(packageRoot, "..", "..", ".github", "workflows", "appv231-release-image.yml"), "utf8");
+
+  assert.match(workflow, /^name: appv231 release image/m);
+  assert.match(workflow, /IMAGE_NAME: ghcr\.io\/\$\{\{ github\.repository_owner \}\}\/appv231/);
+  assert.match(workflow, /file: Dockerfile\.appv231\.release/);
+  assert.doesNotMatch(workflow, /appv23 release image/);
+  assert.doesNotMatch(workflow, /Dockerfile\.appv23\.release/);
 });
 
 test("package defaults to appv231 production GHCR image and auto pull", () => {

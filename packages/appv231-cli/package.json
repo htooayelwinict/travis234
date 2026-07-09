@@ -21,6 +21,7 @@
     "access": "public"
   },
   "scripts": {
+    "build": "npm pack --dry-run",
     "test": "node --test test/appv231-cli.test.js",
     "pack:dry-run": "npm pack --dry-run"
   }

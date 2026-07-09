@@ -326,9 +326,10 @@ docker run --rm -it \
   --cwd /workspace
 ```
 
-The image runs as the named `appv231` user. It has narrow passwordless sudo for
-`apt`, `apt-get`, and `dpkg`, so a session can install project tools such as
-Node.js or npm when needed.
+The image runs as the named `appv231` user. It includes Node.js and npm for
+common JavaScript project workflows, and it has narrow passwordless sudo for
+`apt`, `apt-get`, and `dpkg` so a session can install other project tools when
+needed.
 
 ## Local development from this repo
 
@@ -376,7 +377,8 @@ python -m pip install ".[browser]"
 
 The production image is built from `next/appv23.1` using `Dockerfile.appv231.release`.
 
-Commit and push runtime changes first:
+Commit and push runtime changes first. The `appv231 release image` GitHub Actions
+workflow publishes `ghcr.io/htooayelwinict/appv231:production`.
 
 ```bash
 git push upstream next/appv23.1
@@ -418,6 +420,15 @@ Publish npm only when one of these changes:
 - `packages/appv231-cli/bin/appv231.js`
 - bundled `agents/AGENTS.md`
 - bundled `skills/**/SKILL.md`
+- `packages/appv231-cli/package.json`
+
+Build and inspect the package before publishing:
+
+```bash
+npm --prefix packages/appv231-cli test
+npm --prefix packages/appv231-cli run build
+npm --prefix packages/appv231-cli publish --access public
+```
 - package metadata or version
 - launcher README
 - CLI flags or Docker run behavior
