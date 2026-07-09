@@ -111,6 +111,7 @@ _BASH_MUTATION_MARKERS = (
     " chown ",
     " tee ",
 )
+_BASH_MUTATING_COMMANDS = frozenset({"rm", "mv", "cp", "mkdir", "rmdir", "touch", "chmod", "chown", "tee"})
 _BASH_PACKAGE_MANAGER_STATE_COMMANDS = frozenset(
     {
         "ci",
@@ -772,6 +773,10 @@ def _bash_command_may_change_state(command: str) -> bool:
         next_token = lower_tokens[index + 1] if index + 1 < len(lower_tokens) else ""
         second_next = lower_tokens[index + 2] if index + 2 < len(lower_tokens) else ""
         third_next = lower_tokens[index + 3] if index + 3 < len(lower_tokens) else ""
+        if _is_redirection_token(token):
+            return True
+        if _basename(token) in _BASH_MUTATING_COMMANDS:
+            return True
         if token in {"pip", "pip3"} and next_token in _BASH_PACKAGE_MANAGER_STATE_COMMANDS:
             return True
         if token in {"python", "python3"} and next_token == "-m" and second_next in {"pip", "pip3"}:

@@ -1067,6 +1067,7 @@ class AgentSession:
         self._tool_guardrail_halt_decision: ToolGuardrailDecision | None = None
         self._tool_guardrail_halt_response_emitted = False
         self._tool_loop_recovery_steered_keys: set[tuple[str, str, int]] = set()
+        self._bash_signatures_this_assistant_turn: set[str] = set()
         self._process_limit_recovery_steered = False
         self._process_limit_halt_message: str | None = None
         self._process_limit_halt_response_emitted = False
@@ -1165,7 +1166,7 @@ class AgentSession:
             before_tool_call=self._before_tool_call,
             after_tool_call=self._after_tool_call,
             should_stop_after_turn=self._should_stop_after_turn,
-            prepare_next_turn=self._prepare_next_turn,
+            prepare_next_turn_with_context=self._prepare_next_turn,
             transform_context=self._transform_context,
             steering_mode=steering_mode,
             follow_up_mode=follow_up_mode,
@@ -2781,7 +2782,10 @@ class AgentSession:
         )
         return None
 
-    def _prepare_next_turn(self, signal: AbortSignal | None = None) -> AgentLoopTurnUpdate:
+    def _prepare_next_turn(self, context=None, signal: AbortSignal | None = None) -> AgentLoopTurnUpdate:
+        if isinstance(context, AbortSignal) and signal is None:
+            signal = context
+            context = None
         active_tool_names = self.get_active_tool_names()
         self.system_prompt = self._build_system_prompt(active_tool_names)
         self.agent.state.system_prompt = self.system_prompt
@@ -3664,11 +3668,35 @@ class AgentSession:
                 self._tool_guardrail_halt_decision = decision
             return BeforeToolCallResult(block=True, reason=toolguard_synthetic_result(decision))
 
+        duplicate_bash_result = self._duplicate_bash_call_in_current_turn(context.tool_call.name, context.args)
+        if duplicate_bash_result is not None:
+            return duplicate_bash_result
+
         decision = self._tool_guardrails.before_call(context.tool_call.name, context.args)
         if not decision.allows_execution:
             if decision.should_halt:
                 self._tool_guardrail_halt_decision = decision
             return BeforeToolCallResult(block=True, reason=toolguard_synthetic_result(decision))
+        return None
+
+    def _duplicate_bash_call_in_current_turn(self, tool_name: str, args) -> BeforeToolCallResult | None:
+        if tool_name != "bash" or not isinstance(args, Mapping):
+            return None
+        command = args.get("command")
+        if not isinstance(command, str):
+            return None
+        signature = command.strip()
+        if not signature:
+            return None
+        if signature in self._bash_signatures_this_assistant_turn:
+            return BeforeToolCallResult(
+                block=True,
+                reason=(
+                    "Duplicate bash command in the same assistant turn. "
+                    "Use the result already provided for this command instead of executing it again."
+                ),
+            )
+        self._bash_signatures_this_assistant_turn.add(signature)
         return None
 
     def _after_tool_call(self, context, signal=None) -> AfterToolCallResult | None:
@@ -3840,6 +3868,8 @@ class AgentSession:
         )
 
     def _handle_agent_event(self, event) -> None:
+        if event.type == "turn_start":
+            self._bash_signatures_this_assistant_turn.clear()
         if event.type == "message_end" and self._extension_runner.has_handlers("message_end"):
             replacement = self._extension_runner.emit_message_end({"type": "message_end", "message": event.message})
             if replacement is not None:

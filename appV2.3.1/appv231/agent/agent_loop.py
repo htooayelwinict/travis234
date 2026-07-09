@@ -9,7 +9,7 @@ from __future__ import annotations
 import copy
 import json
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from typing import Any, Callable, Optional, Union
 
@@ -46,7 +46,6 @@ from appv231.agent.types import (
     TurnEndEvent,
     TurnStartEvent,
 )
-from appv231.agent.tool_dispatch import should_parallelize_tool_batch
 
 AgentEventSink = Callable[[AgentEvent], Any]
 
@@ -93,7 +92,10 @@ def agent_loop_continue(
     stream = AgentEventStream()
 
     def _run() -> None:
-        run_agent_loop_continue(context, config, stream.push, signal, stream_fn)
+        try:
+            run_agent_loop_continue(context, config, stream.push, signal, stream_fn)
+        except Exception:  # pragma: no cover - loop must not crash the thread silently
+            stream.push(AgentEndEvent(messages=[]))
 
     threading.Thread(target=_run, daemon=True).start()
     return stream
@@ -197,7 +199,11 @@ def _run_loop(
             tool_results: list[ToolResultMessage] = []
             has_more_tool_calls = False
             if tool_calls:
-                batch = _execute_tool_calls(current_context, message, config, signal, emit)
+                batch = (
+                    _fail_tool_calls_from_truncated_message(tool_calls, emit)
+                    if message.stop_reason == "length"
+                    else _execute_tool_calls(current_context, message, config, signal, emit)
+                )
                 tool_results.extend(batch.messages)
                 has_more_tool_calls = not batch.terminate
                 for result in tool_results:
@@ -352,7 +358,6 @@ def _stream_assistant_response(
                 _emit_event(emit, MessageUpdateEvent(message=copy.copy(last_partial_snapshot), assistant_message_event=event))
         elif event.type in ("done", "error"):
             final_message = response.result_sync()
-            _deduplicate_tool_calls(final_message)
             if partial_added:
                 context.messages[-1] = final_message
             else:
@@ -381,7 +386,6 @@ def _stream_assistant_response(
         )
 
     final_message = response.result_sync()
-    _deduplicate_tool_calls(final_message)
     if partial_added:
         context.messages[-1] = final_message
     else:
@@ -441,34 +445,6 @@ def _close_response(response: object) -> None:
         return
 
 
-def _deduplicate_tool_calls(message: AssistantMessage) -> None:
-    content = getattr(message, "content", None)
-    if not content:
-        return
-    seen: set[tuple[str, str]] = set()
-    next_content = []
-    changed = False
-    for item in content:
-        if getattr(item, "type", None) != "toolCall":
-            next_content.append(item)
-            continue
-        key = (getattr(item, "name", ""), _canonical_tool_call_arguments(getattr(item, "arguments", None)))
-        if key in seen:
-            changed = True
-            continue
-        seen.add(key)
-        next_content.append(item)
-    if changed:
-        message.content = next_content
-
-
-def _canonical_tool_call_arguments(arguments: Any) -> str:
-    try:
-        return json.dumps(arguments or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
-    except TypeError:
-        return str(arguments)
-
-
 def _is_guardrail_block_result(reason: str | None) -> bool:
     if not reason:
         return False
@@ -485,6 +461,28 @@ class _ExecutedBatch:
         self.terminate = terminate
 
 
+def _fail_tool_calls_from_truncated_message(tool_calls: list[Any], emit: AgentEventSink) -> _ExecutedBatch:
+    messages: list[ToolResultMessage] = []
+    for tool_call in tool_calls:
+        _emit_event(
+            emit,
+            ToolExecutionStartEvent(tool_call_id=tool_call.id, tool_name=tool_call.name, args=tool_call.arguments),
+        )
+        finalized = {
+            "tool_call": tool_call,
+            "result": _error_result(
+                f'Tool call "{tool_call.name}" was not executed: the response hit the output token limit, '
+                "so its arguments may be truncated. Re-issue the tool call with complete arguments."
+            ),
+            "is_error": True,
+        }
+        _emit_tool_end(finalized, emit)
+        message = _tool_result_message(finalized)
+        _emit_tool_result_message(message, emit)
+        messages.append(message)
+    return _ExecutedBatch(messages, False)
+
+
 def _execute_tool_calls(
     current_context: AgentContext,
     assistant_message: AssistantMessage,
@@ -494,9 +492,17 @@ def _execute_tool_calls(
 ) -> _ExecutedBatch:
     tool_calls = [c for c in assistant_message.content if getattr(c, "type", None) == "toolCall"]
     tools = current_context.tools or []
-    if config.tool_execution != "sequential" and should_parallelize_tool_batch(tool_calls, tools):
-        return _execute_parallel(current_context, assistant_message, tool_calls, config, signal, emit)
-    return _execute_sequential(current_context, assistant_message, tool_calls, config, signal, emit)
+    if config.tool_execution == "sequential":
+        return _execute_sequential(current_context, assistant_message, tool_calls, config, signal, emit)
+    tool_by_name = {tool.name: tool for tool in tools}
+    has_sequential_tool_call = any(
+        tool_by_name.get(tool_call.name) is not None
+        and tool_by_name[tool_call.name].execution_mode == "sequential"
+        for tool_call in tool_calls
+    )
+    if has_sequential_tool_call:
+        return _execute_sequential(current_context, assistant_message, tool_calls, config, signal, emit)
+    return _execute_parallel(current_context, assistant_message, tool_calls, config, signal, emit)
 
 
 def _execute_sequential(current_context, assistant_message, tool_calls, config, signal, emit) -> _ExecutedBatch:
@@ -542,9 +548,7 @@ def _execute_parallel(current_context, assistant_message, tool_calls, config, si
         def _make(prep):
             def _job():
                 executed = _execute_prepared(prep, signal, emit)
-                finalized = _finalize(current_context, assistant_message, prep, executed, config, signal)
-                _emit_tool_end(finalized, emit)
-                return finalized
+                return _finalize(current_context, assistant_message, prep, executed, config, signal)
             return _job
 
         entries.append(_make(preparation))
@@ -557,9 +561,11 @@ def _execute_parallel(current_context, assistant_message, tool_calls, config, si
     if callables:
         with ThreadPoolExecutor(max_workers=max(1, len(callables))) as pool:
             futures = {pool.submit(job): i for i, job in callables}
-            for future in futures:
+            for future in as_completed(futures):
                 idx = futures[future]
-                results_by_index[idx] = future.result()
+                finalized = future.result()
+                results_by_index[idx] = finalized
+                _emit_tool_end(finalized, emit)
     for i, entry in enumerate(entries):
         ordered.append(results_by_index[i] if callable(entry) else entry)
 

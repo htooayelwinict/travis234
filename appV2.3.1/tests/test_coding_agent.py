@@ -3370,6 +3370,16 @@ def test_package_manager_mutation_guardrail_ignores_read_only_test_commands() ->
     assert decision.action == "allow"
 
 
+def test_bash_mutation_classifier_detects_attached_redirects_and_absolute_mutators() -> None:
+    from appv231.agent.tool_guardrails import _bash_command_may_change_state
+
+    assert _bash_command_may_change_state("echo hi > file") is True
+    assert _bash_command_may_change_state("echo hi >file") is True
+    assert _bash_command_may_change_state("cat <<EOF >out.txt\nx\nEOF") is True
+    assert _bash_command_may_change_state("/bin/rm file") is True
+    assert _bash_command_may_change_state("/usr/bin/touch file") is True
+
+
 def test_workspace_scope_violation_guardrail_counts_across_state_changes() -> None:
     from appv231.agent.tool_guardrails import ToolCallGuardrailController
 
@@ -4068,9 +4078,12 @@ def test_agent_session_deduplicates_duplicate_bash_calls_in_same_turn(tmp_path: 
         ("call_1", {"command": "ls -la src/metrics"}),
         ("call_3", {"command": "pwd"}),
     ]
-    assert [result.tool_call_id for result in tool_results] == ["call_1", "call_3"]
+    assert [result.tool_call_id for result in tool_results] == ["call_1", "call_2", "call_3"]
+    assert tool_results[1].is_error is True
+    assert "Duplicate bash command in the same assistant turn" in tool_results[1].content[0].text
     assert [call.id for call in assistant.content if getattr(call, "type", None) == "toolCall"] == [
         "call_1",
+        "call_2",
         "call_3",
     ]
 

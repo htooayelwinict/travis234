@@ -79,6 +79,8 @@ from appv231.tui import (
 )
 from appv231.agent.types import (
     AgentEndEvent,
+    AgentContext,
+    AgentLoopConfig,
     MessageEndEvent,
     MessageStartEvent,
     MessageUpdateEvent,
@@ -87,6 +89,7 @@ from appv231.agent.types import (
     TurnEndEvent,
 )
 from appv231.agent.types import AgentTool, AgentToolResult
+from appv231.agent import run_agent_loop
 from appv231.ai.providers.capabilities import ProviderParamWarning
 from appv231.ai.providers.faux import create_faux_provider, faux_model, text_response_events, tool_call_response_events
 from appv231.ai.providers.params import GenerationParams
@@ -2424,6 +2427,79 @@ def test_interactive_renderer_hides_streaming_tool_call_drafts_until_execution_s
     rendered_started = "\n".join(tui.render(80))
     assert "write" in rendered_started
     assert "a.txt" in rendered_started
+
+
+def test_interactive_renderer_duplicate_tool_calls_complete_through_agent_loop() -> None:
+    from appv231.ai.types import ToolCall, ToolcallEndEvent, ToolcallStartEvent
+
+    terminal = FakeTerminal()
+    tui = TUI(terminal)
+    renderer = InteractiveRenderer(tui)
+    model = faux_model()
+    provider_calls = {"n": 0}
+
+    def convert(messages):
+        return [message for message in messages if getattr(message, "role", None) in ("user", "assistant", "toolResult")]
+
+    def script(m, c):
+        provider_calls["n"] += 1
+        if provider_calls["n"] != 1:
+            return text_response_events(m, "done")
+        calls = [
+            ToolCall(id="call_1", name="echo", arguments={"text": "same"}),
+            ToolCall(id="call_2", name="echo", arguments={"text": "same"}),
+            ToolCall(id="call_3", name="echo", arguments={"text": "different"}),
+        ]
+        partial = AssistantMessage(
+            content=list(calls),
+            api=m.api,
+            provider=m.provider,
+            model=m.id,
+            usage=empty_usage(),
+            stop_reason="toolUse",
+            timestamp=now_ms(),
+        )
+        final = AssistantMessage(
+            content=list(calls),
+            api=m.api,
+            provider=m.provider,
+            model=m.id,
+            usage=empty_usage(),
+            stop_reason="toolUse",
+            timestamp=now_ms(),
+        )
+        events = [StartEvent(partial=partial)]
+        for index, tool_call in enumerate(calls):
+            events.append(ToolcallStartEvent(content_index=index, partial=partial))
+            events.append(ToolcallEndEvent(content_index=index, tool_call=tool_call, partial=partial))
+        events.append(DoneEvent(reason="toolUse", message=final))
+        return events
+
+    register_api_provider(create_faux_provider(script))
+
+    def echo_execute(tool_call_id, args, signal=None, on_update=None):
+        return AgentToolResult(content=[TextContent(text=f"echo:{args['text']}")], details={})
+
+    echo = AgentTool(
+        name="echo",
+        description="echo",
+        parameters={"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+        label="Echo",
+        execute=echo_execute,
+    )
+
+    run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        AgentContext(system_prompt="sys", messages=[], tools=[echo]),
+        AgentLoopConfig(model=model, convert_to_llm=convert),
+        renderer.handle_event,
+    )
+
+    components = renderer._tool_components
+    assert set(components) == {"call_1", "call_2", "call_3"}
+    assert {
+        call_id for call_id, component in components.items() if component.result is not None
+    } == {"call_1", "call_2", "call_3"}
 
 
 def test_interactive_renderer_skips_non_visual_turn_events() -> None:

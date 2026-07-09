@@ -15,6 +15,7 @@ from appv231.agent import (
     AfterToolCallResult,
     BeforeToolCallResult,
     ShouldStopAfterTurnContext,
+    agent_loop_continue,
     run_agent_loop,
 )
 from appv231.ai.event_stream import create_assistant_message_event_stream
@@ -232,7 +233,7 @@ def test_agent_loop_stops_after_signal_aborted_during_tool_execution() -> None:
     )
 
 
-def test_duplicate_tool_calls_in_same_assistant_turn_execute_once() -> None:
+def test_duplicate_tool_calls_in_same_assistant_turn_execute_like_pi() -> None:
     model = faux_model()
     provider_calls = {"n": 0}
     executions: list[tuple[str, dict]] = []
@@ -273,15 +274,74 @@ def test_duplicate_tool_calls_in_same_assistant_turn_execute_once() -> None:
 
     tool_results = [msg for msg in msgs if getattr(msg, "role", None) == "toolResult"]
     assistant = next(msg for msg in msgs if getattr(msg, "role", None) == "assistant")
-    assert executions == [
-        ("call_1", {"text": "same"}),
-        ("call_3", {"text": "different"}),
-    ]
-    assert [result.tool_call_id for result in tool_results] == ["call_1", "call_3"]
+    assert len(executions) == 3
+    assert {call_id for call_id, _args in executions} == {"call_1", "call_2", "call_3"}
+    assert {call_id: args for call_id, args in executions} == {
+        "call_1": {"text": "same"},
+        "call_2": {"text": "same"},
+        "call_3": {"text": "different"},
+    }
+    assert [result.tool_call_id for result in tool_results] == ["call_1", "call_2", "call_3"]
     assert [call.id for call in assistant.content if getattr(call, "type", None) == "toolCall"] == [
         "call_1",
+        "call_2",
         "call_3",
     ]
+
+
+def test_truncated_assistant_tool_calls_fail_without_execution_like_pi() -> None:
+    model = faux_model()
+    executions: list[str] = []
+    stream_calls = {"n": 0}
+
+    def stream_fn(model, context, options):
+        stream_calls["n"] += 1
+        if stream_calls["n"] > 1:
+            return create_faux_provider(lambda m, c: text_response_events(m, "done")).stream_simple(
+                model, context, options
+            )
+        stream = create_assistant_message_event_stream()
+        tool_call = ToolCall(id="call_truncated", name="echo", arguments={"text": "unfinished"})
+        partial = AssistantMessage(
+            content=[tool_call],
+            api=model.api,
+            provider=model.provider,
+            model=model.id,
+            usage=empty_usage(),
+            stop_reason="length",
+            timestamp=now_ms(),
+        )
+        stream.push(StartEvent(partial=partial))
+        stream.push(ToolcallStartEvent(content_index=0, partial=partial))
+        stream.push(ToolcallEndEvent(content_index=0, tool_call=tool_call, partial=partial))
+        stream.push(DoneEvent(reason="length", message=partial))
+        return stream
+
+    def echo_execute(tool_call_id, args, signal=None, on_update=None):
+        executions.append(tool_call_id)
+        return AgentToolResult(content=[TextContent(text="should not run")], details={})
+
+    echo = AgentTool(
+        name="echo",
+        description="echo",
+        parameters={"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+        label="Echo",
+        execute=echo_execute,
+    )
+
+    messages = run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(tools=[echo]),
+        _config(model),
+        lambda e: None,
+        stream_fn=stream_fn,
+    )
+
+    tool_results = [message for message in messages if getattr(message, "role", None) == "toolResult"]
+    assert executions == []
+    assert [result.tool_call_id for result in tool_results] == ["call_truncated"]
+    assert tool_results[0].is_error is True
+    assert "truncated" in tool_results[0].content[0].text.lower()
 
 
 def test_repeated_same_path_write_batch_does_not_block_second_landed_mutation() -> None:
@@ -740,6 +800,121 @@ def test_all_terminating_parallel_tool_results_stop_without_next_assistant_turn(
         "toolResult",
         "toolResult",
     ]
+
+
+def test_core_parallel_dispatch_ignores_appv231_batch_safety_for_bash_like_pi() -> None:
+    model = faux_model()
+    provider_calls = {"n": 0}
+    first_started = threading.Event()
+    second_started = threading.Event()
+    release_first = threading.Event()
+    messages_holder: list[list[Message]] = []
+    run_error: list[BaseException] = []
+
+    def script(m, c):
+        provider_calls["n"] += 1
+        if provider_calls["n"] == 1:
+            return _multi_tool_call_response_events(
+                m,
+                [
+                    ("call_1", "bash", {"command": "sleep 1"}),
+                    ("call_2", "bash", {"command": "pwd"}),
+                ],
+            )
+        return text_response_events(m, "done")
+
+    register_api_provider(create_faux_provider(script))
+
+    def bash_execute(tool_call_id, args, signal=None, on_update=None):
+        if tool_call_id == "call_1":
+            first_started.set()
+            release_first.wait(timeout=2)
+        if tool_call_id == "call_2":
+            second_started.set()
+        return AgentToolResult(content=[TextContent(text=f"ok:{tool_call_id}")], details={})
+
+    bash = AgentTool(
+        name="bash",
+        description="bash",
+        parameters={"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]},
+        label="Bash",
+        execute=bash_execute,
+    )
+    cfg = _config(model)
+    cfg.tool_execution = "parallel"
+
+    def run_loop() -> None:
+        try:
+            messages_holder.append(
+                run_agent_loop(
+                    [UserMessage(content="go", timestamp=now_ms())],
+                    _ctx(tools=[bash]),
+                    cfg,
+                    lambda e: None,
+                )
+            )
+        except BaseException as error:  # noqa: BLE001
+            run_error.append(error)
+
+    thread = threading.Thread(target=run_loop)
+    thread.start()
+    try:
+        assert first_started.wait(timeout=2)
+        assert second_started.wait(timeout=0.2)
+    finally:
+        release_first.set()
+        thread.join(timeout=2)
+
+    assert run_error == []
+    assert thread.is_alive() is False
+    tool_results = [message for message in messages_holder[0] if getattr(message, "role", None) == "toolResult"]
+    assert [message.tool_call_id for message in tool_results] == ["call_1", "call_2"]
+
+
+def test_parallel_tool_execution_end_events_emit_from_loop_thread() -> None:
+    model = faux_model()
+    provider_calls = {"n": 0}
+    end_threads: list[str] = []
+
+    def script(m, c):
+        provider_calls["n"] += 1
+        if provider_calls["n"] == 1:
+            return _multi_tool_call_response_events(
+                m,
+                [
+                    ("call_1", "grep", {"pattern": "a"}),
+                    ("call_2", "grep", {"pattern": "b"}),
+                ],
+            )
+        return text_response_events(m, "done")
+
+    register_api_provider(create_faux_provider(script))
+
+    def grep_execute(tool_call_id, args, signal=None, on_update=None):
+        return AgentToolResult(content=[TextContent(text=f"ok:{tool_call_id}")], details={})
+
+    grep = AgentTool(
+        name="grep",
+        description="grep",
+        parameters={"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]},
+        label="Grep",
+        execute=grep_execute,
+    )
+    cfg = _config(model)
+    cfg.tool_execution = "parallel"
+
+    messages = run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(tools=[grep]),
+        cfg,
+        lambda event: end_threads.append(threading.current_thread().name)
+        if event.type == "tool_execution_end"
+        else None,
+    )
+
+    assert end_threads == ["MainThread", "MainThread"]
+    tool_results = [message for message in messages if getattr(message, "role", None) == "toolResult"]
+    assert [message.tool_call_id for message in tool_results] == ["call_1", "call_2"]
 
 
 def test_should_stop_after_turn_halts_loop() -> None:
@@ -1242,6 +1417,71 @@ def test_agent_prepare_next_turn_receives_active_abort_signal() -> None:
 
     assert seen_signals == [agent.signal]
     assert getattr(seen_signals[0], "aborted") is False
+
+
+def test_agent_prepare_next_turn_with_context_receives_context_and_signal() -> None:
+    model = faux_model()
+    seen_contexts: list[ShouldStopAfterTurnContext] = []
+    seen_signals: list[object] = []
+
+    def prepare_next_turn_with_context(context, signal):
+        seen_contexts.append(context)
+        seen_signals.append(signal)
+        return None
+
+    agent = Agent(
+        system_prompt="sys",
+        model=model,
+        convert_to_llm=_convert,
+        prepare_next_turn_with_context=prepare_next_turn_with_context,
+    )
+
+    agent.prompt(
+        "hello",
+        stream_fn=lambda model, context, options: create_faux_provider(
+            lambda m, c: text_response_events(m, "done")
+        ).stream_simple(model, context, options),
+    )
+
+    assert len(seen_contexts) == 1
+    assert seen_contexts[0].message.content[0].text == "done"
+    assert seen_contexts[0].context.system_prompt == "sys"
+    assert seen_signals == [agent.signal]
+
+
+def test_agent_loop_continue_runtime_exception_emits_agent_end_event() -> None:
+    model = faux_model()
+    context = AgentContext(
+        system_prompt="sys",
+        messages=[UserMessage(content="continue", timestamp=now_ms())],
+        tools=[],
+    )
+
+    def stream_fn(model, context, options):
+        raise RuntimeError("provider exploded during continue")
+
+    stream = agent_loop_continue(context, _config(model), stream_fn=stream_fn)
+    events: list[object] = []
+    agent_end_seen = threading.Event()
+
+    def consume() -> None:
+        for event in stream.iter_until(lambda: agent_end_seen.is_set()):
+            events.append(event)
+            if event.type == "agent_end":
+                agent_end_seen.set()
+
+    thread = threading.Thread(target=consume)
+    thread.start()
+    if not agent_end_seen.wait(timeout=2):
+        stream.close()
+    thread.join(timeout=2)
+
+    assert agent_end_seen.is_set()
+    thread.join(timeout=2)
+
+    assert thread.is_alive() is False
+    assert events[-1].type == "agent_end"
+    assert stream.result_sync() == events[-1].messages
 
 
 def test_prompt_failure_emits_assistant_error_lifecycle() -> None:

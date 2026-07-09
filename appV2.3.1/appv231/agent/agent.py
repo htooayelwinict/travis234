@@ -83,6 +83,7 @@ class Agent:
         after_tool_call=None,
         should_stop_after_turn=None,
         prepare_next_turn=None,
+        prepare_next_turn_with_context=None,
         transform_context=None,
         steering_mode: QueueMode = "one-at-a-time",
         follow_up_mode: QueueMode = "one-at-a-time",
@@ -106,6 +107,7 @@ class Agent:
         self._after_tool_call = after_tool_call
         self._should_stop_after_turn = should_stop_after_turn
         self._prepare_next_turn = prepare_next_turn
+        self._prepare_next_turn_with_context = prepare_next_turn_with_context
         self._transform_context = transform_context
         self.session_id = session_id
         self.thinking_budgets = thinking_budgets
@@ -206,13 +208,20 @@ class Agent:
                 return []
             return self._drain_steering()
 
+        def prepare_next_turn_adapter(context):
+            if self._prepare_next_turn_with_context:
+                return self._prepare_next_turn_with_context(context, self._signal)
+            if self._prepare_next_turn:
+                return self._prepare_next_turn(self._signal)
+            return None
+
         return AgentLoopConfig(
             model=self._state.model,
             convert_to_llm=self._convert_to_llm,
             get_steering_messages=get_steering_messages,
             get_follow_up_messages=self._drain_follow_up,
-            prepare_next_turn=(lambda _ctx: self._prepare_next_turn(self._signal))
-            if self._prepare_next_turn
+            prepare_next_turn=prepare_next_turn_adapter
+            if self._prepare_next_turn_with_context or self._prepare_next_turn
             else None,
             tool_execution=self._tool_execution,
             before_tool_call=self._before_tool_call,

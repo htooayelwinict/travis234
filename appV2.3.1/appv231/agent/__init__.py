@@ -31,6 +31,7 @@ from appv231.agent.types import (
     AgentToolResult,
     BeforeToolCallContext,
     BeforeToolCallResult,
+    PrepareNextTurnContext,
     ShouldStopAfterTurnContext,
 )
 
@@ -52,6 +53,7 @@ __all__ = [
     "BeforeToolCallContext",
     "BeforeToolCallResult",
     "IterationBudget",
+    "PrepareNextTurnContext",
     "ShouldStopAfterTurnContext",
     "ToolCallGuardrailConfig",
     "ToolCallGuardrailController",

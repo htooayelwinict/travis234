@@ -107,6 +107,9 @@ class ShouldStopAfterTurnContext:
     new_messages: list[AgentMessage]
 
 
+PrepareNextTurnContext = ShouldStopAfterTurnContext
+
+
 @dataclass
 class AgentLoopTurnUpdate:
     context: AgentContext | None = None
