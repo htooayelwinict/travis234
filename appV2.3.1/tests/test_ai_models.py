@@ -179,15 +179,23 @@ def test_get_api_key_and_headers_resolves_command_api_key_on_each_request(monkey
     assert second["headers"] == {"Authorization": "Bearer token-2"}
 
 
-def test_get_api_key_and_headers_does_not_execute_shell_metacharacters() -> None:
+def test_get_api_key_and_headers_does_not_execute_shell_metacharacters(monkeypatch) -> None:
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def run_without_shell(args, **kwargs):
+        calls.append((args, kwargs))
+        return type("Completed", (), {"returncode": 0, "stdout": "safe\n"})()
+
+    monkeypatch.setattr("appv231.ai.models.subprocess.run", run_without_shell)
     provider = "command-auth-metacharacter-test"
     register_provider_auth_config(provider, {"apiKey": "!printf safe; printf hacked", "authHeader": True})
     model = Model(id="m", name="M", api="faux", provider=provider, base_url="")
 
     result = get_api_key_and_headers(model)
 
-    assert result["ok"] is False
-    assert "headers" not in result
+    assert result["headers"] == {"Authorization": "Bearer safe"}
+    assert calls[0][0] == ["printf", "safe;", "printf", "hacked"]
+    assert calls[0][1]["shell"] is False
 
 
 def test_get_provider_display_name_resolves_registered_oauth_built_in_and_fallback() -> None:
