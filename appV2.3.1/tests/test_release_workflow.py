@@ -57,4 +57,6 @@ def test_container_smoke_prepares_linux_writable_workspace(tmp_path) -> None:
     prepare_npm_workspace(tmp_path)
 
     assert tmp_path.stat().st_mode & 0o777 == 0o777
-    assert (tmp_path / "package.json").is_file()
+    package_json = tmp_path / "package.json"
+    assert package_json.is_file()
+    assert package_json.stat().st_mode & 0o666 == 0o666

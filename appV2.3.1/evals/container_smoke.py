@@ -17,9 +17,13 @@ def run_container_smoke(image: str) -> None:
         prepare_npm_workspace(workspace)
         _run(
             [
-                "docker", "run", "--rm", "--entrypoint", "npm",
+                "docker", "run", "--rm", "--entrypoint", "sh",
                 "-v", f"{workspace}:/workspace", "-w", "/workspace", image,
-                "install", "--ignore-scripts", "--no-audit", "--no-fund", "is-number",
+                "-lc",
+                (
+                    "npm install --ignore-scripts --no-audit --no-fund is-number; "
+                    "status=$?; chmod -R a+rwX /workspace; exit $status"
+                ),
             ]
         )
         if not (workspace / "node_modules" / "is-number").is_dir():
@@ -42,10 +46,12 @@ def run_container_smoke(image: str) -> None:
 def prepare_npm_workspace(workspace: Path) -> None:
     workspace.mkdir(parents=True, exist_ok=True)
     workspace.chmod(0o777)
-    (workspace / "package.json").write_text(
+    package_json = workspace / "package.json"
+    package_json.write_text(
         json.dumps({"name": "smoke", "version": "1.0.0", "private": True}) + "\n",
         encoding="utf-8",
     )
+    package_json.chmod(0o666)
 
 
 def _run(command: list[str], expected: str | None = None) -> str:

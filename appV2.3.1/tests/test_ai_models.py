@@ -179,10 +179,10 @@ def test_get_api_key_and_headers_resolves_command_api_key_on_each_request(monkey
     assert second["headers"] == {"Authorization": "Bearer token-2"}
 
 
-def test_get_api_key_and_headers_does_not_execute_shell_metacharacters(monkeypatch) -> None:
-    monkeypatch.delenv("PROXY_API_KEY", raising=False)
-    register_provider_auth_config("proxy", {"apiKey": "!printf safe; printf hacked", "authHeader": True})
-    model = Model(id="m", name="M", api="faux", provider="proxy", base_url="")
+def test_get_api_key_and_headers_does_not_execute_shell_metacharacters() -> None:
+    provider = "command-auth-metacharacter-test"
+    register_provider_auth_config(provider, {"apiKey": "!printf safe; printf hacked", "authHeader": True})
+    model = Model(id="m", name="M", api="faux", provider=provider, base_url="")
 
     result = get_api_key_and_headers(model)
 
