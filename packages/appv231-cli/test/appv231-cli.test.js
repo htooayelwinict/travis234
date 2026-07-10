@@ -92,6 +92,7 @@ test("release image combines python 3.13 with official Node 20 without Debian np
   assert.match(dockerfile, /COPY appV2\.3\.1 \/tmp\/allthebest\/appV2\.3\.1/);
   assert.doesNotMatch(dockerfile, /git clone/);
   assert.match(dockerfile, /pip install --no-cache-dir \/tmp\/allthebest\/appV2\.3\.1/);
+  assert.match(dockerfile, /pip install --no-cache-dir pytest/);
   assert.match(dockerfile, /ENTRYPOINT \["appv231"\]/);
   assert.match(dockerfile, /\bsudo\b/);
   assert.match(dockerfile, /\bnpm\b/);

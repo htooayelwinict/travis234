@@ -12,6 +12,20 @@ def run_container_smoke(image: str) -> None:
     _run(["docker", "run", "--rm", "--entrypoint", "appv231", image, "--help"])
     _run(["docker", "run", "--rm", "--entrypoint", "node", image, "--version"])
     _run(["docker", "run", "--rm", "--entrypoint", "npm", image, "--version"])
+    shell_env_script = (
+        "import json,shutil;"
+        "from appv231.coding_agent.tools.bash import get_shell_env;"
+        "env=get_shell_env();"
+        "print(json.dumps({name:shutil.which(name,path=env['PATH']) for name in "
+        "('python','node','npm','npx')}));"
+        "import pytest"
+    )
+    shell_env = json.loads(
+        _run(["docker", "run", "--rm", "--entrypoint", "python", image, "-c", shell_env_script])
+    )
+    missing = [name for name, executable in shell_env.items() if executable is None]
+    if missing:
+        raise RuntimeError(f"coding-agent shell PATH is missing: {', '.join(missing)}")
     with tempfile.TemporaryDirectory(prefix="appv231-container-smoke-") as temporary:
         workspace = Path(temporary)
         prepare_npm_workspace(workspace)

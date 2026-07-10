@@ -34,6 +34,7 @@ COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY appV2.3.1 /tmp/allthebest/appV2.3.1
 
 RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir pytest \
     && python -m pip install --no-cache-dir /tmp/allthebest/appV2.3.1 \
     && rm -rf /tmp/allthebest
 

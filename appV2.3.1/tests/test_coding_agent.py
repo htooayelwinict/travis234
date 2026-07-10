@@ -10347,6 +10347,20 @@ def test_bash_shell_env_matches_pi_without_runtime_python_path(tmp_path: Path, m
     assert "PYTHONPATH" not in env
 
 
+def test_bash_shell_env_preserves_system_runtime_bin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from appv231.coding_agent.config import ENV_AGENT_DIR
+    from appv231.coding_agent.tools.bash import get_shell_env
+
+    runtime_python_bin = str(Path(sys.executable).resolve().parent)
+    monkeypatch.setattr(sys, "prefix", sys.base_prefix)
+    monkeypatch.setenv(ENV_AGENT_DIR, str(tmp_path / "agent"))
+    monkeypatch.setenv("PATH", os.pathsep.join([runtime_python_bin, "/usr/bin"]))
+
+    env = get_shell_env()
+
+    assert runtime_python_bin in env["PATH"].split(os.pathsep)
+
+
 def test_bash_spawn_context_uses_pi_shell_env_not_app_runtime_python(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from appv231.coding_agent.config import ENV_AGENT_DIR
     from appv231.coding_agent.tools.bash import _resolve_spawn_context
