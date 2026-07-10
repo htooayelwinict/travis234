@@ -177,17 +177,21 @@ test("package builds install-capable docker command for npx-style use", () => {
   assert.equal(command.includes("no-new-privileges"), false);
   assert.ok(command.includes("--pids-limit"));
   assert.ok(command.includes("512"));
-  assert.equal(command.includes("--user"), false);
+  assert.equal(command[command.indexOf("--user") + 1], "appv231");
   assert.ok(command.includes("DEBIAN_FRONTEND=noninteractive"));
   assert.ok(command.includes("APPV231_SANDBOX=1"));
+  assert.ok(command.includes("APPV231_WORKSPACE_ROOT=/workspace"));
+  assert.ok(command.includes("APPV231_AGENT_HOME=/agent-home"));
   assert.ok(command.includes("APPV231_NO_VENV_REEXEC=1"));
   assert.ok(command.includes("APPV231_CODING_AGENT_DIR=/agent-home/agent"));
   assert.ok(command.includes(`${workspace}:/workspace:rw`));
+  assert.ok(command.includes(`${config.agentHome}:/agent-home:rw`));
+  assert.equal(command.some((value) => value === "/:/workspace:rw" || value.includes("docker.sock")), false);
   assert.ok(command.includes("ghcr.io/htooayelwinict/appv231:production"));
   assert.deepEqual(command.slice(-4), ["ghcr.io/htooayelwinict/appv231:production", "--cwd", "/workspace", "hello"]);
 });
 
-test("package copies bundled skills into sandbox home", () => {
+test("package copies bundled skills into the app-owned sandbox agent directory", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "appv231-cli-"));
   const syntheticPackageRoot = path.join(root, "package");
   const bundledSkill = path.join(syntheticPackageRoot, "skills", "subagent-delegation");
@@ -203,12 +207,14 @@ test("package copies bundled skills into sandbox home", () => {
   );
 
   assert.equal(
-    fs.readFileSync(path.join(agentHome, ".agents", "skills", "subagent-delegation", "SKILL.md"), "utf8"),
+    fs.readFileSync(path.join(agentHome, "agent", "skills", "subagent-delegation", "SKILL.md"), "utf8"),
     "---\nname: subagent-delegation\n---\nBundled policy\n",
   );
+  assert.equal(fs.existsSync(path.join(hostHome, ".agents")), false);
+  assert.equal(fs.existsSync(path.join(agentHome, ".agents")), false);
 });
 
-test("package seeds bundled AGENTS.md into host home when missing", () => {
+test("package seeds bundled AGENTS.md into the host app-owned agent directory when missing", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "appv231-cli-"));
   const syntheticPackageRoot = path.join(root, "package");
   const bundledAgentsDir = path.join(syntheticPackageRoot, "agents");
@@ -223,17 +229,21 @@ test("package seeds bundled AGENTS.md into host home when missing", () => {
     { homeDir: hostHome, packageRoot: syntheticPackageRoot },
   );
 
-  assert.equal(fs.readFileSync(path.join(hostHome, ".agents", "AGENTS.md"), "utf8"), "Bundled appv231 kernel\n");
+  assert.equal(
+    fs.readFileSync(path.join(hostHome, ".appv231", "agent", "AGENTS.md"), "utf8"),
+    "Bundled appv231 kernel\n",
+  );
   const imported = fs.readFileSync(path.join(agentHome, "agent", "AGENTS.md"), "utf8");
   assert.match(imported, /Bundled appv231 kernel/);
+  assert.equal(fs.existsSync(path.join(hostHome, ".agents")), false);
 });
 
-test("package seeds bundled skills into host home without overwriting user skills", () => {
+test("package seeds bundled skills into the host app-owned agent directory without overwriting user skills", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "appv231-cli-"));
   const syntheticPackageRoot = path.join(root, "package");
   const bundledWebSearch = path.join(syntheticPackageRoot, "skills", "web-search");
   const hostHome = path.join(root, "host-home");
-  const userWebSearch = path.join(hostHome, ".agents", "skills", "web-search");
+  const userWebSearch = path.join(hostHome, ".appv231", "agent", "skills", "web-search");
   const agentHome = path.join(root, "agent-home");
   fs.mkdirSync(bundledWebSearch, { recursive: true });
   fs.mkdirSync(userWebSearch, { recursive: true });
@@ -246,16 +256,16 @@ test("package seeds bundled skills into host home without overwriting user skill
   );
 
   assert.equal(
-    fs.readFileSync(path.join(hostHome, ".agents", "skills", "web-search", "SKILL.md"), "utf8"),
+    fs.readFileSync(path.join(hostHome, ".appv231", "agent", "skills", "web-search", "SKILL.md"), "utf8"),
     "---\nname: web-search\n---\nUser search\n",
   );
   assert.equal(
-    fs.readFileSync(path.join(agentHome, ".agents", "skills", "web-search", "SKILL.md"), "utf8"),
+    fs.readFileSync(path.join(agentHome, "agent", "skills", "web-search", "SKILL.md"), "utf8"),
     "---\nname: web-search\n---\nUser search\n",
   );
 });
 
-test("package seeds bundled skills into host home when missing", () => {
+test("package seeds bundled skills into the host app-owned agent directory when missing", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "appv231-cli-"));
   const syntheticPackageRoot = path.join(root, "package");
   const bundledWebSearch = path.join(syntheticPackageRoot, "skills", "web-search");
@@ -271,21 +281,21 @@ test("package seeds bundled skills into host home when missing", () => {
   );
 
   assert.equal(
-    fs.readFileSync(path.join(hostHome, ".agents", "skills", "web-search", "SKILL.md"), "utf8"),
+    fs.readFileSync(path.join(hostHome, ".appv231", "agent", "skills", "web-search", "SKILL.md"), "utf8"),
     "---\nname: web-search\n---\nBundled search\n",
   );
   assert.equal(
-    fs.readFileSync(path.join(agentHome, ".agents", "skills", "web-search", "SKILL.md"), "utf8"),
+    fs.readFileSync(path.join(agentHome, "agent", "skills", "web-search", "SKILL.md"), "utf8"),
     "---\nname: web-search\n---\nBundled search\n",
   );
 });
 
-test("package user skills override bundled skills", () => {
+test("package app-owned user skills override bundled skills", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "appv231-cli-"));
   const syntheticPackageRoot = path.join(root, "package");
   const bundledSkill = path.join(syntheticPackageRoot, "skills", "subagent-delegation");
   const hostHome = path.join(root, "host-home");
-  const userSkill = path.join(hostHome, ".agents", "skills", "subagent-delegation");
+  const userSkill = path.join(hostHome, ".appv231", "agent", "skills", "subagent-delegation");
   const agentHome = path.join(root, "agent-home");
   fs.mkdirSync(bundledSkill, { recursive: true });
   fs.mkdirSync(userSkill, { recursive: true });
@@ -298,15 +308,15 @@ test("package user skills override bundled skills", () => {
   );
 
   assert.equal(
-    fs.readFileSync(path.join(agentHome, ".agents", "skills", "subagent-delegation", "SKILL.md"), "utf8"),
+    fs.readFileSync(path.join(agentHome, "agent", "skills", "subagent-delegation", "SKILL.md"), "utf8"),
     "---\nname: subagent-delegation\n---\nUser policy\n",
   );
 });
 
-test("package copies user AGENTS.md into sandbox agent context by default", () => {
+test("package copies app-owned user AGENTS.md into sandbox agent context by default", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "appv231-cli-"));
   const hostHome = path.join(root, "host-home");
-  const userAgentsDir = path.join(hostHome, ".agents");
+  const userAgentsDir = path.join(hostHome, ".appv231", "agent");
   const agentHome = path.join(root, "agent-home");
   const syntheticPackageRoot = path.join(root, "package");
   fs.mkdirSync(userAgentsDir, { recursive: true });

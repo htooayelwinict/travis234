@@ -107,6 +107,17 @@ class ProviderProfile:
     default_max_tokens: int | None = None
     default_aux_model: str = ""
 
+    @property
+    def transport_available(self) -> bool:
+        from appv231.ai.providers.transports import UnsupportedTransport, get_transport
+
+        return not isinstance(get_transport(self.api_mode), UnsupportedTransport)
+
+    def auth_headers(self, credential: str, *, credential_kind: str = "api_key") -> dict[str, str]:
+        if self.name == "anthropic" and credential_kind == "api_key":
+            return {"x-api-key": credential, "anthropic-version": "2023-06-01"}
+        return {"Authorization": f"Bearer {credential}"}
+
     def get_hostname(self) -> str:
         if self.hostname:
             return self.hostname

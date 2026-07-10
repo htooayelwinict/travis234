@@ -2,7 +2,7 @@
 
 This is the default appv231 user-level agent prompt. It is installed only when
 
-`~/.agents/AGENTS.md` is missing. Edit the host file to customize behavior.
+`~/.appv231/agent/AGENTS.md` is missing. Edit the host file to customize behavior.
 
 ## Core behavior
 

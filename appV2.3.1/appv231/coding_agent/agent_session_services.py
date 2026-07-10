@@ -12,12 +12,13 @@ from urllib.parse import urlparse
 
 from appv231.agent.types import AgentMessage
 from appv231.ai.model_resolver import find_initial_model
-from appv231.ai.stream import stream_simple
+from appv231.ai.stream import _DEFAULT_API_PROVIDER_REGISTRY
 from appv231.ai.types import Context, ImageContent, Message, Model, SimpleStreamOptions, TextContent
 from appv231.coding_agent.agent_session import AgentSession, default_convert_to_llm
 from appv231.coding_agent.auth_storage import AuthStorage
 from appv231.coding_agent.extensions import ExtensionRunner
 from appv231.coding_agent.model_registry import ModelRegistry
+from appv231.coding_agent.provider_control_plane import ProviderControlPlane
 from appv231.coding_agent.resource_loader import DefaultResourceLoader
 from appv231.coding_agent.session_store import SessionContextSnapshot, SessionStore
 from appv231.coding_agent.settings_manager import SettingsManager
@@ -56,13 +57,28 @@ def create_agent_session_services(options: dict[str, Any]) -> dict[str, Any]:
             **resource_loader_options,
         )
         resource_loader.reload(options.get("resourceLoaderReloadOptions") or options.get("resource_loader_reload_options"))
-    auth_storage = options.get("authStorage") or options.get("auth_storage") or AuthStorage.create(
-        str(Path(agent_dir) / "auth.json")
-    )
-    model_registry = options.get("modelRegistry") or options.get("model_registry") or ModelRegistry.create(
-        auth_storage,
-        str(Path(agent_dir) / "models.json"),
-    )
+    provider_control_plane = options.get("providerControlPlane") or options.get("provider_control_plane")
+    if provider_control_plane is not None and not isinstance(provider_control_plane, ProviderControlPlane):
+        raise TypeError("providerControlPlane must be a ProviderControlPlane")
+    if provider_control_plane is None:
+        auth_storage = options.get("authStorage") or options.get("auth_storage") or AuthStorage.create(
+            str(Path(agent_dir) / "auth.json")
+        )
+        model_registry = options.get("modelRegistry") or options.get("model_registry") or ModelRegistry(
+            auth_storage,
+            str(Path(agent_dir) / "models.json"),
+            _DEFAULT_API_PROVIDER_REGISTRY,
+        )
+        if model_registry.auth_storage is not auth_storage:
+            raise ValueError("modelRegistry and authStorage must share the same AuthStorage")
+        provider_control_plane = ProviderControlPlane(
+            auth=auth_storage,
+            models=model_registry,
+            api_providers=model_registry.api_providers,
+        )
+    else:
+        auth_storage = provider_control_plane.auth
+        model_registry = provider_control_plane.models
     session_id = options.get("sessionId", options.get("session_id"))
     session_path = options.get("sessionPath", options.get("session_path"))
     if session_path is None:
@@ -87,6 +103,7 @@ def create_agent_session_services(options: dict[str, Any]) -> dict[str, Any]:
         "resourceLoader": resource_loader,
         "authStorage": auth_storage,
         "modelRegistry": model_registry,
+        "providerControlPlane": provider_control_plane,
         "sessionPath": session_path,
         "sessionId": session_id,
         "diagnostics": diagnostics,
@@ -194,7 +211,12 @@ def create_agent_session_from_services(options: dict[str, Any]) -> CreateAgentSe
         resource_loader=services["resourceLoader"],
         settings_manager=services["settingsManager"],
         extension_runner=runtime if isinstance(runtime, ExtensionRunner) else None,
-        stream_fn=_stream_fn_for_sdk(services["modelRegistry"], services["settingsManager"]),
+        stream_fn=_stream_fn_for_sdk(
+            services["modelRegistry"],
+            services["settingsManager"],
+            services["providerControlPlane"],
+        ),
+        provider_control_plane=services["providerControlPlane"],
         session_path=session_path,
         parent_session_path=options.get("parentSession", options.get("parent_session_path")),
         session_id=str(session_id) if session_id else None,
@@ -294,7 +316,11 @@ def _record_initial_session_state(session: AgentSession, model: Model, thinking_
         store.append_thinking_level_change(thinking_level)
 
 
-def _stream_fn_for_sdk(model_registry: object, settings_manager: object):
+def _stream_fn_for_sdk(
+    model_registry: object,
+    settings_manager: object,
+    provider_control_plane: ProviderControlPlane,
+):
     def _stream(model: Model, context: Context, options: SimpleStreamOptions | None = None):
         auth_method = getattr(model_registry, "getApiKeyAndHeaders", None) or getattr(
             model_registry,
@@ -361,7 +387,7 @@ def _stream_fn_for_sdk(model_registry: object, settings_manager: object):
             max_retry_delay_ms=max_retry_delay_ms,
             headers=headers,
         )
-        return stream_simple(model, context, next_options)
+        return provider_control_plane.api_providers.require(model.api).stream_simple(model, context, next_options)
 
     return _stream
 

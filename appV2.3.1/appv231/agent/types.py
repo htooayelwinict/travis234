@@ -30,13 +30,42 @@ class AbortSignal:
 
     def __init__(self) -> None:
         self._event = threading.Event()
+        self._callbacks: dict[object, Callable[[], None]] = {}
+        self._lock = threading.Lock()
 
     @property
     def aborted(self) -> bool:
         return self._event.is_set()
 
     def abort(self) -> None:
-        self._event.set()
+        with self._lock:
+            if self._event.is_set():
+                return
+            self._event.set()
+            callbacks = tuple(self._callbacks.values())
+            self._callbacks.clear()
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception:
+                pass
+
+    def add_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
+        token = object()
+        with self._lock:
+            if self._event.is_set():
+                call_now = True
+            else:
+                self._callbacks[token] = callback
+                call_now = False
+        if call_now:
+            callback()
+
+        def unsubscribe() -> None:
+            with self._lock:
+                self._callbacks.pop(token, None)
+
+        return unsubscribe
 
 
 @dataclass
@@ -58,6 +87,30 @@ class AgentTool:
     execute: Callable[..., AgentToolResult]
     prepare_arguments: Optional[Callable[[Any], dict[str, Any]]] = None
     execution_mode: ToolExecutionMode | None = None
+    compiled_schema: Any = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        from appv231.ai.validation import compile_tool_schema
+
+        try:
+            self.compiled_schema = compile_tool_schema(self.parameters)
+        except Exception as error:
+            raise ValueError(f"invalid schema for tool {self.name}: {error}") from error
+
+
+@dataclass
+class PreparedToolCall:
+    tool_call: Any
+    tool: AgentTool
+    args: Any
+
+
+@dataclass
+class ImmediateToolOutcome:
+    tool_call: Any
+    result: AgentToolResult
+    is_error: bool
+    reason_code: str
 
 
 @dataclass
@@ -111,6 +164,14 @@ PrepareNextTurnContext = ShouldStopAfterTurnContext
 
 
 @dataclass
+class IterationLimitContext:
+    context: AgentContext
+    api_call_count: int
+    max_iterations: int
+    signal: AbortSignal | None
+
+
+@dataclass
 class AgentLoopTurnUpdate:
     context: AgentContext | None = None
     model: Model | None = None
@@ -128,6 +189,7 @@ class AgentLoopConfig:
     get_steering_messages: Optional[Callable[[], list[AgentMessage]]] = None
     get_follow_up_messages: Optional[Callable[[], list[AgentMessage]]] = None
     tool_execution: ToolExecutionMode = "parallel"
+    max_parallel_tools: int = 8
     before_tool_call: Optional[Callable[[BeforeToolCallContext, Optional[AbortSignal]], Optional[BeforeToolCallResult]]] = None
     after_tool_call: Optional[Callable[[AfterToolCallContext, Optional[AbortSignal]], Optional[AfterToolCallResult]]] = None
     reasoning: str | None = None
@@ -142,6 +204,7 @@ class AgentLoopConfig:
     max_tokens: int | None = None
     max_iterations: int = 90
     iteration_budget: Any | None = None
+    on_iteration_limit: Optional[Callable[[IterationLimitContext], AgentMessage | None]] = None
 
 
 # --- AgentEvent union (pi AgentEvent) ---
@@ -212,6 +275,8 @@ class ToolExecutionEndEvent:
     tool_name: str
     result: Any
     is_error: bool
+    args: Any = None
+    reason_code: str | None = None
     type: Literal["tool_execution_end"] = "tool_execution_end"
 
 

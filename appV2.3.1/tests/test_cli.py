@@ -10,6 +10,7 @@ import appv231.cli as cli
 from appv231.ai.env_config import ModelConfig
 from appv231.app import CodingApp
 from appv231.coding_agent.config import ENV_AGENT_DIR, get_agent_dir
+from appv231.coding_agent.provider_control_plane import ProviderControlPlane
 from appv231.ai.models import get_api_key_for_provider, register_model, reset_models
 from appv231.ai.types import Model
 from appv231.ai.providers.faux import create_faux_provider, faux_model, text_response_events
@@ -368,7 +369,8 @@ def test_cli_model_registry_find_prefers_live_override_over_global_registered_mo
     )
 
     register_model(registered_model)
-    registry = cli._CliModelRegistry([live_model])
+    registry = ProviderControlPlane.in_memory().models
+    registry.replace_models([live_model])
 
     assert registry.find("openrouter", "openai/gpt-5.4-mini") is live_model
 
@@ -582,10 +584,15 @@ def test_cli_passes_hermes_loop_runtime_options(monkeypatch, tmp_path) -> None:
             self.max_iterations = max_iterations
             self.tool_loop_guardrails = tool_loop_guardrails
             self.messages = []
+            self.session = self
+            self.grants = []
             created["app"] = self
 
         def run_turn(self, prompt):
             created["prompt"] = prompt
+
+        def grant_capability(self, name, uses=1):
+            self.grants.append((name, uses))
 
     monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
     monkeypatch.setattr(
@@ -604,6 +611,7 @@ def test_cli_passes_hermes_loop_runtime_options(monkeypatch, tmp_path) -> None:
             "--max-iterations",
             "7",
             "--tool-loop-hard-stop",
+            "--allow-package-install",
             "--plain",
             "inspect",
         ]
@@ -612,7 +620,8 @@ def test_cli_passes_hermes_loop_runtime_options(monkeypatch, tmp_path) -> None:
     app = created["app"]
     assert exit_code == 0
     assert app.max_iterations == 7
-    assert app.tool_loop_guardrails == {"hard_stop_enabled": True}
+    assert app.tool_loop_guardrails == {"blocking_enabled": True}
+    assert app.grants == [("package_mutation", 1)]
     assert created["prompt"] == "inspect"
 
 
@@ -915,6 +924,8 @@ def test_cli_export_session_file_to_html_without_starting_app(monkeypatch, tmp_p
 
 
 def test_cli_models_flag_sets_scoped_models_and_initial_model(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     created: dict[str, object] = {}
     sonnet = Model(
         id="claude-sonnet-4-5",
@@ -980,6 +991,7 @@ def test_cli_models_flag_sets_scoped_models_and_initial_model(monkeypatch, tmp_p
 
 
 def test_cli_models_unqualified_openrouter_model_id_hydrates_live_catalog(monkeypatch, tmp_path, capsys) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     created: dict[str, object] = {}
     monkeypatch.setenv("APPV231_MODEL_CATALOG_STARTUP_FETCH", "true")
     live_model = Model(
@@ -1328,6 +1340,7 @@ def test_cli_startup_hydrates_live_openrouter_model_before_custom_fallback(monke
 
 
 def test_cli_scoped_models_hydrates_exact_live_openrouter_model(monkeypatch, tmp_path, capsys) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     created: dict[str, object] = {}
     monkeypatch.setenv("APPV231_MODEL_CATALOG_STARTUP_FETCH", "true")
 
@@ -1384,6 +1397,7 @@ def test_cli_scoped_models_hydrates_exact_live_openrouter_model(monkeypatch, tmp
 def test_cli_scoped_models_hydrates_unqualified_live_openrouter_model_with_thinking(
     monkeypatch, tmp_path, capsys
 ) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     created: dict[str, object] = {}
     monkeypatch.setenv("APPV231_MODEL_CATALOG_STARTUP_FETCH", "true")
 

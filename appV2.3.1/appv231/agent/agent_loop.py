@@ -1,15 +1,12 @@
-"""Agent loop over AgentMessage. Port of pi/packages/agent/src/agent-loop.ts.
-
-Synchronous Python port: `emit` is a sync sink; the assistant event stream is
-iterated synchronously; `agent_loop` runs the loop in a worker thread.
-"""
+"""Agent loop over AgentMessage. Port of pi/packages/agent/src/agent-loop.ts."""
 
 from __future__ import annotations
 
+import asyncio
 import copy
-import json
+import inspect
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future as ConcurrentFuture
 from dataclasses import replace
 from typing import Any, Callable, Optional, Union
 
@@ -26,12 +23,16 @@ from appv231.ai.types import (
     now_ms,
 )
 from appv231.ai.validation import validate_tool_arguments
+from appv231.agent.async_utils import resolve, run_sync
+from appv231.agent.tool_coordinator import ToolCoordinator
 from appv231.agent.types import (
     AbortSignal,
     AgentContext,
     AgentEndEvent,
     AgentEvent,
     AgentLoopConfig,
+    IterationLimitContext,
+    ImmediateToolOutcome,
     AgentMessage,
     AgentStartEvent,
     AgentTool,
@@ -39,6 +40,7 @@ from appv231.agent.types import (
     MessageEndEvent,
     MessageStartEvent,
     MessageUpdateEvent,
+    PreparedToolCall,
     ShouldStopAfterTurnContext,
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
@@ -48,6 +50,7 @@ from appv231.agent.types import (
 )
 
 AgentEventSink = Callable[[AgentEvent], Any]
+_ITERATION_DONE = object()
 
 
 class AgentEventStream(EventStream):
@@ -71,8 +74,8 @@ def agent_loop(
     def _run() -> None:
         try:
             run_agent_loop(prompts, context, config, stream.push, signal, stream_fn)
-        except Exception:  # pragma: no cover - loop must not crash the thread silently
-            stream.push(AgentEndEvent(messages=list(prompts)))
+        except Exception as error:  # pragma: no cover - exercised via EventStream.result
+            stream.fail(error)
 
     threading.Thread(target=_run, daemon=True).start()
     return stream
@@ -94,14 +97,25 @@ def agent_loop_continue(
     def _run() -> None:
         try:
             run_agent_loop_continue(context, config, stream.push, signal, stream_fn)
-        except Exception:  # pragma: no cover - loop must not crash the thread silently
-            stream.push(AgentEndEvent(messages=[]))
+        except Exception as error:  # pragma: no cover - exercised via EventStream.result
+            stream.fail(error)
 
     threading.Thread(target=_run, daemon=True).start()
     return stream
 
 
 def run_agent_loop(
+    prompts: list[AgentMessage],
+    context: AgentContext,
+    config: AgentLoopConfig,
+    emit: AgentEventSink,
+    signal: Optional[AbortSignal] = None,
+    stream_fn: Optional[Callable] = None,
+) -> list[AgentMessage]:
+    return run_sync(run_agent_loop_async(prompts, context, config, emit, signal, stream_fn))
+
+
+async def run_agent_loop_async(
     prompts: list[AgentMessage],
     context: AgentContext,
     config: AgentLoopConfig,
@@ -116,17 +130,27 @@ def run_agent_loop(
         tools=context.tools,
     )
 
-    _emit_event(emit, AgentStartEvent())
-    _emit_event(emit, TurnStartEvent())
+    await _emit_event(emit, AgentStartEvent())
+    await _emit_event(emit, TurnStartEvent())
     for prompt in prompts:
-        _emit_event(emit, MessageStartEvent(message=prompt))
-        _emit_event(emit, MessageEndEvent(message=prompt))
+        await _emit_event(emit, MessageStartEvent(message=prompt))
+        await _emit_event(emit, MessageEndEvent(message=prompt))
 
-    _run_loop(current_context, new_messages, config, signal, emit, stream_fn)
+    await _run_loop(current_context, new_messages, config, signal, emit, stream_fn)
     return new_messages
 
 
 def run_agent_loop_continue(
+    context: AgentContext,
+    config: AgentLoopConfig,
+    emit: AgentEventSink,
+    signal: Optional[AbortSignal] = None,
+    stream_fn: Optional[Callable] = None,
+) -> list[AgentMessage]:
+    return run_sync(run_agent_loop_continue_async(context, config, emit, signal, stream_fn))
+
+
+async def run_agent_loop_continue_async(
     context: AgentContext,
     config: AgentLoopConfig,
     emit: AgentEventSink,
@@ -143,14 +167,14 @@ def run_agent_loop_continue(
         system_prompt=context.system_prompt, messages=context.messages, tools=context.tools
     )
 
-    _emit_event(emit, AgentStartEvent())
-    _emit_event(emit, TurnStartEvent())
+    await _emit_event(emit, AgentStartEvent())
+    await _emit_event(emit, TurnStartEvent())
 
-    _run_loop(current_context, new_messages, config, signal, emit, stream_fn)
+    await _run_loop(current_context, new_messages, config, signal, emit, stream_fn)
     return new_messages
 
 
-def _run_loop(
+async def _run_loop(
     initial_context: AgentContext,
     new_messages: list[AgentMessage],
     initial_config: AgentLoopConfig,
@@ -162,37 +186,39 @@ def _run_loop(
     config = initial_config
     first_turn = True
     api_call_count = 0
-    pending_messages: list[AgentMessage] = list(config.get_steering_messages() or []) if config.get_steering_messages else []
+    pending_messages = await _get_messages(config.get_steering_messages)
 
     while True:
         has_more_tool_calls = True
 
         while has_more_tool_calls or pending_messages:
             if not first_turn:
-                _emit_event(emit, TurnStartEvent())
+                await _emit_event(emit, TurnStartEvent())
             else:
                 first_turn = False
 
             if pending_messages:
                 for message in pending_messages:
-                    _emit_event(emit, MessageStartEvent(message=message))
-                    _emit_event(emit, MessageEndEvent(message=message))
+                    await _emit_event(emit, MessageStartEvent(message=message))
+                    await _emit_event(emit, MessageEndEvent(message=message))
                     current_context.messages.append(message)
                     new_messages.append(message)
                 pending_messages = []
 
             if _iteration_budget_exhausted(api_call_count, config):
-                _request_iteration_summary(current_context, new_messages, config, signal, emit, stream_fn, api_call_count)
+                await _handle_iteration_limit(
+                    current_context, new_messages, config, signal, emit, stream_fn, api_call_count
+                )
                 return
 
             _consume_iteration_budget(config)
             api_call_count += 1
-            message = _stream_assistant_response(current_context, config, signal, emit, stream_fn)
+            message = await _stream_assistant_response(current_context, config, signal, emit, stream_fn)
             new_messages.append(message)
 
             if message.stop_reason in ("error", "aborted"):
-                _emit_event(emit, TurnEndEvent(message=message, tool_results=[]))
-                _emit_event(emit, AgentEndEvent(messages=new_messages))
+                await _emit_event(emit, TurnEndEvent(message=message, tool_results=[]))
+                await _emit_event(emit, AgentEndEvent(messages=new_messages))
                 return
 
             tool_calls = [c for c in message.content if getattr(c, "type", None) == "toolCall"]
@@ -200,9 +226,9 @@ def _run_loop(
             has_more_tool_calls = False
             if tool_calls:
                 batch = (
-                    _fail_tool_calls_from_truncated_message(tool_calls, emit)
+                    await _fail_tool_calls_from_truncated_message(tool_calls, emit)
                     if message.stop_reason == "length"
-                    else _execute_tool_calls(current_context, message, config, signal, emit)
+                    else await _execute_tool_calls(current_context, message, config, signal, emit)
                 )
                 tool_results.extend(batch.messages)
                 has_more_tool_calls = not batch.terminate
@@ -210,17 +236,17 @@ def _run_loop(
                     current_context.messages.append(result)
                     new_messages.append(result)
 
-            _emit_event(emit, TurnEndEvent(message=message, tool_results=tool_results))
+            await _emit_event(emit, TurnEndEvent(message=message, tool_results=tool_results))
 
             if signal and signal.aborted:
-                _emit_event(emit, AgentEndEvent(messages=new_messages))
+                await _emit_event(emit, AgentEndEvent(messages=new_messages))
                 return
 
             next_turn_ctx = ShouldStopAfterTurnContext(
                 message=message, tool_results=tool_results, context=current_context, new_messages=new_messages
             )
             if config.prepare_next_turn:
-                snapshot = config.prepare_next_turn(next_turn_ctx)
+                snapshot = await resolve(config.prepare_next_turn(next_turn_ctx))
                 if snapshot:
                     current_context = snapshot.context or current_context
                     reasoning = config.reasoning
@@ -235,19 +261,19 @@ def _run_loop(
             stop_turn_ctx = ShouldStopAfterTurnContext(
                 message=message, tool_results=tool_results, context=current_context, new_messages=new_messages
             )
-            if config.should_stop_after_turn and config.should_stop_after_turn(stop_turn_ctx):
-                _emit_event(emit, AgentEndEvent(messages=new_messages))
+            if config.should_stop_after_turn and await resolve(config.should_stop_after_turn(stop_turn_ctx)):
+                await _emit_event(emit, AgentEndEvent(messages=new_messages))
                 return
 
-            pending_messages = list(config.get_steering_messages() or []) if config.get_steering_messages else []
+            pending_messages = await _get_messages(config.get_steering_messages)
 
-        follow_up = list(config.get_follow_up_messages() or []) if config.get_follow_up_messages else []
+        follow_up = await _get_messages(config.get_follow_up_messages)
         if follow_up:
             pending_messages = follow_up
             continue
         break
 
-    _emit_event(emit, AgentEndEvent(messages=new_messages))
+    await _emit_event(emit, AgentEndEvent(messages=new_messages))
 
 
 def _iteration_budget_exhausted(api_call_count: int, config: AgentLoopConfig) -> bool:
@@ -264,7 +290,13 @@ def _consume_iteration_budget(config: AgentLoopConfig) -> None:
         budget.consume()
 
 
-def _request_iteration_summary(
+async def _get_messages(callback: Callable | None) -> list[AgentMessage]:
+    if callback is None:
+        return []
+    return list(await resolve(callback()) or [])
+
+
+async def _handle_iteration_limit(
     current_context: AgentContext,
     new_messages: list[AgentMessage],
     config: AgentLoopConfig,
@@ -274,16 +306,22 @@ def _request_iteration_summary(
     api_call_count: int,
 ) -> None:
     max_iterations = max(1, int(config.max_iterations or 90))
-    summary_request = UserMessage(
-        content=(
-            "You've reached the maximum number of tool-calling iterations allowed. "
-            "Please provide a final response summarizing what you've found and accomplished so far, "
-            "without calling any more tools."
-        ),
-        timestamp=now_ms(),
-    )
-    _emit_event(emit, MessageStartEvent(message=summary_request))
-    _emit_event(emit, MessageEndEvent(message=summary_request))
+    if config.on_iteration_limit is None:
+        await _emit_event(emit, AgentEndEvent(messages=new_messages))
+        return
+    summary_request = await resolve(config.on_iteration_limit(
+        IterationLimitContext(
+            context=current_context,
+            api_call_count=api_call_count,
+            max_iterations=max_iterations,
+            signal=signal,
+        )
+    ))
+    if summary_request is None:
+        await _emit_event(emit, AgentEndEvent(messages=new_messages))
+        return
+    await _emit_event(emit, MessageStartEvent(message=summary_request))
+    await _emit_event(emit, MessageEndEvent(message=summary_request))
     current_context.messages.append(summary_request)
     new_messages.append(summary_request)
 
@@ -292,14 +330,19 @@ def _request_iteration_summary(
         messages=current_context.messages,
         tools=[],
     )
-    summary_config = replace(config, max_iterations=max_iterations, iteration_budget=None)
-    message = _stream_assistant_response(summary_context, summary_config, signal, emit, stream_fn)
+    summary_config = replace(
+        config,
+        max_iterations=max_iterations,
+        iteration_budget=None,
+        on_iteration_limit=None,
+    )
+    message = await _stream_assistant_response(summary_context, summary_config, signal, emit, stream_fn)
     new_messages.append(message)
-    _emit_event(emit, TurnEndEvent(message=message, tool_results=[]))
-    _emit_event(emit, AgentEndEvent(messages=new_messages))
+    await _emit_event(emit, TurnEndEvent(message=message, tool_results=[]))
+    await _emit_event(emit, AgentEndEvent(messages=new_messages))
 
 
-def _stream_assistant_response(
+async def _stream_assistant_response(
     context: AgentContext,
     config: AgentLoopConfig,
     signal: Optional[AbortSignal],
@@ -308,13 +351,13 @@ def _stream_assistant_response(
 ) -> AssistantMessage:
     messages = context.messages
     if config.transform_context:
-        messages = config.transform_context(messages, signal)
+        messages = await resolve(config.transform_context(messages, signal))
 
-    llm_messages = config.convert_to_llm(messages)
+    llm_messages = await resolve(config.convert_to_llm(messages))
     llm_context = Context(system_prompt=context.system_prompt, messages=llm_messages, tools=_llm_tools(context.tools))
 
     stream_function = stream_fn or default_stream_simple
-    resolved_api_key = config.get_api_key(config.model.provider) if config.get_api_key else None
+    resolved_api_key = await resolve(config.get_api_key(config.model.provider)) if config.get_api_key else None
     options = SimpleStreamOptions(
         temperature=config.temperature,
         max_tokens=config.max_tokens,
@@ -328,14 +371,14 @@ def _stream_assistant_response(
         reasoning=config.reasoning,
         thinking_budgets=config.thinking_budgets,
     )
-    response = stream_function(config.model, llm_context, options)
+    response = await resolve(stream_function(config.model, llm_context, options))
 
     partial_added = False
     last_partial_snapshot: AssistantMessage | None = None
-    for event in _iter_response_events(response, signal):
+    async for event in _iter_response_events(response, signal):
         if signal and signal.aborted:
-            _close_response(response)
-            return _finalize_aborted_stream_response(
+            await _close_response(response)
+            return await _finalize_aborted_stream_response(
                 context,
                 config,
                 emit,
@@ -346,7 +389,7 @@ def _stream_assistant_response(
             last_partial_snapshot = copy.deepcopy(event.partial)
             context.messages.append(last_partial_snapshot)
             partial_added = True
-            _emit_event(emit, MessageStartEvent(message=copy.copy(last_partial_snapshot)))
+            await _emit_event(emit, MessageStartEvent(message=copy.copy(last_partial_snapshot)))
         elif event.type in (
             "text_start", "text_delta", "text_end",
             "thinking_start", "thinking_delta", "thinking_end",
@@ -355,19 +398,24 @@ def _stream_assistant_response(
             if partial_added:
                 last_partial_snapshot = copy.deepcopy(event.partial)
                 context.messages[-1] = last_partial_snapshot
-                _emit_event(emit, MessageUpdateEvent(message=copy.copy(last_partial_snapshot), assistant_message_event=event))
+                await _emit_event(
+                    emit,
+                    MessageUpdateEvent(
+                        message=copy.copy(last_partial_snapshot), assistant_message_event=event
+                    ),
+                )
         elif event.type in ("done", "error"):
-            final_message = response.result_sync()
+            final_message = await _response_result(response)
             if partial_added:
                 context.messages[-1] = final_message
             else:
                 context.messages.append(final_message)
-                _emit_event(emit, MessageStartEvent(message=copy.copy(final_message)))
-            _emit_event(emit, MessageEndEvent(message=final_message))
+                await _emit_event(emit, MessageStartEvent(message=copy.copy(final_message)))
+            await _emit_event(emit, MessageEndEvent(message=final_message))
             return final_message
         if signal and signal.aborted:
-            _close_response(response)
-            return _finalize_aborted_stream_response(
+            await _close_response(response)
+            return await _finalize_aborted_stream_response(
                 context,
                 config,
                 emit,
@@ -376,8 +424,8 @@ def _stream_assistant_response(
             )
 
     if signal and signal.aborted:
-        _close_response(response)
-        return _finalize_aborted_stream_response(
+        await _close_response(response)
+        return await _finalize_aborted_stream_response(
             context,
             config,
             emit,
@@ -385,24 +433,55 @@ def _stream_assistant_response(
             partial_snapshot=last_partial_snapshot,
         )
 
-    final_message = response.result_sync()
+    final_message = await _response_result(response)
     if partial_added:
         context.messages[-1] = final_message
     else:
         context.messages.append(final_message)
-        _emit_event(emit, MessageStartEvent(message=copy.copy(final_message)))
-    _emit_event(emit, MessageEndEvent(message=final_message))
+        await _emit_event(emit, MessageStartEvent(message=copy.copy(final_message)))
+    await _emit_event(emit, MessageEndEvent(message=final_message))
     return final_message
 
 
-def _iter_response_events(response: object, signal: Optional[AbortSignal]):
+async def _iter_response_events(response: object, signal: Optional[AbortSignal]):
     iter_until = getattr(response, "iter_until", None)
     if callable(iter_until):
-        return iter_until(lambda: bool(signal and signal.aborted))
-    return iter(response)
+        iterator = iter(iter_until(lambda: bool(signal and signal.aborted)))
+        while True:
+            item = await asyncio.to_thread(_next_or_done, iterator)
+            if item is _ITERATION_DONE:
+                return
+            yield item
+        return
+    async_iterator = getattr(response, "__aiter__", None)
+    if callable(async_iterator):
+        async for item in response:
+            yield item
+        return
+    iterator = iter(response)
+    while True:
+        item = await asyncio.to_thread(_next_or_done, iterator)
+        if item is _ITERATION_DONE:
+            return
+        yield item
 
 
-def _finalize_aborted_stream_response(
+def _next_or_done(iterator):
+    try:
+        return next(iterator)
+    except StopIteration:
+        return _ITERATION_DONE
+
+
+async def _response_result(response: object) -> AssistantMessage:
+    result = getattr(response, "result", None)
+    if callable(result):
+        return await resolve(result())
+    result_sync = getattr(response, "result_sync")
+    return await asyncio.to_thread(result_sync)
+
+
+async def _finalize_aborted_stream_response(
     context: AgentContext,
     config: AgentLoopConfig,
     emit: AgentEventSink,
@@ -430,29 +509,26 @@ def _finalize_aborted_stream_response(
             timestamp=now_ms(),
         )
         context.messages.append(final_message)
-        _emit_event(emit, MessageStartEvent(message=copy.copy(final_message)))
-    _emit_event(emit, MessageEndEvent(message=final_message))
+        await _emit_event(emit, MessageStartEvent(message=copy.copy(final_message)))
+    await _emit_event(emit, MessageEndEvent(message=final_message))
     return final_message
 
 
-def _close_response(response: object) -> None:
+async def _close_response(response: object) -> None:
+    aclose = getattr(response, "aclose", None)
+    if callable(aclose):
+        try:
+            await resolve(aclose())
+        except Exception:
+            pass
+        return
     close = getattr(response, "close", None)
     if not callable(close):
         return
     try:
-        close()
+        await resolve(close())
     except Exception:
         return
-
-
-def _is_guardrail_block_result(reason: str | None) -> bool:
-    if not reason:
-        return False
-    try:
-        parsed = json.loads(reason)
-    except (TypeError, ValueError):
-        return False
-    return isinstance(parsed, dict) and isinstance(parsed.get("guardrail"), dict)
 
 
 class _ExecutedBatch:
@@ -461,10 +537,12 @@ class _ExecutedBatch:
         self.terminate = terminate
 
 
-def _fail_tool_calls_from_truncated_message(tool_calls: list[Any], emit: AgentEventSink) -> _ExecutedBatch:
+async def _fail_tool_calls_from_truncated_message(
+    tool_calls: list[Any], emit: AgentEventSink
+) -> _ExecutedBatch:
     messages: list[ToolResultMessage] = []
     for tool_call in tool_calls:
-        _emit_event(
+        await _emit_event(
             emit,
             ToolExecutionStartEvent(tool_call_id=tool_call.id, tool_name=tool_call.name, args=tool_call.arguments),
         )
@@ -476,14 +554,14 @@ def _fail_tool_calls_from_truncated_message(tool_calls: list[Any], emit: AgentEv
             ),
             "is_error": True,
         }
-        _emit_tool_end(finalized, emit)
+        await _emit_tool_end(finalized, emit)
         message = _tool_result_message(finalized)
-        _emit_tool_result_message(message, emit)
+        await _emit_tool_result_message(message, emit)
         messages.append(message)
     return _ExecutedBatch(messages, False)
 
 
-def _execute_tool_calls(
+async def _execute_tool_calls(
     current_context: AgentContext,
     assistant_message: AssistantMessage,
     config: AgentLoopConfig,
@@ -492,36 +570,50 @@ def _execute_tool_calls(
 ) -> _ExecutedBatch:
     tool_calls = [c for c in assistant_message.content if getattr(c, "type", None) == "toolCall"]
     tools = current_context.tools or []
-    if config.tool_execution == "sequential":
-        return _execute_sequential(current_context, assistant_message, tool_calls, config, signal, emit)
-    tool_by_name = {tool.name: tool for tool in tools}
-    has_sequential_tool_call = any(
-        tool_by_name.get(tool_call.name) is not None
-        and tool_by_name[tool_call.name].execution_mode == "sequential"
-        for tool_call in tool_calls
-    )
-    if has_sequential_tool_call:
-        return _execute_sequential(current_context, assistant_message, tool_calls, config, signal, emit)
-    return _execute_parallel(current_context, assistant_message, tool_calls, config, signal, emit)
+    max_parallel_tools = 1 if config.tool_execution == "sequential" else config.max_parallel_tools
+    async with ToolCoordinator(max_parallel_tools) as coordinator:
+        if config.tool_execution == "sequential":
+            return await _execute_sequential(
+                current_context, assistant_message, tool_calls, config, signal, emit, coordinator
+            )
+        tool_by_name = {tool.name: tool for tool in tools}
+        has_sequential_tool_call = any(
+            tool_by_name.get(tool_call.name) is not None
+            and tool_by_name[tool_call.name].execution_mode == "sequential"
+            for tool_call in tool_calls
+        )
+        if has_sequential_tool_call:
+            return await _execute_sequential(
+                current_context, assistant_message, tool_calls, config, signal, emit, coordinator
+            )
+        return await _execute_parallel(
+            current_context, assistant_message, tool_calls, config, signal, emit, coordinator
+        )
 
 
-def _execute_sequential(current_context, assistant_message, tool_calls, config, signal, emit) -> _ExecutedBatch:
+async def _execute_sequential(
+    current_context, assistant_message, tool_calls, config, signal, emit, coordinator
+) -> _ExecutedBatch:
     finalized_calls: list[dict] = []
     messages: list[ToolResultMessage] = []
     for tool_call in tool_calls:
-        _emit_event(
+        await _emit_event(
             emit,
             ToolExecutionStartEvent(tool_call_id=tool_call.id, tool_name=tool_call.name, args=tool_call.arguments),
         )
-        preparation = _prepare_tool_call(current_context, assistant_message, tool_call, config, signal)
-        if preparation["kind"] == "immediate":
-            finalized = _finalize_immediate(current_context, assistant_message, tool_call, preparation, config, signal)
+        preparation = await _prepare_tool_call(
+            current_context, assistant_message, tool_call, config, signal
+        )
+        if isinstance(preparation, ImmediateToolOutcome):
+            finalized = _finalize_immediate(preparation)
         else:
-            executed = _execute_prepared(preparation, signal, emit)
-            finalized = _finalize(current_context, assistant_message, preparation, executed, config, signal)
-        _emit_tool_end(finalized, emit)
+            executed = await _execute_prepared(preparation, signal, emit, coordinator)
+            finalized = await _finalize(
+                current_context, assistant_message, preparation, executed, config, signal
+            )
+        await _emit_tool_end(finalized, emit)
         message = _tool_result_message(finalized)
-        _emit_tool_result_message(message, emit)
+        await _emit_tool_result_message(message, emit)
         finalized_calls.append(finalized)
         messages.append(message)
         if signal and signal.aborted:
@@ -529,50 +621,53 @@ def _execute_sequential(current_context, assistant_message, tool_calls, config, 
     return _ExecutedBatch(messages, _should_terminate(finalized_calls))
 
 
-def _execute_parallel(current_context, assistant_message, tool_calls, config, signal, emit) -> _ExecutedBatch:
-    entries: list = []  # either finalized dict or a callable returning finalized dict
+async def _execute_parallel(
+    current_context, assistant_message, tool_calls, config, signal, emit, coordinator
+) -> _ExecutedBatch:
+    entries: list = []  # either a finalized dict or an awaitable task
     for tool_call in tool_calls:
-        _emit_event(
+        await _emit_event(
             emit,
             ToolExecutionStartEvent(tool_call_id=tool_call.id, tool_name=tool_call.name, args=tool_call.arguments),
         )
-        preparation = _prepare_tool_call(current_context, assistant_message, tool_call, config, signal)
-        if preparation["kind"] == "immediate":
-            finalized = _finalize_immediate(current_context, assistant_message, tool_call, preparation, config, signal)
-            _emit_tool_end(finalized, emit)
+        preparation = await _prepare_tool_call(
+            current_context, assistant_message, tool_call, config, signal
+        )
+        if isinstance(preparation, ImmediateToolOutcome):
+            finalized = _finalize_immediate(preparation)
+            await _emit_tool_end(finalized, emit)
             entries.append(finalized)
             if signal and signal.aborted:
                 break
             continue
 
-        def _make(prep):
-            def _job():
-                executed = _execute_prepared(prep, signal, emit)
-                return _finalize(current_context, assistant_message, prep, executed, config, signal)
-            return _job
-
-        entries.append(_make(preparation))
+        entries.append(
+            asyncio.create_task(
+                _execute_and_finalize(
+                    current_context,
+                    assistant_message,
+                    preparation,
+                    config,
+                    signal,
+                    emit,
+                    coordinator,
+                )
+            )
+        )
         if signal and signal.aborted:
             break
 
     ordered: list[dict] = []
-    callables = [(i, e) for i, e in enumerate(entries) if callable(e)]
-    results_by_index: dict[int, dict] = {}
-    if callables:
-        with ThreadPoolExecutor(max_workers=max(1, len(callables))) as pool:
-            futures = {pool.submit(job): i for i, job in callables}
-            for future in as_completed(futures):
-                idx = futures[future]
-                finalized = future.result()
-                results_by_index[idx] = finalized
-                _emit_tool_end(finalized, emit)
-    for i, entry in enumerate(entries):
-        ordered.append(results_by_index[i] if callable(entry) else entry)
+    for entry in entries:
+        finalized = await entry if isinstance(entry, asyncio.Task) else entry
+        if isinstance(entry, asyncio.Task):
+            await _emit_tool_end(finalized, emit)
+        ordered.append(finalized)
 
     messages: list[ToolResultMessage] = []
     for finalized in ordered:
         message = _tool_result_message(finalized)
-        _emit_tool_result_message(message, emit)
+        await _emit_tool_result_message(message, emit)
         messages.append(message)
     return _ExecutedBatch(messages, _should_terminate(ordered))
 
@@ -581,64 +676,71 @@ def _should_terminate(finalized_calls: list[dict]) -> bool:
     return len(finalized_calls) > 0 and all(f["result"].terminate is True for f in finalized_calls)
 
 
-def _prepare_tool_call(current_context, assistant_message, tool_call, config, signal) -> dict:
+async def _execute_and_finalize(
+    current_context, assistant_message, preparation, config, signal, emit, coordinator
+) -> dict:
+    executed = await _execute_prepared(preparation, signal, emit, coordinator)
+    return await _finalize(
+        current_context, assistant_message, preparation, executed, config, signal
+    )
+
+
+async def _prepare_tool_call(
+    current_context, assistant_message, tool_call, config, signal
+) -> PreparedToolCall | ImmediateToolOutcome:
     tool = next((t for t in (current_context.tools or []) if t.name == tool_call.name), None)
     if tool is None:
-        return {
-            "kind": "immediate",
-            "tool_call": tool_call,
-            "args": getattr(tool_call, "arguments", {}),
-            "result": _error_result(_unknown_tool_message(tool_call.name, current_context.tools or [])),
-            "is_error": True,
-            "apply_after_tool_call": True,
-        }
+        return ImmediateToolOutcome(
+            tool_call=tool_call,
+            result=_error_result(_unknown_tool_message(tool_call.name, current_context.tools or [])),
+            is_error=True,
+            reason_code="unknown_tool",
+        )
     prepared_call = tool_call
     try:
-        prepared_call = _prepare_arguments(tool, tool_call)
+        prepared_call = await _prepare_arguments(tool, tool_call)
         validated_args = validate_tool_arguments(tool, prepared_call)
         if config.before_tool_call:
-            before = config.before_tool_call(
-                _before_ctx(assistant_message, tool_call, validated_args, current_context), signal
+            before = await resolve(
+                config.before_tool_call(
+                    _before_ctx(assistant_message, tool_call, validated_args, current_context), signal
+                )
             )
             if signal and signal.aborted:
-                return {
-                    "kind": "immediate",
-                    "result": _error_result("Operation aborted"),
-                    "is_error": True,
-                    "apply_after_tool_call": False,
-                }
+                return ImmediateToolOutcome(
+                    tool_call=prepared_call,
+                    result=_error_result("Operation aborted"),
+                    is_error=True,
+                    reason_code="aborted",
+                )
             if before and before.block:
-                return {
-                    "kind": "immediate",
-                    "tool_call": prepared_call,
-                    "args": validated_args,
-                    "result": _error_result(before.reason or "Tool execution was blocked"),
-                    "is_error": True,
-                    "apply_after_tool_call": not _is_guardrail_block_result(before.reason),
-                }
+                return ImmediateToolOutcome(
+                    tool_call=prepared_call,
+                    result=_error_result(before.reason or "Tool execution was blocked"),
+                    is_error=True,
+                    reason_code="before_hook_block",
+                )
         if signal and signal.aborted:
-            return {
-                "kind": "immediate",
-                "result": _error_result("Operation aborted"),
-                "is_error": True,
-                "apply_after_tool_call": False,
-            }
-        return {"kind": "prepared", "tool_call": prepared_call, "tool": tool, "args": validated_args}
+            return ImmediateToolOutcome(
+                tool_call=prepared_call,
+                result=_error_result("Operation aborted"),
+                is_error=True,
+                reason_code="aborted",
+            )
+        return PreparedToolCall(tool_call=prepared_call, tool=tool, args=validated_args)
     except Exception as error:  # noqa: BLE001
-        return {
-            "kind": "immediate",
-            "tool_call": prepared_call,
-            "args": getattr(prepared_call, "arguments", getattr(tool_call, "arguments", {})),
-            "result": _error_result(str(error)),
-            "is_error": True,
-            "apply_after_tool_call": True,
-        }
+        return ImmediateToolOutcome(
+            tool_call=prepared_call,
+            result=_error_result(str(error)),
+            is_error=True,
+            reason_code="invalid_arguments",
+        )
 
 
-def _prepare_arguments(tool: AgentTool, tool_call):
+async def _prepare_arguments(tool: AgentTool, tool_call):
     if not tool.prepare_arguments:
         return tool_call
-    prepared = tool.prepare_arguments(tool_call.arguments)
+    prepared = await resolve(tool.prepare_arguments(tool_call.arguments))
     if prepared is tool_call.arguments:
         return tool_call
     clone = copy.copy(tool_call)
@@ -646,60 +748,88 @@ def _prepare_arguments(tool: AgentTool, tool_call):
     return clone
 
 
-def _execute_prepared(prepared: dict, signal, emit: AgentEventSink) -> dict:
-    tool_call = prepared["tool_call"]
+async def _execute_prepared(
+    prepared: PreparedToolCall,
+    signal,
+    emit: AgentEventSink,
+    coordinator: ToolCoordinator,
+) -> dict:
+    tool_call = prepared.tool_call
     accepting = {"value": True}
-    update_events: list[Any] = []
+    update_tasks: list[Any] = []
+    owner_loop = asyncio.get_running_loop()
 
     def on_update(partial_result: AgentToolResult) -> None:
         if not accepting["value"]:
             return
-        update_events.append(
-            emit(ToolExecutionUpdateEvent(
-                tool_call_id=tool_call.id,
-                tool_name=tool_call.name,
-                args=tool_call.arguments,
-                partial_result=partial_result,
-            ))
+        event = ToolExecutionUpdateEvent(
+            tool_call_id=tool_call.id,
+            tool_name=tool_call.name,
+            args=tool_call.arguments,
+            partial_result=partial_result,
         )
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+        if running_loop is owner_loop:
+            update_tasks.append(owner_loop.create_task(_emit_event(emit, event)))
+        else:
+            future = asyncio.run_coroutine_threadsafe(_emit_event(emit, event), owner_loop)
+            future.result()
 
     try:
-        result = prepared["tool"].execute(tool_call.id, prepared["args"], signal, on_update)
+        execute = prepared.tool.execute
+        result = await coordinator.execute(
+            execute, tool_call.id, prepared.args, signal, on_update
+        )
         accepting["value"] = False
-        _settle_emit_results(update_events)
+        await _settle_update_tasks(update_tasks)
         return {"result": result, "is_error": False}
     except Exception as error:  # noqa: BLE001
         accepting["value"] = False
-        _settle_emit_results(update_events)
+        await _settle_update_tasks(update_tasks)
         return {"result": _error_result(str(error)), "is_error": True}
 
 
-def _emit_event(emit: AgentEventSink, event: AgentEvent) -> None:
-    _settle_emit_result(emit(event))
+async def _settle_update_tasks(tasks: list[Any]) -> None:
+    for task in tasks:
+        if isinstance(task, asyncio.Future):
+            await task
+        else:
+            await asyncio.wrap_future(task)
 
 
-def _settle_emit_result(result: Any) -> None:
-    if result is None:
+async def _emit_event(emit: AgentEventSink, event: AgentEvent) -> None:
+    result = emit(event)
+    if isinstance(result, ConcurrentFuture):
+        await asyncio.wrap_future(result)
         return
-    if hasattr(result, "result") and callable(result.result):
-        result.result()
-    elif hasattr(result, "wait") and callable(result.wait):
-        result.wait()
+    if inspect.isawaitable(result):
+        await result
+        return
+    wait = getattr(result, "wait", None)
+    if callable(wait):
+        await asyncio.to_thread(wait)
 
 
-def _settle_emit_results(results: list[Any]) -> None:
-    for result in results:
-        _settle_emit_result(result)
-
-
-def _finalize(current_context, assistant_message, prepared, executed, config, signal) -> dict:
+async def _finalize(current_context, assistant_message, prepared, executed, config, signal) -> dict:
     result = executed["result"]
     is_error = executed["is_error"]
     if config.after_tool_call:
         try:
-            after = config.after_tool_call(
-                _after_ctx(assistant_message, prepared["tool_call"], prepared["args"], result, is_error, current_context),
-                signal,
+            after = await resolve(
+                config.after_tool_call(
+                    _after_ctx(
+                        assistant_message,
+                        prepared.tool_call,
+                        prepared.args,
+                        result,
+                        is_error,
+                        current_context,
+                    ),
+                    signal,
+                )
             )
             if after:
                 result = AgentToolResult(
@@ -712,23 +842,22 @@ def _finalize(current_context, assistant_message, prepared, executed, config, si
         except Exception as error:  # noqa: BLE001
             result = _error_result(str(error))
             is_error = True
-    return {"tool_call": prepared["tool_call"], "result": result, "is_error": is_error}
+    return {
+        "tool_call": prepared.tool_call,
+        "args": prepared.args,
+        "result": result,
+        "is_error": is_error,
+    }
 
 
-def _finalize_immediate(current_context, assistant_message, tool_call, preparation, config, signal) -> dict:
-    finalized = {
-        "tool_call": preparation.get("tool_call", tool_call),
-        "result": preparation["result"],
-        "is_error": preparation["is_error"],
+def _finalize_immediate(outcome: ImmediateToolOutcome) -> dict:
+    return {
+        "tool_call": outcome.tool_call,
+        "args": getattr(outcome.tool_call, "arguments", {}),
+        "result": outcome.result,
+        "is_error": outcome.is_error,
+        "reason_code": outcome.reason_code,
     }
-    if not preparation.get("apply_after_tool_call"):
-        return finalized
-    prepared = {
-        "tool_call": finalized["tool_call"],
-        "args": preparation.get("args", getattr(finalized["tool_call"], "arguments", {})),
-    }
-    executed = {"result": finalized["result"], "is_error": finalized["is_error"]}
-    return _finalize(current_context, assistant_message, prepared, executed, config, signal)
 
 
 def _error_result(message: str) -> AgentToolResult:
@@ -753,14 +882,16 @@ def _unknown_tool_message(tool_name: str, tools: list[AgentTool]) -> str:
     return message
 
 
-def _emit_tool_end(finalized: dict, emit: AgentEventSink) -> None:
-    _emit_event(
+async def _emit_tool_end(finalized: dict, emit: AgentEventSink) -> None:
+    await _emit_event(
         emit,
         ToolExecutionEndEvent(
             tool_call_id=finalized["tool_call"].id,
             tool_name=finalized["tool_call"].name,
             result=finalized["result"],
             is_error=finalized["is_error"],
+            args=finalized.get("args", getattr(finalized["tool_call"], "arguments", {})),
+            reason_code=finalized.get("reason_code"),
         ),
     )
 
@@ -776,9 +907,9 @@ def _tool_result_message(finalized: dict) -> ToolResultMessage:
     )
 
 
-def _emit_tool_result_message(message: ToolResultMessage, emit: AgentEventSink) -> None:
-    _emit_event(emit, MessageStartEvent(message=message))
-    _emit_event(emit, MessageEndEvent(message=message))
+async def _emit_tool_result_message(message: ToolResultMessage, emit: AgentEventSink) -> None:
+    await _emit_event(emit, MessageStartEvent(message=message))
+    await _emit_event(emit, MessageEndEvent(message=message))
 
 
 def _role_of(message) -> str:

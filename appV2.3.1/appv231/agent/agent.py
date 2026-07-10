@@ -8,8 +8,14 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Union
 
 from appv231.ai.types import AssistantMessage, ImageContent, Message, Model, TextContent, UserMessage, empty_usage, now_ms
-from appv231.agent.agent_loop import AgentEventSink, run_agent_loop, run_agent_loop_continue
+from appv231.agent.agent_loop import (
+    AgentEventSink,
+    run_agent_loop_async,
+    run_agent_loop_continue_async,
+)
+from appv231.agent.async_utils import resolve, run_sync
 from appv231.agent.iteration_budget import IterationBudget
+from appv231.agent.run_lease import RunLease, RunLeaseToken
 from appv231.agent.types import (
     AbortSignal,
     AgentEndEvent,
@@ -79,6 +85,7 @@ class Agent:
         tools: Optional[list[AgentTool]] = None,
         thinking_level: ThinkingLevel = "off",
         tool_execution: str = "parallel",
+        max_parallel_tools: int = 8,
         before_tool_call=None,
         after_tool_call=None,
         should_stop_after_turn=None,
@@ -94,6 +101,7 @@ class Agent:
         on_payload=None,
         on_response=None,
         max_iterations: int = 90,
+        on_iteration_limit=None,
     ) -> None:
         self._state = AgentState(
             system_prompt=system_prompt,
@@ -103,6 +111,7 @@ class Agent:
         )
         self._convert_to_llm = convert_to_llm
         self._tool_execution = tool_execution
+        self._max_parallel_tools = max(1, int(max_parallel_tools))
         self._before_tool_call = before_tool_call
         self._after_tool_call = after_tool_call
         self._should_stop_after_turn = should_stop_after_turn
@@ -116,9 +125,12 @@ class Agent:
         self.on_payload = on_payload
         self.on_response = on_response
         self.max_iterations = max(1, int(max_iterations))
+        self._on_iteration_limit = on_iteration_limit
         self._listeners: list[Listener] = []
         self._signal = AbortSignal()
         self._run_state_lock = threading.Lock()
+        self._run_lease = RunLease()
+        self._active_run_token: RunLeaseToken | None = None
         self._idle_event = threading.Event()
         self._idle_event.set()
         self._steering = PendingMessageQueue(steering_mode)
@@ -131,6 +143,10 @@ class Agent:
     @property
     def signal(self) -> AbortSignal:
         return self._signal
+
+    @property
+    def run_lease(self) -> RunLease:
+        return self._run_lease
 
     @property
     def steering_mode(self) -> QueueMode:
@@ -192,6 +208,8 @@ class Agent:
         return self._idle_event.wait(timeout)
 
     def reset(self) -> None:
+        if self._run_lease.active:
+            raise RuntimeError("Cannot reset Agent while an active run is in progress; abort and wait for idle first")
         self._state.messages = []
         self._state.is_streaming = False
         self._state.error_message = None
@@ -224,6 +242,7 @@ class Agent:
             if self._prepare_next_turn_with_context or self._prepare_next_turn
             else None,
             tool_execution=self._tool_execution,
+            max_parallel_tools=self._max_parallel_tools,
             before_tool_call=self._before_tool_call,
             after_tool_call=self._after_tool_call,
             should_stop_after_turn=self._should_stop_after_turn,
@@ -238,6 +257,7 @@ class Agent:
             max_tokens=self._state.model.max_tokens or None,
             max_iterations=self.max_iterations,
             iteration_budget=IterationBudget(self.max_iterations),
+            on_iteration_limit=self._on_iteration_limit,
         )
 
     def _drain_steering(self) -> list[AgentMessage]:
@@ -259,6 +279,14 @@ class Agent:
         stream_fn=None,
         images: list[ImageContent] | None = None,
     ) -> list[AgentMessage]:
+        return run_sync(self.async_prompt(prompt, stream_fn=stream_fn, images=images))
+
+    async def async_prompt(
+        self,
+        prompt: Union[str, AgentMessage, list[AgentMessage]],
+        stream_fn=None,
+        images: list[ImageContent] | None = None,
+    ) -> list[AgentMessage]:
         self._begin_run(
             "Agent is already processing a prompt. Use steer() or follow_up() to queue messages, or wait for completion."
         )
@@ -272,16 +300,19 @@ class Agent:
         else:
             messages = [prompt]
         try:
-            new_messages = run_agent_loop(
+            new_messages = await run_agent_loop_async(
                 messages, self._context(), self._build_config(), self._make_sink(), self._signal, stream_fn
             )
         except Exception as error:  # noqa: BLE001
-            new_messages = self._handle_run_failure(error, self._signal.aborted)
+            new_messages = await self._handle_run_failure(error, self._signal.aborted)
         finally:
             self._finish_run()
         return new_messages
 
     def continue_(self, stream_fn=None) -> list[AgentMessage]:
+        return run_sync(self.async_continue(stream_fn=stream_fn))
+
+    async def async_continue(self, stream_fn=None) -> list[AgentMessage]:
         self._begin_run("Agent is already processing. Wait for completion before continuing.")
         try:
             context = self._context()
@@ -291,7 +322,7 @@ class Agent:
             if getattr(last_message, "role", None) == "assistant":
                 queued_steering = self._drain_steering()
                 if queued_steering:
-                    return run_agent_loop(
+                    return await run_agent_loop_async(
                         queued_steering,
                         context,
                         self._build_config(skip_initial_steering_poll=True),
@@ -301,20 +332,20 @@ class Agent:
                     )
                 queued_follow_up = self._drain_follow_up()
                 if queued_follow_up:
-                    return run_agent_loop(
+                    return await run_agent_loop_async(
                         queued_follow_up, context, self._build_config(), self._make_sink(), self._signal, stream_fn
                     )
                 raise ValueError("Cannot continue from message role: assistant")
-            new_messages = run_agent_loop_continue(
+            new_messages = await run_agent_loop_continue_async(
                 context, self._build_config(), self._make_sink(), self._signal, stream_fn
             )
         except Exception as error:  # noqa: BLE001
-            new_messages = self._handle_run_failure(error, self._signal.aborted)
+            new_messages = await self._handle_run_failure(error, self._signal.aborted)
         finally:
             self._finish_run()
         return new_messages
 
-    def _handle_run_failure(self, error: BaseException, aborted: bool) -> list[AgentMessage]:
+    async def _handle_run_failure(self, error: BaseException, aborted: bool) -> list[AgentMessage]:
         failure_message = AssistantMessage(
             content=[TextContent(text="")],
             api=self._state.model.api,
@@ -326,16 +357,16 @@ class Agent:
             timestamp=now_ms(),
         )
         sink = self._make_sink()
-        sink(MessageStartEvent(message=failure_message))
-        sink(MessageEndEvent(message=failure_message))
-        sink(TurnEndEvent(message=failure_message, tool_results=[]))
-        sink(AgentEndEvent(messages=[failure_message]))
+        await sink(MessageStartEvent(message=failure_message))
+        await sink(MessageEndEvent(message=failure_message))
+        await sink(TurnEndEvent(message=failure_message, tool_results=[]))
+        await sink(AgentEndEvent(messages=[failure_message]))
         return [failure_message]
 
     def _begin_run(self, active_error: str) -> None:
         with self._run_state_lock:
-            if self._state.is_streaming:
-                raise RuntimeError(active_error)
+            token = self._run_lease.acquire(active_error)
+            self._active_run_token = token
             self._signal = AbortSignal()
             self._idle_event.clear()
             self._state.is_streaming = True
@@ -348,15 +379,19 @@ class Agent:
             self._state.streaming_message = None
             self._state.pending_tool_calls = set()
             self._idle_event.set()
+            token = self._active_run_token
+            self._active_run_token = None
+            if token is not None:
+                token.release()
 
     def _make_sink(self) -> AgentEventSink:
-        def _sink(event: AgentEvent) -> None:
+        async def _sink(event: AgentEvent) -> None:
             self._process_event(event)
             for listener in list(self._listeners):
                 if _listener_accepts_signal(listener):
-                    listener(event, self._signal)
+                    await resolve(listener(event, self._signal))
                 else:
-                    listener(event)
+                    await resolve(listener(event))
 
         return _sink
 

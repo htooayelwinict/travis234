@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -23,8 +26,17 @@ from appv231.ai.types import (
     empty_usage,
     now_ms,
 )
+from appv231.coding_agent.session_lock import SessionFileLock
 
 CURRENT_SESSION_VERSION = 3
+
+
+class SessionCorruptionError(ValueError):
+    def __init__(self, path: Path, line_number: int, detail: str) -> None:
+        self.path = path
+        self.line_number = line_number
+        self.detail = detail
+        super().__init__(f"Session file {path} is corrupt at line {line_number}: {detail}")
 
 
 @dataclass
@@ -115,10 +127,14 @@ class SessionStore:
         self.file_entries: list[dict[str, Any]] = []
         self.by_id: dict[str, dict[str, Any]] = {}
         self.leaf_id: str | None = None
-        if self.path.exists() and self.path.stat().st_size > 0:
-            self._load()
-        else:
-            self._write_header(cwd=cwd, parent_session=parent_session, session_id=session_id)
+        self._disk_leaf_id: str | None = None
+        self._thread_lock = threading.RLock()
+        self.recovered_tail_path: Path | None = None
+        with self._thread_lock, SessionFileLock(self.path):
+            if self.path.exists() and self.path.stat().st_size > 0:
+                self._load()
+            else:
+                self._write_header(cwd=cwd, parent_session=parent_session, session_id=session_id)
 
     def _write_header(self, *, cwd: str, parent_session: str | None, session_id: str | None = None) -> None:
         header = {
@@ -130,22 +146,68 @@ class SessionStore:
         }
         if parent_session:
             header["parentSession"] = parent_session
+        payload = (json.dumps(header, separators=(",", ":")) + "\n").encode("utf-8")
+        _atomic_write(self.path, payload)
         self.file_entries = [header]
-        self.path.write_text(json.dumps(header, separators=(",", ":")) + "\n", encoding="utf-8")
+        self.by_id = {}
+        self.leaf_id = None
+        self._disk_leaf_id = None
 
     def _load(self) -> None:
         self.file_entries = []
         self.by_id = {}
         self.leaf_id = None
-        for raw_line in self.path.read_text(encoding="utf-8").splitlines():
+        raw = self.path.read_bytes()
+        lines = raw.splitlines(keepends=True)
+        for index, raw_line in enumerate(lines):
             if not raw_line.strip():
                 continue
-            entry = json.loads(raw_line)
+            try:
+                entry = json.loads(raw_line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                is_incomplete_tail = index == len(lines) - 1 and not raw_line.endswith((b"\n", b"\r"))
+                if is_incomplete_tail:
+                    self.recovered_tail_path = self._recover_truncated_tail(
+                        valid_prefix=b"".join(lines[:index]),
+                        tail=raw_line,
+                    )
+                    break
+                raise SessionCorruptionError(self.path, index + 1, str(error)) from error
             self.file_entries.append(entry)
             entry_id = entry.get("id")
             if entry.get("type") != "session" and entry_id:
                 self.by_id[entry_id] = entry
                 self.leaf_id = entry_id
+        self._disk_leaf_id = self.leaf_id
+
+    def _recover_truncated_tail(self, *, valid_prefix: bytes, tail: bytes) -> Path:
+        quarantine = self.path.with_name(f"{self.path.name}.truncated-{uuid.uuid4().hex}.partial")
+        quarantine_fd = os.open(quarantine, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(quarantine_fd, "wb") as handle:
+                handle.write(tail)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except BaseException:
+            quarantine.unlink(missing_ok=True)
+            raise
+
+        temp_fd, temp_name = tempfile.mkstemp(prefix=f".{self.path.name}.", dir=self.path.parent)
+        try:
+            os.fchmod(temp_fd, self.path.stat().st_mode & 0o777)
+            with os.fdopen(temp_fd, "wb") as handle:
+                handle.write(valid_prefix)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_name, self.path)
+        except BaseException:
+            try:
+                os.close(temp_fd)
+            except OSError:
+                pass
+            Path(temp_name).unlink(missing_ok=True)
+            raise
+        return quarantine
 
     @property
     def entries(self) -> list[dict[str, Any]]:
@@ -175,16 +237,16 @@ class SessionStore:
     getLabel = get_label
 
     def append_message(self, message: AgentMessage) -> str:
-        return self._append_entry({"type": "message", "message": serialize_message(message)})
+        return self._append_entry({"type": "message", "message": serialize_message(message)}, durable=True)
 
     def append_thinking_level_change(self, thinking_level: str) -> str:
-        return self._append_entry({"type": "thinking_level_change", "thinkingLevel": thinking_level})
+        return self._append_entry({"type": "thinking_level_change", "thinkingLevel": thinking_level}, durable=True)
 
     def append_model_change(self, provider: str, model_id: str) -> str:
-        return self._append_entry({"type": "model_change", "provider": provider, "modelId": model_id})
+        return self._append_entry({"type": "model_change", "provider": provider, "modelId": model_id}, durable=True)
 
     def append_session_info(self, name: str | None) -> str:
-        return self._append_entry({"type": "session_info", "name": (name or "").strip()})
+        return self._append_entry({"type": "session_info", "name": (name or "").strip()}, durable=True)
 
     def append_compaction(
         self,
@@ -209,7 +271,7 @@ class SessionStore:
                 raise ValueError(f"Entry {parent_id} not found")
             self.leaf_id = parent_id
         try:
-            return self._append_entry(entry)
+            return self._append_entry(entry, durable=True)
         except Exception:
             self.leaf_id = previous_leaf
             raise
@@ -218,7 +280,7 @@ class SessionStore:
         entry = {"type": "custom", "customType": custom_type}
         if data is not None:
             entry["data"] = data
-        return self._append_entry(entry)
+        return self._append_entry(entry, durable=True)
 
     appendCustomEntry = append_custom_entry
 
@@ -237,14 +299,14 @@ class SessionStore:
         }
         if details is not None:
             entry["details"] = details
-        return self._append_entry(entry)
+        return self._append_entry(entry, durable=True)
 
     appendCustomMessageEntry = append_custom_message_entry
 
     def append_label_change(self, target_id: str, label: str | None) -> str:
         if target_id not in self.by_id:
             raise ValueError(f"Entry {target_id} not found")
-        return self._append_entry({"type": "label", "targetId": target_id, "label": label or None})
+        return self._append_entry({"type": "label", "targetId": target_id, "label": label or None}, durable=True)
 
     appendLabelChange = append_label_change
 
@@ -277,7 +339,7 @@ class SessionStore:
             entry["details"] = details
         if from_hook is not None:
             entry["fromHook"] = from_hook
-        return self._append_entry(entry)
+        return self._append_entry(entry, durable=True)
 
     branchWithSummary = branch_with_summary
 
@@ -305,9 +367,10 @@ class SessionStore:
             copied_entries.append(copied)
             parent_id = copied["id"]
 
-        with target_path.open("w", encoding="utf-8") as handle:
-            for entry in [header, *copied_entries]:
-                handle.write(json.dumps(entry, separators=(",", ":")) + "\n")
+        payload = "".join(
+            json.dumps(entry, separators=(",", ":")) + "\n" for entry in [header, *copied_entries]
+        ).encode("utf-8")
+        _atomic_write(target_path, payload)
 
         return str(target_path)
 
@@ -337,7 +400,7 @@ class SessionStore:
             lines.append(json.dumps(linear, separators=(",", ":")))
             previous_id = entry.get("id")
 
-        target_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        _atomic_write(target_path, ("\n".join(lines) + "\n").encode("utf-8"))
         return str(target_path)
 
     exportToJsonl = export_to_jsonl
@@ -407,25 +470,72 @@ class SessionStore:
             session_name=session_name,
         )
 
-    def _append_entry(self, entry: dict[str, Any]) -> str:
-        entry = {
-            **entry,
-            "id": self._generate_id(),
-            "parentId": self.leaf_id,
-            "timestamp": _timestamp(),
-        }
+    def append_checkpoint(self, entry: dict[str, Any]) -> str:
+        return self._append_entry(entry, durable=True)
+
+    def _append_entry(self, entry: dict[str, Any], durable: bool = False) -> str:
+        with self._thread_lock, SessionFileLock(self.path):
+            selected_parent = self.leaf_id
+            follows_disk_leaf = selected_parent == self._disk_leaf_id
+            self._load()
+            parent_id = self.leaf_id if follows_disk_leaf else selected_parent
+            committed = {
+                **entry,
+                "id": self._generate_id(),
+                "parentId": parent_id,
+                "timestamp": _timestamp(),
+            }
+            self._write_record(committed, durable=durable)
+            self._apply_committed_entry(committed)
+            return committed["id"]
+
+    def _write_record(self, entry: dict[str, Any], *, durable: bool) -> None:
+        payload = (json.dumps(entry, separators=(",", ":")) + "\n").encode("utf-8")
+        descriptor = os.open(self.path, os.O_WRONLY | os.O_APPEND)
+        try:
+            view = memoryview(payload)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    raise OSError("session append made no progress")
+                view = view[written:]
+            if durable:
+                os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def _apply_committed_entry(self, entry: dict[str, Any]) -> None:
         self.file_entries.append(entry)
         self.by_id[entry["id"]] = entry
         self.leaf_id = entry["id"]
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry, separators=(",", ":")) + "\n")
-        return entry["id"]
+        self._disk_leaf_id = entry["id"]
 
     def _generate_id(self) -> str:
         while True:
             entry_id = uuid.uuid4().hex[:8]
             if entry_id not in self.by_id:
                 return entry_id
+
+
+def _atomic_write(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = path.stat().st_mode & 0o777 if path.exists() else 0o600
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, mode)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        directory_descriptor = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _entry_to_message(entry: dict[str, Any]) -> AgentMessage | None:

@@ -6,10 +6,12 @@ import os
 import re
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 from appv231.agent.types import AgentTool, AgentToolResult
 from appv231.ai.types import TextContent
+from appv231.coding_agent.capabilities import WorkspaceCapability
 from appv231.coding_agent.tools.path_utils import is_ignored_by_gitignore, load_gitignore_rules, resolve_to_cwd
 from appv231.coding_agent.tools.truncate import (
     DEFAULT_MAX_BYTES,
@@ -124,6 +126,7 @@ def _line_matches(line: str, pattern: str, regex: re.Pattern[str] | None, litera
 
 def _execute_grep(
     cwd: str,
+    workspace: WorkspaceCapability,
     operations: GrepOperations,
     tool_call_id,
     args,
@@ -132,7 +135,7 @@ def _execute_grep(
     ctx: ToolContext | None = None,
 ):
     _check_aborted(signal)
-    search_path = resolve_to_cwd(args.get("path") or ".", cwd)
+    search_path = str(workspace.resolve(args.get("path") or ".", access="read"))
     if not os.path.exists(search_path):
         raise FileNotFoundError(f"Path not found: {search_path}")
 
@@ -209,8 +212,13 @@ def _execute_grep(
     return AgentToolResult(content=[TextContent(text=output)], details=details or None)
 
 
-def create_grep_tool_definition(cwd: str, operations: GrepOperations | None = None) -> ToolDefinition:
+def create_grep_tool_definition(
+    cwd: str,
+    operations: GrepOperations | None = None,
+    workspace: WorkspaceCapability | None = None,
+) -> ToolDefinition:
     ops = operations or _DEFAULT_OPERATIONS
+    workspace = workspace or WorkspaceCapability(Path(cwd))
     return ToolDefinition(
         name="grep",
         label="grep",
@@ -223,11 +231,18 @@ def create_grep_tool_definition(cwd: str, operations: GrepOperations | None = No
         parameters=GREP_SCHEMA,
         prompt_snippet="Search file contents for patterns (respects .gitignore)",
         execute=lambda tid, args, signal=None, on_update=None, ctx=None: _execute_grep(
-            cwd, ops, tid, args, signal, on_update, ctx
+            cwd, workspace, ops, tid, args, signal, on_update, ctx
         ),
         render_call=lambda args, ctx=None: f"grep {args.get('pattern', '')}",
     )
 
 
-def create_grep_tool(cwd: str, operations: GrepOperations | None = None) -> AgentTool:
-    return wrap_tool_definition(create_grep_tool_definition(cwd, operations), lambda: ToolContext(cwd=cwd))
+def create_grep_tool(
+    cwd: str,
+    operations: GrepOperations | None = None,
+    workspace: WorkspaceCapability | None = None,
+) -> AgentTool:
+    return wrap_tool_definition(
+        create_grep_tool_definition(cwd, operations, workspace),
+        lambda: ToolContext(cwd=cwd),
+    )

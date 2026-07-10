@@ -5,11 +5,33 @@ from __future__ import annotations
 import copy
 import json
 import math
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Mapping
+
+from jsonschema.exceptions import SchemaError, ValidationError
+from jsonschema.validators import validator_for
 
 
 class ToolValidationError(ValueError):
     """Raised when tool-call arguments do not match the tool's JSON schema."""
+
+
+@dataclass(frozen=True)
+class CompiledToolSchema:
+    validator: Any
+
+    def errors(self, value: Any) -> list[ValidationError]:
+        return sorted(
+            self.validator.iter_errors(value),
+            key=lambda error: (tuple(str(part) for part in error.absolute_path), error.message),
+        )
+
+
+def compile_tool_schema(schema: Mapping[str, object]) -> CompiledToolSchema:
+    schema_copy = dict(schema)
+    validator_class = validator_for(schema_copy)
+    validator_class.check_schema(schema_copy)
+    return CompiledToolSchema(validator_class(schema_copy))
 
 
 def validate_tool_arguments(tool: Any, tool_call: Any) -> dict[str, Any]:
@@ -25,11 +47,41 @@ def validate_tool_arguments(tool: Any, tool_call: Any) -> dict[str, Any]:
         raise _tool_validation_error(tool, tool_call, f"{_tool_name(tool, tool_call)}: expected object")
     schema = getattr(tool, "parameters", None) or {}
     coerced = _coerce_with_json_schema(copy.deepcopy(args), schema)
-    try:
-        _validate_value(coerced, schema, path=_tool_name(tool, tool_call))
-    except ToolValidationError as error:
-        raise _tool_validation_error(tool, tool_call, str(error)) from error
+    compiled = getattr(tool, "compiled_schema", None)
+    if not isinstance(compiled, CompiledToolSchema):
+        try:
+            compiled = compile_tool_schema(schema)
+        except SchemaError as error:
+            raise ValueError(f"invalid schema for tool {_tool_name(tool, tool_call)}: {error.message}") from error
+    errors = compiled.errors(coerced)
+    if errors:
+        raise _tool_validation_error(
+            tool,
+            tool_call,
+            _format_schema_error(errors[0], _tool_name(tool, tool_call)),
+        )
     return coerced
+
+
+def _format_schema_error(error: ValidationError, tool_name: str) -> str:
+    path = tool_name + "".join(
+        f"[{part}]" if isinstance(part, int) else f".{part}" for part in error.absolute_path
+    )
+    if error.validator == "required":
+        missing = next((key for key in error.validator_value if key not in error.instance), "?")
+        return f"{path}: missing required property '{missing}'"
+    if error.validator == "type":
+        expected = error.validator_value
+        if isinstance(expected, list):
+            expected = " or ".join(expected)
+        return f"{path}: expected {expected}"
+    if error.validator == "additionalProperties":
+        return f"{path}: {error.message}"
+    if error.validator == "minItems":
+        return f"{path}: expected array length >= {error.validator_value}"
+    if error.validator == "maxItems":
+        return f"{path}: expected array length <= {error.validator_value}"
+    return f"{path}: {error.message}"
 
 
 def _tool_name(tool: Any, tool_call: Any) -> str:
@@ -204,10 +256,9 @@ def _coerce_with_json_schema(value: Any, schema: Any) -> Any:
 
 def _is_valid_value(value: Any, schema: dict[str, Any]) -> bool:
     try:
-        _validate_value(value, schema, path="value")
-    except ToolValidationError:
+        return not compile_tool_schema(schema).errors(value)
+    except SchemaError:
         return False
-    return True
 
 
 def _validate_value(value: Any, schema: dict[str, Any], path: str) -> None:

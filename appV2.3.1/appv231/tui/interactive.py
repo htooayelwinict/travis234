@@ -664,6 +664,9 @@ class InteractiveRenderer:
         self.output_container.add(component)
 
     def handle_event(self, event: Any) -> None:
+        if not self.tui.dispatcher.is_owner_thread():
+            self.tui.post(lambda: self.handle_event(event))
+            return
         if isinstance(event, dict):
             return
         etype = getattr(event, "type", None)

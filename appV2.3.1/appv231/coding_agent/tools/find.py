@@ -6,10 +6,12 @@ import fnmatch
 import os
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 from appv231.agent.types import AgentTool, AgentToolResult
 from appv231.ai.types import TextContent
+from appv231.coding_agent.capabilities import WorkspaceCapability
 from appv231.coding_agent.tools.path_utils import is_ignored_by_gitignore, load_gitignore_rules, resolve_to_cwd
 from appv231.coding_agent.tools.truncate import DEFAULT_MAX_BYTES, format_size, truncate_head, truncation_to_details
 from appv231.coding_agent.tools.types import ToolContext, ToolDefinition, wrap_tool_definition
@@ -92,6 +94,7 @@ _DEFAULT_OPERATIONS = FindOperations(exists=os.path.exists, glob=_local_glob)
 
 def _execute_find(
     cwd: str,
+    workspace: WorkspaceCapability,
     operations: FindOperations,
     tool_call_id,
     args,
@@ -101,7 +104,7 @@ def _execute_find(
 ):
     _check_aborted(signal)
     pattern = args["pattern"]
-    root = resolve_to_cwd(args.get("path") or ".", cwd)
+    root = str(workspace.resolve(args.get("path") or ".", access="read"))
     limit = max(1, int(args.get("limit", args.get("max_results", DEFAULT_LIMIT))))
     if not operations.exists(root):
         raise FileNotFoundError(f"Path not found: {root}")
@@ -137,8 +140,13 @@ def _execute_find(
     return AgentToolResult(content=[TextContent(text=output)], details=details or None)
 
 
-def create_find_tool_definition(cwd: str, operations: FindOperations | None = None) -> ToolDefinition:
+def create_find_tool_definition(
+    cwd: str,
+    operations: FindOperations | None = None,
+    workspace: WorkspaceCapability | None = None,
+) -> ToolDefinition:
     ops = operations or _DEFAULT_OPERATIONS
+    workspace = workspace or WorkspaceCapability(Path(cwd))
     return ToolDefinition(
         name="find",
         label="find",
@@ -150,11 +158,18 @@ def create_find_tool_definition(cwd: str, operations: FindOperations | None = No
         parameters=FIND_SCHEMA,
         prompt_snippet="Find files by glob pattern (respects .gitignore)",
         execute=lambda tid, args, signal=None, on_update=None, ctx=None: _execute_find(
-            cwd, ops, tid, args, signal, on_update, ctx
+            cwd, workspace, ops, tid, args, signal, on_update, ctx
         ),
         render_call=lambda args, ctx=None: f"find {args.get('pattern', '')}",
     )
 
 
-def create_find_tool(cwd: str, operations: FindOperations | None = None) -> AgentTool:
-    return wrap_tool_definition(create_find_tool_definition(cwd, operations), lambda: ToolContext(cwd=cwd))
+def create_find_tool(
+    cwd: str,
+    operations: FindOperations | None = None,
+    workspace: WorkspaceCapability | None = None,
+) -> AgentTool:
+    return wrap_tool_definition(
+        create_find_tool_definition(cwd, operations, workspace),
+        lambda: ToolContext(cwd=cwd),
+    )

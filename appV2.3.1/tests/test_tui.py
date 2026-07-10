@@ -1769,12 +1769,13 @@ def test_interactive_mode_escape_aborts_streaming_text_turn_before_done(tmp_path
         send_after_abort.set()
         stopped = _wait_until(lambda: not mode._is_turn_active() and mode.status._message == "Idle", timeout=1)
         rendered = strip_ansi("\n".join(app.tui.render(120)))
+        provider_finished_before_release = provider_finished.is_set()
     finally:
         allow_finish.set()
         mode._wait_for_active_turn()
 
     assert stopped is True
-    assert provider_finished.is_set() is False
+    assert provider_finished_before_release is False
     assert "after-abort" not in rendered
     assert mode.status._message == "Idle"
 
@@ -3658,6 +3659,27 @@ def test_interactive_mode_reports_unknown_slash_command_without_model_turn(tmp_p
     assert "model should not run" not in rendered
 
 
+def test_interactive_mode_routes_subagents_prompt_trigger_to_model(tmp_path) -> None:
+    prompts: list[str] = []
+
+    def script(model, context):
+        prompts.append(context.messages[-1].content[0].text)
+        return text_response_events(model, "subagent prompt received")
+
+    register_api_provider(create_faux_provider(script))
+    terminal = FakeTerminal(columns=120, rows=40)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+    prompt = "/subagents delegate one reviewer to inspect package.json"
+    inputs = iter([prompt, "/exit"])
+
+    InteractiveMode(app, input_fn=lambda input_prompt: next(inputs)).run()
+
+    rendered = strip_ansi("\n".join(app.tui.render(120)))
+    assert prompts == [prompt]
+    assert "subagent prompt received" in rendered
+    assert "Unknown command: /subagents" not in rendered
+
+
 def test_interactive_mode_runs_delegate_command_through_turn_thread(tmp_path) -> None:
     calls = {"model": 0}
 
@@ -3693,6 +3715,39 @@ def test_interactive_mode_does_not_run_delegate_command_on_input_thread(tmp_path
     mode.init()
 
     assert mode._dispatch_extension_command("/delegate reviewer inspect package.json") is False
+
+
+def test_interactive_mode_allow_package_install_grants_bounded_capability(tmp_path) -> None:
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
+    terminal = FakeTerminal(columns=120)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+    grants: list[tuple[str, int]] = []
+    app.session.grant_capability = lambda capability, uses=1: grants.append((capability, uses))
+    inputs = iter(["/allow package-install 3", "/exit"])
+
+    InteractiveMode(app, input_fn=lambda prompt: next(inputs)).run()
+
+    rendered = strip_ansi("\n".join(app.tui.render(120)))
+    assert grants == [("package_mutation", 3)]
+    assert "Allowed package installation for 3 uses" in rendered
+    assert "model should not run" not in rendered
+
+
+def test_interactive_mode_allow_rejects_unknown_or_nonpositive_grants(tmp_path) -> None:
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
+    terminal = FakeTerminal(columns=120)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+    grants: list[tuple[str, int]] = []
+    app.session.grant_capability = lambda capability, uses=1: grants.append((capability, uses))
+    inputs = iter(["/allow shell 2", "/allow package-install 0", "/exit"])
+
+    InteractiveMode(app, input_fn=lambda prompt: next(inputs)).run()
+
+    rendered = strip_ansi("\n".join(app.tui.render(120)))
+    assert grants == []
+    assert "Unknown capability: shell" in rendered
+    assert "Capability use count must be a positive integer" in rendered
+    assert "model should not run" not in rendered
 
 
 def test_interactive_mode_runs_agents_command_during_active_turn_without_queueing(tmp_path) -> None:
@@ -4489,10 +4544,11 @@ def test_interactive_footer_data_provider_auto_refreshes_head_changes_and_rerend
 
         head.write_text("ref: refs/heads/feature\n")
 
-        assert _wait_until(
-            lambda: seen == ["feature"]
-            and f"{repo} (feature)" in strip_ansi("\n".join(app.tui.render(360)))
-        )
+        def refreshed() -> bool:
+            app.tui.drain_dispatcher()
+            return seen == ["feature"] and f"{repo} (feature)" in strip_ansi("\n".join(app.tui.render(360)))
+
+        assert _wait_until(refreshed)
     finally:
         unsubscribe()
         mode.footer_data_provider.dispose()
@@ -4501,10 +4557,14 @@ def test_interactive_footer_data_provider_auto_refreshes_head_changes_and_rerend
 
 def test_interactive_mode_footer_ports_pi_available_provider_count_for_scoped_models(tmp_path) -> None:
     primary = faux_model()
+    primary.base_url = "http://localhost"
     secondary = faux_model(api="other")
     secondary.provider = "other"
     secondary.id = "other-model"
     secondary.name = "Other"
+    secondary.base_url = "http://localhost"
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "unused")))
+    register_api_provider(ApiProvider(api="other", stream=lambda *args: None, stream_simple=lambda *args: None))
     app = CodingApp(
         cwd=str(tmp_path),
         model=primary,
@@ -4974,6 +5034,7 @@ def test_interactive_mode_queues_prompt_while_turn_is_streaming(tmp_path) -> Non
         if index == 0:
             return "first"
         if index == 1:
+            first_stream_started.wait(timeout=2)
             second_input_requested.set()
             return "second"
         if index == 2:
@@ -4988,7 +5049,7 @@ def test_interactive_mode_queues_prompt_while_turn_is_streaming(tmp_path) -> Non
     assert first_stream_started.wait(timeout=2)
     try:
         assert second_input_requested.wait(timeout=0.25)
-        assert app.session.get_steering_messages() == ["second"]
+        assert _wait_until(lambda: app.session.get_steering_messages() == ["second"], timeout=0.25)
         assert app.session.pending_message_count == 1
     finally:
         first_stream_released.set()
@@ -4996,7 +5057,7 @@ def test_interactive_mode_queues_prompt_while_turn_is_streaming(tmp_path) -> Non
     assert not thread.is_alive()
 
 
-def test_interactive_mode_runs_bang_bash_while_turn_is_streaming(tmp_path) -> None:
+def test_interactive_mode_serializes_bang_bash_after_streaming_turn(tmp_path) -> None:
     first_stream_started = threading.Event()
     first_stream_released = threading.Event()
     first_stream_finished = threading.Event()
@@ -5037,9 +5098,11 @@ def test_interactive_mode_runs_bang_bash_while_turn_is_streaming(tmp_path) -> No
 
     assert first_stream_started.wait(timeout=2)
     try:
-        assert _wait_until(lambda: app.session.has_pending_bash_messages is True, timeout=2)
+        assert app.session.has_pending_bash_messages is False
         assert app.session.get_steering_messages() == []
-        assert mode.status._message == "Running"
+        assert _wait_until(lambda: mode.status._message == "Running bash")
+        first_stream_released.set()
+        assert first_stream_finished.wait(timeout=2)
     finally:
         first_stream_released.set()
         thread.join(timeout=2)
@@ -5109,10 +5172,9 @@ def test_interactive_mode_labels_post_response_compaction_after_reply(tmp_path) 
     thread.start()
 
     assert compression_started.wait(timeout=2)
-    rendered = strip_ansi("\n".join(app.tui.render(120)))
-    assert "reply before compaction" in rendered
-    assert "status: Compressing" in rendered
-    assert "status: Running" not in rendered
+    assert _wait_until(lambda: "reply before compaction" in strip_ansi(terminal.output))
+    assert _wait_until(lambda: mode.status._message == "Compressing")
+    assert "status: Running" not in strip_ansi(terminal.output).split("reply before compaction")[-1]
 
     release_compression.set()
     allow_exit_input.set()
@@ -5196,7 +5258,7 @@ def test_interactive_mode_renders_auto_retry_status_instead_of_stale_running(tmp
 
     assert retry_started.wait(timeout=2)
     try:
-        assert mode.status._message.startswith("Retrying (1/1) in 5s")
+        assert _wait_until(lambda: mode.status._message.startswith("Retrying (1/1) in 5s"))
         assert mode.status._message != "Running"
     finally:
         app.session.abort_retry()
@@ -5520,8 +5582,9 @@ def test_interactive_mode_login_logout_oauth_are_local_tui_commands(tmp_path) ->
     assert "model should not run" not in rendered
 
 
-def test_interactive_mode_login_api_key_is_local_tui_command(tmp_path) -> None:
+def test_interactive_mode_login_api_key_is_local_tui_command(tmp_path, monkeypatch) -> None:
     calls: list[object] = []
+    monkeypatch.setenv("APPV231_CODING_AGENT_DIR", str(tmp_path / "agent"))
 
     def script(model, context):
         calls.append(("model", context))
@@ -5588,8 +5651,11 @@ def test_interactive_mode_login_api_key_offers_active_provider_without_registere
     rendered = strip_ansi("\n".join(app.tui.render(140)))
     assert "Saved API key for OpenRouter" in rendered
     assert "typed-secret" not in rendered
-    assert get_provider_auth_status("openrouter") == {"configured": True, "source": "stored"}
-    assert get_api_key_for_provider("openrouter") == "typed-secret"
+    assert app.session.model_registry.get_provider_auth_status("openrouter") == {
+        "configured": True,
+        "source": "stored",
+    }
+    assert app.session.model_registry.get_api_key_for_provider("openrouter") == "typed-secret"
     stored = json.loads((agent_dir / "auth.json").read_text(encoding="utf-8"))
     assert stored == {"openrouter": {"type": "api_key", "key": "typed-secret"}}
     assert (agent_dir / "auth.json").stat().st_mode & 0o777 == 0o600
@@ -5652,6 +5718,7 @@ def test_interactive_mode_model_command_switches_openrouter_without_model_turn(t
 
 def test_interactive_mode_model_command_selects_registered_alternate_without_model_turn(tmp_path, monkeypatch) -> None:
     register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setattr(interactive_mode, "get_live_openrouter_models", lambda **kwargs: [])
     terminal = FakeTerminal(columns=140)
     active = Model(
@@ -5687,6 +5754,7 @@ def test_interactive_mode_model_command_selects_registered_alternate_without_mod
 
 
 def test_interactive_mode_model_command_fetches_openrouter_catalog_for_picker(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
     terminal = FakeTerminal(columns=140)
     active = Model(
@@ -5741,6 +5809,7 @@ def test_interactive_mode_model_command_fetches_openrouter_catalog_for_picker(tm
 
 
 def test_interactive_mode_model_command_caps_openrouter_full_context_output_limit(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
     terminal = FakeTerminal(columns=140)
     active = Model(
@@ -5779,6 +5848,7 @@ def test_interactive_mode_model_command_caps_openrouter_full_context_output_limi
 
 
 def test_interactive_mode_openrouter_catalog_uses_shared_model_metadata_converter(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
     terminal = FakeTerminal(columns=140)
     active = Model(
@@ -5817,6 +5887,7 @@ def test_interactive_mode_openrouter_catalog_uses_shared_model_metadata_converte
 
 
 def test_interactive_mode_model_command_uses_shared_openrouter_live_cache(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
     terminal = FakeTerminal(columns=140)
     active = Model(
@@ -5858,6 +5929,7 @@ def test_interactive_mode_model_command_uses_shared_openrouter_live_cache(tmp_pa
 
 
 def test_interactive_mode_model_command_filters_openrouter_catalog_without_huge_picker(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
     terminal = FakeTerminal(columns=160)
     active = Model(
@@ -5893,6 +5965,55 @@ def test_interactive_mode_model_command_filters_openrouter_catalog_without_huge_
     assert "openrouter/moonshotai/kimi-dev-72b" in rendered
     assert "acme/noise-0" not in rendered
     assert "model should not run" not in rendered
+
+
+def test_interactive_mode_model_list_does_not_block_on_remote_catalog(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "unused")))
+    release = threading.Event()
+    active = Model(
+        id="qwen/qwen3.6-flash",
+        name="Qwen Flash",
+        api="faux",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+    )
+    remote = Model(
+        id="moonshotai/kimi-k2.6",
+        name="Kimi K2.6",
+        api=active.api,
+        provider=active.provider,
+        base_url=active.base_url,
+    )
+
+    def blocking_catalog(*, base_model, force_refresh=False):
+        release.wait(timeout=2)
+        return [remote]
+
+    monkeypatch.setattr(interactive_mode, "get_live_openrouter_models", blocking_catalog)
+    app = CodingApp(cwd=str(tmp_path), model=active, terminal=FakeTerminal(columns=140), enable_tui=True)
+    mode = InteractiveMode(app)
+    mode.init()
+    try:
+        started = time.monotonic()
+        mode._run_model_command("list", None)
+
+        assert time.monotonic() - started < 0.05
+        assert "Loading model catalog" in strip_ansi("\n".join(app.tui.render(140)))
+
+        release.set()
+
+        def loaded() -> bool:
+            app.tui.drain_dispatcher()
+            return "moonshotai/kimi-k2.6" in strip_ansi("\n".join(app.tui.render(140)))
+
+        assert _wait_until(loaded)
+    finally:
+        release.set()
+        if mode._model_loader is not None:
+            mode._model_loader.close()
+        mode.footer_data_provider.dispose()
+        app.tui.stop()
 
 
 def test_interactive_mode_model_command_warns_and_falls_back_when_openrouter_fetch_fails(tmp_path, monkeypatch) -> None:

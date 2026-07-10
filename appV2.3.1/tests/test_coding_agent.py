@@ -261,7 +261,7 @@ def test_write_tool_writes_literal_historical_marker_text_like_pi_write(tmp_path
 
 
 def test_repeated_successful_write_mutations_are_not_model_guardrail_warnings(tmp_path: Path) -> None:
-    from appv231.agent.tool_guardrails import ToolCallGuardrailController
+    from appv231.coding_agent.policies.tool_guardrails import ToolCallGuardrailController
 
     controller = ToolCallGuardrailController(cwd=str(tmp_path))
 
@@ -277,10 +277,13 @@ def test_repeated_successful_write_mutations_are_not_model_guardrail_warnings(tm
     assert second.message == ""
 
 
-def test_repeated_identical_successful_write_mutation_warns_without_default_halt(tmp_path: Path) -> None:
-    from appv231.agent.tool_guardrails import ToolCallGuardrailController
+def test_repeated_identical_successful_write_mutation_warns_when_blocking_disabled(tmp_path: Path) -> None:
+    from appv231.coding_agent.policies.tool_guardrails import ToolCallGuardrailConfig, ToolCallGuardrailController
 
-    controller = ToolCallGuardrailController(cwd=str(tmp_path))
+    controller = ToolCallGuardrailController(
+        ToolCallGuardrailConfig(blocking_enabled=False),
+        cwd=str(tmp_path),
+    )
     args = {"path": "PROTOCOL_FIXTURE.md", "content": "line1 is"}
 
     decisions = [
@@ -301,10 +304,10 @@ def test_repeated_identical_successful_write_mutation_warns_without_default_halt
     assert decisions[-1].should_halt is False
 
 
-def test_repeated_identical_successful_write_mutation_halts_when_hard_stop_enabled(tmp_path: Path) -> None:
-    from appv231.agent.tool_guardrails import ToolCallGuardrailConfig, ToolCallGuardrailController
+def test_repeated_identical_successful_write_mutation_halts_when_blocking_enabled(tmp_path: Path) -> None:
+    from appv231.coding_agent.policies.tool_guardrails import ToolCallGuardrailConfig, ToolCallGuardrailController
 
-    controller = ToolCallGuardrailController(ToolCallGuardrailConfig(hard_stop_enabled=True), cwd=str(tmp_path))
+    controller = ToolCallGuardrailController(ToolCallGuardrailConfig(blocking_enabled=True), cwd=str(tmp_path))
     args = {"path": "PROTOCOL_FIXTURE.md", "content": "line1 is"}
 
     decisions = [
@@ -1028,6 +1031,18 @@ def test_bash_tool_truncates_tail_and_persists_full_output(tmp_path: Path) -> No
     full_output = full_output_path.read_text(encoding="utf-8")
     assert "line0" in full_output
     assert "line2004" in full_output
+
+
+def test_bash_tool_replaces_invalid_utf8_without_dropping_output(tmp_path: Path) -> None:
+    def exec_command(command: str, cwd: str, options) -> dict[str, int | None]:
+        options.on_data(b"before-\xff-after")
+        return {"exit_code": 0}
+
+    tool = create_bash_tool(str(tmp_path), operations=BashOperations(exec=exec_command))
+
+    result = tool.execute("c1", {"command": "binary-output"})
+
+    assert result.content[0].text == "before-\ufffd-after"
 
 
 def test_truncating_find_ls_and_grep_details_are_json_serializable_pi_shape(tmp_path: Path) -> None:
@@ -2352,14 +2367,14 @@ def test_default_resource_loader_uses_pi_settings_manager_resource_paths(
     assert [theme.name for theme in loader.get_themes()["themes"]] == ["configured"]
 
 
-def test_default_resource_loader_loads_user_agents_skills_like_pi(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_resource_loader_loads_app_owned_agent_skills(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from appv231.coding_agent import DefaultResourceLoader
     from appv231.coding_agent.resource_loader import format_skills_for_prompt
 
     home = tmp_path / "home"
     project = home / "repo"
-    agent_dir = home / ".pi" / "agent"
-    user_skill_dir = home / ".agents" / "skills" / "systematic-debugging"
+    agent_dir = home / ".appv231" / "agent"
+    user_skill_dir = agent_dir / "skills" / "systematic-debugging"
     project.mkdir(parents=True)
     agent_dir.mkdir(parents=True)
     user_skill_dir.mkdir(parents=True)
@@ -2379,28 +2394,28 @@ def test_default_resource_loader_loads_user_agents_skills_like_pi(tmp_path: Path
     skills = loader.get_skills()["skills"]
     assert [skill.name for skill in skills] == ["systematic-debugging"]
     assert skills[0].sourceInfo.scope == "user"
-    assert skills[0].sourceInfo.baseDir == str(home / ".agents")
+    assert skills[0].sourceInfo.baseDir == str(agent_dir)
     assert str(user_skill_dir / "SKILL.md") in format_skills_for_prompt(skills)
 
 
-def test_default_resource_loader_blocks_legacy_pi_agent_skills(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_resource_loader_ignores_legacy_home_agents_skills(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from appv231.coding_agent import DefaultResourceLoader
 
     home = tmp_path / "home"
     project = home / "repo"
-    agent_dir = home / ".pi" / "agent"
-    pi_skill_dir = agent_dir / "skills" / "legacy-pi"
-    agents_skill_dir = home / ".agents" / "skills" / "active-agents"
+    agent_dir = home / ".appv231" / "agent"
+    app_skill_dir = agent_dir / "skills" / "app-owned"
+    legacy_skill_dir = home / ".agents" / "skills" / "legacy-agents"
     project.mkdir(parents=True)
-    pi_skill_dir.mkdir(parents=True)
-    agents_skill_dir.mkdir(parents=True)
+    app_skill_dir.mkdir(parents=True)
+    legacy_skill_dir.mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
-    (pi_skill_dir / "SKILL.md").write_text(
-        "---\nname: legacy-pi\ndescription: Use legacy pi skill\n---\nlegacy\n",
+    (app_skill_dir / "SKILL.md").write_text(
+        "---\nname: app-owned\ndescription: Use app-owned skill\n---\nactive\n",
         encoding="utf-8",
     )
-    (agents_skill_dir / "SKILL.md").write_text(
-        "---\nname: active-agents\ndescription: Use active agents skill\n---\nactive\n",
+    (legacy_skill_dir / "SKILL.md").write_text(
+        "---\nname: legacy-agents\ndescription: Use legacy agents skill\n---\nlegacy\n",
         encoding="utf-8",
     )
 
@@ -2408,8 +2423,8 @@ def test_default_resource_loader_blocks_legacy_pi_agent_skills(tmp_path: Path, m
     loader.reload()
 
     skill_names = [skill.name for skill in loader.get_skills()["skills"]]
-    assert "active-agents" in skill_names
-    assert "legacy-pi" not in skill_names
+    assert "app-owned" in skill_names
+    assert "legacy-agents" not in skill_names
 
 
 def test_agent_session_read_tool_can_load_discovered_user_skill_outside_cwd(
@@ -2418,8 +2433,8 @@ def test_agent_session_read_tool_can_load_discovered_user_skill_outside_cwd(
 ) -> None:
     home = tmp_path / "home"
     project = home / "repo"
-    agent_dir = home / ".pi" / "agent"
-    user_skill_dir = home / ".agents" / "skills"
+    agent_dir = home / ".appv231" / "agent"
+    user_skill_dir = agent_dir / "skills"
     skill_file = user_skill_dir / "web_search.md"
     project.mkdir(parents=True)
     agent_dir.mkdir(parents=True)
@@ -2449,8 +2464,8 @@ def test_web_search_skill_allowed_tools_profile_enables_bash_for_child(
 ) -> None:
     home = tmp_path / "home"
     project = home / "repo"
-    agent_dir = home / ".pi" / "agent"
-    user_skill_dir = home / ".agents" / "skills"
+    agent_dir = home / ".appv231" / "agent"
+    user_skill_dir = agent_dir / "skills"
     skill_file = user_skill_dir / "web_search.md"
     project.mkdir(parents=True)
     agent_dir.mkdir(parents=True)
@@ -2561,6 +2576,7 @@ def test_auth_storage_create_persists_api_key_runtime_and_fallback(tmp_path: Pat
 def test_model_registry_create_loads_models_json_and_resolves_pi_request_auth(tmp_path: Path) -> None:
     from appv231.coding_agent import AuthStorage, ModelRegistry
 
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "unused")))
     auth = AuthStorage.create(str(tmp_path / "auth.json"))
     auth.set("proxy", {"type": "api_key", "key": "stored-proxy-key"})
     models_path = tmp_path / "models.json"
@@ -2651,6 +2667,7 @@ def test_create_agent_session_services_defaults_pi_auth_storage_and_model_regist
 def test_create_agent_session_from_services_resolves_pi_default_model(tmp_path: Path) -> None:
     from appv231.coding_agent import SettingsManager, create_agent_session_from_services, create_agent_session_services
 
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "unused")))
     agent_dir = tmp_path / "agent"
     project = tmp_path / "repo"
     agent_dir.mkdir()
@@ -2979,6 +2996,7 @@ def test_appv231_provider_attribution_headers_match_appv231_precedence(monkeypat
 def test_exported_create_agent_session_matches_pi_sdk_result_factory(tmp_path: Path) -> None:
     from appv231.coding_agent import CreateAgentSessionResult, SettingsManager, createAgentSession, create_agent_session
 
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "unused")))
     agent_dir = tmp_path / "agent"
     project = tmp_path / "repo"
     agent_dir.mkdir()
@@ -3280,7 +3298,7 @@ def test_internal_subagent_installs_run_alias_without_escalating_read_only_child
 
 
 def test_tool_loop_guardrail_warns_on_repeated_idempotent_no_progress() -> None:
-    from appv231.agent.tool_guardrails import ToolCallGuardrailConfig, ToolCallGuardrailController
+    from appv231.coding_agent.policies.tool_guardrails import ToolCallGuardrailConfig, ToolCallGuardrailController
 
     controller = ToolCallGuardrailController(ToolCallGuardrailConfig(no_progress_warn_after=2))
 
@@ -3294,7 +3312,7 @@ def test_tool_loop_guardrail_warns_on_repeated_idempotent_no_progress() -> None:
 
 
 def test_tool_failure_recovery_guidance_respects_user_process_limits() -> None:
-    from appv231.agent.tool_guardrails import ToolCallGuardrailConfig, ToolCallGuardrailController
+    from appv231.coding_agent.policies.tool_guardrails import ToolCallGuardrailConfig, ToolCallGuardrailController
 
     controller = ToolCallGuardrailController(ToolCallGuardrailConfig(same_tool_failure_warn_after=2))
 
@@ -3306,7 +3324,7 @@ def test_tool_failure_recovery_guidance_respects_user_process_limits() -> None:
 
 
 def test_tool_loop_guardrail_allows_repeated_successful_same_path_mutations_without_warning() -> None:
-    from appv231.agent.tool_guardrails import ToolCallGuardrailController
+    from appv231.coding_agent.policies.tool_guardrails import ToolCallGuardrailController
 
     controller = ToolCallGuardrailController()
     first_args = {"path": "LOCAL_REVIEW.md", "content": "first draft"}
@@ -3332,46 +3350,8 @@ def test_tool_loop_guardrail_allows_repeated_successful_same_path_mutations_with
     assert after_read_edit.action == "allow"
 
 
-def test_package_manager_mutation_guardrail_blocks_without_explicit_user_consent() -> None:
-    from appv231.agent.tool_guardrails import package_manager_mutation_decision
-
-    decision = package_manager_mutation_decision(
-        "bash",
-        {"command": "cd /work/project && python3 -m pip install -e ."},
-        "Create a package and tests. Do not install dependencies.",
-    )
-
-    assert decision.action == "block"
-    assert decision.code == "package_manager_mutation_requires_consent"
-    assert "explicitly asked not to install dependencies" in decision.message
-
-
-def test_package_manager_mutation_guardrail_allows_explicit_user_install_request() -> None:
-    from appv231.agent.tool_guardrails import package_manager_mutation_decision
-
-    decision = package_manager_mutation_decision(
-        "bash",
-        {"command": "python -m pip install -e ."},
-        "Install the package in editable mode and run tests.",
-    )
-
-    assert decision.action == "allow"
-
-
-def test_package_manager_mutation_guardrail_ignores_read_only_test_commands() -> None:
-    from appv231.agent.tool_guardrails import package_manager_mutation_decision
-
-    decision = package_manager_mutation_decision(
-        "bash",
-        {"command": "PYTHONPATH=src python -m pytest tests/ -q"},
-        "Run the tests once.",
-    )
-
-    assert decision.action == "allow"
-
-
 def test_bash_mutation_classifier_detects_attached_redirects_and_absolute_mutators() -> None:
-    from appv231.agent.tool_guardrails import _bash_command_may_change_state
+    from appv231.coding_agent.policies.tool_guardrails import _bash_command_may_change_state
 
     assert _bash_command_may_change_state("echo hi > file") is True
     assert _bash_command_may_change_state("echo hi >file") is True
@@ -3381,7 +3361,7 @@ def test_bash_mutation_classifier_detects_attached_redirects_and_absolute_mutato
 
 
 def test_workspace_scope_violation_guardrail_counts_across_state_changes() -> None:
-    from appv231.agent.tool_guardrails import ToolCallGuardrailController
+    from appv231.coding_agent.policies.tool_guardrails import ToolCallGuardrailController
 
     controller = ToolCallGuardrailController()
     message = (
@@ -3420,7 +3400,7 @@ def test_workspace_scope_violation_guardrail_counts_across_state_changes() -> No
 
 
 def test_tool_loop_guardrail_resets_exact_failure_after_successful_state_change() -> None:
-    from appv231.agent.tool_guardrails import ToolCallGuardrailController
+    from appv231.coding_agent.policies.tool_guardrails import ToolCallGuardrailController
 
     controller = ToolCallGuardrailController()
     pytest_args = {"command": "cd /work/project && python -m pytest tests/ -v"}
@@ -3663,7 +3643,7 @@ def test_agent_session_halts_repeated_identical_successful_write_loop(tmp_path: 
         cwd=str(tmp_path),
         model=model,
         tool_definitions=[write_definition],
-        tool_loop_guardrails={"hard_stop_enabled": True},
+        tool_loop_guardrails={"blocking_enabled": True},
     )
 
     session.prompt("write protocol fixture")
@@ -3676,7 +3656,7 @@ def test_agent_session_halts_repeated_identical_successful_write_loop(tmp_path: 
 
 
 def test_tool_failure_classifier_does_not_treat_read_source_error_tokens_as_failure() -> None:
-    from appv231.agent.tool_guardrails import classify_tool_failure
+    from appv231.coding_agent.policies.tool_guardrails import classify_tool_failure
 
     source = 'import type { DraftAnalysis } from "../types";\nconst status = "error";\nconst failed = false;'
 
@@ -3687,7 +3667,7 @@ def test_tool_failure_classifier_does_not_treat_read_source_error_tokens_as_fail
 
 
 def test_tool_failure_classifier_keeps_explicit_tool_errors_as_failures() -> None:
-    from appv231.agent.tool_guardrails import classify_tool_failure
+    from appv231.coding_agent.policies.tool_guardrails import classify_tool_failure
 
     failed, suffix = classify_tool_failure("read", "Error: File not found: src/app/EditorPanel.tsx")
 
@@ -3760,7 +3740,7 @@ def test_agent_session_missing_read_named_as_output_gets_write_recovery_guidance
 
 
 def test_tool_loop_guardrail_does_not_escalate_read_source_error_tokens_as_exact_failures() -> None:
-    from appv231.agent.tool_guardrails import ToolCallGuardrailController
+    from appv231.coding_agent.policies.tool_guardrails import ToolCallGuardrailController
 
     controller = ToolCallGuardrailController()
     source = 'import type { DraftAnalysis } from "../types";\nconst status = "error";\nconst failed = false;'
@@ -3778,7 +3758,7 @@ def test_tool_loop_guardrail_does_not_escalate_read_source_error_tokens_as_exact
 
 
 def test_tool_loop_guardrail_treats_bash_file_preview_variants_as_no_progress() -> None:
-    from appv231.agent.tool_guardrails import ToolCallGuardrailController
+    from appv231.coding_agent.policies.tool_guardrails import ToolCallGuardrailController
 
     controller = ToolCallGuardrailController()
     commands = [
@@ -3800,7 +3780,7 @@ def test_tool_loop_guardrail_treats_bash_file_preview_variants_as_no_progress() 
 
 
 def test_tool_loop_guardrail_keeps_bash_file_preview_memory_across_shell_mutations() -> None:
-    from appv231.agent.tool_guardrails import ToolCallGuardrailController
+    from appv231.coding_agent.policies.tool_guardrails import ToolCallGuardrailController
 
     controller = ToolCallGuardrailController(cwd="/workspace")
 
@@ -3844,7 +3824,7 @@ def test_tool_loop_guardrail_keeps_bash_file_preview_memory_across_shell_mutatio
 
 
 def test_tool_loop_guardrail_treats_bash_inventory_variants_as_no_progress() -> None:
-    from appv231.agent.tool_guardrails import ToolCallGuardrailController
+    from appv231.coding_agent.policies.tool_guardrails import ToolCallGuardrailController
 
     controller = ToolCallGuardrailController()
     commands = [
@@ -3866,7 +3846,7 @@ def test_tool_loop_guardrail_treats_bash_inventory_variants_as_no_progress() -> 
 
 
 def test_tool_loop_guardrail_treats_broad_python_repo_scan_variants_as_no_progress() -> None:
-    from appv231.agent.tool_guardrails import ToolCallGuardrailController
+    from appv231.coding_agent.policies.tool_guardrails import ToolCallGuardrailController
 
     controller = ToolCallGuardrailController()
     commands = [
@@ -3890,7 +3870,7 @@ def test_tool_loop_guardrail_treats_broad_python_repo_scan_variants_as_no_progre
 
 
 def test_tool_loop_guardrail_allows_useful_followup_reads_but_warns_on_repeated_same_read() -> None:
-    from appv231.agent.tool_guardrails import ToolCallGuardrailController
+    from appv231.coding_agent.policies.tool_guardrails import ToolCallGuardrailController
 
     controller = ToolCallGuardrailController()
     first = controller.after_call(
@@ -3920,7 +3900,7 @@ def test_tool_loop_guardrail_allows_useful_followup_reads_but_warns_on_repeated_
 
 
 def test_tool_loop_guardrail_normalizes_bash_inventory_paths_against_cwd(tmp_path: Path) -> None:
-    from appv231.agent.tool_guardrails import ToolCallGuardrailController
+    from appv231.coding_agent.policies.tool_guardrails import ToolCallGuardrailController
 
     project = tmp_path / "bot"
     project.mkdir()
@@ -3944,7 +3924,7 @@ def test_tool_loop_guardrail_normalizes_bash_inventory_paths_against_cwd(tmp_pat
 
 
 def test_tool_loop_guardrail_ignores_unknown_bash_args_for_no_progress() -> None:
-    from appv231.agent.tool_guardrails import ToolCallGuardrailController
+    from appv231.coding_agent.policies.tool_guardrails import ToolCallGuardrailController
 
     controller = ToolCallGuardrailController()
     calls = [
@@ -4728,7 +4708,7 @@ def test_agent_session_blocks_model_invented_absolute_read_outside_cwd(tmp_path:
     assert any("outside the current working directory" in message.content[0].text for message in tool_results)
 
 
-def test_agent_session_blocks_model_invented_absolute_bash_path_outside_cwd(tmp_path: Path) -> None:
+def test_trusted_backend_does_not_claim_bash_path_containment(tmp_path: Path) -> None:
     project = tmp_path / "project"
     outside = tmp_path / "outside"
     project.mkdir()
@@ -4765,13 +4745,11 @@ def test_agent_session_blocks_model_invented_absolute_bash_path_outside_cwd(tmp_
 
     session.prompt("Inspect this empty project and create a focused TODO.")
 
-    assert bash_executions == []
+    assert bash_executions == [command]
     assert provider_calls["n"] == 2
-    tool_results = [message for message in session.messages if isinstance(message, ToolResultMessage)]
-    assert any("outside the current working directory" in message.content[0].text for message in tool_results)
 
 
-def test_agent_session_allows_user_authorized_absolute_path_outside_cwd(tmp_path: Path) -> None:
+def test_prompt_text_does_not_authorize_absolute_path_outside_cwd(tmp_path: Path) -> None:
     project = tmp_path / "project"
     outside = tmp_path / "outside" / "allowed.txt"
     project.mkdir()
@@ -4808,8 +4786,10 @@ def test_agent_session_allows_user_authorized_absolute_path_outside_cwd(tmp_path
 
     session.prompt(f"Read this exact file: {outside}")
 
-    assert read_executions == [{"path": str(outside)}]
+    assert read_executions == []
     assert provider_calls["n"] == 2
+    tool_results = [message for message in session.messages if isinstance(message, ToolResultMessage)]
+    assert any("outside the current working directory" in message.content[0].text for message in tool_results)
 
 
 def test_agent_session_run_once_limit_does_not_halt_failed_non_command_tool(tmp_path: Path) -> None:
@@ -5440,7 +5420,7 @@ def test_agent_session_blocks_repeated_extension_blocked_bash_loop(tmp_path: Pat
     assert "I stopped retrying bash" in session.messages[-1].content[0].text
 
 
-def test_agent_session_blocks_workspace_scope_bash_loop_across_successful_writes(tmp_path: Path) -> None:
+def test_agent_session_does_not_claim_bash_token_scanning_is_containment(tmp_path: Path) -> None:
     model = faux_model()
     provider_calls = {"n": 0}
     bash_executions: list[dict] = []
@@ -5504,15 +5484,12 @@ def test_agent_session_blocks_workspace_scope_bash_loop_across_successful_writes
     session.prompt("add a cli and run tests")
 
     tool_results = [m for m in session.messages if getattr(m, "role", None) == "toolResult"]
-    assert provider_calls["n"] == 5
-    assert bash_executions == []
+    assert provider_calls["n"] == 7
+    assert len(bash_executions) == 4
     assert [args["path"] for args in write_executions] == ["ledgerlite_cli.py", "tests/test_ledgerlite_cli.py"]
-    assert tool_results[-1].is_error is True
-    assert "workspace_scope_repeated_block" in tool_results[-1].content[0].text
-    assert "same out-of-workspace path 3 times" in tool_results[-1].content[0].text
+    assert tool_results[-1].is_error is False
     assert session.messages[-1].role == "assistant"
-    assert "I stopped retrying bash" in session.messages[-1].content[0].text
-    assert "workspace_scope_repeated_block" in session.messages[-1].content[0].text
+    assert session.messages[-1].content[0].text == "loop escaped"
 
 
 def test_agent_session_blocks_repeated_invalid_read_schema_loop_by_default(tmp_path: Path) -> None:
@@ -5767,7 +5744,7 @@ def test_agent_session_accepts_hermes_tool_loop_guardrail_config(tmp_path: Path)
 
 
 def test_tool_loop_guardrail_resets_consecutive_idempotent_count_on_different_tool() -> None:
-    from appv231.agent.tool_guardrails import ToolCallGuardrailConfig, ToolCallGuardrailController
+    from appv231.coding_agent.policies.tool_guardrails import ToolCallGuardrailConfig, ToolCallGuardrailController
 
     controller = ToolCallGuardrailController(
         ToolCallGuardrailConfig(consecutive_no_progress_block_after=4)
@@ -7171,11 +7148,11 @@ def test_agent_session_extension_unregister_provider_removes_extension_models(tm
     session = AgentSession(cwd=str(tmp_path), model=faux_model(), extension_runner=runner)
 
     session.prompt("/add-proxy")
-    assert get_model("proxy", "proxy-model") is not None
+    assert session.model_registry.find("proxy", "proxy-model") is not None
 
     session.prompt("/remove-proxy")
 
-    assert get_model("proxy", "proxy-model") is None
+    assert session.model_registry.find("proxy", "proxy-model") is None
 
 
 def test_agent_session_extension_unregister_provider_restores_existing_models(tmp_path: Path) -> None:
@@ -7216,12 +7193,12 @@ def test_agent_session_extension_unregister_provider_restores_existing_models(tm
     session = AgentSession(cwd=str(tmp_path), model=faux_model(), extension_runner=runner)
 
     session.prompt("/replace-proxy")
-    assert [model.id for model in get_models("proxy")] == ["override-model"]
+    assert [model.id for model in session.model_registry.get_all() if model.provider == "proxy"] == ["override-model"]
 
     session.prompt("/remove-proxy")
 
-    assert get_model("proxy", "override-model") is None
-    assert get_models("proxy") == [original]
+    assert session.model_registry.find("proxy", "override-model") is None
+    assert [model for model in session.model_registry.get_all() if model.provider == "proxy"] == [original]
 
 
 def test_agent_session_extension_register_provider_validates_model_auth_config(tmp_path: Path) -> None:
@@ -7265,12 +7242,10 @@ def test_agent_session_extension_register_provider_validates_model_auth_config(t
         assert str(error) == 'Provider proxy: "api" is required when registering streamSimple.'
 
     runner.registerProvider("proxy", {"baseUrl": "https://proxy.example.test", "api": "faux", "oauth": {}, "models": [model_config]})
-    assert get_model("proxy", "proxy-model") is not None
+    assert session.model_registry.find("proxy", "proxy-model") is not None
 
 
 def test_agent_session_extension_provider_auth_status_tracks_api_key_and_oauth(tmp_path: Path, monkeypatch) -> None:
-    import appv231.ai.models as model_registry
-
     runner = ExtensionRunner()
     session = AgentSession(cwd=str(tmp_path), model=faux_model(), extension_runner=runner)
     model_config = {
@@ -7293,7 +7268,8 @@ def test_agent_session_extension_provider_auth_status_tracks_api_key_and_oauth(t
             "models": [model_config],
         },
     )
-    proxy_model = get_model("proxy", "proxy-model")
+    model_registry = session.model_registry
+    proxy_model = model_registry.find("proxy", "proxy-model")
 
     assert proxy_model is not None
     assert model_registry.has_configured_auth(proxy_model) is True
@@ -7322,7 +7298,7 @@ def test_agent_session_extension_provider_auth_status_tracks_api_key_and_oauth(t
         "sso",
         {"type": "oauth", "access": "sso-token", "refresh": "refresh-token", "expires": 4_102_444_800_000},
     )
-    sso_model = get_model("sso", "sso-model")
+    sso_model = model_registry.find("sso", "sso-model")
 
     assert sso_model is not None
     assert model_registry.has_configured_auth(sso_model) is True
@@ -7336,8 +7312,6 @@ def test_agent_session_extension_provider_auth_status_tracks_api_key_and_oauth(t
 
 
 def test_agent_session_extension_provider_oauth_login_logout_and_refresh(tmp_path: Path) -> None:
-    import appv231.ai.models as model_registry
-
     runner = ExtensionRunner()
     session = AgentSession(cwd=str(tmp_path), model=faux_model(), extension_runner=runner)
     model_config = {
@@ -7373,6 +7347,7 @@ def test_agent_session_extension_provider_oauth_login_logout_and_refresh(tmp_pat
             "models": [model_config],
         },
     )
+    model_registry = session.model_registry
 
     callbacks = {"onAuth": lambda info: None, "onDeviceCode": lambda info: None}
     model_registry.login_oauth_provider("sso", callbacks)
@@ -7442,8 +7417,9 @@ def test_agent_session_emits_session_info_and_thinking_events(tmp_path: Path) ->
 
 
 def test_agent_session_cycles_scoped_models_with_thinking_levels(tmp_path: Path) -> None:
-    first = Model(id="first", name="First", api="faux", provider="faux", base_url="", reasoning=True)
-    second = Model(id="second", name="Second", api="faux", provider="faux", base_url="", reasoning=True)
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "unused")))
+    first = Model(id="first", name="First", api="faux", provider="faux", base_url="http://localhost", reasoning=True)
+    second = Model(id="second", name="Second", api="faux", provider="faux", base_url="http://localhost", reasoning=True)
     session = AgentSession(
         cwd=str(tmp_path),
         model=first,
@@ -7465,8 +7441,9 @@ def test_agent_session_cycles_scoped_models_with_thinking_levels(tmp_path: Path)
 
 
 def test_agent_session_cycles_registered_models_without_scoped_models(tmp_path: Path) -> None:
-    first = Model(id="first", name="First", api="faux", provider="faux", base_url="", reasoning=True)
-    second = Model(id="second", name="Second", api="faux", provider="faux", base_url="", reasoning=True)
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "unused")))
+    first = Model(id="first", name="First", api="faux", provider="faux", base_url="http://localhost", reasoning=True)
+    second = Model(id="second", name="Second", api="faux", provider="faux", base_url="http://localhost", reasoning=True)
     register_model(first)
     register_model(second)
     session = AgentSession(cwd=str(tmp_path), model=first, thinking_level="high")
@@ -7482,8 +7459,9 @@ def test_agent_session_cycles_registered_models_without_scoped_models(tmp_path: 
 
 
 def test_agent_session_cycle_includes_active_model_when_registry_does_not(tmp_path: Path) -> None:
-    active = Model(id="env-model", name="Env", api="faux", provider="openrouter", base_url="", reasoning=True)
-    alternate = Model(id="registered-model", name="Registered", api="faux", provider="openrouter", base_url="", reasoning=True)
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "unused")))
+    active = Model(id="env-model", name="Env", api="faux", provider="openrouter", base_url="http://localhost", reasoning=True)
+    alternate = Model(id="registered-model", name="Registered", api="faux", provider="openrouter", base_url="http://localhost", reasoning=True)
     register_model(alternate)
     session = AgentSession(cwd=str(tmp_path), model=active, thinking_level="high")
 
@@ -7497,8 +7475,9 @@ def test_agent_session_cycle_includes_active_model_when_registry_does_not(tmp_pa
 
 
 def test_agent_session_extension_model_registry_includes_active_model_without_registered_model(tmp_path: Path) -> None:
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "unused")))
     runner = ExtensionRunner()
-    active = Model(id="env-model", name="Env", api="faux", provider="openrouter", base_url="", reasoning=True)
+    active = Model(id="env-model", name="Env", api="faux", provider="openrouter", base_url="http://localhost", reasoning=True)
     session = AgentSession(cwd=str(tmp_path), model=active, extension_runner=runner)
 
     registry = runner.create_context().modelRegistry
@@ -7507,7 +7486,7 @@ def test_agent_session_extension_model_registry_includes_active_model_without_re
     assert registry.find("openrouter", "env-model") is active
     assert registry.getAll() == [active]
     assert registry.getAvailable() == [active]
-    assert registry.hasConfiguredAuth(active) is True
+    assert registry.hasConfiguredAuth(active) is False
     assert session.extension_runner is runner
 
 

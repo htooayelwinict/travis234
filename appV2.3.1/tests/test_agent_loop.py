@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from concurrent.futures import Future
 import threading
+import time
 
 import pytest
 
@@ -10,11 +12,14 @@ from appv231.agent import (
     Agent,
     AgentContext,
     AgentLoopTurnUpdate,
+    IterationLimitContext,
     AgentTool,
     AgentToolResult,
     AfterToolCallResult,
     BeforeToolCallResult,
+    RunLease,
     ShouldStopAfterTurnContext,
+    agent_loop,
     agent_loop_continue,
     run_agent_loop,
 )
@@ -345,7 +350,7 @@ def test_truncated_assistant_tool_calls_fail_without_execution_like_pi() -> None
 
 
 def test_repeated_same_path_write_batch_does_not_block_second_landed_mutation() -> None:
-    from appv231.agent.tool_guardrails import ToolCallGuardrailController, toolguard_synthetic_result
+    from appv231.coding_agent.policies.tool_guardrails import ToolCallGuardrailController, toolguard_synthetic_result
 
     model = faux_model()
     provider_calls = {"n": 0}
@@ -593,6 +598,13 @@ def test_max_iterations_requests_toolless_summary_after_unique_tool_loop() -> No
     )
     cfg = _config(model)
     cfg.max_iterations = 3
+    limit_contexts: list[IterationLimitContext] = []
+
+    def on_iteration_limit(context: IterationLimitContext) -> UserMessage:
+        limit_contexts.append(context)
+        return UserMessage(content="profile final-response request", timestamp=now_ms())
+
+    cfg.on_iteration_limit = on_iteration_limit
 
     messages = run_agent_loop(
         [UserMessage(content="loop with unique args", timestamp=now_ms())],
@@ -604,10 +616,43 @@ def test_max_iterations_requests_toolless_summary_after_unique_tool_loop() -> No
     assert provider_calls["n"] == 4
     assert tool_iterations["n"] == 3
     assert tool_visibility == [True, True, True, False]
+    assert len(limit_contexts) == 1
+    assert limit_contexts[0].api_call_count == 3
+    assert limit_contexts[0].max_iterations == 3
     assert getattr(messages[-2], "role", None) == "user"
-    assert "maximum number of tool-calling iterations" in messages[-2].content
+    assert messages[-2].content == "profile final-response request"
     assert messages[-1].role == "assistant"
     assert messages[-1].content[0].text == "summary without tools"
+
+
+def test_max_iterations_without_handler_stops_without_extra_provider_call() -> None:
+    model = faux_model()
+    provider_calls = {"n": 0}
+
+    def script(m, c):
+        provider_calls["n"] += 1
+        return tool_call_response_events(m, "echo", {"text": "again"}, call_id=f"call_{provider_calls['n']}")
+
+    register_api_provider(create_faux_provider(script))
+    echo = AgentTool(
+        name="echo",
+        description="echo",
+        parameters={"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+        label="Echo",
+        execute=lambda *_args, **_kwargs: AgentToolResult(content=[TextContent(text="ok")]),
+    )
+    cfg = _config(model)
+    cfg.max_iterations = 1
+
+    messages = run_agent_loop(
+        [UserMessage(content="loop", timestamp=now_ms())],
+        _ctx(tools=[echo]),
+        cfg,
+        lambda _event: None,
+    )
+
+    assert provider_calls["n"] == 1
+    assert messages[-1].role == "toolResult"
 
 
 def test_tool_execution_update_emit_settles_before_tool_execution_end() -> None:
@@ -917,6 +962,71 @@ def test_parallel_tool_execution_end_events_emit_from_loop_thread() -> None:
     assert [message.tool_call_id for message in tool_results] == ["call_1", "call_2"]
 
 
+def test_parallel_tools_are_bounded_and_callbacks_stay_on_coordinator_thread() -> None:
+    model = faux_model()
+    provider_calls = {"n": 0}
+    active = 0
+    maximum = 0
+    lock = threading.Lock()
+    callback_threads: list[str] = []
+
+    def script(m, c):
+        provider_calls["n"] += 1
+        if provider_calls["n"] == 1:
+            return _multi_tool_call_response_events(
+                m,
+                [(f"call_{index}", "probe", {"index": index}) for index in range(12)],
+            )
+        return text_response_events(m, "done")
+
+    register_api_provider(create_faux_provider(script))
+
+    def execute(tool_call_id, args, signal=None, on_update=None):
+        nonlocal active, maximum
+        with lock:
+            active += 1
+            maximum = max(maximum, active)
+        on_update(AgentToolResult(content=[TextContent(text="partial")]))
+        time.sleep(0.02)
+        with lock:
+            active -= 1
+        return AgentToolResult(content=[TextContent(text=str(args["index"]))])
+
+    def after(context, signal):
+        callback_threads.append(threading.current_thread().name)
+        return None
+
+    tool = AgentTool(
+        name="probe",
+        description="probe",
+        parameters={
+            "type": "object",
+            "properties": {"index": {"type": "integer"}},
+            "required": ["index"],
+        },
+        label="Probe",
+        execute=execute,
+    )
+    cfg = _config(model)
+    cfg.tool_execution = "parallel"
+    cfg.max_parallel_tools = 3
+    cfg.after_tool_call = after
+
+    messages = run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(tools=[tool]),
+        cfg,
+        lambda event: callback_threads.append(threading.current_thread().name)
+        if event.type in ("tool_execution_update", "tool_execution_end")
+        else None,
+    )
+
+    assert maximum == 3
+    assert set(callback_threads) == {"MainThread"}
+    tool_results = [message for message in messages if getattr(message, "role", None) == "toolResult"]
+    assert [message.tool_call_id for message in tool_results] == [f"call_{index}" for index in range(12)]
+
+
 def test_should_stop_after_turn_halts_loop() -> None:
     model = faux_model()
     register_api_provider(create_faux_provider(lambda m, c: text_response_events(m, "x")))
@@ -980,6 +1090,85 @@ def test_unknown_tool_returns_error_result() -> None:
     )
     assert ends[0].is_error is True
     assert "not found" in ends[0].result.content[0].text
+
+
+@pytest.mark.parametrize("case", ["before_block", "unknown_tool", "invalid_arguments"])
+def test_immediate_tool_outcomes_bypass_after_hook(case: str) -> None:
+    model = faux_model()
+    provider_calls = {"n": 0}
+    after_calls: list[str] = []
+
+    def script(m, c):
+        provider_calls["n"] += 1
+        if provider_calls["n"] == 1:
+            name = "missing" if case == "unknown_tool" else "probe"
+            arguments = {} if case == "invalid_arguments" else {"value": "ok"}
+            return tool_call_response_events(m, name, arguments, call_id=f"call_{case}")
+        return text_response_events(m, "done")
+
+    register_api_provider(create_faux_provider(script))
+    tool = AgentTool(
+        name="probe",
+        description="probe",
+        parameters={
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+        },
+        label="Probe",
+        execute=lambda *_args: AgentToolResult(content=[TextContent(text="ok")]),
+    )
+    cfg = _config(model)
+    if case == "before_block":
+        cfg.before_tool_call = lambda *_args: BeforeToolCallResult(block=True, reason="blocked")
+    cfg.after_tool_call = lambda context, signal: after_calls.append(context.tool_call.id)
+
+    messages = run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(tools=[tool]),
+        cfg,
+        lambda _event: None,
+    )
+
+    assert after_calls == []
+    result = next(message for message in messages if getattr(message, "role", None) == "toolResult")
+    assert result.is_error is True
+
+
+def test_invoked_tool_failure_runs_after_hook_once() -> None:
+    model = faux_model()
+    provider_calls = {"n": 0}
+    after_calls: list[str] = []
+
+    def script(m, c):
+        provider_calls["n"] += 1
+        if provider_calls["n"] == 1:
+            return tool_call_response_events(m, "probe", {}, call_id="call_failure")
+        return text_response_events(m, "done")
+
+    register_api_provider(create_faux_provider(script))
+
+    def execute(*_args):
+        raise RuntimeError("tool failed")
+
+    tool = AgentTool(
+        name="probe",
+        description="probe",
+        parameters={"type": "object"},
+        label="Probe",
+        execute=execute,
+    )
+    cfg = _config(model)
+    cfg.after_tool_call = lambda context, signal: after_calls.append(context.tool_call.id)
+
+    run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(tools=[tool]),
+        cfg,
+        lambda _event: None,
+    )
+
+    assert after_calls == ["call_failure"]
 
 
 def test_unknown_tool_error_reports_active_tool_catalog_for_recovery() -> None:
@@ -1081,6 +1270,68 @@ def test_agent_reset_clears_streaming_state_like_pi() -> None:
     agent.reset()
 
     assert agent.state.is_streaming is False
+
+
+def test_agent_reset_does_not_release_an_active_run() -> None:
+    model = faux_model()
+    agent = Agent(system_prompt="sys", model=model, convert_to_llm=_convert)
+    first_stream_started = threading.Event()
+    release_first_stream = threading.Event()
+    calls = {"n": 0}
+
+    def stream_fn(model, context, options):
+        calls["n"] += 1
+        stream = create_assistant_message_event_stream()
+        events = text_response_events(model, "first done")
+        stream.push(type(events[0])(partial=events[0].partial))
+        first_stream_started.set()
+
+        def finish() -> None:
+            release_first_stream.wait(timeout=2)
+            for event in events[1:]:
+                stream.push(event)
+
+        threading.Thread(target=finish, daemon=True).start()
+        return stream
+
+    first_thread = threading.Thread(target=lambda: agent.prompt("first", stream_fn=stream_fn))
+    first_thread.start()
+    assert first_stream_started.wait(timeout=2)
+
+    try:
+        with pytest.raises(RuntimeError, match="active run"):
+            agent.reset()
+        assert agent.state.is_streaming is True
+        with pytest.raises(RuntimeError, match="already processing"):
+            agent.prompt("second", stream_fn=stream_fn)
+    finally:
+        release_first_stream.set()
+        first_thread.join(timeout=2)
+
+    assert not first_thread.is_alive()
+    assert calls["n"] == 1
+    assert agent.state.is_streaming is False
+
+
+def test_run_lease_tracks_owner_waits_and_releases_idempotently() -> None:
+    lease = RunLease()
+    token = lease.acquire("busy")
+    other_thread_owns: list[bool] = []
+
+    thread = threading.Thread(target=lambda: other_thread_owns.append(lease.owned_by_current_thread))
+    thread.start()
+    thread.join(timeout=1)
+
+    assert lease.active is True
+    assert lease.owned_by_current_thread is True
+    assert other_thread_owns == [False]
+    assert lease.wait(timeout=0.01) is False
+
+    token.release()
+    token.release()
+
+    assert lease.active is False
+    assert lease.wait(timeout=0.01) is True
 
 
 def test_agent_rejects_prompt_while_streaming() -> None:
@@ -1342,6 +1593,80 @@ def test_wait_for_idle_waits_for_agent_end_listeners() -> None:
     assert agent.state.is_streaming is False
 
 
+def test_agent_async_prompt_awaits_async_listener() -> None:
+    model = faux_model()
+    register_api_provider(create_faux_provider(lambda m, c: text_response_events(m, "reply")))
+    agent = Agent(system_prompt="sys", model=model, convert_to_llm=_convert)
+    seen: list[str] = []
+
+    async def listener(event, signal) -> None:
+        await asyncio.sleep(0)
+        seen.append(event.type)
+
+    agent.subscribe(listener)
+    asyncio.run(agent.async_prompt("hello"))
+
+    assert seen[-1] == "agent_end"
+    assert agent.wait_for_idle(timeout=0.1) is True
+
+
+def test_agent_async_prompt_awaits_async_hook_and_tool() -> None:
+    model = faux_model()
+    provider_calls = {"n": 0}
+    observed: list[str] = []
+
+    def script(m, c):
+        provider_calls["n"] += 1
+        if provider_calls["n"] == 1:
+            return tool_call_response_events(m, "probe", {}, call_id="call_async")
+        return text_response_events(m, "done")
+
+    register_api_provider(create_faux_provider(script))
+
+    async def before(context, signal):
+        await asyncio.sleep(0)
+        observed.append("before")
+        return None
+
+    async def execute(tool_call_id, args, signal=None, on_update=None):
+        await asyncio.sleep(0)
+        observed.append("tool")
+        return AgentToolResult(content=[TextContent(text="ok")])
+
+    agent = Agent(
+        system_prompt="sys",
+        model=model,
+        convert_to_llm=_convert,
+        tools=[
+            AgentTool(
+                name="probe",
+                label="Probe",
+                description="probe",
+                parameters={"type": "object"},
+                execute=execute,
+            )
+        ],
+        before_tool_call=before,
+    )
+
+    asyncio.run(agent.async_prompt("run"))
+
+    assert observed == ["before", "tool"]
+    assert agent.state.messages[-1].content[0].text == "done"
+
+
+def test_agent_sync_prompt_rejects_running_event_loop() -> None:
+    model = faux_model()
+    register_api_provider(create_faux_provider(lambda m, c: text_response_events(m, "reply")))
+    agent = Agent(system_prompt="sys", model=model, convert_to_llm=_convert)
+
+    async def exercise() -> None:
+        with pytest.raises(RuntimeError, match="Use the async appv231 API"):
+            agent.prompt("hello")
+
+    asyncio.run(exercise())
+
+
 def test_listener_receives_active_abort_signal() -> None:
     model = faux_model()
     agent = Agent(system_prompt="sys", model=model, convert_to_llm=_convert)
@@ -1391,6 +1716,19 @@ def test_listener_receives_active_abort_signal() -> None:
     thread.join(timeout=2)
 
     assert run_error == []
+
+
+def test_abort_signal_callbacks_fire_once_and_can_unsubscribe() -> None:
+    signal = AbortSignal()
+    calls: list[str] = []
+    signal.add_callback(lambda: calls.append("kept"))
+    unsubscribe = signal.add_callback(lambda: calls.append("removed"))
+    unsubscribe()
+
+    signal.abort()
+    signal.abort()
+
+    assert calls == ["kept"]
 
 
 def test_agent_prepare_next_turn_receives_active_abort_signal() -> None:
@@ -1449,7 +1787,25 @@ def test_agent_prepare_next_turn_with_context_receives_context_and_signal() -> N
     assert seen_signals == [agent.signal]
 
 
-def test_agent_loop_continue_runtime_exception_emits_agent_end_event() -> None:
+def test_agent_loop_runtime_exception_fails_stream() -> None:
+    model = faux_model()
+
+    def stream_fn(model, context, options):
+        raise RuntimeError("provider exploded")
+
+    stream = agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(),
+        _config(model),
+        stream_fn=stream_fn,
+    )
+
+    with pytest.raises(RuntimeError, match="provider exploded"):
+        stream.result_sync()
+    assert not any(event.type == "agent_end" for event in list(stream))
+
+
+def test_agent_loop_continue_runtime_exception_fails_stream() -> None:
     model = faux_model()
     context = AgentContext(
         system_prompt="sys",
@@ -1461,27 +1817,11 @@ def test_agent_loop_continue_runtime_exception_emits_agent_end_event() -> None:
         raise RuntimeError("provider exploded during continue")
 
     stream = agent_loop_continue(context, _config(model), stream_fn=stream_fn)
-    events: list[object] = []
-    agent_end_seen = threading.Event()
+    events = list(stream)
 
-    def consume() -> None:
-        for event in stream.iter_until(lambda: agent_end_seen.is_set()):
-            events.append(event)
-            if event.type == "agent_end":
-                agent_end_seen.set()
-
-    thread = threading.Thread(target=consume)
-    thread.start()
-    if not agent_end_seen.wait(timeout=2):
-        stream.close()
-    thread.join(timeout=2)
-
-    assert agent_end_seen.is_set()
-    thread.join(timeout=2)
-
-    assert thread.is_alive() is False
-    assert events[-1].type == "agent_end"
-    assert stream.result_sync() == events[-1].messages
+    assert [event.type for event in events] == ["agent_start", "turn_start"]
+    with pytest.raises(RuntimeError, match="provider exploded during continue"):
+        stream.result_sync()
 
 
 def test_prompt_failure_emits_assistant_error_lifecycle() -> None:

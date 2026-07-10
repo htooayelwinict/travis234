@@ -5,9 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from pathlib import Path
 
 from appv231.agent.types import AgentTool, AgentToolResult
 from appv231.ai.types import TextContent
+from appv231.coding_agent.capabilities import WorkspaceCapability
+from appv231.coding_agent.tools.atomic_file import atomic_replace_text
 from appv231.coding_agent.tools.edit_diff import (
     apply_edits_to_normalized_content,
     detect_line_ending,
@@ -118,9 +121,17 @@ def _file_content_metadata(content: str) -> dict[str, object]:
     }
 
 
-def _execute_edit(cwd: str, tool_call_id, args, signal=None, on_update=None, ctx: ToolContext | None = None):
+def _execute_edit(
+    cwd: str,
+    workspace: WorkspaceCapability,
+    tool_call_id,
+    args,
+    signal=None,
+    on_update=None,
+    ctx: ToolContext | None = None,
+):
     path, edits = _validate_edit_input(args)
-    absolute_path = resolve_to_cwd(path, cwd)
+    absolute_path = str(workspace.resolve(path, access="write"))
     result_details: dict = {}
 
     def mutate() -> None:
@@ -140,8 +151,7 @@ def _execute_edit(cwd: str, tool_call_id, args, signal=None, on_update=None, ctx
         final_content = bom + restore_line_endings(applied.new_content, original_ending)
         diff_result = generate_diff_string(applied.base_content, applied.new_content)
         patch = generate_unified_patch(path, applied.base_content, applied.new_content)
-        with open(absolute_path, "w", encoding="utf-8") as handle:
-            handle.write(final_content)
+        atomic_replace_text(Path(absolute_path), final_content)
         if signal and signal.aborted:
             raise RuntimeError("Operation aborted")
         result_details = {
@@ -160,7 +170,11 @@ def _execute_edit(cwd: str, tool_call_id, args, signal=None, on_update=None, ctx
     )
 
 
-def create_edit_tool_definition(cwd: str) -> ToolDefinition:
+def create_edit_tool_definition(
+    cwd: str,
+    workspace: WorkspaceCapability | None = None,
+) -> ToolDefinition:
+    workspace = workspace or WorkspaceCapability(Path(cwd))
     return ToolDefinition(
         name="edit",
         label="edit",
@@ -178,12 +192,17 @@ def create_edit_tool_definition(cwd: str) -> ToolDefinition:
             "Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.",
             "Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.",
         ],
-        execute=lambda tid, args, signal=None, on_update=None, ctx=None: _execute_edit(cwd, tid, args, signal, on_update, ctx),
+        execute=lambda tid, args, signal=None, on_update=None, ctx=None: _execute_edit(
+            cwd, workspace, tid, args, signal, on_update, ctx
+        ),
         prepare_arguments=prepare_edit_arguments,
         render_call=_render_edit_call,
         render_result=_render_edit_result,
     )
 
 
-def create_edit_tool(cwd: str) -> AgentTool:
-    return wrap_tool_definition(create_edit_tool_definition(cwd), lambda: ToolContext(cwd=cwd))
+def create_edit_tool(cwd: str, workspace: WorkspaceCapability | None = None) -> AgentTool:
+    return wrap_tool_definition(
+        create_edit_tool_definition(cwd, workspace),
+        lambda: ToolContext(cwd=cwd),
+    )

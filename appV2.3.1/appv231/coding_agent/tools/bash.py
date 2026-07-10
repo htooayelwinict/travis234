@@ -16,8 +16,10 @@ from typing import Callable
 
 from appv231.agent.types import AgentTool, AgentToolResult
 from appv231.ai.types import TextContent
+from appv231.coding_agent.artifacts import ArtifactRegistry
 from appv231.coding_agent.config import get_bin_dir
-from appv231.coding_agent.tools.output_accumulator import OutputAccumulator, OutputSnapshot
+from appv231.coding_agent.execution_backend import ExecutionBackend, TrustedLocalBackend
+from appv231.coding_agent.tools.output_spool import OutputSnapshot, OutputSpool
 from appv231.coding_agent.tools.truncate import (
     DEFAULT_MAX_BYTES,
     DEFAULT_MAX_LINES,
@@ -106,7 +108,12 @@ def _reader_thread(pipe, on_data: Callable[[bytes], None]) -> threading.Thread:
     return thread
 
 
-def create_local_bash_operations(shell_path: str | None = None) -> BashOperations:
+def create_local_bash_operations(
+    shell_path: str | None = None,
+    backend: ExecutionBackend | None = None,
+) -> BashOperations:
+    backend = backend or TrustedLocalBackend()
+
     def exec_command(command: str, cwd: str, options: BashExecOptions | dict) -> dict[str, int | None]:
         options = _coerce_exec_options(options)
         if not os.path.exists(cwd):
@@ -117,44 +124,42 @@ def create_local_bash_operations(shell_path: str | None = None) -> BashOperation
             raise RuntimeError("aborted")
 
         shell = shell_path or os.environ.get("SHELL") or "/bin/bash"
-        process = subprocess.Popen(
-            [shell, "-c", command],
-            cwd=cwd,
-            env=get_shell_env(options.env),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            start_new_session=os.name == "posix",
+        process = backend.spawn(
+            command,
+            cwd,
+            get_shell_env(options.env),
+            {"shell_path": shell},
         )
         stdout_thread = _reader_thread(process.stdout, options.on_data) if process.stdout else None
         stderr_thread = _reader_thread(process.stderr, options.on_data) if process.stderr else None
         started_at = time.monotonic()
-        timed_out = False
         try:
             while process.poll() is None:
                 if _is_aborted(options.signal):
                     _kill_process_tree(process)
                     raise RuntimeError("aborted")
                 if options.timeout is not None and options.timeout > 0 and time.monotonic() - started_at >= options.timeout:
-                    timed_out = True
                     _kill_process_tree(process)
                     raise RuntimeError(f"timeout:{options.timeout:g}")
                 time.sleep(0.01)
             return {"exit_code": process.returncode}
         finally:
+            if process.poll() is None:
+                _kill_process_tree(process)
+            try:
+                process.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=0.5)
+            for thread in (stdout_thread, stderr_thread):
+                if thread:
+                    thread.join(timeout=0.5)
             for pipe in (process.stdout, process.stderr):
                 if pipe:
                     try:
                         pipe.close()
                     except OSError:
                         pass
-            for thread in (stdout_thread, stderr_thread):
-                if thread:
-                    thread.join(timeout=0.5)
-            if process.poll() is None:
-                _kill_process_tree(process)
-            if timed_out:
-                process.wait(timeout=0.5)
 
     return BashOperations(exec=exec_command)
 
@@ -240,12 +245,16 @@ def _resolve_spawn_context(command: str, cwd: str, spawn_hook: BashSpawnHook | N
     return spawn_hook(context) if spawn_hook else context
 
 
-def _format_output(output: OutputAccumulator, snapshot: OutputSnapshot, empty_text: str = "(no output)") -> tuple[str, dict | None]:
+def _format_output(output: OutputSpool, snapshot: OutputSnapshot, empty_text: str = "(no output)") -> tuple[str, dict | None]:
     truncation = snapshot.truncation
     text = snapshot.content if snapshot.content else empty_text
     details = None
     if truncation.truncated:
-        details = {"truncation": truncation_to_details(truncation), "fullOutputPath": snapshot.full_output_path}
+        details = {
+            "truncation": truncation_to_details(truncation),
+            "fullOutputPath": snapshot.full_output_path,
+            "artifactId": snapshot.artifact_id,
+        }
         start_line = truncation.total_lines - truncation.output_lines + 1
         end_line = truncation.total_lines
         if truncation.last_line_partial:
@@ -273,6 +282,7 @@ def _execute_bash(
     operations: BashOperations,
     command_prefix: str | None,
     spawn_hook: BashSpawnHook | None,
+    artifacts: ArtifactRegistry | None,
     tool_call_id,
     args,
     signal=None,
@@ -283,7 +293,11 @@ def _execute_bash(
     timeout = args.get("timeout")
     resolved_command = f"{command_prefix}\n{command}" if command_prefix else command
     spawn_context = _resolve_spawn_context(resolved_command, cwd, spawn_hook)
-    output = OutputAccumulator(temp_file_prefix="pi-bash")
+    output = OutputSpool(
+        temp_file_prefix="pi-bash",
+        artifact_registry=artifacts,
+        artifact_kind="bash-output",
+    )
     update_dirty = False
     last_update_at = 0.0
 
@@ -300,6 +314,7 @@ def _execute_bash(
                 details={
                     "truncation": truncation_to_details(snapshot.truncation) if snapshot.truncation.truncated else None,
                     "fullOutputPath": snapshot.full_output_path,
+                    "artifactId": snapshot.artifact_id,
                 },
             )
         )
@@ -323,7 +338,7 @@ def _execute_bash(
         output.finish()
         emit_output_update()
         snapshot = output.snapshot(persist_if_truncated=True)
-        output.close_temp_file()
+        output.close()
         return snapshot
 
     try:
@@ -365,8 +380,10 @@ def create_bash_tool_definition(
     command_prefix: str | None = None,
     shell_path: str | None = None,
     spawn_hook: BashSpawnHook | None = None,
+    artifacts: ArtifactRegistry | None = None,
+    backend: ExecutionBackend | None = None,
 ) -> ToolDefinition:
-    ops = operations or create_local_bash_operations(shell_path=shell_path)
+    ops = operations or create_local_bash_operations(shell_path=shell_path, backend=backend)
     return ToolDefinition(
         name="bash",
         label="bash",
@@ -379,7 +396,7 @@ def create_bash_tool_definition(
         prompt_snippet="Execute bash commands (ls, grep, find, etc.)",
         prompt_guidelines=[],
         execute=lambda tid, args, signal=None, on_update=None, ctx=None: _execute_bash(
-            cwd, ops, command_prefix, spawn_hook, tid, args, signal, on_update, ctx
+            cwd, ops, command_prefix, spawn_hook, artifacts, tid, args, signal, on_update, ctx
         ),
         render_call=lambda args, ctx=None: f"bash {args.get('command', '')}",
     )
@@ -391,6 +408,8 @@ def create_bash_tool(
     command_prefix: str | None = None,
     shell_path: str | None = None,
     spawn_hook: BashSpawnHook | None = None,
+    artifacts: ArtifactRegistry | None = None,
+    backend: ExecutionBackend | None = None,
 ) -> AgentTool:
     return wrap_tool_definition(
         create_bash_tool_definition(
@@ -399,6 +418,8 @@ def create_bash_tool(
             command_prefix=command_prefix,
             shell_path=shell_path,
             spawn_hook=spawn_hook,
+            artifacts=artifacts,
+            backend=backend,
         ),
         lambda: ToolContext(cwd=cwd),
     )

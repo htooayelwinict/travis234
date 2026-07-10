@@ -321,6 +321,7 @@ def find_initial_model(
     default_model_id: str | None = None,
     default_thinking_level: str | None = None,
 ) -> InitialModelResult:
+    available_models = _registry_get_available(model_registry)
     if cli_provider and cli_model:
         resolved = resolve_cli_model(cli_provider=cli_provider, cli_model=cli_model, model_registry=model_registry)
         if resolved.error:
@@ -329,24 +330,38 @@ def find_initial_model(
             return InitialModelResult(model=resolved.model)
 
     if scoped_models and not is_continuing:
-        scoped = scoped_models[0]
-        return InitialModelResult(
-            model=scoped.model,
-            thinking_level=scoped.thinking_level or default_thinking_level or DEFAULT_THINKING_LEVEL,
+        scoped = next(
+            (
+                candidate
+                for candidate in scoped_models
+                if any(_models_are_equal(candidate.model, available) for available in available_models)
+            ),
+            None,
         )
+        if scoped is not None:
+            return InitialModelResult(
+                model=scoped.model,
+                thinking_level=scoped.thinking_level or default_thinking_level or DEFAULT_THINKING_LEVEL,
+            )
 
     if default_provider and default_model_id:
         found = _registry_find(model_registry, default_provider, default_model_id)
-        if found is not None:
+        if found is not None and any(_models_are_equal(found, available) for available in available_models):
             return InitialModelResult(
                 model=found,
                 thinking_level=default_thinking_level or DEFAULT_THINKING_LEVEL,
             )
 
-    available_models = _registry_get_available(model_registry)
     if available_models:
         default_model = _first_default_model(available_models)
-        return InitialModelResult(model=default_model or available_models[0])
+        fallback = default_model or available_models[0]
+        message = None
+        if default_provider and default_model_id:
+            message = (
+                f'Configured default "{default_provider}/{default_model_id}" is unavailable; '
+                f'using "{fallback.provider}/{fallback.id}".'
+            )
+        return InitialModelResult(model=fallback, fallback_message=message)
 
     return InitialModelResult(model=None)
 

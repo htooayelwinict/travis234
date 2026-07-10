@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from appv231.ai.providers.params import GenerationParams, merge_generation_params, params_from_mapping
+from appv231.ai.providers.catalog import get_provider
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
 DEFAULT_MODEL_PER_PROVIDER = {
@@ -167,7 +168,8 @@ def load_model_config(prefix: str, dotenv_path: "str | Path" = ".env") -> ModelC
 
 
 def find_env_keys(provider: str) -> list[str] | None:
-    keys = PROVIDER_API_KEY_ENV.get(provider)
+    descriptor = get_provider(provider)
+    keys = descriptor.api_key_env_vars if descriptor is not None else PROVIDER_API_KEY_ENV.get(provider)
     if not keys:
         return None
     found = [key for key in keys if os.environ.get(key)]

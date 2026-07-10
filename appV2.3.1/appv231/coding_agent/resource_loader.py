@@ -153,14 +153,13 @@ class DefaultPackageManager:
     def _add_auto_discovered_resources(self, resolved: ResolvedPaths) -> None:
         global_base = Path(self.agent_dir)
         project_base = Path(self.cwd) / CONFIG_DIR_NAME
-        user_agents_skills_dir = Path.home() / ".agents" / "skills"
+        legacy_user_agents_skills_dir = Path.home() / ".agents" / "skills"
         pairs: list[tuple[Path, str, str]] = [(global_base, "user", "auto")]
         if self.project_trusted:
             pairs.append((project_base, "project", "auto"))
         for base, scope, source in pairs:
             metadata = {"source": source, "scope": scope, "origin": "top-level", "baseDir": str(base)}
-            resource_types = ("prompts", "themes") if base == global_base else ("skills", "prompts", "themes")
-            for resource_type in resource_types:
+            for resource_type in ("skills", "prompts", "themes"):
                 paths = _collect_resource_files(base / resource_type, resource_type)
                 target = getattr(resolved, resource_type)
                 for path in paths:
@@ -168,7 +167,7 @@ class DefaultPackageManager:
 
         if self.project_trusted:
             for agents_skills_dir in _collect_ancestor_agents_skill_dirs(Path(self.cwd)):
-                if agents_skills_dir.resolve() == user_agents_skills_dir.resolve():
+                if agents_skills_dir.resolve() == legacy_user_agents_skills_dir.resolve():
                     continue
                 metadata = {
                     "source": "auto",
@@ -178,16 +177,6 @@ class DefaultPackageManager:
                 }
                 for path in _collect_resource_files(agents_skills_dir, "skills"):
                     resolved.skills.append(ResolvedResource(path=str(path), enabled=True, metadata=metadata))
-
-        user_agents_metadata = {
-            "source": "auto",
-            "scope": "user",
-            "origin": "top-level",
-            "baseDir": str(user_agents_skills_dir.parent),
-        }
-        for path in _collect_resource_files(user_agents_skills_dir, "skills"):
-            resolved.skills.append(ResolvedResource(path=str(path), enabled=True, metadata=user_agents_metadata))
-
 
 def load_context_file_from_dir(directory: str | Path) -> dict[str, str] | None:
     base = Path(directory).expanduser().resolve()

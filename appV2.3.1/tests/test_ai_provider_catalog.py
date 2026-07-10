@@ -42,7 +42,6 @@ EXPECTED_HERMES_PROVIDER_ORDER = [
     "kilocode",
     "opencode-zen",
     "opencode-go",
-    "bedrock",
     "azure-foundry",
     "qwen-oauth",
     "alibaba-coding-plan",
@@ -85,7 +84,6 @@ def test_provider_catalog_matches_hermes_provider_universe() -> None:
         "ollama-cloud",
         "arcee",
         "azure-foundry",
-        "bedrock",
         "custom",
         "gmi",
         "kilocode",
@@ -93,6 +91,7 @@ def test_provider_catalog_matches_hermes_provider_universe() -> None:
         "opencode-go",
         "qwen-oauth",
     }.issubset(slugs)
+    assert "bedrock" not in slugs
 
 
 def test_provider_catalog_order_matches_hermes_provider_catalog() -> None:
@@ -253,11 +252,19 @@ def test_hermes_tab_for_auth_type_routes_aws_sdk_to_keys() -> None:
     assert tab_for_auth_type("external_process") == "accounts"
 
 
-def test_bedrock_routes_to_keys_like_hermes_provider_catalog() -> None:
-    bedrock = provider_catalog_by_slug()["bedrock"]
+def test_bedrock_is_not_advertised_without_an_implemented_transport() -> None:
+    assert "bedrock" not in provider_catalog_by_slug()
 
-    assert bedrock.auth_type == "aws_sdk"
-    assert bedrock.tab == "keys"
+
+def test_direct_anthropic_api_key_uses_native_auth_headers() -> None:
+    profile = get_provider_profile("anthropic")
+    assert profile is not None
+
+    headers = profile.auth_headers("test-key")
+
+    assert headers["x-api-key"] == "test-key"
+    assert headers["anthropic-version"]
+    assert "Authorization" not in headers
 
 
 def test_copilot_descriptor_matches_hermes_provider_catalog() -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from dataclasses import replace
+import threading
 from typing import Callable
 
 from appv231.ai.event_stream import AssistantMessageEventStream
@@ -31,36 +32,87 @@ class ApiProvider:
         return self.stream_simple
 
 
-_API_PROVIDERS: dict[str, ApiProvider] = {}
-_API_PROVIDER_SOURCES: dict[str, str | None] = {}
+class ProviderRegistration:
+    def __init__(self, close: Callable[[], None]) -> None:
+        self._close = close
+        self._closed = False
+        self._lock = threading.Lock()
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+        self._close()
 
 
-def register_api_provider(provider: ApiProvider, source_id: str | None = None) -> None:
-    _API_PROVIDERS[provider.api] = provider
-    _API_PROVIDER_SOURCES[provider.api] = source_id
+class ApiProviderRegistry:
+    def __init__(self) -> None:
+        self._stacks: dict[str, list[tuple[object, str | None, ApiProvider]]] = {}
+        self._lock = threading.RLock()
+
+    def register(self, provider: ApiProvider, source_id: str | None = None) -> ProviderRegistration:
+        token = object()
+        with self._lock:
+            self._stacks.setdefault(provider.api, []).append((token, source_id, provider))
+
+        def close() -> None:
+            with self._lock:
+                stack = self._stacks.get(provider.api, [])
+                stack[:] = [entry for entry in stack if entry[0] is not token]
+                if not stack:
+                    self._stacks.pop(provider.api, None)
+
+        return ProviderRegistration(close)
+
+    def get(self, api: str) -> ApiProvider | None:
+        with self._lock:
+            stack = self._stacks.get(api)
+            return stack[-1][2] if stack else None
+
+    def require(self, api: str) -> ApiProvider:
+        provider = self.get(api)
+        if provider is None:
+            raise KeyError(f"No api provider registered for api '{api}'")
+        return provider
+
+    def all(self) -> list[ApiProvider]:
+        with self._lock:
+            return [stack[-1][2] for stack in self._stacks.values() if stack]
+
+    def unregister_source(self, source_id: str) -> None:
+        with self._lock:
+            for api, stack in list(self._stacks.items()):
+                stack[:] = [entry for entry in stack if entry[1] != source_id]
+                if not stack:
+                    self._stacks.pop(api, None)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._stacks.clear()
+
+
+_DEFAULT_API_PROVIDER_REGISTRY = ApiProviderRegistry()
+
+
+def register_api_provider(provider: ApiProvider, source_id: str | None = None) -> ProviderRegistration:
+    return _DEFAULT_API_PROVIDER_REGISTRY.register(provider, source_id)
 
 
 def get_api_provider(api: str) -> ApiProvider:
-    provider = _API_PROVIDERS.get(api)
-    if provider is None:
-        raise KeyError(f"No api provider registered for api '{api}'")
-    return provider
+    return _DEFAULT_API_PROVIDER_REGISTRY.require(api)
 
 
 def get_api_providers() -> list[ApiProvider]:
-    return list(_API_PROVIDERS.values())
+    return _DEFAULT_API_PROVIDER_REGISTRY.all()
 
 
 def unregister_api_providers(source_id: str) -> None:
-    for api, registered_source_id in list(_API_PROVIDER_SOURCES.items()):
-        if registered_source_id == source_id:
-            _API_PROVIDER_SOURCES.pop(api, None)
-            _API_PROVIDERS.pop(api, None)
+    _DEFAULT_API_PROVIDER_REGISTRY.unregister_source(source_id)
 
 
 def reset_api_providers() -> None:
-    _API_PROVIDERS.clear()
-    _API_PROVIDER_SOURCES.clear()
+    _DEFAULT_API_PROVIDER_REGISTRY.clear()
 
 
 clear_api_providers = reset_api_providers

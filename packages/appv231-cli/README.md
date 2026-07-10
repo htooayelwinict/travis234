@@ -23,12 +23,12 @@ The launcher pulls and runs:
 ghcr.io/htooayelwinict/appv231:production
 ```
 
-It mounts only the selected `--cwd` as `/workspace`, stores sandbox state in `~/.appv231/sandbox-home`, copies host `~/.agents/AGENTS.md` into the sandbox agent context, and copies host `~/.agents/skills` into the sandbox.
+It mounts only the selected `--cwd` as `/workspace`, stores sandbox state in `~/.appv231/sandbox-home`, copies host `~/.appv231/agent/AGENTS.md` into the sandbox agent context, and copies host `~/.appv231/agent/skills` into the sandbox.
 
 On startup, the package restores compact default agent files only when they are missing:
 
-- `~/.agents/AGENTS.md`
-- `~/.agents/skills/web-search/SKILL.md`
+- `~/.appv231/agent/AGENTS.md`
+- `~/.appv231/agent/skills/web-search/SKILL.md`
 - bundled package skills such as `subagent-delegation`
 
 Existing user files are never overwritten.

@@ -14,6 +14,8 @@ const PUBLIC_APPV231_IMAGE_PREFIX = "ghcr.io/htooayelwinict/appv231:";
 const DEFAULT_PULL_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const CONTAINER_WORKSPACE = "/workspace";
 const CONTAINER_AGENT_HOME = "/agent-home";
+const APP_CONFIG_DIR = ".appv231";
+const APP_AGENT_DIR = "agent";
 const IMPORTED_AGENTS_MARKER = "<!-- appv231-sandbox-imported-agents -->";
 const SKIP_IMPORT_NAMES = new Set([
   ".DS_Store",
@@ -168,6 +170,8 @@ function buildDockerCommand(config, runtime = {}) {
     "-it",
     "--name",
     `appv231-sandbox-${pid}`,
+    "--user",
+    "appv231",
     "--workdir",
     CONTAINER_WORKSPACE,
     "--pids-limit",
@@ -182,6 +186,10 @@ function buildDockerCommand(config, runtime = {}) {
     `APPV231_CODING_AGENT_DIR=${CONTAINER_AGENT_HOME}/agent`,
     "-e",
     "APPV231_SANDBOX=1",
+    "-e",
+    `APPV231_WORKSPACE_ROOT=${CONTAINER_WORKSPACE}`,
+    "-e",
+    `APPV231_AGENT_HOME=${CONTAINER_AGENT_HOME}`,
     "-e",
     "APPV231_NO_VENV_REEXEC=1",
     "-e",
@@ -275,7 +283,7 @@ function seedHostDefaults(homeDir, packageRoot) {
 
 function seedHostAgentsFile(homeDir, packageRoot) {
   const source = path.join(packageRoot, "agents", "AGENTS.md");
-  const target = path.join(homeDir, ".agents", "AGENTS.md");
+  const target = path.join(hostAgentDir(homeDir), "AGENTS.md");
   if (!fs.existsSync(source) || fs.existsSync(target)) {
     return;
   }
@@ -284,7 +292,7 @@ function seedHostAgentsFile(homeDir, packageRoot) {
 
 function seedHostSkills(homeDir, packageRoot) {
   const sourceRoot = path.join(packageRoot, "skills");
-  const targetRoot = path.join(homeDir, ".agents", "skills");
+  const targetRoot = path.join(hostAgentDir(homeDir), "skills");
   if (!fs.existsSync(sourceRoot)) {
     return;
   }
@@ -319,7 +327,7 @@ function prepareAgentsFiles(config, homeDir = os.homedir()) {
     IMPORTED_AGENTS_MARKER,
     "# Imported appv231 sandbox instructions",
     "",
-    "These instructions were copied into the sandbox from host ~/.agents/AGENTS.md and explicit --agents-file arguments.",
+    "These instructions were copied into the sandbox from host ~/.appv231/agent/AGENTS.md and explicit --agents-file arguments.",
     "",
   ];
   for (const source of sources) {
@@ -335,7 +343,7 @@ function prepareAgentsFiles(config, homeDir = os.homedir()) {
 
 function collectAgentsFiles(config, homeDir) {
   const sources = [];
-  const userAgentsFile = path.join(homeDir, ".agents", "AGENTS.md");
+  const userAgentsFile = path.join(hostAgentDir(homeDir), "AGENTS.md");
   if (fs.existsSync(userAgentsFile)) {
     sources.push(userAgentsFile);
   }
@@ -369,7 +377,7 @@ function prepareSkills(config, homeDir, packageRoot) {
   if (fs.existsSync(bundledSkills)) {
     sources.push(bundledSkills);
   }
-  const userSkills = path.join(homeDir, ".agents", "skills");
+  const userSkills = path.join(hostAgentDir(homeDir), "skills");
   if (config.importUserSkills && fs.existsSync(userSkills)) {
     sources.push(userSkills);
   }
@@ -377,7 +385,7 @@ function prepareSkills(config, homeDir, packageRoot) {
   if (!sources.length) {
     return;
   }
-  const targetRoot = path.join(config.agentHome, ".agents", "skills");
+  const targetRoot = path.join(config.agentHome, APP_AGENT_DIR, "skills");
   fs.rmSync(targetRoot, { recursive: true, force: true });
   fs.mkdirSync(targetRoot, { recursive: true, mode: 0o700 });
   for (const source of sources) {
@@ -453,6 +461,10 @@ function shouldSkipImport(filePath) {
   return SKIP_IMPORT_NAMES.has(name) || name.startsWith(".env");
 }
 
+function hostAgentDir(homeDir) {
+  return path.join(homeDir, APP_CONFIG_DIR, APP_AGENT_DIR);
+}
+
 function printHelp() {
   process.stdout.write(`appv231-sandbox
 
@@ -466,8 +478,8 @@ Options:
   --image <name>        Docker image. Defaults to APPV231_IMAGE, APPV231_SANDBOX_IMAGE, or ghcr.io/htooayelwinict/appv231:production.
   --agent-home <path>   Sandbox state directory. Defaults to ~/.appv231/sandbox-home.
   --agents-file <path>  Copy an explicit AGENTS.md-style file into sandbox context.
-  --with-skills <path>  Copy an extra skill file or directory into sandbox ~/.agents/skills.
-  --no-user-skills      Do not copy host ~/.agents/skills.
+  --with-skills <path>  Copy an extra skill file or directory into the sandbox agent/skills directory.
+  --no-user-skills      Do not copy host ~/.appv231/agent/skills.
   --no-network          Run container with --network=none.
   --pull                Pull image before running. Default.
   --no-pull             Do not pull image before running.

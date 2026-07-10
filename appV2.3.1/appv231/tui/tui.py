@@ -10,6 +10,7 @@ import re
 import threading
 
 from appv231.tui.component import CURSOR_MARKER, Container
+from appv231.tui.dispatcher import UiDispatcher
 from appv231.tui.keys import is_key_release
 from appv231.tui.terminal import Terminal
 from appv231.tui.terminal_colors import is_osc11_background_color_response, parse_osc11_background_color
@@ -128,6 +129,7 @@ class TUI(Container):
         show_hardware_cursor: bool | None = None,
         *,
         showHardwareCursor: bool | None = None,
+        render_interval: float = 0.0,
     ) -> None:
         super().__init__()
         self.terminal = terminal
@@ -155,6 +157,7 @@ class TUI(Container):
         self._scroll_offset_from_bottom = 0
         self._logical_line_count = 0
         self._scroll_listeners: list[Callable[[], None]] = []
+        self.dispatcher = UiDispatcher(render=self._do_render, render_interval=render_interval)
 
     @property
     def full_redraws(self) -> int:
@@ -191,8 +194,12 @@ class TUI(Container):
     def start(self) -> None:
         if self._started:
             return
+        self.dispatcher.adopt_current_thread()
         self._started = True
-        self.terminal.start(self._handle_terminal_input, lambda: self.request_render(force=True))
+        self.terminal.start(
+            lambda data: self.post(lambda: self._handle_terminal_input(data)),
+            lambda: self.request_render(force=True),
+        )
         self.terminal.hide_cursor()
         self._query_cell_size()
         self.request_render()
@@ -204,6 +211,9 @@ class TUI(Container):
         drain_input = getattr(self.terminal, "drain_input", None) or getattr(self.terminal, "drainInput", None)
         if callable(drain_input):
             drain_input(1000)
+        if self.dispatcher.is_owner_thread():
+            self.dispatcher.request_render(force=True)
+            self.dispatcher.drain()
         self.terminal.show_cursor()
         self.terminal.stop()
 
@@ -433,8 +443,21 @@ class TUI(Container):
         if not query.done():
             query.set_result(None)
 
-    def request_render(self, force: bool = False) -> RenderInfo:
-        return self._do_render(force)
+    def post(self, callback: Callable[[], None]) -> None:
+        if self.dispatcher.is_owner_thread():
+            callback()
+            return
+        self.dispatcher.post(callback)
+
+    def drain_dispatcher(self) -> int:
+        return self.dispatcher.drain()
+
+    def time_until_next_work(self, default: float) -> float:
+        return self.dispatcher.time_until_next_work(default)
+
+    def request_render(self, force: bool = False) -> RenderInfo | None:
+        rendered = self.dispatcher.request_render(force)
+        return rendered if isinstance(rendered, RenderInfo) else self.last_render
 
     def _do_render(self, force: bool) -> RenderInfo:
         width = self.terminal.columns

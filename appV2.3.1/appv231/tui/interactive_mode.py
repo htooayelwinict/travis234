@@ -15,27 +15,16 @@ import signal as signal_module
 import subprocess
 import threading
 import time
+from concurrent.futures import Future
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
-from appv231.ai import (
-    get_auth_credential,
-    get_models,
-    get_oauth_providers,
-    get_provider_auth_status,
-    get_provider_display_name,
-    get_providers,
-    list_auth_providers,
-    login_oauth_provider,
-    logout_provider,
-    set_auth_credential,
-)
 from appv231.ai.providers.capabilities import ProviderParamWarning
 from appv231.ai.providers.model_catalog import get_last_openrouter_live_catalog_error, get_live_openrouter_models
 from appv231.ai.providers.params import GenerationParams, compact_generation_params_display
-from appv231.coding_agent.config import get_agent_dir
 from appv231.compaction import estimate_tokens
+from appv231.coding_agent.session_commands import SessionCommandExecutor
 from appv231.tui.component import (
     CombinedAutocompleteProvider,
     Component,
@@ -54,6 +43,7 @@ from appv231.tui.interactive import (
     message_to_component,
     user_message_to_component,
 )
+from appv231.tui.model_loader import ModelCatalogLoader
 
 
 InputFn = Callable[[str], str]
@@ -73,40 +63,6 @@ def _short_status_text(text: str, *, limit: int) -> str:
 
 def _compact_generation_param_warnings(warnings: list[ProviderParamWarning]) -> str:
     return ", ".join(f"{warning.param} {warning.action}" for warning in warnings)
-
-
-def _auth_json_path() -> Path:
-    return Path(get_agent_dir()).expanduser().resolve() / "auth.json"
-
-
-def _read_auth_json(path: Path) -> dict[str, object]:
-    if not path.exists():
-        return {}
-    try:
-        parsed = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
-
-def _persist_auth_credential(provider: str, credential: dict[str, object]) -> None:
-    path = _auth_json_path()
-    path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
-    data = _read_auth_json(path)
-    data[provider] = dict(credential)
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    os.chmod(path, 0o600)
-
-
-def _remove_persisted_auth_credential(provider: str) -> None:
-    path = _auth_json_path()
-    if not path.exists():
-        return
-    data = _read_auth_json(path)
-    data.pop(provider, None)
-    path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    os.chmod(path, 0o600)
 
 
 class InteractiveMode:
@@ -146,6 +102,8 @@ class InteractiveMode:
         self._terminal_input_listeners: list[Callable[[str], object]] = []
         self.autocomplete_provider_wrappers: list[Callable[[object], object]] = []
         self.autocomplete_provider: object | None = None
+        self._session_commands: SessionCommandExecutor | None = None
+        self._turn_future: Future[object] | None = None
         self._turn_thread: threading.Thread | None = None
         self._turn_lock = threading.RLock()
         self._queued_after_turn: list[str] = []
@@ -179,8 +137,11 @@ class InteractiveMode:
         self._initialized = False
         self._history_populated = False
         self._shutdown_requested = False
+        self._run_loop_active = False
         self._openrouter_model_cache: tuple[float, list[object]] | None = None
         self._last_openrouter_model_fetch_error: Exception | None = None
+        self._model_loader: ModelCatalogLoader | None = None
+        self._pending_model_picker_trace: tuple[int, str] | None = None
         self._last_turn_finished_at = 0.0
         self._last_idle_ctrl_c_at = 0.0
         self.setup_autocomplete_provider()
@@ -202,10 +163,12 @@ class InteractiveMode:
         self.tui.add(self.status)
         self.tui.add(self.footer_container)
         if self._unsubscribe_session_events is None:
-            self._unsubscribe_session_events = self.app.session.subscribe(self._handle_session_event)
+            self._unsubscribe_session_events = self.app.session.subscribe(
+                lambda event: self.tui.post(lambda: self._handle_session_event(event))
+            )
         if self._unsubscribe_footer_branch_change is None:
             self._unsubscribe_footer_branch_change = self.footer_data_provider.on_branch_change(
-                self._handle_footer_branch_change
+                lambda: self.tui.post(self._handle_footer_branch_change)
             )
         if self._unsubscribe_tui_terminal_input is None:
             self._unsubscribe_tui_terminal_input = self.tui.add_input_listener(self._handle_tui_terminal_input)
@@ -214,6 +177,11 @@ class InteractiveMode:
         self._update_available_provider_count()
         self._refresh_footer()
         self.tui.start()
+        if self.app.event_trace is not None:
+            self.app.event_trace.write(
+                "tui_ready",
+                {"provider": self.app.session.model.provider, "model": self.app.session.model.id},
+            )
         self._initialized = True
 
     def _populate_existing_history(self) -> None:
@@ -298,6 +266,7 @@ class InteractiveMode:
         )
 
     def run(self) -> int:
+        self._run_loop_active = True
         self.init()
         previous_sigint_handler = self._install_sigint_handler()
         try:
@@ -321,7 +290,7 @@ class InteractiveMode:
 
                 if self._line_input_mode:
                     try:
-                        prompt_text = self.input_fn("")
+                        prompt_text = self._read_prompt_from_line_input()
                     except EOFError:
                         return 0
                     dispatch_result = self._dispatch_terminal_input(prompt_text)
@@ -393,11 +362,19 @@ class InteractiveMode:
                 if params_query is not None:
                     self._run_params_command(params_query)
                     continue
+                allow_command = _parse_allow_command(prompt)
+                if allow_command is not None:
+                    self._run_allow_command(*allow_command)
+                    continue
                 if self._dispatch_extension_command(prompt):
                     self._refresh_footer()
                     self.tui.request_render()
                     continue
-                if _is_command_like_slash_prompt(prompt) and not self._is_registered_extension_command(prompt):
+                if (
+                    _is_command_like_slash_prompt(prompt)
+                    and not _is_prompt_level_skill_trigger(prompt)
+                    and not self._is_registered_extension_command(prompt)
+                ):
                     self._run_unknown_command(prompt)
                     continue
                 if self._handle_active_turn_prompt(prompt):
@@ -411,6 +388,14 @@ class InteractiveMode:
         finally:
             self._shutdown_requested = True
             self._wait_for_active_turn()
+            self.tui.drain_dispatcher()
+            self._run_loop_active = False
+            if self._session_commands is not None:
+                self._session_commands.close()
+                self._session_commands = None
+            if self._model_loader is not None:
+                self._model_loader.close()
+                self._model_loader = None
             if self._unsubscribe_session_events is not None:
                 self._unsubscribe_session_events()
                 self._unsubscribe_session_events = None
@@ -424,16 +409,41 @@ class InteractiveMode:
                 self._unsubscribe_tui_scroll_change()
                 self._unsubscribe_tui_scroll_change = None
             self.footer_data_provider.dispose()
+            if self.app.event_trace is not None:
+                self.app.event_trace.write("shutdown", {"status": "ok"})
             self.tui.stop()
             self._restore_sigint_handler(previous_sigint_handler)
 
     def _read_prompt_from_tui(self, submitted_queue: "queue.Queue[str]") -> str | None:
         while not self._shutdown_requested:
             try:
-                return submitted_queue.get(timeout=0.05)
+                timeout = self.tui.time_until_next_work(0.05)
+                return submitted_queue.get(timeout=timeout)
             except queue.Empty:
+                self.tui.drain_dispatcher()
                 continue
         return None
+
+    def _read_prompt_from_line_input(self, prompt: str = "") -> str:
+        results: queue.Queue[tuple[str, object]] = queue.Queue(maxsize=1)
+
+        def read() -> None:
+            try:
+                results.put(("value", self.input_fn(prompt)))
+            except BaseException as error:  # noqa: BLE001 - re-raised on the UI owner thread.
+                results.put(("error", error))
+
+        threading.Thread(target=read, name="appv231-line-input", daemon=True).start()
+        while True:
+            try:
+                kind, value = results.get(timeout=self.tui.time_until_next_work(0.05))
+            except queue.Empty:
+                self.tui.drain_dispatcher()
+                continue
+            self.tui.drain_dispatcher()
+            if kind == "error":
+                raise value  # type: ignore[misc]
+            return str(value)
 
     def _handle_tui_terminal_input(self, data: str):
         if data == "\x03":
@@ -594,15 +604,16 @@ class InteractiveMode:
         self.tui.request_render()
 
     def _get_model_candidates(self, *, fetch_remote: bool = False, query: str | None = None):
+        del fetch_remote
         scoped_models = getattr(self.app.session, "scoped_models", [])
         if scoped_models:
-            return _filter_model_candidates([scoped.model for scoped in scoped_models], query)
-        models = _models_with_active_fallback(self.app.session.model)
-        self._last_openrouter_model_fetch_error = None
-        if fetch_remote:
-            remote_models, error = self._openrouter_model_candidates()
-            self._last_openrouter_model_fetch_error = error
-            models = _dedupe_models([*remote_models, *models])
+            models = [
+                scoped.model
+                for scoped in scoped_models
+                if self.app.session.model_registry.is_selectable(scoped.model)
+            ]
+            return _filter_model_candidates(models, query)
+        models = self.app.session.model_registry.get_selectable(self.app.session.model)
         return _filter_model_candidates(models, query)
 
     def _openrouter_model_candidates(self):
@@ -626,30 +637,76 @@ class InteractiveMode:
         self._openrouter_model_cache = (now, models)
         return list(models), None
 
+    def _catalog_loader(self) -> ModelCatalogLoader:
+        if self._model_loader is None:
+            self._model_loader = ModelCatalogLoader(
+                discover=self._discover_remote_models,
+                post=self.tui.dispatcher.post,
+            )
+        return self._model_loader
+
+    def _discover_remote_models(self, query: str | None) -> list[object]:
+        models, error = self._openrouter_model_candidates()
+        if error is not None:
+            raise error
+        return _filter_model_candidates(models, query)
+
+    def _wait_for_model_catalog(self, future: Future[list[object]]) -> list[object]:
+        while not future.done():
+            time.sleep(min(0.01, self.tui.time_until_next_work(0.01)))
+            self.tui.drain_dispatcher()
+        return future.result()
+
     def _update_available_provider_count(self) -> None:
         providers = {model.provider for model in self._get_model_candidates() if getattr(model, "provider", None)}
         self.footer_data_provider.set_available_provider_count(len(providers))
 
     def _is_turn_active(self) -> bool:
         with self._turn_lock:
+            future = self._turn_future
             thread = self._turn_thread
-        return thread is not None and thread.is_alive()
+        active = (future is not None and not future.done()) or (thread is not None and thread.is_alive())
+        if not active and self.tui.dispatcher.is_owner_thread():
+            self.tui.drain_dispatcher()
+        return active
 
     def _wait_for_active_turn(self) -> None:
-        with self._turn_lock:
-            thread = self._turn_thread
-        if thread is not None and thread is not threading.current_thread() and thread.is_alive():
-            thread.join()
+        while True:
+            with self._turn_lock:
+                future = self._turn_future
+                thread = self._turn_thread
+            if future is not None and not future.done():
+                future.result()
+                continue
+            if thread is not None and thread is not threading.current_thread() and thread.is_alive():
+                thread.join()
+                continue
+            break
+        if not self._run_loop_active and self._session_commands is not None:
+            self._session_commands.close()
+            self._session_commands = None
+        if self.tui.dispatcher.is_owner_thread():
+            self.tui.drain_dispatcher()
+
+    def _command_executor(self) -> SessionCommandExecutor:
+        if self._session_commands is None:
+            self._session_commands = SessionCommandExecutor(daemon=not self._run_loop_active)
+        return self._session_commands
+
+    def _run_session_command(self, name: str, callback: Callable[[], object]):
+        executor = self._command_executor()
+        if executor.is_owner_thread():
+            return callback()
+        return executor.submit(name, callback).result()
 
     def _start_turn_thread(self, prompt: str, before_compressions: int, before_tokens: int) -> None:
-        thread = threading.Thread(
-            target=self._run_turn_thread,
-            args=(prompt, before_compressions, before_tokens),
-            daemon=True,
+        future = self._command_executor().submit(
+            "turn",
+            lambda: self._run_turn_thread(prompt, before_compressions, before_tokens),
         )
         with self._turn_lock:
-            self._turn_thread = thread
-        thread.start()
+            self._turn_future = future
+            self._turn_thread = None
 
     def _run_turn_thread(self, prompt: str, before_compressions: int, before_tokens: int) -> None:
         try:
@@ -658,9 +715,11 @@ class InteractiveMode:
                 on_post_response_compaction_start=self._show_post_response_compaction_status,
             )
         except Exception as error:  # noqa: BLE001 - keep the TUI responsive if a turn fails outside agent handling
-            self.history.add(StatusLine(f"Turn failed: {error}", kind="error"))
+            self.tui.post(
+                lambda error=error: self.history.add(StatusLine(f"Turn failed: {error}", kind="error"))
+            )
         finally:
-            self._finish_turn_thread(before_compressions, before_tokens)
+            self.tui.post(lambda: self._finish_turn_thread(before_compressions, before_tokens))
 
     def _finish_turn_thread(self, before_compressions: int, before_tokens: int) -> None:
         self._render_auto_compaction_notice(before_compressions, before_tokens)
@@ -686,18 +745,10 @@ class InteractiveMode:
             self._refresh_footer()
             self.tui.request_render()
             return True
-        if self.app.session.is_streaming:
-            try:
-                self.app.session.prompt(prompt, streaming_behavior="steer")
-            except Exception as error:  # noqa: BLE001 - queue errors should render, not crash input handling
-                self.history.add(StatusLine(f"Queued input failed: {error}", kind="error"))
-            self._refresh_footer()
-            self.tui.request_render()
-            return True
-
-        with self._turn_lock:
-            self._queued_after_turn.append(prompt)
-        self.history.add(StatusLine("Queued message for after current turn", kind="info"))
+        try:
+            self.app.session.steer(prompt)
+        except Exception as error:  # noqa: BLE001 - queue errors should render, not crash input handling
+            self.history.add(StatusLine(f"Queued input failed: {error}", kind="error"))
         self._refresh_footer()
         self.tui.request_render()
         return True
@@ -725,6 +776,9 @@ class InteractiveMode:
             self.tui.request_render()
 
     def _show_post_response_compaction_status(self) -> None:
+        if not self.tui.dispatcher.is_owner_thread():
+            self.tui.post(self._show_post_response_compaction_status)
+            return
         self.status.set_message("Compressing")
         self._refresh_footer()
         self.tui.request_render()
@@ -793,7 +847,7 @@ class InteractiveMode:
     def _extension_compact(self, options: dict | None = None):
         focus = options.get("customInstructions") if isinstance(options, dict) else None
         try:
-            result = self.app.session.compact(focus)
+            result = self._run_session_command("compact", lambda: self.app.session.compact(focus))
         except Exception as error:  # noqa: BLE001 - mirrors Pi callback-style compact errors
             if isinstance(options, dict) and callable(options.get("onError")):
                 options["onError"](error)
@@ -823,6 +877,7 @@ class InteractiveMode:
             "/logout - Remove provider authentication.",
             "/compact or /compress - Safely compress conversation context.",
             "/compact deep [focus] - Run bounded multi-pass compaction toward a fresh-session baseline.",
+            "/allow package-install [uses] - Allow explicit package installation for this session.",
             "/agents - List delegated subagents.",
             "/delegate <role> <task> - Spawn a subagent for explicit multi-agent work.",
             "/cancel-agent <task-id> [reason] - Cancel a delegated subagent.",
@@ -853,9 +908,12 @@ class InteractiveMode:
         self.tui.request_render()
 
         try:
-            status = self.app.session.compact(
-                focus=focus,
-                deep=deep,
+            status = self._run_session_command(
+                "compact",
+                lambda: self.app.session.compact(
+                    focus=focus,
+                    deep=deep,
+                ),
             )
             self.history.add(StatusLine(status.headline, kind="compact"))
             self.history.add(Text(status.token_line))
@@ -880,19 +938,10 @@ class InteractiveMode:
 
     def _run_model_command(self, command: str, query: str | None) -> None:
         local_candidates = self._get_model_candidates()
-        if command == "list":
-            candidates = self._get_model_candidates(fetch_remote=True)
-            if self._last_openrouter_model_fetch_error is not None:
-                self._show_status("Could not fetch OpenRouter models; showing local models only.", kind="model")
-            self._show_model_list(candidates)
-            return
         query = (query or "").strip()
         if query.lower() in {"list", "ls"}:
-            candidates = self._get_model_candidates(fetch_remote=True)
-            if self._last_openrouter_model_fetch_error is not None:
-                self._show_status("Could not fetch OpenRouter models; showing local models only.", kind="model")
-            self._show_model_list(candidates)
-            return
+            command = "list"
+            query = ""
         if query.lower() in {"next", "forward"}:
             self._cycle_model("forward")
             return
@@ -901,21 +950,72 @@ class InteractiveMode:
             return
         if query:
             model = _resolve_model_query(query, local_candidates, self.app.session.model)
-            if model is None:
-                candidates = self._get_model_candidates(fetch_remote=True, query=query)
-                if self._last_openrouter_model_fetch_error is not None:
-                    self._show_status("Could not fetch OpenRouter models; showing local models only.", kind="model")
-            else:
+            if model is not None:
                 self._switch_model(model)
                 return
+
+        if not _is_openrouter_model(self.app.session.model):
+            self._complete_model_command(command, query, [], None)
+            return
+
+        self._show_status("Loading model catalog", kind="model")
+        if self._line_input_mode:
+            try:
+                remote_models = self._wait_for_model_catalog(self._catalog_loader().load(query or None))
+                error = None
+            except BaseException as caught:  # noqa: BLE001 - model picker falls back to local models.
+                remote_models = []
+                error = caught
+            self._complete_model_command(command, query, remote_models, error)
+            return
+
+        self._catalog_loader().load(
+            query or None,
+            lambda models, error: self._complete_model_command(command, query, models, error),
+        )
+
+    def _complete_model_command(
+        self,
+        command: str,
+        query: str,
+        remote_models: list[object],
+        error: BaseException | None,
+    ) -> None:
+        self._last_openrouter_model_fetch_error = error if isinstance(error, Exception) else None
+        if remote_models:
+            self.app.provider_control_plane.merge_discovered_models(remote_models)  # type: ignore[arg-type]
+        scoped_models = getattr(self.app.session, "scoped_models", [])
+        if scoped_models:
+            candidates = [
+                scoped.model
+                for scoped in scoped_models
+                if self.app.session.model_registry.is_selectable(scoped.model)
+            ]
         else:
-            candidates = self._get_model_candidates(fetch_remote=True)
-            if self._last_openrouter_model_fetch_error is not None:
-                self._show_status("Could not fetch OpenRouter models; showing local models only.", kind="model")
+            candidates = self.app.session.model_registry.get_selectable(self.app.session.model)
+        if remote_models:
+            selectable_by_key = {
+                (model.provider, model.id): model
+                for model in candidates
+            }
+            preferred = [
+                selectable_by_key[(model.provider, model.id)]
+                for model in remote_models
+                if (model.provider, model.id) in selectable_by_key
+            ]
+            candidates = _dedupe_models([*preferred, *candidates])
+        candidates = _filter_model_candidates(candidates, query or None)
+        if error is not None:
+            self._show_status("Could not fetch OpenRouter models; showing local models only.", kind="model")
+        if command == "list":
+            self._trace_model_picker_ready(len(candidates), query)
+            self._show_model_list(candidates)
+            return
         if not candidates:
             self._show_status("No models available. Configure APPV231_WORKER_LLM_MODEL or models.json.", kind="error")
             return
         labels = [_model_label(model, self.app.session.model) for model in candidates]
+        self._pending_model_picker_trace = (len(candidates), query)
         selected = self.prompt_extension_select("Select model:", labels, kind="model")
         if selected is None:
             return
@@ -949,6 +1049,26 @@ class InteractiveMode:
             display = f"{display}; warnings: {warning_display}"
         self._show_status(f"{provider}/{model_id}: {display}", kind="model")
 
+    def _run_allow_command(self, capability: str, uses: int) -> None:
+        if capability != "package-install":
+            self._show_status(f"Unknown capability: {capability}", kind="error")
+            return
+        if uses <= 0:
+            self._show_status("Capability use count must be a positive integer", kind="error")
+            return
+        try:
+            self._command_executor().submit(
+                "grant-capability",
+                lambda: self.app.session.grant_capability("package_mutation", uses),
+            ).result()
+        except Exception as error:  # noqa: BLE001 - command failures are local TUI status.
+            self._show_status(f"Capability grant failed: {error}", kind="error")
+            return
+        suffix = "use" if uses == 1 else "uses"
+        self._show_status(f"Allowed package installation for {uses} {suffix}", kind="auth")
+        if self.app.event_trace is not None:
+            self.app.event_trace.write("capability_granted", {"status": "ok"})
+
     def _show_model_list(self, models) -> None:
         if not models:
             self._show_status("No models available. Configure APPV231_WORKER_LLM_MODEL or models.json.", kind="error")
@@ -959,21 +1079,40 @@ class InteractiveMode:
         self.tui.request_render()
 
     def _cycle_model(self, direction: str) -> None:
-        result = self.app.session.cycle_model(direction)
+        result = self._run_session_command("cycle-model", lambda: self.app.session.cycle_model(direction))
         if result is None:
             self._show_status("No alternate models available. Configure --models or models.json to enable switching.", kind="model")
             return
         self._show_model_switched(result.model)
 
     def _switch_model(self, model) -> None:
-        self.app.session.set_model(model)
+        self._run_session_command("set-model", lambda: self.app.session.set_model(model))
         self._show_model_switched(model)
 
     def _show_model_switched(self, model) -> None:
+        if self.app.event_trace is not None:
+            self.app.event_trace.write(
+                "model_selected",
+                {"provider": model.provider, "model": model.id},
+            )
         self._show_status(f"Switched model to {model.provider}/{model.id}", kind="model")
         self._update_available_provider_count()
         self._refresh_footer()
         self.tui.request_render()
+
+    def _trace_model_picker_ready(self, count: int, query: str) -> None:
+        if self.app.event_trace is not None:
+            self.app.event_trace.write(
+                "model_picker_ready",
+                {"model_count": count, "picker_query": query},
+            )
+
+    def _emit_pending_model_picker_trace(self) -> None:
+        pending = self._pending_model_picker_trace
+        if pending is None:
+            return
+        self._pending_model_picker_trace = None
+        self._trace_model_picker_ready(*pending)
 
     def _run_login(self, provider_query: str | None) -> None:
         if provider_query:
@@ -994,17 +1133,17 @@ class InteractiveMode:
     def _run_oauth_login(self, provider_query: str | None) -> None:
         provider = self._select_oauth_provider(
             "Select provider to configure:",
-            _oauth_provider_options(),
+            self._oauth_provider_options(),
             provider_query,
             empty_message="No subscription providers available.",
         )
         if provider is None:
             return
         try:
-            login_oauth_provider(provider["id"], self._oauth_login_callbacks())
-            credential = get_auth_credential(provider["id"])
-            if credential is not None:
-                _persist_auth_credential(provider["id"], credential)
+            self.app.session.model_registry.login_oauth_provider(
+                provider["id"],
+                self._oauth_login_callbacks(),
+            )
         except Exception as error:  # noqa: BLE001 - local auth command should render errors, not crash the TUI
             self._show_status(f"Failed to login to {provider['name']}: {error}", kind="error")
             return
@@ -1026,8 +1165,10 @@ class InteractiveMode:
             self._show_status(f"Failed to save API key for {provider['name']}: API key cannot be empty.", kind="error")
             return
         credential = {"type": "api_key", "key": api_key.strip()}
-        set_auth_credential(provider["id"], credential)
-        _persist_auth_credential(provider["id"], credential)
+        self._run_session_command(
+            "set-auth",
+            lambda: self.app.session.model_registry.set_auth_credential(provider["id"], credential),
+        )
         self._show_status(f"Saved API key for {provider['name']}", kind="auth")
         self._refresh_footer()
         self.tui.request_render()
@@ -1035,7 +1176,7 @@ class InteractiveMode:
     def _run_logout(self, provider_query: str | None) -> None:
         provider = self._select_oauth_provider(
             "Select provider to logout:",
-            _stored_auth_provider_options(),
+            self._stored_auth_provider_options(),
             provider_query,
             empty_message=(
                 "No stored credentials to remove. /logout only removes credentials saved by /login; "
@@ -1045,8 +1186,10 @@ class InteractiveMode:
         if provider is None:
             return
         try:
-            logout_provider(provider["id"])
-            _remove_persisted_auth_credential(provider["id"])
+            self._run_session_command(
+                "logout",
+                lambda: self.app.session.model_registry.logout_provider(provider["id"]),
+            )
         except Exception as error:  # noqa: BLE001
             self._show_status(f"Logout failed: {error}", kind="error")
             return
@@ -1085,13 +1228,38 @@ class InteractiveMode:
         return next((provider for provider in providers if provider["name"] == selected), None)
 
     def _api_key_provider_options(self) -> list[dict[str, str]]:
-        providers = _api_key_provider_options()
-        seen = {provider["id"] for provider in providers}
-        oauth_provider_ids = {provider["id"] for provider in _oauth_provider_options()}
-        active_provider = str(getattr(self.app.session.model, "provider", "") or "")
-        if active_provider and active_provider not in seen and active_provider not in oauth_provider_ids:
-            providers.append({"id": active_provider, "name": _provider_display_name(active_provider)})
-        return providers
+        registry = self.app.session.model_registry
+        oauth_provider_ids = {provider["id"] for provider in self._oauth_provider_options()}
+        providers = [
+            {"id": provider_id, "name": registry.get_provider_display_name(provider_id)}
+            for provider_id in registry.get_api_key_providers()
+            if provider_id not in oauth_provider_ids
+        ]
+        return sorted(providers, key=lambda provider: provider["name"].lower())
+
+    def _oauth_provider_options(self) -> list[dict[str, str]]:
+        providers = [
+            {"id": str(provider.get("id", "")), "name": str(provider.get("name") or provider.get("id", ""))}
+            for provider in self.app.session.model_registry.get_oauth_providers()
+            if provider.get("id")
+        ]
+        return sorted(providers, key=lambda provider: provider["name"].lower())
+
+    def _stored_auth_provider_options(self) -> list[dict[str, str]]:
+        registry = self.app.session.model_registry
+        providers: list[dict[str, str]] = []
+        for provider_id in self.app.session.auth_storage.list():
+            credential = self.app.session.auth_storage.get(provider_id)
+            if not credential:
+                continue
+            providers.append(
+                {
+                    "id": provider_id,
+                    "name": registry.get_provider_display_name(provider_id),
+                    "authType": str(credential.get("type", "")),
+                }
+            )
+        return sorted(providers, key=lambda provider: provider["name"].lower())
 
     def _oauth_login_callbacks(self) -> dict[str, object]:
         return {
@@ -1174,10 +1342,13 @@ class InteractiveMode:
             if getattr(result, "output", None):
                 component.append_output(result.output)
             component.set_complete(result.exit_code, result.cancelled, result.truncated, result.full_output_path)
-            self.app.session.record_bash_result(
-                command,
-                result,
-                {"excludeFromContext": exclude_from_context},
+            self._run_session_command(
+                "record-bash",
+                lambda: self.app.session.record_bash_result(
+                    command,
+                    result,
+                    {"excludeFromContext": exclude_from_context},
+                ),
             )
             self.status.set_message("Running" if self._is_turn_active() else "Idle")
             self._refresh_footer()
@@ -1185,8 +1356,7 @@ class InteractiveMode:
             return
 
         def on_chunk(chunk: str) -> None:
-            component.append_output(chunk)
-            self.tui.request_render()
+            self.tui.post(lambda: (component.append_output(chunk), self.tui.request_render()))
 
         try:
             options = {"excludeFromContext": exclude_from_context}
@@ -1196,10 +1366,13 @@ class InteractiveMode:
                 for key in ("commandPrefix", "command_prefix", "shellPath", "shell_path"):
                     if extension_result.get(key) is not None:
                         options[key] = extension_result[key]
-            result = self.app.session.execute_bash(
-                command,
-                on_chunk,
-                options,
+            result = self._run_session_command(
+                "bash",
+                lambda: self.app.session.execute_bash(
+                    command,
+                    on_chunk,
+                    options,
+                ),
             )
             component.set_complete(result.exit_code, result.cancelled, result.truncated, result.full_output_path)
         except Exception as error:  # noqa: BLE001 - user bash errors are rendered in the TUI
@@ -1420,7 +1593,7 @@ class InteractiveMode:
         self.tui.request_render()
         if self._line_input_mode:
             try:
-                value = self.input_fn(prompt)
+                value = self._read_prompt_from_line_input(prompt)
             except EOFError:
                 return None
         else:
@@ -1469,8 +1642,9 @@ class InteractiveMode:
             self.history.add(Text(f"{index}. {choice}"))
         self.tui.request_render()
         if self._line_input_mode:
+            self._emit_pending_model_picker_trace()
             try:
-                value = self.input_fn(f"{clean_title} [1-{len(normalized_choices)}]: ")
+                value = self._read_prompt_from_line_input(f"{clean_title} [1-{len(normalized_choices)}]: ")
             except EOFError:
                 return None
         else:
@@ -1504,11 +1678,17 @@ class InteractiveMode:
         self.editor_container.add(prompt_component)
         self.tui.set_focus(prompt_component)
         self.tui.request_render()
+        self._emit_pending_model_picker_trace()
         try:
             while not self._shutdown_requested:
                 try:
-                    return submitted_queue.get(timeout=0.05)
+                    value = submitted_queue.get(timeout=self.tui.time_until_next_work(0.05))
+                    if self.tui.dispatcher.is_owner_thread():
+                        self.tui.drain_dispatcher()
+                    return value
                 except queue.Empty:
+                    if self.tui.dispatcher.is_owner_thread():
+                        self.tui.drain_dispatcher()
                     continue
             return None
         finally:
@@ -1571,11 +1751,11 @@ class InteractiveMode:
 
         self.editor_container.clear()
         self.editor_container.add(_coerce_extension_component(component))
-        self.tui.request_render()
+        self.tui.request_render(force=True)
 
         while not result["closed"]:
             try:
-                data = self.input_fn("")
+                data = self._read_prompt_from_line_input("")
             except EOFError:
                 close(None)
                 break
@@ -1733,6 +1913,10 @@ def _is_command_like_slash_prompt(prompt: str) -> bool:
     return bool(command_name) and "/" not in command_name
 
 
+def _is_prompt_level_skill_trigger(prompt: str) -> bool:
+    return prompt == "/subagents" or prompt.startswith("/subagents ")
+
+
 def _is_help_command(prompt: str) -> bool:
     return prompt == "/help" or prompt.startswith("/help ")
 
@@ -1763,50 +1947,19 @@ def _parse_params_command(prompt: str) -> str | None:
     return None
 
 
-def _oauth_provider_options() -> list[dict[str, str]]:
-    providers = [
-        {"id": str(provider.get("id", "")), "name": str(provider.get("name") or provider.get("id", ""))}
-        for provider in get_oauth_providers()
-        if provider.get("id")
-    ]
-    return sorted(providers, key=lambda provider: provider["name"].lower())
-
-
-def _api_key_provider_options() -> list[dict[str, str]]:
-    oauth_provider_ids = {provider["id"] for provider in _oauth_provider_options()}
-    providers = [
-        {"id": provider_id, "name": _provider_display_name(provider_id)}
-        for provider_id in get_providers()
-        if provider_id not in oauth_provider_ids
-    ]
-    return sorted(providers, key=lambda provider: provider["name"].lower())
-
-
-def _stored_auth_provider_options() -> list[dict[str, str]]:
-    providers: list[dict[str, str]] = []
-    for provider_id in list_auth_providers():
-        credential = get_auth_credential(provider_id)
-        if not credential:
-            continue
-        providers.append(
-            {
-                "id": provider_id,
-                "name": _provider_display_name(provider_id),
-                "authType": str(credential.get("type", "")),
-            }
-        )
-    return sorted(providers, key=lambda provider: provider["name"].lower())
-
-
-def _models_with_active_fallback(active_model):
-    models = [model for provider in get_providers() for model in get_models(provider)]
-    active_provider = getattr(active_model, "provider", None)
-    active_id = getattr(active_model, "id", None)
-    if active_provider and active_id and not any(
-        model.provider == active_provider and model.id == active_id for model in models
-    ):
-        models.append(active_model)
-    return models
+def _parse_allow_command(prompt: str) -> tuple[str, int] | None:
+    if not prompt.startswith("/allow"):
+        return None
+    parts = prompt.split()
+    if len(parts) not in {2, 3} or parts[0] != "/allow":
+        return "", 0
+    uses = 1
+    if len(parts) == 3:
+        try:
+            uses = int(parts[2])
+        except ValueError:
+            return parts[1], 0
+    return parts[1], uses
 
 
 def _is_openrouter_model(model) -> bool:
@@ -1872,10 +2025,6 @@ def _resolve_model_query(query: str, candidates, active_model):
     if provider != active_provider or not model_id:
         return None
     return replace(active_model, id=model_id, name=model_id)
-
-
-def _provider_display_name(provider_id: str) -> str:
-    return get_provider_display_name(provider_id)
 
 
 def _match_oauth_provider(providers: list[dict[str, str]], query: str) -> dict[str, str] | None:

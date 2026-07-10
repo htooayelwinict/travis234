@@ -71,18 +71,18 @@ _OPTION_ALIASES = {
 }
 
 _SUPPORTED_DEFINITION_OPTIONS = {
-    "read": {"operations", "auto_resize_images", "image_resizer"},
-    "bash": {"operations", "command_prefix", "shell_path", "spawn_hook"},
-    "edit": set(),
-    "write": {"operations"},
-    "grep": {"operations"},
-    "find": {"operations"},
-    "ls": {"operations"},
+    "read": {"operations", "auto_resize_images", "image_resizer", "workspace", "artifacts"},
+    "bash": {"operations", "command_prefix", "shell_path", "spawn_hook", "artifacts", "backend"},
+    "edit": {"workspace"},
+    "write": {"operations", "workspace"},
+    "grep": {"operations", "workspace"},
+    "find": {"operations", "workspace"},
+    "ls": {"operations", "workspace"},
 }
 
 _SUPPORTED_TOOL_OPTIONS = {
     **_SUPPORTED_DEFINITION_OPTIONS,
-    "read": {"operations", "auto_resize_images", "image_resizer", "model"},
+    "read": {"operations", "auto_resize_images", "image_resizer", "model", "workspace", "artifacts"},
 }
 
 

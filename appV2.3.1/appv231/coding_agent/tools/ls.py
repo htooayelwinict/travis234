@@ -5,10 +5,12 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 from appv231.agent.types import AgentTool, AgentToolResult
 from appv231.ai.types import TextContent
+from appv231.coding_agent.capabilities import WorkspaceCapability
 from appv231.coding_agent.tools.path_utils import render_tool_path, resolve_to_cwd
 from appv231.coding_agent.tools.truncate import DEFAULT_MAX_BYTES, format_size, truncate_head, truncation_to_details
 from appv231.coding_agent.tools.types import ToolContext, ToolDefinition, wrap_tool_definition
@@ -52,6 +54,7 @@ def _check_aborted(signal) -> None:
 
 def _execute_ls(
     cwd: str,
+    workspace: WorkspaceCapability,
     operations: LsOperations,
     tool_call_id,
     args,
@@ -60,7 +63,7 @@ def _execute_ls(
     ctx: ToolContext | None = None,
 ):
     _check_aborted(signal)
-    root = resolve_to_cwd(args.get("path") or ".", cwd)
+    root = str(workspace.resolve(args.get("path") or ".", access="read"))
     limit = max(1, int(args.get("limit", DEFAULT_LIMIT)))
     if not operations.exists(root):
         raise FileNotFoundError(f"Path not found: {root}")
@@ -106,8 +109,13 @@ def _execute_ls(
     return AgentToolResult(content=[TextContent(text=output)], details=details or None)
 
 
-def create_ls_tool_definition(cwd: str, operations: LsOperations | None = None) -> ToolDefinition:
+def create_ls_tool_definition(
+    cwd: str,
+    operations: LsOperations | None = None,
+    workspace: WorkspaceCapability | None = None,
+) -> ToolDefinition:
     ops = operations or _DEFAULT_OPERATIONS
+    workspace = workspace or WorkspaceCapability(Path(cwd))
     return ToolDefinition(
         name="ls",
         label="ls",
@@ -119,11 +127,18 @@ def create_ls_tool_definition(cwd: str, operations: LsOperations | None = None) 
         parameters=LS_SCHEMA,
         prompt_snippet="List directory contents",
         execute=lambda tid, args, signal=None, on_update=None, ctx=None: _execute_ls(
-            cwd, ops, tid, args, signal, on_update, ctx
+            cwd, workspace, ops, tid, args, signal, on_update, ctx
         ),
         render_call=_render_ls_call,
     )
 
 
-def create_ls_tool(cwd: str, operations: LsOperations | None = None) -> AgentTool:
-    return wrap_tool_definition(create_ls_tool_definition(cwd, operations), lambda: ToolContext(cwd=cwd))
+def create_ls_tool(
+    cwd: str,
+    operations: LsOperations | None = None,
+    workspace: WorkspaceCapability | None = None,
+) -> AgentTool:
+    return wrap_tool_definition(
+        create_ls_tool_definition(cwd, operations, workspace),
+        lambda: ToolContext(cwd=cwd),
+    )

@@ -826,7 +826,9 @@ def test_coding_app_recovers_output_cap_error_by_lowering_max_tokens_without_com
     app.run_turn("hi", stream_fn=stream_fn)
 
     assert seen_max_tokens == [100]
-    assert model.max_tokens == 100
+    assert model.max_tokens == 8192
+    assert app.provider_control_plane.models.find(model.provider, model.id) is model
+    assert app.session.model.max_tokens == 100
     assert app.compaction.compressor.compression_count == 0
     assert all(getattr(message, "stop_reason", None) != "error" for message in app.messages)
     assert any(

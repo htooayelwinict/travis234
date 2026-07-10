@@ -9,6 +9,8 @@ import shlex
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
+from appv231.coding_agent.policies.types import Allow, Block, CodingTurnContext, PolicyDecision, ToolCallView
+
 IDEMPOTENT_TOOL_NAMES = frozenset(
     {
         "read",
@@ -68,11 +70,10 @@ FILE_OBSERVING_TOOL_NAMES = frozenset(
         "mcp_filesystem_read_text_file",
     }
 )
-PACKAGE_MANAGER_MUTATION_REQUIRES_CONSENT_CODE = "package_manager_mutation_requires_consent"
 WORKSPACE_SCOPE_VIOLATION_CODE = "workspace_scope_violation"
 WORKSPACE_SCOPE_REPEATED_WARNING_CODE = "workspace_scope_repeated_warning"
 WORKSPACE_SCOPE_REPEATED_BLOCK_CODE = "workspace_scope_repeated_block"
-RECOVERABLE_BLOCK_CODES = frozenset({PACKAGE_MANAGER_MUTATION_REQUIRES_CONSENT_CODE, WORKSPACE_SCOPE_VIOLATION_CODE})
+RECOVERABLE_BLOCK_CODES = frozenset({WORKSPACE_SCOPE_VIOLATION_CODE})
 
 DEFAULT_NO_PROGRESS_BLOCK_TOOL_NAMES = frozenset(
     {
@@ -125,56 +126,12 @@ _BASH_PACKAGE_MANAGER_STATE_COMMANDS = frozenset(
         "upgrade",
     }
 )
-_PACKAGE_MANAGER_DENY_MARKERS = (
-    "do not install",
-    "don't install",
-    "dont install",
-    "without installing",
-    "no install",
-    "do not add dependencies",
-    "don't add dependencies",
-    "dont add dependencies",
-    "do not add packages",
-    "don't add packages",
-    "dont add packages",
-)
-_PACKAGE_MANAGER_ALLOW_MARKERS = (
-    "add dependencies",
-    "add dependency",
-    "add package",
-    "add packages",
-    "bun install",
-    "install dependencies",
-    "install dependency",
-    "install deps",
-    "install package",
-    "install packages",
-    "install requirements",
-    "install the package",
-    "install it",
-    "npm i",
-    "npm install",
-    "pip install",
-    "pnpm install",
-    "poetry add",
-    "poetry install",
-    "python -m pip install",
-    "python3 -m pip install",
-    "run install",
-    "uv add",
-    "uv pip install",
-    "uv sync",
-    "yarn add",
-    "yarn install",
-)
-
-
 @dataclass(frozen=True)
 class ToolCallGuardrailConfig:
     """Thresholds for per-turn tool-call loop detection."""
 
-    warnings_enabled: bool = True
-    hard_stop_enabled: bool = False
+    guidance_enabled: bool = True
+    blocking_enabled: bool = True
     exact_failure_warn_after: int = 2
     exact_failure_block_after: int = 5
     same_tool_failure_warn_after: int = 3
@@ -202,8 +159,14 @@ class ToolCallGuardrailConfig:
 
         defaults = cls()
         return cls(
-            warnings_enabled=_as_bool(data.get("warnings_enabled"), defaults.warnings_enabled),
-            hard_stop_enabled=_as_bool(data.get("hard_stop_enabled"), defaults.hard_stop_enabled),
+            guidance_enabled=_as_bool(
+                data.get("guidance_enabled", data.get("warnings_enabled")),
+                defaults.guidance_enabled,
+            ),
+            blocking_enabled=_as_bool(
+                data.get("blocking_enabled", data.get("hard_stop_enabled")),
+                defaults.blocking_enabled,
+            ),
             exact_failure_warn_after=_positive_int(
                 warn_after.get("exact_failure", data.get("exact_failure_warn_after")),
                 defaults.exact_failure_warn_after,
@@ -328,62 +291,6 @@ def classify_tool_failure(tool_name: str, result: str | None) -> tuple[bool, str
     return False, ""
 
 
-def package_manager_mutation_decision(
-    tool_name: str,
-    args: Mapping[str, Any] | None,
-    latest_user_message: str | None,
-) -> ToolGuardrailDecision:
-    args = _coerce_args(args)
-    signature = ToolCallSignature.from_call(tool_name, args)
-    if not _tool_call_is_package_manager_state_mutation(tool_name, args):
-        return ToolGuardrailDecision(tool_name=tool_name, signature=signature)
-
-    prompt = (latest_user_message or "").strip().lower()
-    if _user_message_forbids_package_manager_mutation(prompt):
-        return ToolGuardrailDecision(
-            action="block",
-            code=PACKAGE_MANAGER_MUTATION_REQUIRES_CONSENT_CODE,
-            message=(
-                "Blocked package-manager state mutation because the latest user request "
-                "explicitly asked not to install dependencies. Do not run pip/npm/yarn/pnpm/bun/poetry/uv "
-                "install/add/sync commands for this turn. Use existing files, existing environment, or "
-                "`PYTHONPATH=src` style test commands instead."
-            ),
-            tool_name=tool_name,
-            count=1,
-            signature=signature,
-        )
-    if _user_message_allows_package_manager_mutation(prompt):
-        return ToolGuardrailDecision(tool_name=tool_name, signature=signature)
-    return ToolGuardrailDecision(
-        action="block",
-        code=PACKAGE_MANAGER_MUTATION_REQUIRES_CONSENT_CODE,
-        message=(
-            "Blocked package-manager state mutation because dependency/package installation requires "
-            "explicit user consent. Ask before installing, or use existing project commands and "
-            "`PYTHONPATH=src` style test commands when possible."
-        ),
-        tool_name=tool_name,
-        count=1,
-        signature=signature,
-    )
-
-
-def _tool_call_is_package_manager_state_mutation(tool_name: str, args: Mapping[str, Any]) -> bool:
-    if tool_name != "bash":
-        return False
-    command = args.get("command")
-    return isinstance(command, str) and _bash_command_is_package_manager_state_mutation(command)
-
-
-def _user_message_forbids_package_manager_mutation(prompt: str) -> bool:
-    return any(marker in prompt for marker in _PACKAGE_MANAGER_DENY_MARKERS)
-
-
-def _user_message_allows_package_manager_mutation(prompt: str) -> bool:
-    return any(marker in prompt for marker in _PACKAGE_MANAGER_ALLOW_MARKERS)
-
-
 class ToolCallGuardrailController:
     """Per-turn controller for repeated failed/non-progressing tool calls."""
 
@@ -413,6 +320,8 @@ class ToolCallGuardrailController:
         args = _coerce_args(args)
         signature = ToolCallSignature.from_call(tool_name, args)
         if (
+            self.config.blocking_enabled
+            and
             self._is_idempotent(tool_name)
             and self._consecutive_signature == signature
             and self._consecutive_count >= self.config.consecutive_no_progress_block_after - 1
@@ -434,7 +343,7 @@ class ToolCallGuardrailController:
             self._halt_decision = decision
             return decision
 
-        if not self.config.hard_stop_enabled:
+        if not self.config.blocking_enabled:
             return ToolGuardrailDecision(tool_name=tool_name, signature=signature)
 
         exact_count = self._exact_failure_counts.get(signature, 0)
@@ -496,13 +405,12 @@ class ToolCallGuardrailController:
             self._same_tool_failure_counts[tool_name] = same_count
 
             exact_failure_block_after = self.config.exact_failure_block_after
-            if tool_name in DEFAULT_NO_PROGRESS_BLOCK_TOOL_NAMES and not self.config.hard_stop_enabled:
+            if tool_name in DEFAULT_NO_PROGRESS_BLOCK_TOOL_NAMES:
                 exact_failure_block_after = min(
                     exact_failure_block_after,
                     DEFAULT_READ_STYLE_EXACT_FAILURE_BLOCK_AFTER,
                 )
-
-            if exact_count >= exact_failure_block_after:
+            if self.config.blocking_enabled and exact_count >= exact_failure_block_after:
                 decision = ToolGuardrailDecision(
                     action="halt",
                     code="repeated_exact_failure_block",
@@ -518,7 +426,7 @@ class ToolCallGuardrailController:
                 self._halt_decision = decision
                 return decision
 
-            if self.config.hard_stop_enabled and same_count >= self.config.same_tool_failure_halt_after:
+            if self.config.blocking_enabled and same_count >= self.config.same_tool_failure_halt_after:
                 decision = ToolGuardrailDecision(
                     action="halt",
                     code="same_tool_failure_halt",
@@ -533,7 +441,7 @@ class ToolCallGuardrailController:
                 self._halt_decision = decision
                 return decision
 
-            if self.config.warnings_enabled and exact_count >= self.config.exact_failure_warn_after:
+            if self.config.guidance_enabled and exact_count >= self.config.exact_failure_warn_after:
                 return ToolGuardrailDecision(
                     action="warn",
                     code="repeated_exact_failure_warning",
@@ -547,7 +455,7 @@ class ToolCallGuardrailController:
                     signature=signature,
                 )
 
-            if self.config.warnings_enabled and same_count >= self.config.same_tool_failure_warn_after:
+            if self.config.guidance_enabled and same_count >= self.config.same_tool_failure_warn_after:
                 return ToolGuardrailDecision(
                     action="warn",
                     code="same_tool_failure_warning",
@@ -588,7 +496,7 @@ class ToolCallGuardrailController:
                 else 1
             )
             self._mutating_no_progress[mutation_path] = (mutation_fingerprint, repeat_count)
-            if self.config.hard_stop_enabled and repeat_count >= self.config.mutating_no_progress_halt_after:
+            if self.config.blocking_enabled and repeat_count >= self.config.mutating_no_progress_halt_after:
                 mutating_no_progress_decision = ToolGuardrailDecision(
                     action="halt",
                     code="mutating_no_progress_halt",
@@ -602,7 +510,7 @@ class ToolCallGuardrailController:
                     signature=signature,
                 )
                 self._halt_decision = mutating_no_progress_decision
-            elif self.config.warnings_enabled and repeat_count >= self.config.mutating_no_progress_warn_after:
+            elif self.config.guidance_enabled and repeat_count >= self.config.mutating_no_progress_warn_after:
                 mutating_no_progress_decision = ToolGuardrailDecision(
                     action="warn",
                     code="mutating_no_progress_warning",
@@ -637,12 +545,12 @@ class ToolCallGuardrailController:
         self._no_progress[progress_signature] = (result_hash, repeat_count)
 
         no_progress_block_after = self.config.no_progress_block_after
-        if tool_name in DEFAULT_NO_PROGRESS_BLOCK_TOOL_NAMES and not self.config.hard_stop_enabled:
-            no_progress_block_after = min(no_progress_block_after, DEFAULT_READ_STYLE_NO_PROGRESS_BLOCK_AFTER)
-
-        if repeat_count >= no_progress_block_after and (
-            self.config.hard_stop_enabled or tool_name in DEFAULT_NO_PROGRESS_BLOCK_TOOL_NAMES
-        ):
+        if tool_name in DEFAULT_NO_PROGRESS_BLOCK_TOOL_NAMES:
+            no_progress_block_after = min(
+                no_progress_block_after,
+                DEFAULT_READ_STYLE_NO_PROGRESS_BLOCK_AFTER,
+            )
+        if self.config.blocking_enabled and repeat_count >= no_progress_block_after:
             decision = ToolGuardrailDecision(
                 action="halt",
                 code="idempotent_no_progress_block",
@@ -654,7 +562,7 @@ class ToolCallGuardrailController:
             self._halt_decision = decision
             return decision
 
-        if self.config.warnings_enabled and self._consecutive_count >= self.config.consecutive_no_progress_warn_after:
+        if self.config.guidance_enabled and self._consecutive_count >= self.config.consecutive_no_progress_warn_after:
             return ToolGuardrailDecision(
                 action="warn",
                 code="idempotent_consecutive_warning",
@@ -664,7 +572,7 @@ class ToolCallGuardrailController:
                 signature=signature,
             )
 
-        if self.config.warnings_enabled and repeat_count >= self.config.no_progress_warn_after:
+        if self.config.guidance_enabled and repeat_count >= self.config.no_progress_warn_after:
             return ToolGuardrailDecision(
                 action="warn",
                 code="idempotent_no_progress_warning",
@@ -689,7 +597,7 @@ class ToolCallGuardrailController:
         self._workspace_scope_violation_counts[signature] = count
 
         block_after = min(self.config.exact_failure_block_after, DEFAULT_READ_STYLE_NO_PROGRESS_BLOCK_AFTER)
-        if count >= block_after:
+        if self.config.blocking_enabled and count >= block_after:
             decision = ToolGuardrailDecision(
                 action="halt",
                 code=WORKSPACE_SCOPE_REPEATED_BLOCK_CODE,
@@ -701,7 +609,7 @@ class ToolCallGuardrailController:
             self._halt_decision = decision
             return decision
 
-        if self.config.warnings_enabled and count >= self.config.exact_failure_warn_after:
+        if self.config.guidance_enabled and count >= self.config.exact_failure_warn_after:
             return ToolGuardrailDecision(
                 action="warn",
                 code=WORKSPACE_SCOPE_REPEATED_WARNING_CODE,
@@ -735,6 +643,19 @@ class ToolCallGuardrailController:
         progress_signature = _no_progress_signature(tool_name, args, self.cwd)
         if progress_signature is not None:
             self._no_progress.pop(progress_signature, None)
+
+
+class ToolLoopPolicy:
+    """Typed before-call adapter for the stateful loop controller."""
+
+    def __init__(self, controller: ToolCallGuardrailController) -> None:
+        self.controller = controller
+
+    def evaluate(self, call: ToolCallView, context: CodingTurnContext) -> PolicyDecision:
+        decision = self.controller.before_call(call.name, call.args)
+        if decision.allows_execution:
+            return Allow()
+        return Block(decision.code, decision.message, decision.to_metadata())
 
 
 def _file_mutation_path_key(tool_name: str, args: Mapping[str, Any], cwd: str | None = None) -> str | None:
@@ -777,33 +698,6 @@ def _bash_command_may_change_state(command: str) -> bool:
             return True
         if _basename(token) in _BASH_MUTATING_COMMANDS:
             return True
-        if token in {"pip", "pip3"} and next_token in _BASH_PACKAGE_MANAGER_STATE_COMMANDS:
-            return True
-        if token in {"python", "python3"} and next_token == "-m" and second_next in {"pip", "pip3"}:
-            return third_next in _BASH_PACKAGE_MANAGER_STATE_COMMANDS
-        if token in {"npm", "pnpm", "yarn", "bun", "poetry"} and next_token in _BASH_PACKAGE_MANAGER_STATE_COMMANDS:
-            return True
-        if token == "uv" and (
-            next_token in {"sync", "add", "remove"}
-            or (next_token == "pip" and second_next in _BASH_PACKAGE_MANAGER_STATE_COMMANDS)
-        ):
-            return True
-    return False
-
-
-def _bash_command_is_package_manager_state_mutation(command: str) -> bool:
-    stripped = command.strip()
-    if not stripped:
-        return False
-    try:
-        tokens = shlex.split(stripped)
-    except ValueError:
-        return False
-    lower_tokens = [token.lower() for token in tokens]
-    for index, token in enumerate(lower_tokens):
-        next_token = lower_tokens[index + 1] if index + 1 < len(lower_tokens) else ""
-        second_next = lower_tokens[index + 2] if index + 2 < len(lower_tokens) else ""
-        third_next = lower_tokens[index + 3] if index + 3 < len(lower_tokens) else ""
         if token in {"pip", "pip3"} and next_token in _BASH_PACKAGE_MANAGER_STATE_COMMANDS:
             return True
         if token in {"python", "python3"} and next_token == "-m" and second_next in {"pip", "pip3"}:

@@ -5,10 +5,13 @@ from __future__ import annotations
 import hashlib
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 from appv231.agent.types import AgentTool, AgentToolResult
 from appv231.ai.types import TextContent
+from appv231.coding_agent.capabilities import WorkspaceCapability
+from appv231.coding_agent.tools.atomic_file import atomic_replace_text
 from appv231.coding_agent.tools.file_mutation_queue import with_file_mutation_queue
 from appv231.coding_agent.tools.path_utils import render_tool_path, resolve_to_cwd
 from appv231.coding_agent.tools.types import ToolContext, ToolDefinition, wrap_tool_definition
@@ -34,8 +37,7 @@ def _default_mkdir(path: str) -> None:
 
 
 def _default_write_file(path: str, content: str) -> None:
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write(content)
+    atomic_replace_text(Path(path), content)
 
 
 _DEFAULT_OPERATIONS = WriteOperations(mkdir=_default_mkdir, write_file=_default_write_file)
@@ -74,6 +76,7 @@ def _file_content_metadata(content: str) -> dict[str, object]:
 
 def _execute_write(
     cwd: str,
+    workspace: WorkspaceCapability,
     tool_call_id,
     args,
     signal=None,
@@ -83,7 +86,7 @@ def _execute_write(
 ):
     path = args["path"]
     content = args["content"]
-    absolute_path = resolve_to_cwd(path, cwd)
+    absolute_path = str(workspace.resolve(path, access="write"))
     parent = os.path.dirname(absolute_path)
     result_details: dict = {}
 
@@ -111,8 +114,13 @@ def _execute_write(
     )
 
 
-def create_write_tool_definition(cwd: str, operations: WriteOperations | None = None) -> ToolDefinition:
+def create_write_tool_definition(
+    cwd: str,
+    operations: WriteOperations | None = None,
+    workspace: WorkspaceCapability | None = None,
+) -> ToolDefinition:
     ops = operations or _DEFAULT_OPERATIONS
+    workspace = workspace or WorkspaceCapability(Path(cwd))
     return ToolDefinition(
         name="write",
         label="write",
@@ -127,12 +135,19 @@ def create_write_tool_definition(cwd: str, operations: WriteOperations | None = 
             "When the user asks for a summary, report, checklist, notes, or other deliverable in a file path, create or update that file with write before your final response.",
         ],
         execute=lambda tid, args, signal=None, on_update=None, ctx=None: _execute_write(
-            cwd, tid, args, signal, on_update, ctx, ops
+            cwd, workspace, tid, args, signal, on_update, ctx, ops
         ),
         render_call=_render_write_call,
         render_result=_render_write_result,
     )
 
 
-def create_write_tool(cwd: str, operations: WriteOperations | None = None) -> AgentTool:
-    return wrap_tool_definition(create_write_tool_definition(cwd, operations), lambda: ToolContext(cwd=cwd))
+def create_write_tool(
+    cwd: str,
+    operations: WriteOperations | None = None,
+    workspace: WorkspaceCapability | None = None,
+) -> AgentTool:
+    return wrap_tool_definition(
+        create_write_tool_definition(cwd, operations, workspace),
+        lambda: ToolContext(cwd=cwd),
+    )

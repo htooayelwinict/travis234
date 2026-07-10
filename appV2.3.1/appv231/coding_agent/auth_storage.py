@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
+import threading
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -15,6 +18,10 @@ import appv231.ai.models as ai_models
 AuthCredential = dict[str, object]
 AuthStorageData = dict[str, AuthCredential]
 LockResult = dict[str, object]
+
+
+class AuthStorageError(RuntimeError):
+    pass
 
 
 def _agent_auth_path() -> Path:
@@ -40,21 +47,43 @@ class FileAuthStorageBackend(AuthStorageBackend):
 
     def withLock(self, fn: Callable[[str | None], LockResult]) -> object:
         self._ensure_file()
-        with self.auth_path.open("r+", encoding="utf-8") as file:
-            fcntl.flock(file.fileno(), fcntl.LOCK_EX)
+        lock_path = self.auth_path.with_name(f"{self.auth_path.name}.lock")
+        with lock_path.open("a+", encoding="utf-8") as lock_file:
+            os.chmod(lock_path, 0o600)
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             try:
-                current = file.read()
+                current = self.auth_path.read_text(encoding="utf-8")
                 result = fn(current)
                 if "next" in result:
-                    file.seek(0)
-                    file.write(str(result["next"]))
-                    file.truncate()
-                    file.flush()
-                    os.fsync(file.fileno())
-                    os.chmod(self.auth_path, 0o600)
+                    self._atomic_write(str(result["next"]))
                 return result.get("result")
             finally:
-                fcntl.flock(file.fileno(), fcntl.LOCK_UN)
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    def _atomic_write(self, content: str) -> None:
+        fd, temporary_name = tempfile.mkstemp(
+            prefix=f".{self.auth_path.name}.",
+            suffix=".tmp",
+            dir=self.auth_path.parent,
+        )
+        temporary = Path(temporary_name)
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self.auth_path)
+            directory_fd = os.open(self.auth_path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
 
     with_lock = withLock
 
@@ -80,6 +109,9 @@ class AuthStorage:
         self._fallback_resolver: Callable[[str], str | None] | None = None
         self._load_error: Exception | None = None
         self._errors: list[Exception] = []
+        self._oauth_providers: dict[str, dict[str, object]] = {}
+        self._oauth_locks: dict[str, threading.Lock] = {}
+        self._oauth_locks_guard = threading.Lock()
         self.reload()
 
     @staticmethod
@@ -124,9 +156,9 @@ class AuthStorage:
             self._load_error = error
             self._record_error(error)
 
-    def _persist_provider_change(self, provider: str, credential: AuthCredential | None) -> None:
+    def _persist_provider_change(self, provider: str, credential: AuthCredential | None) -> AuthStorageData:
         if self._load_error is not None:
-            return
+            raise AuthStorageError(f"auth storage is malformed: {self._load_error}") from self._load_error
         try:
             def update(current: str | None) -> LockResult:
                 merged = self._parse_storage_data(current)
@@ -134,11 +166,17 @@ class AuthStorage:
                     merged.pop(provider, None)
                 else:
                     merged[provider] = dict(credential)
-                return {"result": None, "next": json.dumps(merged, indent=2)}
+                return {"result": merged, "next": json.dumps(merged, indent=2)}
 
-            self._storage.withLock(update)
-        except Exception as error:  # noqa: BLE001 - Pi buffers persistence errors.
+            committed = self._storage.withLock(update)
+            if not isinstance(committed, dict):
+                raise AuthStorageError("auth storage transaction did not return committed data")
+            return {str(key): dict(value) for key, value in committed.items() if isinstance(value, dict)}
+        except Exception as error:
             self._record_error(error)
+            if isinstance(error, AuthStorageError):
+                raise
+            raise AuthStorageError(f"auth storage update failed: {error}") from error
 
     def setRuntimeApiKey(self, provider: str, api_key: str) -> None:
         self._runtime_overrides[provider] = api_key
@@ -158,12 +196,10 @@ class AuthStorage:
         return dict(credential) if credential is not None else None
 
     def set(self, provider: str, credential: AuthCredential) -> None:
-        self._data[provider] = dict(credential)
-        self._persist_provider_change(provider, credential)
+        self._data = self._persist_provider_change(provider, credential)
 
     def remove(self, provider: str) -> None:
-        self._data.pop(provider, None)
-        self._persist_provider_change(provider, None)
+        self._data = self._persist_provider_change(provider, None)
 
     delete = remove
 
@@ -190,12 +226,12 @@ class AuthStorage:
         if provider in self._data:
             return {"configured": True, "source": "stored"}
         if provider in self._runtime_overrides:
-            return {"configured": False, "source": "runtime", "label": "--api-key"}
+            return {"configured": True, "source": "runtime", "label": "--api-key"}
         env_keys = find_env_keys(provider)
         if env_keys:
-            return {"configured": False, "source": "environment", "label": env_keys[0]}
+            return {"configured": True, "source": "environment", "label": env_keys[0]}
         if self._fallback_resolver is not None and self._fallback_resolver(provider):
-            return {"configured": False, "source": "fallback", "label": "custom provider config"}
+            return {"configured": True, "source": "fallback", "label": "custom provider config"}
         return {"configured": False}
 
     get_auth_status = getAuthStatus
@@ -230,8 +266,7 @@ class AuthStorage:
             if credential.get("type") == "api_key":
                 return ai_models._resolve_config_value(str(credential.get("key", "")))  # noqa: SLF001
             if credential.get("type") == "oauth":
-                access = credential.get("access") or credential.get("access_token")
-                return str(access) if access is not None else None
+                return self._get_oauth_api_key(provider)
 
         env_key = get_env_api_key(provider)
         if env_key:
@@ -246,7 +281,47 @@ class AuthStorage:
 
     get_api_key = getApiKey
 
+    def register_oauth_provider(self, provider: str, implementation: dict[str, object]) -> None:
+        self._oauth_providers[provider] = dict(implementation)
+
+    def unregister_oauth_provider(self, provider: str) -> None:
+        self._oauth_providers.pop(provider, None)
+
+    def _get_oauth_api_key(self, provider: str) -> str | None:
+        with self._oauth_locks_guard:
+            lock = self._oauth_locks.setdefault(provider, threading.Lock())
+        with lock:
+            credential = self.get(provider)
+            if credential is None or credential.get("type") != "oauth":
+                return None
+            implementation = self._oauth_providers.get(provider)
+            if implementation is not None and _oauth_is_expired(credential):
+                refresh = implementation.get("refreshToken") or implementation.get("refresh_token")
+                if not callable(refresh):
+                    return None
+                refreshed = ai_models._settle_oauth_result(refresh(credential))  # noqa: SLF001
+                if not isinstance(refreshed, dict):
+                    raise AuthStorageError(f"OAuth provider {provider} returned invalid refreshed credentials")
+                self.set(provider, {"type": "oauth", **refreshed})
+                credential = self.get(provider) or {}
+            if implementation is not None:
+                get_api_key = implementation.get("getApiKey") or implementation.get("get_api_key")
+                if callable(get_api_key):
+                    return str(get_api_key(credential))
+            access = credential.get("access") or credential.get("access_token")
+            return str(access) if access is not None else None
+
     def getOAuthProviders(self) -> list[dict[str, object]]:
         return ai_models.get_oauth_providers()
 
     get_oauth_providers = getOAuthProviders
+
+
+def _oauth_is_expired(credential: AuthCredential) -> bool:
+    expires = credential.get("expires")
+    if expires is None:
+        return False
+    try:
+        return int(expires) <= int(time.time() * 1000)
+    except (TypeError, ValueError):
+        return False

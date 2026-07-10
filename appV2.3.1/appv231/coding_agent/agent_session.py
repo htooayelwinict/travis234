@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shlex
 import subprocess
 import time
 from dataclasses import dataclass
@@ -23,39 +22,45 @@ from appv231.agent.types import AgentToolResult
 from appv231.agent.types import AgentMessage
 from appv231.agent.types import BeforeToolCallResult
 from appv231.agent.types import MessageEndEvent, MessageStartEvent
-from appv231.agent.tool_guardrails import (
+from appv231.coding_agent.policies.tool_guardrails import (
     ToolCallGuardrailConfig,
     ToolCallGuardrailController,
     ToolGuardrailDecision,
+    ToolLoopPolicy,
     append_toolguard_guidance,
     classify_tool_failure,
-    package_manager_mutation_decision,
     toolguard_synthetic_result,
+)
+from appv231.coding_agent.policies.iteration_limit import coding_iteration_limit_message
+from appv231.coding_agent.policies.package_consent import PackageMutationPolicy
+from appv231.coding_agent.policies.pipeline import PolicyPipeline
+from appv231.coding_agent.policies.types import (
+    Allow,
+    Block,
+    CodingPolicyEvent,
+    CodingTurnContext,
+    RequireConsent,
+    ToolCallView,
+    TurnCapabilities,
 )
 from appv231.ai.model_resolver import ScopedModel
 from appv231.ai.models import (
     clamp_thinking_level,
-    get_api_key_for_provider,
     get_supported_thinking_levels,
-    get_provider_auth_status,
-    get_provider_display_name,
-    get_providers,
-    get_models,
-    has_configured_auth,
-    register_model_request_headers,
-    register_provider_auth_config,
-    set_provider_models,
-    unregister_provider_auth_config,
-    unregister_provider_models,
 )
-from appv231.ai.stream import ApiProvider, register_api_provider
 from appv231.ai.types import AssistantMessage, Cost, ImageContent, Message, Model, TextContent, UserMessage, now_ms
 from appv231.ai.types import ToolCall, ToolResultMessage, Usage
 from appv231.compaction.compressor import LEGACY_SUMMARY_PREFIX, SUMMARY_END_MARKER, SUMMARY_PREFIX, estimate_tokens
 from appv231.compaction.timing import CompactionManager
 from appv231.coding_agent.branch_summarization import generate_branch_summary
+from appv231.coding_agent.artifacts import ArtifactRegistry
+from appv231.coding_agent.compaction_adapter import compaction_summary_with_details, to_compressor_messages
+from appv231.coding_agent.compaction_coordinator import CompactionCoordinator, CompactionDeferredError
+from appv231.coding_agent.capabilities import CapabilityViolation, WorkspaceCapability
 from appv231.coding_agent.config import get_docs_path, get_examples_path, get_readme_path
 from appv231.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
+from appv231.coding_agent.execution_backend import select_execution_backend
+from appv231.coding_agent.provider_control_plane import ProviderControlPlane
 from appv231.coding_agent.resource_loader import DefaultResourceLoader
 from appv231.coding_agent.session_store import (
     BashExecutionMessage,
@@ -76,8 +81,7 @@ from appv231.coding_agent.subagents import (
 )
 from appv231.coding_agent.tools import create_all_tool_definitions
 from appv231.coding_agent.tools.bash import BASH_SCHEMA, BashExecOptions, BashOperations, create_local_bash_operations, get_shell_env
-from appv231.coding_agent.tools.output_accumulator import OutputAccumulator
-from appv231.coding_agent.tools.path_utils import resolve_to_cwd
+from appv231.coding_agent.tools.output_spool import OutputSpool
 from appv231.coding_agent.tools.types import (
     ToolContext,
     ToolDefinition,
@@ -224,8 +228,6 @@ _BRANCH_SUMMARY_PREFIX = "The following is a summary of a branch that this conve
 _BRANCH_SUMMARY_SUFFIX = "</summary>"
 _COMPACTION_SUMMARY_PREFIX = "The conversation history before this point was compacted into the following summary:\n\n<summary>\n"
 _COMPACTION_SUMMARY_SUFFIX = "\n</summary>"
-_COMPACTION_READ_FILES_TAG = "read-files"
-_COMPACTION_MODIFIED_FILES_TAG = "modified-files"
 _THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"]
 _RETRYABLE_ERROR_MARKERS = (
     "overloaded",
@@ -385,69 +387,6 @@ class ModelCycleResult:
     @property
     def isScoped(self) -> bool:
         return self.is_scoped
-
-
-class _SessionModelRegistry:
-    def __init__(self, active_model_fn: Callable[[], Model]) -> None:
-        self._active_model_fn = active_model_fn
-
-    def getAll(self) -> list[Model]:
-        return _models_with_active_fallback(self._active_model_fn())
-
-    get_all = getAll
-
-    def getAvailable(self) -> list[Model]:
-        active_model = self._active_model_fn()
-        return [
-            model
-            for model in self.getAll()
-            if _models_are_same(model, active_model) or has_configured_auth(model)
-        ]
-
-    get_available = getAvailable
-
-    def find(self, provider: str, model_id: str) -> Model | None:
-        return next(
-            (
-                model
-                for model in self.getAll()
-                if model.provider == provider and model.id == model_id
-            ),
-            None,
-        )
-
-    def hasConfiguredAuth(self, model: Model) -> bool:
-        return _models_are_same(model, self._active_model_fn()) or has_configured_auth(model)
-
-    has_configured_auth = hasConfiguredAuth
-
-    def getProviderAuthStatus(self, provider: str) -> dict[str, object]:
-        if provider == self._active_model_fn().provider:
-            return {"configured": True, "source": "active_session"}
-        return get_provider_auth_status(provider)
-
-    get_provider_auth_status = getProviderAuthStatus
-
-    def getProviderDisplayName(self, provider: str) -> str:
-        return get_provider_display_name(provider)
-
-    get_provider_display_name = getProviderDisplayName
-
-    def getApiKeyForProvider(self, provider: str) -> str | None:
-        return get_api_key_for_provider(provider)
-
-    get_api_key_for_provider = getApiKeyForProvider
-
-
-def _models_are_same(left: Model | None, right: Model | None) -> bool:
-    return bool(left and right and left.provider == right.provider and left.id == right.id)
-
-
-def _models_with_active_fallback(active_model: Model) -> list[Model]:
-    models = [model for provider in get_providers() for model in get_models(provider)]
-    if not any(_models_are_same(model, active_model) for model in models):
-        models.append(active_model)
-    return models
 
 
 @dataclass
@@ -638,7 +577,7 @@ def default_convert_to_llm(messages: list[AgentMessage]) -> list[Message]:
                 )
             )
         elif role == "compactionSummary":
-            summary = _compaction_summary_with_details(
+            summary = compaction_summary_with_details(
                 getattr(message, "summary", ""),
                 getattr(message, "details", None),
             )
@@ -663,41 +602,6 @@ def default_convert_to_llm(messages: list[AgentMessage]) -> list[Message]:
         elif role in ("user", "assistant", "toolResult"):
             out.append(message)
     return out
-
-
-def _compaction_summary_with_details(summary: object, details: object) -> str:
-    text = str(summary or "")
-    if not isinstance(details, dict):
-        return text
-
-    sections: list[str] = []
-    if f"<{_COMPACTION_READ_FILES_TAG}>" not in text:
-        section = _compaction_file_detail_section(_COMPACTION_READ_FILES_TAG, details.get("readFiles"))
-        if section:
-            sections.append(section)
-    if f"<{_COMPACTION_MODIFIED_FILES_TAG}>" not in text:
-        section = _compaction_file_detail_section(_COMPACTION_MODIFIED_FILES_TAG, details.get("modifiedFiles"))
-        if section:
-            sections.append(section)
-
-    if not sections:
-        return text
-    return text.rstrip() + "\n\n" + "\n\n".join(sections)
-
-
-def _compaction_file_detail_section(tag: str, value: object) -> str:
-    if not isinstance(value, list):
-        return ""
-    paths: list[str] = []
-    for item in value:
-        if not isinstance(item, str):
-            continue
-        path = item.strip()
-        if path and path not in paths:
-            paths.append(path)
-    if not paths:
-        return ""
-    return f"<{tag}>\n" + "\n".join(paths) + f"\n</{tag}>"
 
 
 def _exclude_aborted_turns_from_context(messages: list[AgentMessage]) -> list[AgentMessage]:
@@ -1021,10 +925,18 @@ class AgentSession:
         stream_fn=None,
         max_iterations: int = 90,
         tool_loop_guardrails: ToolCallGuardrailConfig | Mapping[str, object] | None = None,
+        provider_control_plane: ProviderControlPlane | None = None,
     ) -> None:
         self.cwd = cwd
+        self.provider_control_plane = provider_control_plane or ProviderControlPlane.create_default()
+        self.provider_control_plane.ensure_model(model)
+        self.model_registry = self.provider_control_plane.models
+        self.auth_storage = self.provider_control_plane.auth
+        self._workspace = WorkspaceCapability(Path(cwd))
+        self._artifacts = ArtifactRegistry()
+        self.execution_backend = select_execution_backend(cwd)
         self.settings_manager = settings_manager or SettingsManager.inMemory()
-        self._stream_fn = stream_fn
+        self._stream_fn = stream_fn or self.provider_control_plane.stream_simple
         self._allowed_tool_names = set(allowed_tool_names) if allowed_tool_names is not None else None
         self._excluded_tool_names = set(excluded_tool_names or [])
         self._tool_by_name: dict[str, AgentTool] = {}
@@ -1037,7 +949,7 @@ class AgentSession:
         self._extension_error_unsubscribe: Callable[[], None] | None = None
         self._extension_error_listener: Callable[[dict[str, object]], None] | None = None
         if getattr(self._extension_runner, "_model_registry", None) is None:
-            self._extension_runner._model_registry = _SessionModelRegistry(lambda: self.model)  # noqa: SLF001
+            self._extension_runner._model_registry = self.model_registry  # noqa: SLF001
         self._extension_ui_context: object | None = None
         self._extension_mode = "print"
         self._extension_command_context_actions: object | None = None
@@ -1045,7 +957,7 @@ class AgentSession:
         self._extension_shutdown_handler: Callable[[], object] | None = None
         self._extensions_bound = False
         self._extension_provider_original_models: dict[str, Model] = {}
-        self._extension_provider_original_registry: dict[str, list[Model]] = {}
+        self._extension_provider_registrations: dict[str, object] = {}
         self._event_listeners: list[Callable[[object], None]] = []
         self._subagent_observer_errors: list[str] = []
         self._model_subagents_spawned_this_turn = 0
@@ -1064,6 +976,12 @@ class AgentSession:
             _coerce_tool_guardrail_config(tool_loop_guardrails),
             cwd=self.cwd,
         )
+        self._turn_capabilities = TurnCapabilities()
+        self._policy_pipeline = PolicyPipeline(
+            [PackageMutationPolicy(), ToolLoopPolicy(self._tool_guardrails)]
+        )
+        self._policy_run_id = session_id or "ephemeral"
+        self._policy_turn_number = 0
         self._tool_guardrail_halt_decision: ToolGuardrailDecision | None = None
         self._tool_guardrail_halt_response_emitted = False
         self._tool_loop_recovery_steered_keys: set[tuple[str, str, int]] = set()
@@ -1087,6 +1005,19 @@ class AgentSession:
         self._append_system_prompt: str | None = None
         self._context_files: list[tuple[str, str]] = []
         self._refresh_resource_prompt_inputs()
+        skill_access = self._skill_read_access()
+        external_read_paths = [
+            *skill_access["roots"],
+            *skill_access["files"],
+            *(path for path, _content in self._context_files),
+            get_docs_path(),
+            get_examples_path(),
+            get_readme_path(),
+        ]
+        self._workspace = WorkspaceCapability(
+            Path(cwd),
+            tuple(Path(path) for path in external_read_paths),
+        )
         self._compaction_manager = compaction_manager
         self._compaction_running = False
         self._session_name: str | None = None
@@ -1177,7 +1108,9 @@ class AgentSession:
             on_response=self._on_provider_response,
             session_id=self.session_id or None,
             max_iterations=max_iterations,
+            on_iteration_limit=coding_iteration_limit_message,
         )
+        self._compaction_coordinator = CompactionCoordinator(self.agent)
         self._extension_runner.bind_provider_actions(
             self._register_extension_provider,
             self._unregister_extension_provider,
@@ -1249,10 +1182,19 @@ class AgentSession:
         return {
             "read": {
                 "auto_resize_images": True if auto_resize_images is None else bool(auto_resize_images),
+                "workspace": self._workspace,
+                "artifacts": self._artifacts,
             },
+            "edit": {"workspace": self._workspace},
+            "write": {"workspace": self._workspace},
+            "grep": {"workspace": self._workspace},
+            "find": {"workspace": self._workspace},
+            "ls": {"workspace": self._workspace},
             "bash": {
                 "command_prefix": self._settings_shell_command_prefix(),
                 "shell_path": self._settings_shell_path(),
+                "artifacts": self._artifacts,
+                "backend": self.execution_backend,
             },
         }
 
@@ -1416,6 +1358,10 @@ class AgentSession:
             unsubscribe()
             self._unsubscribe_agent = None
         self._event_listeners = []
+        for registration in self._extension_provider_registrations.values():
+            registration.close()
+        self._extension_provider_registrations.clear()
+        self._artifacts.close(remove_files=True)
 
     def prompt(
         self,
@@ -2548,6 +2494,10 @@ class AgentSession:
         if self._extension_error_unsubscribe is not None:
             self._extension_error_unsubscribe()
             self._extension_error_unsubscribe = None
+        for registration in self._extension_provider_registrations.values():
+            registration.close()
+        self._extension_provider_registrations.clear()
+        self._artifacts.close(remove_files=True)
 
     def set_label(self, entry_id: str, label: str | None) -> None:
         if self._session_store is None:
@@ -2666,6 +2616,9 @@ class AgentSession:
                 self._event_listeners.remove(listener)
 
         return _unsubscribe
+
+    def grant_capability(self, name: str, uses: int = 1) -> None:
+        self._turn_capabilities.grant(name, uses)
 
     def steer(self, text: str, images: list[ImageContent] | None = None) -> None:
         self._raise_if_extension_command(text)
@@ -3102,6 +3055,13 @@ class AgentSession:
 
     setModel = set_model
 
+    def with_model_overrides(self, *, max_tokens: int) -> Model:
+        overridden = replace(self.model, max_tokens=int(max_tokens))
+        self.agent.state.model = overridden
+        return overridden
+
+    withModelOverrides = with_model_overrides
+
     def set_scoped_models(self, scoped_models: list[ScopedModel]) -> None:
         self._scoped_models = list(scoped_models)
 
@@ -3115,31 +3075,34 @@ class AgentSession:
     cycleModel = cycle_model
 
     def _cycle_scoped_model(self, direction: str) -> ModelCycleResult | None:
-        if len(self._scoped_models) <= 1:
+        scoped_models = [
+            scoped for scoped in self._scoped_models if self.model_registry.is_selectable(scoped.model)
+        ]
+        if len(scoped_models) <= 1:
             return None
 
         current_index = next(
             (
                 index
-                for index, scoped in enumerate(self._scoped_models)
+                for index, scoped in enumerate(scoped_models)
                 if scoped.model.provider == self.model.provider and scoped.model.id == self.model.id
             ),
             0,
         )
-        count = len(self._scoped_models)
+        count = len(scoped_models)
         if direction == "backward":
             next_index = (current_index - 1 + count) % count
         else:
             next_index = (current_index + 1) % count
 
-        next_scoped = self._scoped_models[next_index]
+        next_scoped = scoped_models[next_index]
         thinking_level = self._get_thinking_level_for_model_switch(next_scoped.thinking_level)
         self.set_model(next_scoped.model)
         self.set_thinking_level(thinking_level)
         return ModelCycleResult(model=next_scoped.model, thinking_level=self.thinking_level, is_scoped=True)
 
     def _cycle_available_model(self, direction: str) -> ModelCycleResult | None:
-        available_models = _models_with_active_fallback(self.model)
+        available_models = self.model_registry.get_selectable()
         if len(available_models) <= 1:
             return None
 
@@ -3165,23 +3128,13 @@ class AgentSession:
 
     def _register_extension_provider(self, name: str, config: dict) -> None:
         _validate_extension_provider_config(name, config)
-        register_provider_auth_config(name, config)
-        api = str(config.get("api") or name)
-        stream_simple = config.get("streamSimple") or config.get("stream_simple")
-        if callable(stream_simple):
-            register_api_provider(ApiProvider(api=api, stream=stream_simple, stream_simple=stream_simple))
-
-        model_configs = config.get("models")
-        if isinstance(model_configs, list):
-            self._extension_provider_original_registry.setdefault(name, list(get_models(name)))
-            models = []
-            for model_config in model_configs:
-                if not isinstance(model_config, dict):
-                    continue
-                model = _model_from_provider_config(name, config, model_config)
-                register_model_request_headers(name, model.id, model_config.get("headers"))
-                models.append(model)
-            set_provider_models(name, models)
+        previous_registration = self._extension_provider_registrations.pop(name, None)
+        if previous_registration is not None:
+            previous_registration.close()
+        self._extension_provider_registrations[name] = self.provider_control_plane.register_extension(
+            f"extension:{name}",
+            {"provider": name, **config},
+        )
 
         current = self.agent.state.model
         if current.provider != name:
@@ -3192,25 +3145,25 @@ class AgentSession:
             self.agent.state.model = updated
 
     def _unregister_extension_provider(self, name: str) -> None:
-        unregister_provider_auth_config(name)
+        registration = self._extension_provider_registrations.pop(name, None)
+        if registration is not None:
+            registration.close()
         original = self._extension_provider_original_models.pop(name, None)
-        original_registry = self._extension_provider_original_registry.pop(name, None)
-        if original_registry is None:
-            unregister_provider_models(name)
-        else:
-            set_provider_models(name, original_registry)
         if original is not None and self.agent.state.model.provider == name:
             self.agent.state.model = original
 
     def compact(self, focus: str | None = None, summarizer=None, deep: bool = False):
         if self._compaction_manager is None:
             raise RuntimeError("No compaction manager configured")
+        if self._compaction_coordinator.prepare() == "deferred":
+            raise CompactionDeferredError("Compaction deferred until the active run completes")
         self._begin_compaction("manual")
         before_messages = list(self.messages)
+        compressor_messages = to_compressor_messages(before_messages)
         before_entry_ids = self._session_context_message_entry_ids()
         try:
             status = self._compaction_manager.compress_manual_with_status(
-                self.messages,
+                compressor_messages,
                 summarizer=summarizer,
                 focus=focus,
                 deep=deep,
@@ -3218,7 +3171,7 @@ class AgentSession:
             if self._session_store and status.compressed:
                 first_kept = self._first_kept_entry_id_for_status(status, before_entry_ids)
                 summary = status.summary or _extract_compaction_result_summary(status.messages)
-                tokens_before = status.tokens_before or estimate_tokens(before_messages)
+                tokens_before = status.tokens_before or estimate_tokens(compressor_messages)
                 self._session_store.append_compaction(
                     summary,
                     first_kept,
@@ -3393,7 +3346,11 @@ class AgentSession:
             shell_path = self._settings_shell_path()
         operations: BashOperations = options.get("operations") or create_local_bash_operations(shell_path=shell_path)
         resolved_command = f"{command_prefix}\n{command}" if command_prefix else command
-        output = OutputAccumulator(temp_file_prefix="pi-user-bash")
+        output = OutputSpool(
+            temp_file_prefix="pi-user-bash",
+            artifact_registry=self._artifacts,
+            artifact_kind="user-bash-output",
+        )
         self._bash_signal = AbortSignal()
 
         def handle_data(data: bytes) -> None:
@@ -3418,7 +3375,7 @@ class AgentSession:
             output.finish()
             self._bash_signal = None
         snapshot = output.snapshot(persist_if_truncated=True)
-        output.close_temp_file()
+        output.close()
         bash_result = BashResult(
             output=snapshot.content,
             exit_code=exit_code,
@@ -3478,6 +3435,7 @@ class AgentSession:
         self._process_limit_halt_message = None
         self._process_limit_halt_response_emitted = False
         self._partial_stream_continue_retries = 0
+        self._policy_turn_number += 1
         active_stream_fn = stream_fn or self._stream_fn
         try:
             new_messages = list(self.agent.prompt(prompt_message, stream_fn=active_stream_fn))
@@ -3502,6 +3460,7 @@ class AgentSession:
             return new_messages
         finally:
             self._flush_pending_bash_messages()
+            self._turn_capabilities.clear()
 
     def _prepare_retry(self, message: AssistantMessage | None) -> bool:
         if not self._retry_enabled or message is None or message.stop_reason != "error":
@@ -3579,9 +3538,8 @@ class AgentSession:
     def _workspace_scope_violation(self, context) -> ToolGuardrailDecision | None:
         tool_name = str(getattr(context.tool_call, "name", "") or "")
         args = context.args if isinstance(context.args, dict) else {}
-        latest_user_message = self._latest_user_message_text(context.context)
         for raw_path in _tool_call_workspace_path_candidates(tool_name, args):
-            violation = self._workspace_path_violation(tool_name, raw_path, latest_user_message)
+            violation = self._workspace_path_violation(tool_name, raw_path)
             if violation is not None:
                 resolved_path, message = violation
                 return self._tool_guardrails.workspace_scope_violation_decision(
@@ -3596,31 +3554,19 @@ class AgentSession:
         self,
         tool_name: str,
         raw_path: str,
-        latest_user_message: str,
     ) -> tuple[str, str] | None:
-        resolved = _safe_resolve_to_cwd(raw_path, self.cwd)
-        if resolved is None or _path_is_within(resolved, self.cwd):
+        if tool_name == "read" and self._artifacts.resolve_read(raw_path) is not None:
             return None
-        if _user_authorized_absolute_path(raw_path, resolved, latest_user_message):
+        access = "read" if tool_name in {"read", "grep", "find", "ls"} else "execute" if tool_name == "bash" else "write"
+        try:
+            self._workspace.resolve(raw_path, access=access)
             return None
-        if tool_name == "read" and self._read_path_is_registered_resource(resolved):
-            return None
+        except CapabilityViolation as error:
+            resolved = str(error.resolved_path)
         return resolved, (
             f"Refusing {tool_name} outside the current working directory: {resolved}. "
-            f"Current working directory is {self.cwd}. Ask the user to name this exact absolute path if it is intentional."
+            f"Current working directory is {self.cwd}."
         )
-
-    def _read_path_is_registered_resource(self, resolved_path: str) -> bool:
-        if _path_is_internal_docs_resource(resolved_path):
-            return True
-        access = self._skill_read_access()
-        for file_path in access["files"]:
-            if _same_path(resolved_path, file_path):
-                return True
-        for root in access["roots"]:
-            if _path_is_within(resolved_path, root):
-                return True
-        return False
 
     def _before_tool_call(self, context, signal=None) -> BeforeToolCallResult | None:
         if self._process_limit_halt_message is not None:
@@ -3657,26 +3603,41 @@ class AgentSession:
             return BeforeToolCallResult(block=True, reason=toolguard_synthetic_result(workspace_violation))
 
         latest_user_message = self._latest_user_message_text(context.context)
-
-        decision = package_manager_mutation_decision(
-            context.tool_call.name,
-            context.args,
-            self._latest_user_message_text(context.context),
+        policy_call = ToolCallView(
+            id=context.tool_call.id,
+            name=context.tool_call.name,
+            args=context.args if isinstance(context.args, Mapping) else {},
         )
-        if not decision.allows_execution:
-            if decision.should_halt:
-                self._tool_guardrail_halt_decision = decision
-            return BeforeToolCallResult(block=True, reason=toolguard_synthetic_result(decision))
+        policy_context = CodingTurnContext(
+            cwd=self.cwd,
+            latest_user_message=latest_user_message,
+            capabilities=self._turn_capabilities,
+            tool_catalog=tuple(self.get_active_tool_names()),
+            run_id=self._policy_run_id,
+            turn_id=str(self._policy_turn_number),
+        )
+        policy_decision = self._policy_pipeline.evaluate(policy_call, policy_context)
+        if not isinstance(policy_decision, Allow):
+            if isinstance(policy_decision, Block) and self._tool_guardrails.halt_decision is not None:
+                self._tool_guardrail_halt_decision = self._tool_guardrails.halt_decision
+            self._emit(
+                CodingPolicyEvent(
+                    decision=policy_decision,
+                    tool_call=policy_call,
+                    run_id=policy_context.run_id,
+                    turn_id=policy_context.turn_id,
+                )
+            )
+            if isinstance(policy_decision, RequireConsent):
+                reason = f"[{policy_decision.capability}] {policy_decision.reason}"
+            else:
+                reason = f"[{policy_decision.code}] {policy_decision.reason}"
+            return BeforeToolCallResult(block=True, reason=reason)
 
         duplicate_bash_result = self._duplicate_bash_call_in_current_turn(context.tool_call.name, context.args)
         if duplicate_bash_result is not None:
             return duplicate_bash_result
 
-        decision = self._tool_guardrails.before_call(context.tool_call.name, context.args)
-        if not decision.allows_execution:
-            if decision.should_halt:
-                self._tool_guardrail_halt_decision = decision
-            return BeforeToolCallResult(block=True, reason=toolguard_synthetic_result(decision))
         return None
 
     def _duplicate_bash_call_in_current_turn(self, tool_name: str, args) -> BeforeToolCallResult | None:
@@ -3870,6 +3831,8 @@ class AgentSession:
     def _handle_agent_event(self, event) -> None:
         if event.type == "turn_start":
             self._bash_signatures_this_assistant_turn.clear()
+        if event.type == "tool_execution_end" and getattr(event, "reason_code", None):
+            self._observe_nonexecuted_tool_outcome(event)
         if event.type == "message_end" and self._extension_runner.has_handlers("message_end"):
             replacement = self._extension_runner.emit_message_end({"type": "message_end", "message": event.message})
             if replacement is not None:
@@ -3898,6 +3861,26 @@ class AgentSession:
             elif message_role in ("user", "assistant", "toolResult"):
                 self._session_store.append_message(event.message)
         self._emit(event)
+
+    def _observe_nonexecuted_tool_outcome(self, event) -> None:
+        if self._tool_guardrail_halt_decision is not None:
+            return
+        result_text = _tool_result_text(event.result.content)
+        decision = self._tool_guardrails.after_call(
+            event.tool_name,
+            event.args if isinstance(event.args, Mapping) else {},
+            result_text,
+            failed=True,
+        )
+        if decision.action == "halt":
+            event.result.content = _append_toolguard_content(event.result.content, decision)
+            self._steer_tool_loop_recovery(decision)
+        elif decision.action == "warn":
+            event.result.details = _with_toolguard_details(event.result.details, decision)
+            self._steer_tool_loop_recovery(decision)
+        if decision.should_halt:
+            self._tool_guardrail_halt_decision = decision
+            event.is_error = True
 
     def _will_retry_after_agent_end(self, event) -> bool:
         if not self._retry_enabled or self._retry_attempt >= self._max_retries:
@@ -4741,22 +4724,9 @@ def _message_content_text(content: object) -> str:
 
 
 _WORKSPACE_PATH_ARG_TOOLS = {"read", "write", "edit", "grep", "find", "ls"}
-_BASH_SYSTEM_PATH_PREFIXES = (
-    "/bin",
-    "/sbin",
-    "/usr/bin",
-    "/usr/sbin",
-    "/System",
-    "/Library",
-    "/opt/homebrew/bin",
-    "/opt/local/bin",
-)
 
 
 def _tool_call_workspace_path_candidates(tool_name: str, args: dict) -> list[str]:
-    if tool_name == "bash":
-        command = args.get("command")
-        return _bash_absolute_path_candidates(command if isinstance(command, str) else "")
     if tool_name not in _WORKSPACE_PATH_ARG_TOOLS:
         return []
     candidates: list[str] = []
@@ -4765,91 +4735,6 @@ def _tool_call_workspace_path_candidates(tool_name: str, args: dict) -> list[str
         if isinstance(value, str) and value.strip():
             candidates.append(value)
     return candidates
-
-
-def _bash_absolute_path_candidates(command: str) -> list[str]:
-    if not command:
-        return []
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        tokens = command.split()
-    candidates: list[str] = []
-    for token in tokens:
-        for value in _bash_token_path_values(token):
-            if not value or value.startswith(("http://", "https://", "git@")):
-                continue
-            if not os.path.isabs(os.path.expanduser(value)):
-                continue
-            if any(_path_is_within(value, prefix) for prefix in _BASH_SYSTEM_PATH_PREFIXES):
-                continue
-            candidates.append(value)
-    return candidates
-
-
-def _bash_token_path_values(token: str) -> list[str]:
-    stripped = token.strip().strip(",;()[]{}")
-    if not stripped:
-        return []
-    if stripped[0] in {">", "<"}:
-        stripped = stripped.lstrip("><")
-    if not stripped:
-        return []
-    if stripped.startswith("-"):
-        if "=" not in stripped:
-            return []
-        stripped = stripped.split("=", 1)[1]
-    elif "=" in stripped and not stripped.startswith(("/", "~")):
-        stripped = stripped.split("=", 1)[1]
-    return [stripped.strip().strip(",;()[]{}")]
-
-
-def _safe_resolve_to_cwd(raw_path: str, cwd: str) -> str | None:
-    try:
-        return resolve_to_cwd(str(raw_path), cwd)
-    except (OSError, ValueError):
-        return None
-
-
-def _safe_realpath(path: str) -> Path | None:
-    try:
-        return Path(path).expanduser().resolve(strict=False)
-    except (OSError, RuntimeError, ValueError):
-        return None
-
-
-def _path_is_within(path: str, root: str) -> bool:
-    resolved_path = _safe_realpath(path)
-    resolved_root = _safe_realpath(root)
-    if resolved_path is None or resolved_root is None:
-        return False
-    if resolved_path == resolved_root:
-        return True
-    try:
-        resolved_path.relative_to(resolved_root)
-        return True
-    except ValueError:
-        return False
-
-
-def _same_path(left: str, right: str) -> bool:
-    resolved_left = _safe_realpath(left)
-    resolved_right = _safe_realpath(right)
-    return resolved_left is not None and resolved_right is not None and resolved_left == resolved_right
-
-
-def _user_authorized_absolute_path(raw_path: str, resolved_path: str, latest_user_message: str) -> bool:
-    if not latest_user_message:
-        return False
-    raw = str(raw_path)
-    raw_without_at = raw[1:] if raw.startswith("@") else raw
-    return raw in latest_user_message or raw_without_at in latest_user_message or resolved_path in latest_user_message
-
-
-def _path_is_internal_docs_resource(resolved_path: str) -> bool:
-    if _same_path(resolved_path, get_readme_path()):
-        return True
-    return _path_is_within(resolved_path, get_docs_path()) or _path_is_within(resolved_path, get_examples_path())
 
 
 def _extract_compaction_result_summary(messages: list[Message]) -> str:

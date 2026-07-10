@@ -4,7 +4,8 @@ from dataclasses import dataclass
 
 import pytest
 
-from appv231.ai.validation import ToolValidationError, validate_tool_arguments
+from appv231.ai.validation import ToolValidationError, compile_tool_schema, validate_tool_arguments
+from appv231.agent.types import AgentTool, AgentToolResult
 from appv231.coding_agent.tools.write import WRITE_SCHEMA
 
 
@@ -88,6 +89,40 @@ def test_validate_tool_arguments_ports_pi_integer_string_coercion() -> None:
     )
 
     assert validate_tool_arguments(tool, _ToolCall(arguments={"count": "42.0"})) == {"count": 42}
+
+
+@pytest.mark.parametrize(
+    ("schema", "arguments"),
+    [
+        ({"type": "string", "enum": ["staging"]}, "production"),
+        ({"type": "integer", "minimum": 1}, -5),
+        ({"type": "string", "pattern": "^[a-z]+$"}, "NOT-LOWER"),
+        ({"const": "safe"}, "unsafe"),
+        ({"type": "object", "additionalProperties": {"type": "integer"}}, {"x": "bad"}),
+    ],
+)
+def test_complete_json_schema_constraints_are_enforced(schema, arguments) -> None:
+    tool = _Tool(
+        name="check",
+        parameters={
+            "type": "object",
+            "properties": {"value": schema},
+            "required": ["value"],
+        },
+    )
+    with pytest.raises(ToolValidationError):
+        validate_tool_arguments(tool, _ToolCall(arguments={"value": arguments}))
+
+
+def test_invalid_tool_schema_is_rejected_at_registration() -> None:
+    with pytest.raises(ValueError, match="invalid schema for tool bad"):
+        AgentTool(
+            name="bad",
+            label="Bad",
+            description="bad",
+            parameters={"type": "not-a-json-schema-type"},
+            execute=lambda *_args: AgentToolResult(content=[]),
+        )
 
 
 def test_write_schema_matches_pi_path_content_contract() -> None:

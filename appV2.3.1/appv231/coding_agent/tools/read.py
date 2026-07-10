@@ -5,10 +5,13 @@ from __future__ import annotations
 import base64
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 from appv231.agent.types import AgentTool, AgentToolResult
 from appv231.ai.types import ImageContent, TextContent
+from appv231.coding_agent.artifacts import ArtifactRegistry
+from appv231.coding_agent.capabilities import CapabilityViolation, WorkspaceCapability
 from appv231.coding_agent.tools.path_utils import format_path_relative_to_cwd, resolve_read_path, resolve_to_cwd
 from appv231.coding_agent.tools.truncate import (
     DEFAULT_MAX_BYTES,
@@ -96,6 +99,8 @@ def _format_dimension_note(result: ReadImageResizeResult) -> str | None:
 
 def _execute_read(
     cwd: str,
+    workspace: WorkspaceCapability,
+    artifacts: ArtifactRegistry | None,
     operations: ReadOperations,
     auto_resize_images: bool,
     image_resizer: ResizeImage,
@@ -109,7 +114,16 @@ def _execute_read(
     path = args["path"]
     offset = _number_arg(args.get("offset"))
     limit = _number_arg(args.get("limit"))
-    absolute_path = resolve_read_path(path, cwd)
+    artifact_path = artifacts.resolve_read(path) if artifacts is not None else None
+    if artifact_path is not None:
+        absolute_path = str(artifact_path)
+    else:
+        try:
+            absolute_path = str(workspace.resolve(path, access="read"))
+            absolute_path = resolve_read_path(absolute_path, cwd)
+            workspace.resolve(absolute_path, access="read")
+        except CapabilityViolation:
+            raise
     _check_aborted(signal)
     operations.access(absolute_path)
     _check_aborted(signal)
@@ -302,7 +316,10 @@ def create_read_tool_definition(
     operations: ReadOperations | None = None,
     auto_resize_images: bool = True,
     image_resizer: ResizeImage | None = None,
+    workspace: WorkspaceCapability | None = None,
+    artifacts: ArtifactRegistry | None = None,
 ) -> ToolDefinition:
+    workspace = workspace or WorkspaceCapability(Path(cwd))
     ops = operations or ReadOperations(
         read_file=_default_read_file,
         access=_default_access,
@@ -322,7 +339,7 @@ def create_read_tool_definition(
         prompt_snippet="Read file contents",
         prompt_guidelines=["Use read to examine files instead of cat or sed."],
         execute=lambda tid, args, signal=None, on_update=None, ctx=None: _execute_read(
-            cwd, ops, auto_resize_images, resize, tid, args, signal, on_update, ctx
+            cwd, workspace, artifacts, ops, auto_resize_images, resize, tid, args, signal, on_update, ctx
         ),
         render_call=_render_read_call,
         render_result=_render_read_result,
@@ -336,6 +353,8 @@ def create_read_tool(
     auto_resize_images: bool = True,
     image_resizer: ResizeImage | None = None,
     model=None,
+    workspace: WorkspaceCapability | None = None,
+    artifacts: ArtifactRegistry | None = None,
 ) -> AgentTool:
     return wrap_tool_definition(
         create_read_tool_definition(
@@ -343,6 +362,8 @@ def create_read_tool(
             operations=operations,
             auto_resize_images=auto_resize_images,
             image_resizer=image_resizer,
+            workspace=workspace,
+            artifacts=artifacts,
         ),
         lambda: ToolContext(cwd=cwd, model=model),
     )

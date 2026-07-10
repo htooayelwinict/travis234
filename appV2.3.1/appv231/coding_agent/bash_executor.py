@@ -9,7 +9,7 @@ from typing import Callable, Mapping
 
 from appv231.coding_agent.agent_session import BashResult
 from appv231.coding_agent.tools.bash import BashExecOptions, BashOperations
-from appv231.coding_agent.tools.output_accumulator import OutputAccumulator
+from appv231.coding_agent.tools.output_spool import OutputSpool
 
 _ANSI_RE = re.compile(
     r"(?:\x1b\][\s\S]*?(?:\x07|\x1b\\|\x9c))|"
@@ -35,8 +35,8 @@ def execute_bash_with_operations(
 ) -> BashResult:
     """Execute a bash command through custom operations, matching Pi's public helper."""
     executor_options = _coerce_options(options)
-    decoder = codecs.getincrementaldecoder("utf-8")()
-    output = OutputAccumulator(temp_file_prefix="pi-bash")
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    output = OutputSpool(temp_file_prefix="pi-bash")
 
     def on_data(data: bytes) -> None:
         text = decoder.decode(data, final=False)
@@ -72,7 +72,7 @@ def execute_bash_with_operations(
         output.finish()
 
     snapshot = output.snapshot(persist_if_truncated=True)
-    output.close_temp_file()
+    output.close()
     return BashResult(
         output=snapshot.content,
         exit_code=None if cancelled else exit_code,

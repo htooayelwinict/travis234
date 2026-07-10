@@ -803,7 +803,10 @@ def _provider_auth_type(profile: ProviderProfile, overlay: HermesOverlay | None)
 
 def provider_catalog() -> list[ProviderDescriptor]:
     descriptors: list[ProviderDescriptor] = []
-    for order, profile in enumerate(list_provider_profiles()):
+    for profile in list_provider_profiles():
+        if not profile.transport_available:
+            continue
+        order = len(descriptors)
         overlay = HERMES_OVERLAYS.get(profile.name)
         env_vars, base_url_env_var = _provider_env_vars(profile, overlay)
         auth_type = _provider_auth_type(profile, overlay)

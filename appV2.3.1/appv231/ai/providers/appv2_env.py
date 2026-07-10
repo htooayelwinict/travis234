@@ -2056,24 +2056,35 @@ class AppV2EnvProvider:
             option_api_key = getattr(options, "api_key", None) if options is not None else None
             api_key = option_api_key if isinstance(option_api_key, str) and option_api_key.strip() else self.config.api_key
             if api_key:
-                headers["Authorization"] = f"Bearer {api_key}"
+                headers.update(profile.auth_headers(api_key))
             headers.setdefault("Content-Type", "application/json")
             url = base_url.rstrip("/") + endpoint_path
             with httpx.Client(timeout=self.config.timeout_seconds) as client:
                 with client.stream("POST", url, json=body, headers=headers) as response:
-                    on_response = getattr(options, "on_response", None) if options is not None else None
-                    if callable(on_response):
-                        on_response({"status": response.status_code, "headers": dict(response.headers)})
-                    response.raise_for_status()
-                    for event in parse_sse_chunks(
-                        response.iter_lines(),
-                        model,
-                        data_idle_timeout_seconds=self.config.timeout_seconds,
-                        include_reasoning=bool(getattr(options, "reasoning", None)),
-                        api_mode=api_mode,
-                        tools=context.tools,
-                    ):
-                        s.push(event)
+                    signal = getattr(options, "signal", None) if options is not None else None
+                    unsubscribe_abort = (
+                        signal.add_callback(response.close)
+                        if signal is not None and hasattr(signal, "add_callback")
+                        else lambda: None
+                    )
+                    try:
+                        on_response = getattr(options, "on_response", None) if options is not None else None
+                        if callable(on_response):
+                            on_response({"status": response.status_code, "headers": dict(response.headers)})
+                        response.raise_for_status()
+                        for event in parse_sse_chunks(
+                            response.iter_lines(),
+                            model,
+                            data_idle_timeout_seconds=self.config.timeout_seconds,
+                            include_reasoning=bool(getattr(options, "reasoning", None)),
+                            api_mode=api_mode,
+                            tools=context.tools,
+                        ):
+                            if signal is not None and signal.aborted:
+                                raise RuntimeError("Operation aborted")
+                            s.push(event)
+                    finally:
+                        unsubscribe_abort()
         except Exception as exc:  # encode failure as an error event, never raise
             err = _blank(model)
             err.stop_reason = "error"

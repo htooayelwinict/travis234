@@ -25,39 +25,12 @@ from appv231.app import CodingApp
 from appv231.coding_agent.config import get_agent_dir, get_auth_path
 from appv231.coding_agent.agent_session_services import _new_session_path
 from appv231.coding_agent.export_html import export_from_file
+from appv231.coding_agent.eval_trace import ConversationLogWriter, EvalTraceWriter
+from appv231.coding_agent.provider_control_plane import ProviderControlPlane
 from appv231.tui.interactive_mode import InteractiveMode
 
 
 logger = logging.getLogger(__name__)
-
-
-class _CliModelRegistry:
-    def __init__(self, models: list[Model]) -> None:
-        self._models = models
-
-    def get_all(self) -> list[Model]:
-        return list(self._models)
-
-    getAll = get_all
-
-    def get_available(self) -> list[Model]:
-        return list(self._models)
-
-    getAvailable = get_available
-
-    def find(self, provider: str, model_id: str) -> Model | None:
-        local = next((model for model in self._models if model.provider == provider and model.id == model_id), None)
-        if local is not None:
-            return local
-        registered = get_model(provider, model_id)
-        if registered is not None:
-            return registered
-        return None
-
-    def has_configured_auth(self, model: Model) -> bool:
-        return has_configured_auth(model)
-
-    hasConfiguredAuth = has_configured_auth
 
 
 _VALID_THINKING_LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh")
@@ -155,6 +128,7 @@ def _startup_model_from_env(
     cli_model: str | None = None,
     cli_thinking: str | None = None,
     cli_models: list[str] | None = None,
+    model_registry=None,
 ) -> _StartupModelSelection:
     config = config or load_model_config("APPV231_WORKER_LLM", dotenv_path)
     env_model = _env_model_from_config(config)
@@ -165,7 +139,10 @@ def _startup_model_from_env(
         cli_model=cli_model,
         cli_models=cli_models,
     )
-    registry = _CliModelRegistry(_dedupe_startup_models([*registered_models, *live_models]))
+    if model_registry is None:
+        model_registry = ProviderControlPlane.in_memory().models
+    model_registry.replace_models(_dedupe_startup_models([*registered_models, *live_models]))
+    registry = model_registry
     scoped_models = resolve_model_scope(cli_models or [], registry) if cli_models else []
     if not cli_model:
         if scoped_models:
@@ -384,7 +361,14 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Enable Hermes hard-stop thresholds for repeated failed/non-progressing tool calls",
     )
+    parser.add_argument(
+        "--allow-package-install",
+        action="store_true",
+        help="Grant one package/dependency mutation for the initial turn",
+    )
     parser.add_argument("--export", help="Export a session JSONL file to standalone HTML and exit")
+    parser.add_argument("--event-trace", help="Write a sanitized evaluation lifecycle JSONL trace")
+    parser.add_argument("--conversation-log", help="Write an authorized, secret-redacted turn transcript")
     args = parser.parse_args(argv)
 
     if args.export:
@@ -420,6 +404,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(str(error))
     register_builtin_providers(dotenv_path=dotenv_path, config=config)
     _load_persisted_auth_credentials()
+    provider_control_plane = ProviderControlPlane.create_default()
     if args.list_providers:
         _print_provider_list()
         return 0
@@ -435,16 +420,19 @@ def main(argv: list[str] | None = None) -> int:
             cli_model=args.model,
             cli_thinking=args.thinking,
             cli_models=_split_models_arg(args.models),
+            model_registry=provider_control_plane.models,
         )
     except ValueError as error:
         parser.error(str(error))
+    if config.api_key:
+        provider_control_plane.auth.set_runtime_api_key(startup.model.provider, config.api_key)
     generation_warnings = _generation_param_warnings_for_model(startup.model, config.generation_params)
     _print_generation_param_warnings(generation_warnings)
     runtime_options: dict[str, object] = {}
     if args.max_iterations is not None:
         runtime_options["max_iterations"] = args.max_iterations
     if args.tool_loop_hard_stop:
-        runtime_options["tool_loop_guardrails"] = {"hard_stop_enabled": True}
+        runtime_options["tool_loop_guardrails"] = {"blocking_enabled": True}
     agent_dir = get_agent_dir()
     session_path, session_id = _new_session_path(str(cwd_path), agent_dir)
 
@@ -457,8 +445,13 @@ def main(argv: list[str] | None = None) -> int:
         session_path=session_path,
         session_id=session_id,
         agent_dir=agent_dir,
+        provider_control_plane=provider_control_plane,
+        event_trace=EvalTraceWriter(args.event_trace) if args.event_trace else None,
+        conversation_log=ConversationLogWriter(args.conversation_log) if args.conversation_log else None,
         **runtime_options,
     )
+    if args.allow_package_install:
+        app.session.grant_capability("package_mutation", uses=1)
 
     prompt = " ".join(args.prompt).strip()
     if prompt:

@@ -7,17 +7,14 @@ from appv231.agent.agent_loop import (
     agent_loop,
     agent_loop_continue,
     run_agent_loop,
+    run_agent_loop_async,
     run_agent_loop_continue,
+    run_agent_loop_continue_async,
 )
+from appv231.agent.async_utils import MaybeAwaitable, resolve, run_sync
 from appv231.agent.iteration_budget import IterationBudget
-from appv231.agent.tool_guardrails import (
-    ToolCallGuardrailConfig,
-    ToolCallGuardrailController,
-    ToolCallSignature,
-    ToolGuardrailDecision,
-    append_toolguard_guidance,
-    toolguard_synthetic_result,
-)
+from appv231.agent.run_lease import RunLease, RunLeaseToken
+from appv231.agent.tool_coordinator import ToolCoordinator
 from appv231.agent.types import (
     AbortSignal,
     AfterToolCallContext,
@@ -31,6 +28,9 @@ from appv231.agent.types import (
     AgentToolResult,
     BeforeToolCallContext,
     BeforeToolCallResult,
+    IterationLimitContext,
+    ImmediateToolOutcome,
+    PreparedToolCall,
     PrepareNextTurnContext,
     ShouldStopAfterTurnContext,
 )
@@ -53,16 +53,21 @@ __all__ = [
     "BeforeToolCallContext",
     "BeforeToolCallResult",
     "IterationBudget",
+    "IterationLimitContext",
+    "ImmediateToolOutcome",
+    "MaybeAwaitable",
+    "PreparedToolCall",
+    "RunLease",
+    "RunLeaseToken",
+    "ToolCoordinator",
     "PrepareNextTurnContext",
     "ShouldStopAfterTurnContext",
-    "ToolCallGuardrailConfig",
-    "ToolCallGuardrailController",
-    "ToolCallSignature",
-    "ToolGuardrailDecision",
-    "append_toolguard_guidance",
     "agent_loop",
     "agent_loop_continue",
     "run_agent_loop",
+    "run_agent_loop_async",
     "run_agent_loop_continue",
-    "toolguard_synthetic_result",
+    "run_agent_loop_continue_async",
+    "resolve",
+    "run_sync",
 ]

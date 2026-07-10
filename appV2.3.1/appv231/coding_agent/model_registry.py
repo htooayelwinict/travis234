@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import appv231.ai.models as ai_models
-from appv231.ai.stream import ApiProvider, register_api_provider, unregister_api_providers
+from appv231.ai.stream import ApiProvider, ApiProviderRegistry, _DEFAULT_API_PROVIDER_REGISTRY
 from appv231.ai.types import Cost, Model
 from appv231.coding_agent.auth_storage import AuthStorage
 
@@ -19,16 +19,29 @@ def _agent_models_path() -> Path:
 
 
 class ModelRegistry:
-    def __init__(self, auth_storage: AuthStorage, models_json_path: str | os.PathLike[str] | None) -> None:
+    def __init__(
+        self,
+        auth_storage: AuthStorage,
+        models_json_path: str | os.PathLike[str] | None,
+        api_providers: ApiProviderRegistry | None = None,
+    ) -> None:
         self.authStorage = auth_storage
         self.auth_storage = auth_storage
         self._models_json_path = Path(models_json_path).expanduser().resolve() if models_json_path else None
+        self.api_providers = api_providers or _DEFAULT_API_PROVIDER_REGISTRY
         self._models: list[Model] = []
         self._provider_request_configs: dict[str, dict[str, object]] = {}
         self._model_request_headers: dict[str, dict[str, str]] = {}
         self._registered_providers: dict[str, dict[str, Any]] = {}
         self._load_error: str | None = None
+        self.authStorage.setFallbackResolver(self._fallback_api_key)
         self.loadModels()
+
+    def _fallback_api_key(self, provider: str) -> str | None:
+        value = self._provider_request_configs.get(provider, {}).get("apiKey")
+        if not isinstance(value, str):
+            return None
+        return ai_models._resolve_config_value(value)  # noqa: SLF001
 
     @staticmethod
     def create(authStorage: AuthStorage, modelsJsonPath: str | os.PathLike[str] | None = None) -> "ModelRegistry":
@@ -42,7 +55,7 @@ class ModelRegistry:
 
     def refresh(self) -> None:
         for provider_name in list(self._registered_providers):
-            unregister_api_providers(f"provider:{provider_name}")
+            self.api_providers.unregister_source(f"provider:{provider_name}")
         self._provider_request_configs.clear()
         self._model_request_headers.clear()
         self._load_error = None
@@ -77,14 +90,19 @@ class ModelRegistry:
             provider_override = overrides.get(provider) or {}
             per_model_overrides = model_overrides.get(provider) or {}
             for model in ai_models.get_models(provider):
-                next_model = replace(model)
+                next_model = model
                 if isinstance(provider_override.get("baseUrl"), str):
+                    next_model = replace(next_model)
                     next_model.base_url = str(provider_override["baseUrl"])
                 compat_headers = provider_override.get("headers")
                 if isinstance(compat_headers, dict):
+                    if next_model is model:
+                        next_model = replace(next_model)
                     next_model.headers = {str(k): str(v) for k, v in compat_headers.items()}
                 model_override = per_model_overrides.get(model.id)
                 if model_override:
+                    if next_model is model:
+                        next_model = replace(next_model)
                     next_model = self._apply_model_override(next_model, model_override)
                 models.append(next_model)
         return models
@@ -225,8 +243,56 @@ class ModelRegistry:
     def getAll(self) -> list[Model]:
         return list(self._models)
 
+    def getProviders(self) -> list[str]:
+        return list(
+            dict.fromkeys(
+                [model.provider for model in self._models]
+                + list(self._registered_providers)
+                + self.authStorage.list()
+            )
+        )
+
+    def getApiKeyProviders(self) -> list[str]:
+        from appv231.ai.providers.catalog import get_provider_profile
+
+        providers: list[str] = []
+        for provider in self.getProviders():
+            profile = get_provider_profile(provider)
+            if (
+                provider in self._registered_providers
+                or provider in self._provider_request_configs
+                or provider in self.authStorage.list()
+                or (profile is not None and profile.auth_type not in {"virtual", "none"})
+            ):
+                providers.append(provider)
+        return providers
+
+    def replace_models(self, models: list[Model]) -> None:
+        self._models = list(models)
+
     def getAvailable(self) -> list[Model]:
-        return [model for model in self._models if self.hasConfiguredAuth(model)]
+        return self.getSelectable()
+
+    def isSelectable(self, model: Model) -> bool:
+        from appv231.ai.providers.catalog import get_provider_profile
+
+        profile = get_provider_profile(model.provider)
+        transport_available = self.api_providers.get(model.api) is not None or (
+            profile is not None and profile.transport_available
+        )
+        if not transport_available:
+            return False
+        auth_free = profile is not None and profile.auth_type in {"virtual", "none"}
+        local = model.base_url.startswith(("http://127.0.0.1", "http://localhost"))
+        return auth_free or local or self.hasConfiguredAuth(model)
+
+    def getSelectable(self, active: Model | None = None) -> list[Model]:
+        selectable = [model for model in self._models if self.isSelectable(model)]
+        if active is not None and not any(
+            model.provider == active.provider and model.id == active.id for model in selectable
+        ):
+            selectable.append(active)
+        return selectable
 
     def find(self, provider: str, model_id: str) -> Model | None:
         for model in self._models:
@@ -241,7 +307,11 @@ class ModelRegistry:
         )
 
     get_all = getAll
+    get_providers = getProviders
+    get_api_key_providers = getApiKeyProviders
     get_available = getAvailable
+    get_selectable = getSelectable
+    is_selectable = isSelectable
     has_configured_auth = hasConfiguredAuth
 
     def _request_key(self, provider: str, model_id: str) -> str:
@@ -258,18 +328,6 @@ class ModelRegistry:
             "headers": headers,
             "authHeader": auth_header,
         }
-        if isinstance(api_key, str):
-            self.authStorage.setFallbackResolver(
-                lambda provider_name, previous=self.authStorage._fallback_resolver, configs=self._provider_request_configs: (  # noqa: SLF001
-                    previous(provider_name)
-                    if previous is not None and previous(provider_name) is not None
-                    else (
-                        ai_models._resolve_config_value(str(configs.get(provider_name, {}).get("apiKey")))  # noqa: SLF001
-                        if isinstance(configs.get(provider_name, {}).get("apiKey"), str)
-                        else None
-                    )
-                )
-            )
 
     def _store_model_headers(self, provider: str, model_id: str, headers: object) -> None:
         key = self._request_key(provider, model_id)
@@ -312,7 +370,7 @@ class ModelRegistry:
 
     def getProviderAuthStatus(self, provider: str) -> dict[str, object]:
         auth_status = self.authStorage.getAuthStatus(provider)
-        if auth_status.get("source"):
+        if auth_status.get("source") and auth_status.get("source") != "fallback":
             return auth_status
 
         provider_api_key = self._provider_request_configs.get(provider, {}).get("apiKey")
@@ -359,6 +417,41 @@ class ModelRegistry:
 
     is_using_oauth = isUsingOAuth
 
+    def setAuthCredential(self, provider: str, credential: dict[str, object]) -> None:
+        self.authStorage.set(provider, credential)
+
+    set_auth_credential = setAuthCredential
+
+    def loginOAuthProvider(self, provider: str, callbacks: dict[str, object]) -> None:
+        config = self._registered_providers.get(provider, {})
+        oauth = config.get("oauth")
+        if not isinstance(oauth, dict):
+            raise RuntimeError(f"Unknown OAuth provider: {provider}")
+        login = oauth.get("login")
+        if not callable(login):
+            raise RuntimeError(f"OAuth provider {provider} does not support login")
+        credential = ai_models._settle_oauth_result(login(callbacks))  # noqa: SLF001
+        if not isinstance(credential, dict):
+            raise RuntimeError(f"OAuth provider {provider} returned invalid credentials")
+        self.authStorage.set(provider, {"type": "oauth", **credential})
+
+    login_oauth_provider = loginOAuthProvider
+
+    def logoutProvider(self, provider: str) -> None:
+        self.authStorage.remove(provider)
+
+    logout_provider = logoutProvider
+
+    def getOAuthProviders(self) -> list[dict[str, object]]:
+        providers: list[dict[str, object]] = []
+        for provider, config in self._registered_providers.items():
+            oauth = config.get("oauth")
+            if isinstance(oauth, dict):
+                providers.append({"id": provider, "name": str(oauth.get("name") or provider)})
+        return providers
+
+    get_oauth_providers = getOAuthProviders
+
     def registerProvider(self, provider: str, config: dict[str, Any]) -> None:
         self._validate_provider_config(provider, config)
         self._apply_provider_config(provider, config)
@@ -373,7 +466,7 @@ class ModelRegistry:
     def unregisterProvider(self, provider: str) -> None:
         if provider not in self._registered_providers:
             return
-        unregister_api_providers(f"provider:{provider}")
+        self.api_providers.unregister_source(f"provider:{provider}")
         self._registered_providers.pop(provider, None)
         self.refresh()
 
@@ -387,7 +480,7 @@ class ModelRegistry:
             return
         if not config.get("baseUrl"):
             raise RuntimeError(f'Provider {provider}: "baseUrl" is required when defining models.')
-        if not config.get("apiKey") and not config.get("oauth"):
+        if not config.get("apiKey") and not isinstance(config.get("oauth"), dict):
             raise RuntimeError(f'Provider {provider}: "apiKey" or "oauth" is required when defining models.')
         for model in models:
             if isinstance(model, dict) and not (model.get("api") or config.get("api")):
@@ -397,8 +490,8 @@ class ModelRegistry:
         stream_simple = config.get("streamSimple") or config.get("stream_simple")
         if callable(stream_simple):
             api = str(config.get("api") or provider)
-            unregister_api_providers(f"provider:{provider}")
-            register_api_provider(
+            self.api_providers.unregister_source(f"provider:{provider}")
+            self.api_providers.register(
                 ApiProvider(api=api, stream=stream_simple, stream_simple=stream_simple),
                 f"provider:{provider}",
             )
