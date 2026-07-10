@@ -20,6 +20,11 @@ def test_release_push_depends_on_tests_and_smoke() -> None:
     assert build["with"]["no-cache"] is True
 
 
+def test_release_tests_use_deterministic_no_color_baseline() -> None:
+    test_job = _workflow()["jobs"]["test"]
+    assert test_job["env"]["NO_COLOR"] == "1"
+
+
 def test_release_smoke_build_is_no_cache_and_never_pushes() -> None:
     workflow = _workflow()
     smoke_build = next(
@@ -44,3 +49,12 @@ def test_registry_login_exists_only_in_gated_push_job() -> None:
             step.get("with", {}).get("push") is True
             for step in workflow["jobs"][job_name].get("steps", [])
         )
+
+
+def test_container_smoke_prepares_linux_writable_workspace(tmp_path) -> None:
+    from evals.container_smoke import prepare_npm_workspace
+
+    prepare_npm_workspace(tmp_path)
+
+    assert tmp_path.stat().st_mode & 0o777 == 0o777
+    assert (tmp_path / "package.json").is_file()

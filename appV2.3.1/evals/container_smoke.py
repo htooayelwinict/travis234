@@ -14,10 +14,7 @@ def run_container_smoke(image: str) -> None:
     _run(["docker", "run", "--rm", "--entrypoint", "npm", image, "--version"])
     with tempfile.TemporaryDirectory(prefix="appv231-container-smoke-") as temporary:
         workspace = Path(temporary)
-        (workspace / "package.json").write_text(
-            json.dumps({"name": "smoke", "version": "1.0.0", "private": True}) + "\n",
-            encoding="utf-8",
-        )
+        prepare_npm_workspace(workspace)
         _run(
             [
                 "docker", "run", "--rm", "--entrypoint", "npm",
@@ -40,6 +37,15 @@ def run_container_smoke(image: str) -> None:
         "raise SystemExit(InteractiveMode(a,input_fn=lambda p:next(i)).run())"
     )
     _run(["docker", "run", "--rm", "--entrypoint", "python", image, "-c", script])
+
+
+def prepare_npm_workspace(workspace: Path) -> None:
+    workspace.mkdir(parents=True, exist_ok=True)
+    workspace.chmod(0o777)
+    (workspace / "package.json").write_text(
+        json.dumps({"name": "smoke", "version": "1.0.0", "private": True}) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _run(command: list[str], expected: str | None = None) -> str:
