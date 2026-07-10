@@ -104,7 +104,6 @@ class CodingApp:
         self.event_trace = event_trace
         self.conversation_log = conversation_log
         self.provider_control_plane = provider_control_plane or ProviderControlPlane.create_default()
-        summarizer = summarizer or _model_summarizer(model, thinking_level=thinking_level)
         settings_manager = settings_manager or SettingsManager.inMemory()
         retry_enabled, max_retries, retry_delay_ms = _resolve_session_retry_settings(settings_manager)
         self.session = AgentSession(
@@ -124,6 +123,16 @@ class CodingApp:
             agent_dir=agent_dir,
             provider_control_plane=self.provider_control_plane,
         )
+        if summarizer is None:
+            summarizer = _model_summarizer(
+                lambda: self.session.model,
+                thinking_level=lambda: self.session.thinking_level,
+                complete_fn=lambda active_model, context, options: self.provider_control_plane.stream_simple(
+                    active_model,
+                    context,
+                    options,
+                ).result_sync(),
+            )
         resolved_context_length, threshold_percent = _resolve_compaction_window(
             model,
             self.session,
@@ -483,14 +492,25 @@ class CodingApp:
         return True
 
 
-def _model_summarizer(model: Model, *, thinking_level: str = "off"):
+def _model_summarizer(
+    model: Model | Callable[[], Model],
+    *,
+    thinking_level: str | Callable[[], str] = "off",
+    complete_fn=complete_simple_sync,
+):
     def summarize(prompt: str) -> str:
+        active_model = model() if callable(model) else model
+        active_thinking_level = thinking_level() if callable(thinking_level) else thinking_level
         options = SimpleStreamOptions(
-            max_tokens=_summarizer_max_tokens(model),
-            reasoning=thinking_level if model.reasoning and thinking_level != "off" else None,
+            max_tokens=_summarizer_max_tokens(active_model),
+            reasoning=(
+                active_thinking_level
+                if active_model.reasoning and active_thinking_level != "off"
+                else None
+            ),
         )
-        response = complete_simple_sync(
-            model,
+        response = complete_fn(
+            active_model,
             Context(
                 system_prompt=SUMMARIZATION_SYSTEM_PROMPT,
                 messages=[UserMessage(content=[TextContent(text=prompt)], timestamp=now_ms())],

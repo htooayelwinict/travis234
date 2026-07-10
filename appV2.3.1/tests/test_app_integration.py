@@ -5,9 +5,11 @@ from pathlib import Path
 
 from appv231.agent.types import AgentTool, AgentToolResult
 from appv231.app import CodingApp
+from appv231.ai.event_stream import create_assistant_message_event_stream
 from appv231.ai.types import (
     AssistantMessage,
     ErrorEvent,
+    Model,
     TextContent,
     ToolCall,
     ToolResultMessage,
@@ -16,8 +18,9 @@ from appv231.ai.types import (
     now_ms,
 )
 from appv231.ai.providers.faux import create_faux_provider, faux_model, text_response_events, tool_call_response_events
-from appv231.ai.stream import register_api_provider, reset_api_providers
+from appv231.ai.stream import ApiProvider, register_api_provider, reset_api_providers
 from appv231.coding_agent import SettingsManager
+from appv231.coding_agent.provider_control_plane import ProviderControlPlane
 from appv231.tui.terminal import FakeTerminal
 
 
@@ -867,6 +870,90 @@ def test_coding_app_default_compaction_summarizer_uses_active_model(tmp_path: Pa
     assert status.warning is None
     assert summary_prompts == ["You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.\n\nDo NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary."]
     assert any("model-backed summary" in str(message.content) for message in status.messages)
+
+
+def test_coding_app_default_compaction_summarizer_uses_control_plane_auth(tmp_path: Path) -> None:
+    calls: list[tuple[Model, object | None]] = []
+
+    def stream(model, context, options=None):
+        calls.append((model, options))
+        result = create_assistant_message_event_stream()
+        for event in text_response_events(model, "## Historical Task Snapshot\ncontrol-plane summary"):
+            result.push(event)
+        return result
+
+    provider = ApiProvider(api="capturing", stream=stream, stream_simple=stream)
+    control_plane = ProviderControlPlane.in_memory()
+    control_plane.api_providers.register(provider)
+    register_api_provider(provider)
+    control_plane.auth.set_runtime_api_key("runtime-provider", "runtime-test-key")
+    model = Model(id="initial-model", name="Initial", api="capturing", provider="runtime-provider", base_url="")
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=model,
+        terminal=FakeTerminal(),
+        context_length=2000,
+        provider_control_plane=control_plane,
+    )
+    app.session.agent.state.messages = [
+        UserMessage(content=f"old context {index} " * 200, timestamp=now_ms())
+        for index in range(16)
+    ]
+
+    status = app.compaction.compress_manual_with_status(app.messages)
+
+    assert status.warning is None
+    assert calls
+    assert getattr(calls[-1][1], "api_key", None) == "runtime-test-key"
+
+
+def test_coding_app_default_compaction_summarizer_tracks_model_switch(tmp_path: Path) -> None:
+    calls: list[Model] = []
+
+    def stream(model, context, options=None):
+        del context, options
+        calls.append(model)
+        result = create_assistant_message_event_stream()
+        for event in text_response_events(model, "## Historical Task Snapshot\nselected-model summary"):
+            result.push(event)
+        return result
+
+    provider = ApiProvider(api="capturing", stream=stream, stream_simple=stream)
+    control_plane = ProviderControlPlane.in_memory()
+    control_plane.api_providers.register(provider)
+    register_api_provider(provider)
+    initial_model = Model(
+        id="initial-model",
+        name="Initial",
+        api="capturing",
+        provider="runtime-provider",
+        base_url="",
+    )
+    selected_model = Model(
+        id="selected-model",
+        name="Selected",
+        api="capturing",
+        provider="runtime-provider",
+        base_url="",
+    )
+    control_plane.ensure_model(selected_model)
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=initial_model,
+        terminal=FakeTerminal(),
+        context_length=2000,
+        provider_control_plane=control_plane,
+    )
+    app.session.set_model(selected_model)
+    app.session.agent.state.messages = [
+        UserMessage(content=f"old context {index} " * 200, timestamp=now_ms())
+        for index in range(16)
+    ]
+
+    status = app.compaction.compress_manual_with_status(app.messages)
+
+    assert status.warning is None
+    assert calls[-1] is selected_model
 
 
 def test_coding_app_wires_compaction_manager_into_session_api(tmp_path: Path) -> None:
