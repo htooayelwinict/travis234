@@ -79,16 +79,21 @@ test("package web-search skill uses curl-only network retrieval", () => {
   assert.doesNotMatch(webSearchSkill, /xml\.etree/i);
 });
 
-test("release image starts from python 3.13 slim and installs appv231", () => {
+test("release image combines python 3.13 with official Node 20 without Debian npm", () => {
   const dockerfile = fs.readFileSync(path.resolve(packageRoot, "..", "..", "Dockerfile.appv231.release"), "utf8");
 
   assert.match(dockerfile, /^FROM python:3\.13-slim/m);
+  assert.match(dockerfile, /^FROM node:20-bookworm-slim AS node-runtime$/m);
+  assert.match(dockerfile, /COPY --from=node-runtime \/usr\/local\/bin\/node \/usr\/local\/bin\/node/);
+  assert.match(dockerfile, /COPY --from=node-runtime \/usr\/local\/lib\/node_modules \/usr\/local\/lib\/node_modules/);
+  const aptInstall = dockerfile.match(/apt-get install[\s\S]*?&& rm -rf/);
+  assert.ok(aptInstall);
+  assert.doesNotMatch(aptInstall[0], /\bnodejs\b|\bnpm\b/);
   assert.match(dockerfile, /COPY appV2\.3\.1 \/tmp\/allthebest\/appV2\.3\.1/);
   assert.doesNotMatch(dockerfile, /git clone/);
   assert.match(dockerfile, /pip install --no-cache-dir \/tmp\/allthebest\/appV2\.3\.1/);
   assert.match(dockerfile, /ENTRYPOINT \["appv231"\]/);
   assert.match(dockerfile, /\bsudo\b/);
-  assert.match(dockerfile, /\bnodejs\b/);
   assert.match(dockerfile, /\bnpm\b/);
   assert.match(dockerfile, /useradd .*appv231/);
   assert.match(dockerfile, /env_keep \+= "DEBIAN_FRONTEND"/);

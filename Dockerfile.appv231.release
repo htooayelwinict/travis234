@@ -1,4 +1,8 @@
-FROM python:3.13-slim
+FROM python:3.13-slim AS python-runtime
+
+FROM node:20-bookworm-slim AS node-runtime
+
+FROM python-runtime
 
 ENV PYTHONUNBUFFERED=1 \
     APPV231_NO_VENV_REEXEC=1 \
@@ -12,16 +16,20 @@ RUN apt-get update \
         ca-certificates \
         curl \
         git \
-        nodejs \
-        npm \
+        libstdc++6 \
         ripgrep \
         sudo \
     && rm -rf /var/lib/apt/lists/* \
+    && ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && useradd --create-home --home-dir /agent-home --shell /bin/bash appv231 \
     && mkdir -p /workspace /agent-home/agent \
     && chown -R appv231:appv231 /workspace /agent-home \
     && printf 'Defaults:appv231 env_keep += "DEBIAN_FRONTEND"\nappv231 ALL=(root) NOPASSWD: /usr/bin/apt-get, /usr/bin/apt, /usr/bin/dpkg\n' > /etc/sudoers.d/appv231-apt \
     && chmod 0440 /etc/sudoers.d/appv231-apt
+
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
 
 COPY appV2.3.1 /tmp/allthebest/appV2.3.1
 
