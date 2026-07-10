@@ -10,6 +10,7 @@ import copy
 import json
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
 from appv231.ai.stream import complete_simple_sync
@@ -18,10 +19,14 @@ from appv231.ai.overflow import is_context_overflow, parse_available_output_toke
 from appv231.ai.types import Context, Model, SimpleStreamOptions, TextContent, ToolResultMessage, UserMessage, now_ms
 from appv231.ai.types import AssistantMessage
 from appv231.coding_agent.agent_session import AgentSession
+from appv231.coding_agent.agent_session_runtime import AgentSessionRuntime, CreateAgentSessionRuntimeResult
 from appv231.coding_agent.compaction_adapter import to_compressor_messages
 from appv231.coding_agent.branch_summarization import SUMMARIZATION_SYSTEM_PROMPT
+from appv231.coding_agent.config import get_agent_dir
 from appv231.coding_agent.settings_manager import SettingsManager
 from appv231.coding_agent.provider_control_plane import ProviderControlPlane
+from appv231.coding_agent.session_catalog import SessionCatalog
+from appv231.coding_agent.session_store import SessionStore
 from appv231.compaction.compressor import ContextCompressor, estimate_tokens
 from appv231.compaction.timing import CompactionManager
 from appv231.tui.interactive import InteractiveRenderer
@@ -100,29 +105,28 @@ class CodingApp:
         event_trace=None,
         conversation_log=None,
     ) -> None:
-        self.cwd = cwd
+        self.cwd = str(Path(cwd).expanduser().resolve())
         self.event_trace = event_trace
         self.conversation_log = conversation_log
         self.provider_control_plane = provider_control_plane or ProviderControlPlane.create_default()
-        settings_manager = settings_manager or SettingsManager.inMemory()
-        retry_enabled, max_retries, retry_delay_ms = _resolve_session_retry_settings(settings_manager)
-        self.session = AgentSession(
-            cwd=cwd,
-            model=model,
-            transform_context=self._transform_context,
-            thinking_level=thinking_level,
-            scoped_models=scoped_models,
-            settings_manager=settings_manager,
-            retry_enabled=retry_enabled,
-            max_retries=max_retries,
-            retry_delay_ms=retry_delay_ms,
-            max_iterations=max_iterations,
-            tool_loop_guardrails=tool_loop_guardrails,
-            session_path=session_path,
-            session_id=session_id,
-            agent_dir=agent_dir,
-            provider_control_plane=self.provider_control_plane,
+        self.provider_control_plane.ensure_model(model)
+        self._settings_manager = settings_manager or SettingsManager.inMemory()
+        self._retry_settings = _resolve_session_retry_settings(self._settings_manager)
+        self._scoped_models = list(scoped_models or [])
+        self._max_iterations = max_iterations
+        self._tool_loop_guardrails = tool_loop_guardrails
+        self._agent_dir = str(Path(agent_dir or get_agent_dir()).expanduser().resolve())
+        configured_session_dir = _call_setting(self._settings_manager, "getSessionDir", "get_session_dir")
+        self.session_catalog = SessionCatalog(
+            self._agent_dir,
+            session_dir=str(configured_session_dir) if configured_session_dir else None,
         )
+        self._context_length = context_length
+        self._enable_tui = enable_tui
+        self._session_unsubscribers: list[Callable[[], None]] = []
+        self._session_rebound_listeners: list[Callable[[AgentSession], None]] = []
+        self.terminal = terminal or ProcessTerminal()
+        self.tui = TUI(self.terminal, render_interval=0.016)
         if summarizer is None:
             summarizer = _model_summarizer(
                 lambda: self.session.model,
@@ -133,34 +137,173 @@ class CodingApp:
                     options,
                 ).result_sync(),
             )
-        resolved_context_length, threshold_percent = _resolve_compaction_window(
-            model,
+        self._summarizer = summarizer
+        initial_session = self._create_session(
+            cwd=self.cwd,
+            fallback_model=model,
+            thinking_level=thinking_level,
+            session_path=session_path,
+            session_id=session_id,
+        )
+        self._bind_session(initial_session)
+        services = {
+            "cwd": self.cwd,
+            "agentDir": self._agent_dir,
+            "sessionCatalog": self.session_catalog,
+        }
+        self.session_runtime = AgentSessionRuntime(
             self.session,
-            explicit_context_length=context_length,
+            services,
+            self._create_runtime_session,
+        )
+        self.session_runtime.set_before_session_invalidate(self._unbind_session)
+        self.session_runtime.set_rebind_session(self._handle_session_rebound)
+
+    def _create_session(
+        self,
+        *,
+        cwd: str,
+        fallback_model: Model,
+        thinking_level: str,
+        session_path: str | None,
+        session_id: str | None = None,
+        parent_session_path: str | None = None,
+        session_start_event: dict[str, object] | None = None,
+        defer_session_start: bool = False,
+    ) -> AgentSession:
+        resolved_cwd = str(Path(cwd).expanduser().resolve())
+        model = self._restored_session_model(session_path, resolved_cwd, fallback_model)
+        self.provider_control_plane.ensure_model(model)
+        retry_enabled, max_retries, retry_delay_ms = self._retry_settings
+        fresh_session = bool(
+            session_path
+            and (not Path(session_path).exists() or Path(session_path).stat().st_size == 0)
+        )
+        session = AgentSession(
+            cwd=resolved_cwd,
+            model=model,
+            transform_context=self._transform_context,
+            thinking_level=thinking_level,
+            scoped_models=self._scoped_models,
+            settings_manager=self._settings_manager,
+            retry_enabled=retry_enabled,
+            max_retries=max_retries,
+            retry_delay_ms=retry_delay_ms,
+            max_iterations=self._max_iterations,
+            tool_loop_guardrails=self._tool_loop_guardrails,
+            session_path=session_path,
+            parent_session_path=parent_session_path,
+            session_id=session_id,
+            session_start_event=session_start_event,
+            defer_session_start=defer_session_start,
+            agent_dir=self._agent_dir,
+            provider_control_plane=self.provider_control_plane,
+        )
+        if fresh_session and session._session_store is not None:
+            session._session_store.append_model_change(session.model.provider, session.model.id)
+            session._session_store.append_thinking_level_change(session.thinking_level)
+        return session
+
+    def _restored_session_model(self, session_path: str | None, cwd: str, fallback: Model) -> Model:
+        if not session_path:
+            return fallback
+        path = Path(session_path).expanduser()
+        if not path.exists() or path.stat().st_size == 0:
+            return fallback
+        snapshot = SessionStore(str(path), cwd=cwd).build_context()
+        if not snapshot.model:
+            return fallback
+        restored = self.provider_control_plane.models.find(
+            snapshot.model.get("provider", ""),
+            snapshot.model.get("modelId", ""),
+        )
+        return restored or fallback
+
+    def _configure_session_components(self) -> None:
+        resolved_context_length, threshold_percent = _resolve_compaction_window(
+            self.session.model,
+            self.session,
+            explicit_context_length=self._context_length,
         )
         self.compressor = ContextCompressor(
             context_length=resolved_context_length,
             threshold_percent=threshold_percent,
-            summarizer=summarizer,
+            summarizer=self._summarizer,
         )
         self.compaction = CompactionManager(
             self.compressor,
-            summarizer=summarizer,
+            summarizer=self._summarizer,
             deep_baseline_tokens=_estimate_static_prompt_tool_tokens(self.session),
         )
         self.session.set_compaction_manager(self.compaction)
-        self.terminal = terminal or ProcessTerminal()
-        self.tui = TUI(self.terminal, render_interval=0.016)
         tool_definitions = {
             name: definition
             for name in self.session.get_active_tool_names()
             if (definition := self.session.get_tool_definition(name)) is not None
         }
-        self.renderer = InteractiveRenderer(self.tui, tool_definitions=tool_definitions, cwd=cwd)
-        if enable_tui:
-            self.session.subscribe(self.renderer.handle_event)
+        self.renderer = InteractiveRenderer(self.tui, tool_definitions=tool_definitions, cwd=self.cwd)
+        if self._enable_tui:
+            self._session_unsubscribers.append(self.session.subscribe(self.renderer.handle_event))
         if self.event_trace is not None:
-            self.session.subscribe(self._trace_session_event)
+            self._session_unsubscribers.append(self.session.subscribe(self._trace_session_event))
+
+    def _bind_session(self, session: AgentSession) -> None:
+        self.session = session
+        self.cwd = str(Path(session.cwd).expanduser().resolve())
+        self._configure_session_components()
+
+    def _unbind_session(self) -> None:
+        for unsubscribe in self._session_unsubscribers:
+            unsubscribe()
+        self._session_unsubscribers.clear()
+
+    def _create_runtime_session(self, options: dict[str, object]) -> CreateAgentSessionRuntimeResult:
+        current = self.session
+        next_cwd = str(options.get("cwd") or self.cwd)
+        session = self._create_session(
+            cwd=next_cwd,
+            fallback_model=current.model,
+            thinking_level=current.thinking_level,
+            session_path=str(options["session_path"]) if options.get("session_path") else None,
+            parent_session_path=(
+                str(options["parent_session_path"]) if options.get("parent_session_path") else None
+            ),
+            session_start_event=(
+                dict(options["session_start_event"])
+                if isinstance(options.get("session_start_event"), Mapping)
+                else None
+            ),
+            defer_session_start=bool(options.get("defer_session_start", False)),
+        )
+        return CreateAgentSessionRuntimeResult(
+            session=session,
+            services={
+                "cwd": session.cwd,
+                "agentDir": self._agent_dir,
+                "sessionCatalog": self.session_catalog,
+            },
+        )
+
+    def _handle_session_rebound(self, session: AgentSession) -> None:
+        self._bind_session(session)
+        for listener in list(self._session_rebound_listeners):
+            listener(session)
+
+    def subscribe_session_rebound(self, listener: Callable[[AgentSession], None]) -> Callable[[], None]:
+        self._session_rebound_listeners.append(listener)
+
+        def unsubscribe() -> None:
+            if listener in self._session_rebound_listeners:
+                self._session_rebound_listeners.remove(listener)
+
+        return unsubscribe
+
+    def switch_session(self, path: str, *, cwd_override: str | None = None) -> dict[str, bool]:
+        options = {"cwdOverride": cwd_override} if cwd_override else None
+        return self.session_runtime.switch_session(path, options)
+
+    def new_session(self) -> dict[str, bool]:
+        return self.session_runtime.new_session()
 
     def _transform_context(self, messages, signal=None):
         # Hermes preflight timing-compaction phase.

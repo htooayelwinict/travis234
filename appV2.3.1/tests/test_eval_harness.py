@@ -81,6 +81,23 @@ def test_manifest_contains_exactly_21_unique_scenarios() -> None:
     assert {index for item in scenarios for index in item.compact_after} <= {1, 2, 3}
 
 
+def test_session_resume_smoke_uses_two_processes_and_one_jsonl(tmp_path: Path) -> None:
+    from evals.session_resume_smoke import run_smoke
+
+    result = run_smoke(
+        workspace=tmp_path / "workspace",
+        agent_dir=tmp_path / "agent",
+        marker="remember-7f31",
+    )
+
+    assert result["first_exit_code"] == 0
+    assert result["continued_exit_code"] == 0
+    assert result["first_session_path"] == result["continued_session_path"]
+    assert result["first_session_id"] == result["continued_session_id"]
+    assert result["jsonl_count"] == 1
+    assert result["restored_marker"] == "remember-7f31"
+
+
 def test_fixture_builds_are_deterministic_and_secret_free(tmp_path: Path) -> None:
     for scenario in load_scenarios():
         left = build_fixture(scenario.setup, tmp_path / "left" / scenario.id)

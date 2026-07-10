@@ -919,6 +919,7 @@ class AgentSession:
         session_id: str | None = None,
         extension_runner: ExtensionRunner | None = None,
         session_start_event: dict[str, object] | None = None,
+        defer_session_start: bool = False,
         resource_loader: DefaultResourceLoader | None = None,
         agent_dir: str | None = None,
         settings_manager: object | None = None,
@@ -1034,6 +1035,7 @@ class AgentSession:
             else None
         )
         self._session_start_event = session_start_event or {"type": "session_start", "reason": "startup"}
+        self._defer_session_start = bool(defer_session_start)
         restored_context = self._session_store.build_context(default_thinking_level=thinking_level) if self._session_store else None
         if restored_context:
             thinking_level = restored_context.thinking_level
@@ -1121,10 +1123,20 @@ class AgentSession:
         self.set_active_tools_by_name(initial_active_tool_names)
         if restored_context:
             self.agent.state.messages = restored_context.messages
+        if not self._defer_session_start:
+            self._emit_session_start_event()
+
+    def _emit_session_start_event(self) -> None:
         self._extension_runner.emit(self._session_start_event)
         reason = "reload" if self._session_start_event.get("reason") == "reload" else "startup"
         if self._extend_resources_from_extensions(reason):
             self.set_active_tools_by_name(self.get_active_tool_names())
+
+    def emit_deferred_session_start(self) -> None:
+        if not self._defer_session_start:
+            return
+        self._defer_session_start = False
+        self._emit_session_start_event()
 
     def _default_subagent_log_dir(self, *, session_path: str | None, session_id: str | None) -> str:
         namespace = session_id or (Path(session_path).stem if session_path else "ephemeral")
@@ -1313,6 +1325,7 @@ class AgentSession:
             self._extension_error_listener = error_listener if callable(error_listener) else None
         self._apply_extension_bindings()
         self._extensions_bound = True
+        self._defer_session_start = False
         self._extension_runner.emit(self._session_start_event)
         reason = "reload" if self._session_start_event.get("reason") == "reload" else "startup"
         if self._extend_resources_from_extensions(reason):
@@ -4949,6 +4962,7 @@ def create_agent_session(
     convert_to_llm: Optional[Callable[[list[AgentMessage]], list[Message]]] = None,
     extension_runner: ExtensionRunner | None = None,
     session_start_event: dict[str, object] | None = None,
+    defer_session_start: bool = False,
     resource_loader: DefaultResourceLoader | None = None,
     agent_dir: str | None = None,
     settings_manager: object | None = None,
@@ -4964,6 +4978,7 @@ def create_agent_session(
         convert_to_llm=convert_to_llm,
         extension_runner=extension_runner,
         session_start_event=session_start_event,
+        defer_session_start=defer_session_start,
         resource_loader=resource_loader,
         agent_dir=agent_dir,
         settings_manager=settings_manager,

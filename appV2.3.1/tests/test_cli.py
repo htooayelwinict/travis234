@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from argparse import Namespace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,8 +14,11 @@ from appv231.coding_agent.config import ENV_AGENT_DIR, get_agent_dir
 from appv231.coding_agent.provider_control_plane import ProviderControlPlane
 from appv231.ai.models import get_api_key_for_provider, register_model, reset_models
 from appv231.ai.types import Model
+from appv231.ai.types import UserMessage, now_ms
 from appv231.ai.providers.faux import create_faux_provider, faux_model, text_response_events
 from appv231.ai.stream import register_api_provider, reset_api_providers
+from appv231.coding_agent.session_catalog import SessionCatalog
+from appv231.coding_agent.session_store import SessionStore
 
 
 def setup_function() -> None:
@@ -72,6 +76,159 @@ def test_cli_without_prompt_starts_interactive_tui(monkeypatch, tmp_path) -> Non
     assert app.enable_tui is True
     assert app.thinking_level == "off"
     assert app.scoped_models == []
+
+
+def _install_session_cli_fakes(monkeypatch, captured: dict[str, object]) -> None:
+    class FakeApp:
+        def __init__(self, **kwargs):
+            captured["app_kwargs"] = dict(kwargs)
+            self.cwd = kwargs["cwd"]
+            self.messages = []
+            self.session = SimpleNamespace(grant_capability=lambda *_args, **_kwargs: None)
+
+        def run_turn(self, prompt):
+            captured["prompt"] = prompt
+
+    class FakeInteractiveMode:
+        def __init__(self, app, **kwargs):
+            captured["mode_app"] = app
+            captured["mode_kwargs"] = dict(kwargs)
+
+        def run(self):
+            return 23
+
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
+    monkeypatch.setattr(
+        cli,
+        "_startup_model_from_env",
+        lambda dotenv_path, **kwargs: cli._StartupModelSelection(
+            model=Model(id="m", name="m", api="faux", provider="faux", base_url="")
+        ),
+    )
+    monkeypatch.setattr(cli, "CodingApp", FakeApp)
+    monkeypatch.setattr(cli, "InteractiveMode", FakeInteractiveMode)
+
+
+def _seed_cli_session(agent_dir: Path, cwd: Path, *, session_id: str = "saved") -> Path:
+    cwd.mkdir(parents=True, exist_ok=True)
+    catalog = SessionCatalog(str(agent_dir))
+    path, resolved_id = catalog.new_session_path(str(cwd), session_id=session_id)
+    store = SessionStore(path, cwd=str(cwd.resolve()), session_id=resolved_id)
+    store.append_message(UserMessage(content=f"marker-{session_id}", timestamp=now_ms()))
+    return Path(path)
+
+
+def test_cli_continue_uses_latest_workspace_session_without_creating_another(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+    agent_dir = tmp_path / "agent"
+    project = tmp_path / "project"
+    session_path = _seed_cli_session(agent_dir, project)
+    monkeypatch.setenv(ENV_AGENT_DIR, str(agent_dir))
+    _install_session_cli_fakes(monkeypatch, captured)
+
+    exit_code = cli.main(["--cwd", str(project), "--continue", "--plain", "inspect"])
+
+    assert exit_code == 0
+    assert captured["app_kwargs"]["session_path"] == str(session_path)
+    assert captured["app_kwargs"]["session_id"] == "saved"
+    assert list(session_path.parent.glob("*.jsonl")) == [session_path]
+
+
+def test_cli_exact_session_restores_header_cwd_when_cwd_is_not_explicit(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+    agent_dir = tmp_path / "agent"
+    project = tmp_path / "project"
+    session_path = _seed_cli_session(agent_dir, project, session_id="exact")
+    monkeypatch.setenv(ENV_AGENT_DIR, str(agent_dir))
+    _install_session_cli_fakes(monkeypatch, captured)
+
+    exit_code = cli.main(["--session", str(session_path), "--plain", "inspect"])
+
+    assert exit_code == 0
+    assert captured["app_kwargs"]["cwd"] == str(project.resolve())
+    assert captured["app_kwargs"]["session_path"] == str(session_path)
+    assert captured["app_kwargs"]["session_id"] == "exact"
+
+
+def test_cli_exact_session_keeps_explicit_cwd_override(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+    agent_dir = tmp_path / "agent"
+    project = tmp_path / "project"
+    override = tmp_path / "override"
+    override.mkdir()
+    session_path = _seed_cli_session(agent_dir, project, session_id="override")
+    monkeypatch.setenv(ENV_AGENT_DIR, str(agent_dir))
+    _install_session_cli_fakes(monkeypatch, captured)
+
+    exit_code = cli.main(
+        ["--cwd", str(override), "--session", str(session_path), "--plain", "inspect"]
+    )
+
+    assert exit_code == 0
+    assert captured["app_kwargs"]["cwd"] == str(override.resolve())
+    assert captured["app_kwargs"]["session_path"] == str(session_path)
+
+
+def test_cli_no_session_starts_ephemerally_without_creating_jsonl(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+    agent_dir = tmp_path / "agent"
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setenv(ENV_AGENT_DIR, str(agent_dir))
+    _install_session_cli_fakes(monkeypatch, captured)
+
+    exit_code = cli.main(["--cwd", str(project), "--no-session", "--plain", "inspect"])
+
+    assert exit_code == 0
+    assert captured["app_kwargs"]["session_path"] is None
+    assert captured["app_kwargs"]["session_id"] is None
+    assert list(agent_dir.rglob("*.jsonl")) == []
+
+
+def test_cli_resume_boots_ephemerally_and_opens_tui_picker(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+    agent_dir = tmp_path / "agent"
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setenv(ENV_AGENT_DIR, str(agent_dir))
+    _install_session_cli_fakes(monkeypatch, captured)
+
+    exit_code = cli.main(["--cwd", str(project), "--resume"])
+
+    assert exit_code == 23
+    assert captured["app_kwargs"]["session_path"] is None
+    assert captured["app_kwargs"]["session_id"] is None
+    assert captured["mode_kwargs"]["open_resume_picker"] is True
+    assert list(agent_dir.rglob("*.jsonl")) == []
+
+
+def test_cli_session_modes_are_mutually_exclusive(monkeypatch, tmp_path, capsys) -> None:
+    _install_session_cli_fakes(monkeypatch, {})
+
+    with pytest.raises(SystemExit, match="2"):
+        cli.main(["--cwd", str(tmp_path), "--continue", "--no-session"])
+
+    assert "not allowed with argument" in capsys.readouterr().err
+
+
+def test_cli_continue_without_previous_session_reports_error_without_creating_file(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    captured: dict[str, object] = {}
+    agent_dir = tmp_path / "agent"
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setenv(ENV_AGENT_DIR, str(agent_dir))
+    _install_session_cli_fakes(monkeypatch, captured)
+
+    with pytest.raises(SystemExit, match="2"):
+        cli.main(["--cwd", str(project), "--continue", "--plain"])
+
+    assert "No previous session for this workspace" in capsys.readouterr().err
+    assert "app_kwargs" not in captured
+    assert list(agent_dir.rglob("*.jsonl")) == []
 
 
 def test_cli_rejects_missing_cwd_before_starting_app(monkeypatch, tmp_path, capsys) -> None:

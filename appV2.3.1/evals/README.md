@@ -26,12 +26,14 @@ Create a disposable demo directory outside the repository. Populate its `scenari
 
 ```bash
 DEMO_ROOT="$(mktemp -d /tmp/appv231-direct-tui.XXXXXX)"
+AGENT_ROOT="$(mktemp -d /tmp/appv231-direct-agent.XXXXXX)"
 mkdir -p "$DEMO_ROOT/scenarios"
 ```
 
 Launch the app itself in an attached terminal from the repository root:
 
 ```bash
+APPV231_CODING_AGENT_DIR="$AGENT_ROOT" \
 PYTHONPATH="$PWD/appV2.3.1" \
   "$PWD/.venv/bin/python" -m appv231.cli \
   --cwd "$DEMO_ROOT" \
@@ -44,15 +46,17 @@ The process attached to the terminal must be `python -m appv231.cli` itself. Typ
 
 ### Session contract
 
-- Use one TUI process and one conversation for all 21 prompts.
+- Use one logical conversation for all 21 prompts, split across the three attached TUI processes described below.
 - At the visible `appv231>` prompt, type `/model mimo`, press Enter, type `1`, and press Enter. Require the TUI to display `Switched model to openrouter/xiaomi/mimo-v2.5-pro` and show `medium` in the footer.
-- Type exactly one combined end-user prompt per scenario into the visible editor.
+- Type exactly one combined end-user prompt per scenario into the visible editor. Phrase it naturally with the target directory inline; do not prefix it with a scenario ID or scenario name.
 - Wait until the full assistant response is visible and the footer returns to `status: Idle` before sending the next prompt.
 - Print the exact prompt and visible final assistant response in the developer's test notes as each turn completes.
 - Run each scenario's external verifiers only after its turn finishes.
 - Type `/compact` after scenarios `4`, `8`, `12`, `16`, and `20`; wait for visible compaction completion and `Idle` before continuing.
 - Before scenario `10`, type `/allow package-install`; require the visible confirmation `Allowed package installation for 1 use` before its prompt.
-- Finish by typing `/exit` and require the attached process to exit with code `0`.
+- After prompt `7`, type `/session`, record the session file and full ID, then type `/exit` and require exit code `0`. Relaunch the same command with `--continue`; require the same ID, restored history, selected model, and thinking level before prompt `8`.
+- After prompt `14`, type `/session`, record the same ID, then type `/exit` and require exit code `0`. Relaunch the same command with `--resume`, choose the recorded session in the visible picker, and require the same ID and restored history before prompt `15`.
+- Finish prompt `21` by typing `/session` and `/exit`; require the same ID and exit code `0`.
 
 ### Evidence and pass criteria
 
@@ -69,7 +73,7 @@ duration
 failure or guardrail notes
 ```
 
-A scenario passes only when the direct TUI returns to `Idle` with a final response and every configured external verifier exits `0`. The complete run passes only when all 21 scenarios pass, all five visible compactions finish, and the attached TUI exits cleanly.
+A scenario passes only when the direct TUI returns to `Idle` with a final response and every configured external verifier exits `0`. The complete run passes only when all 21 scenarios pass, all five visible compactions finish, all three attached TUI processes exit cleanly, and every `/session` checkpoint reports one unchanged session ID and file.
 
 Do not infer success from the assistant's prose. Treat verifier exit codes and final fixture state as authoritative behavior evidence. The direct terminal transcript is authoritative UX evidence.
 

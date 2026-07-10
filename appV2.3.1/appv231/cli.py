@@ -23,10 +23,10 @@ from appv231.ai.register_builtins import register_builtin_providers
 from appv231.ai.types import Model
 from appv231.app import CodingApp
 from appv231.coding_agent.config import get_agent_dir, get_auth_path
-from appv231.coding_agent.agent_session_services import _new_session_path
 from appv231.coding_agent.export_html import export_from_file
 from appv231.coding_agent.eval_trace import ConversationLogWriter, EvalTraceWriter
 from appv231.coding_agent.provider_control_plane import ProviderControlPlane
+from appv231.coding_agent.session_catalog import SessionCatalog, SessionCatalogError
 from appv231.tui.interactive_mode import InteractiveMode
 
 
@@ -99,6 +99,53 @@ class _StartupModelSelection:
     model: Model
     thinking_level: str | None = None
     scoped_models: list[ScopedModel] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _StartupSessionSelection:
+    cwd: Path
+    session_path: str | None
+    session_id: str | None
+    persistent: bool
+    open_resume_picker: bool = False
+
+
+def _resolve_startup_session(
+    args: argparse.Namespace,
+    *,
+    cwd: Path,
+    cwd_was_explicit: bool,
+    launch_dir: Path,
+    catalog: SessionCatalog,
+) -> _StartupSessionSelection:
+    if args.resume_session:
+        if args.plain or args.prompt:
+            raise ValueError("--resume requires interactive TUI mode without an initial prompt")
+        return _StartupSessionSelection(
+            cwd=cwd,
+            session_path=None,
+            session_id=None,
+            persistent=False,
+            open_resume_picker=True,
+        )
+    if args.no_session:
+        return _StartupSessionSelection(cwd, None, None, False)
+    if args.continue_session:
+        info = catalog.continue_recent(str(cwd))
+        return _StartupSessionSelection(cwd, str(info.path), info.session_id, True)
+    if args.session_target:
+        info = catalog.resolve(args.session_target, cwd=str(cwd), launch_dir=str(launch_dir))
+        selected_cwd = cwd if cwd_was_explicit else info.cwd
+        if not selected_cwd.exists():
+            raise ValueError(
+                f"session working directory does not exist: {selected_cwd}. "
+                "Pass --cwd to override it."
+            )
+        if not selected_cwd.is_dir():
+            raise ValueError(f"session working directory is not a directory: {selected_cwd}")
+        return _StartupSessionSelection(selected_cwd, str(info.path), info.session_id, True)
+    session_path, session_id = catalog.new_session_path(str(cwd))
+    return _StartupSessionSelection(cwd, session_path, session_id, True)
 
 
 def _model_from_env(
@@ -330,7 +377,7 @@ def _hydrate_live_models_for_list(config: ModelConfig, args: argparse.Namespace)
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the appv231 pi+hermes coding app")
     parser.add_argument("prompt", nargs="*", help="Prompt to run. If omitted, starts the interactive TUI.")
-    parser.add_argument("--cwd", default=".", help="Working directory for tools")
+    parser.add_argument("--cwd", default=None, help="Working directory for tools")
     parser.add_argument(
         "--dotenv",
         default=None,
@@ -349,6 +396,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout-seconds", help="Override provider request timeout")
     parser.add_argument("--provider-sort", help="Override provider routing sort preference where supported")
     parser.add_argument("--stop", help="Comma-separated or JSON-array stop sequences")
+    session_group = parser.add_mutually_exclusive_group()
+    session_group.add_argument(
+        "-c",
+        "--continue",
+        dest="continue_session",
+        action="store_true",
+        help="Continue the most recent session for --cwd",
+    )
+    session_group.add_argument(
+        "-r",
+        "--resume",
+        dest="resume_session",
+        action="store_true",
+        help="Browse and select a previous session",
+    )
+    session_group.add_argument("--session", dest="session_target", help="Open a session path or ID")
+    session_group.add_argument("--no-session", action="store_true", help="Run without session persistence")
     parser.add_argument("--tui", action="store_true", help="Render live agent events with the ported differential TUI")
     parser.add_argument("--plain", action="store_true", help="Use the plain stdin loop instead of the interactive TUI")
     parser.add_argument(
@@ -381,7 +445,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Exported to: {exported_path}")
         return 0
 
-    cwd_path = _resolve_cwd_path(args.cwd)
+    cwd_was_explicit = args.cwd is not None
+    launch_dir = (_npm_initial_cwd() or Path.cwd()).resolve()
+    cwd_path = _resolve_cwd_path(args.cwd or ".")
     if not cwd_path.exists():
         print(f"Error: working directory does not exist: {cwd_path}", file=sys.stderr)
         return 1
@@ -396,6 +462,20 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         args.thinking = None
+
+    agent_dir = get_agent_dir()
+    session_catalog = SessionCatalog(agent_dir)
+    try:
+        startup_session = _resolve_startup_session(
+            args,
+            cwd=cwd_path,
+            cwd_was_explicit=cwd_was_explicit,
+            launch_dir=launch_dir,
+            catalog=session_catalog,
+        )
+    except (SessionCatalogError, ValueError) as error:
+        parser.error(str(error))
+    cwd_path = startup_session.cwd
 
     dotenv_path = _resolve_dotenv_path(args.dotenv, search_start=cwd_path)
     try:
@@ -433,17 +513,14 @@ def main(argv: list[str] | None = None) -> int:
         runtime_options["max_iterations"] = args.max_iterations
     if args.tool_loop_hard_stop:
         runtime_options["tool_loop_guardrails"] = {"blocking_enabled": True}
-    agent_dir = get_agent_dir()
-    session_path, session_id = _new_session_path(str(cwd_path), agent_dir)
-
     app = CodingApp(
         cwd=str(cwd_path),
         model=startup.model,
         thinking_level=startup.thinking_level or "off",
         scoped_models=startup.scoped_models,
         enable_tui=args.tui or not args.prompt and not args.plain,
-        session_path=session_path,
-        session_id=session_id,
+        session_path=startup_session.session_path,
+        session_id=startup_session.session_id,
         agent_dir=agent_dir,
         provider_control_plane=provider_control_plane,
         event_trace=EvalTraceWriter(args.event_trace) if args.event_trace else None,
@@ -464,6 +541,7 @@ def main(argv: list[str] | None = None) -> int:
             app,
             generation_params=config.generation_params,
             generation_param_warnings=generation_warnings,
+            open_resume_picker=startup_session.open_resume_picker,
         ).run()
 
     while True:

@@ -197,6 +197,30 @@ test("package builds install-capable docker command for npx-style use", () => {
   assert.deepEqual(command.slice(-4), ["ghcr.io/htooayelwinict/appv231:production", "--cwd", "/workspace", "hello"]);
 });
 
+test("package forwards session modes while mounting persistent app-owned state", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "appv231-session-cli-"));
+  const workspace = path.join(root, "workspace");
+  const agentHome = path.join(root, "agent-home");
+  fs.mkdirSync(workspace, { recursive: true });
+
+  for (const appArgs of [
+    ["--continue"],
+    ["--resume"],
+    ["--session", "saved-session-id"],
+    ["--no-session"],
+  ]) {
+    const config = parseArgs(["--cwd", workspace, "--agent-home", agentHome, "--", ...appArgs]);
+    const command = buildDockerCommand(config, { pid: 24680 });
+
+    assert.ok(command.includes(`${agentHome}:/agent-home:rw`));
+    assert.ok(command.includes("APPV231_CODING_AGENT_DIR=/agent-home/agent"));
+    assert.deepEqual(
+      command.slice(-(appArgs.length + 3)),
+      ["ghcr.io/htooayelwinict/appv231:production", "--cwd", "/workspace", ...appArgs],
+    );
+  }
+});
+
 test("package copies bundled skills into the app-owned sandbox agent directory", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "appv231-cli-"));
   const syntheticPackageRoot = path.join(root, "package");

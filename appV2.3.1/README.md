@@ -113,6 +113,36 @@ appv231 --cwd . --no-user-skills
 
 Use `--dry-run` to inspect the Docker command without starting the container.
 
+## Persistent sessions
+
+Normal startup creates a new persistent JSONL session. The npm launcher keeps
+container state under `~/.appv231/sandbox-home`, mounted at `/agent-home`, so
+sessions survive separate `docker run --rm` processes.
+
+```bash
+# npm/container launcher
+appv231 --cwd . -- --continue
+appv231 --cwd . -- --resume
+appv231 --cwd . -- --session <path-or-session-id>
+appv231 --cwd . -- --no-session
+
+# local Python entrypoint
+python -m appv231.cli --cwd . --continue
+python -m appv231.cli --cwd . --resume
+python -m appv231.cli --cwd . --session <path-or-session-id>
+python -m appv231.cli --cwd . --no-session
+```
+
+`--continue` opens the newest valid session for the selected workspace.
+`--resume` opens the TUI picker. `--session` opens one exact path or unique ID.
+`--no-session` is ephemeral and does not create JSONL state.
+
+Host-launched sandbox sessions are stored below:
+
+```text
+~/.appv231/sandbox-home/agent/sessions/
+```
+
 ## TUI command map
 
 Inside appv231:
@@ -123,6 +153,9 @@ Inside appv231:
 /model                 choose a provider/model
 /compact               compact the current conversation
 /compact deep          stronger compaction pass
+/resume                switch to a previous session
+/new                   start a new persistent session
+/session               show session file, ID, messages, usage, model, and thinking
 /delegate              spawn a delegated worker through the runtime command path
 /agents                list delegated workers and status
 /cancel-agent <id>     mark a delegated worker cancelled

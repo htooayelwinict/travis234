@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import os
-import uuid
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 from urllib.parse import urlparse
@@ -20,6 +18,7 @@ from appv231.coding_agent.extensions import ExtensionRunner
 from appv231.coding_agent.model_registry import ModelRegistry
 from appv231.coding_agent.provider_control_plane import ProviderControlPlane
 from appv231.coding_agent.resource_loader import DefaultResourceLoader
+from appv231.coding_agent.session_catalog import SessionCatalog
 from appv231.coding_agent.session_store import SessionContextSnapshot, SessionStore
 from appv231.coding_agent.settings_manager import SettingsManager
 from appv231.coding_agent.tools import create_all_tool_definitions
@@ -46,6 +45,19 @@ def create_agent_session_services(options: dict[str, Any]) -> dict[str, Any]:
     settings_manager = options.get("settingsManager") or options.get("settings_manager") or SettingsManager.create(
         cwd,
         agent_dir,
+    )
+    configured_session_dir = options.get("sessionDir", options.get("session_dir"))
+    if configured_session_dir is None:
+        get_session_dir = getattr(settings_manager, "getSessionDir", None) or getattr(
+            settings_manager,
+            "get_session_dir",
+            None,
+        )
+        if callable(get_session_dir):
+            configured_session_dir = get_session_dir()
+    session_catalog = options.get("sessionCatalog") or options.get("session_catalog") or SessionCatalog(
+        agent_dir,
+        session_dir=str(configured_session_dir) if configured_session_dir else None,
     )
     resource_loader = options.get("resourceLoader") or options.get("resource_loader")
     if resource_loader is None:
@@ -82,7 +94,7 @@ def create_agent_session_services(options: dict[str, Any]) -> dict[str, Any]:
     session_id = options.get("sessionId", options.get("session_id"))
     session_path = options.get("sessionPath", options.get("session_path"))
     if session_path is None:
-        session_path, session_id = _new_session_path(cwd, agent_dir, str(session_id) if session_id else None)
+        session_path, session_id = session_catalog.new_session_path(cwd, str(session_id) if session_id else None)
     else:
         session_path = str(Path(str(session_path)).expanduser().resolve())
     diagnostics: list[dict[str, object]] = []
@@ -104,6 +116,7 @@ def create_agent_session_services(options: dict[str, Any]) -> dict[str, Any]:
         "authStorage": auth_storage,
         "modelRegistry": model_registry,
         "providerControlPlane": provider_control_plane,
+        "sessionCatalog": session_catalog,
         "sessionPath": session_path,
         "sessionId": session_id,
         "diagnostics": diagnostics,
@@ -221,6 +234,7 @@ def create_agent_session_from_services(options: dict[str, Any]) -> CreateAgentSe
         parent_session_path=options.get("parentSession", options.get("parent_session_path")),
         session_id=str(session_id) if session_id else None,
         session_start_event=options.get("sessionStartEvent", options.get("session_start_event")),
+        defer_session_start=bool(options.get("deferSessionStart", options.get("defer_session_start", False))),
     )
     _record_initial_session_state(session, model, thinking_level or "off", fresh_session)
     return CreateAgentSessionResult(
@@ -251,27 +265,13 @@ def _provider_retry_settings(settings_manager: object) -> dict[str, Any]:
 
 
 def _default_session_dir(cwd: str, agent_dir: str) -> Path:
-    resolved_cwd = str(Path(cwd).expanduser().resolve())
-    safe_path = resolved_cwd.lstrip("/\\")
-    for separator in ("/", "\\", ":"):
-        safe_path = safe_path.replace(separator, "-")
-    path = Path(agent_dir).expanduser().resolve() / "sessions" / f"--{safe_path}--"
+    path = SessionCatalog(agent_dir).workspace_directory(cwd)
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
 def _new_session_path(cwd: str, agent_dir: str, session_id: str | None = None) -> tuple[str, str]:
-    resolved_session_id = session_id or uuid.uuid4().hex
-    session_dir = _default_session_dir(cwd, agent_dir)
-    timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    file_timestamp = timestamp.replace(":", "-").replace(".", "-")
-    path = session_dir / f"{file_timestamp}_{resolved_session_id}.jsonl"
-    while path.exists():
-        resolved_session_id = session_id or uuid.uuid4().hex
-        timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        file_timestamp = timestamp.replace(":", "-").replace(".", "-")
-        path = session_dir / f"{file_timestamp}_{resolved_session_id}.jsonl"
-    return str(path), resolved_session_id
+    return SessionCatalog(agent_dir).new_session_path(cwd, session_id)
 
 
 def _is_fresh_session_path(session_path: str | None) -> bool:

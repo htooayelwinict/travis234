@@ -43,3 +43,19 @@ appv231 --cwd . --image ghcr.io/htooayelwinict/appv231:production
 ```
 
 The host `.env` file is not mounted or passed automatically. Use `/login` inside the TUI for API keys.
+
+## Sessions
+
+The launcher mounts `~/.appv231/sandbox-home` at `/agent-home`, so JSONL
+sessions persist when the disposable container exits.
+
+```bash
+appv231 --cwd . -- --continue
+appv231 --cwd . -- --resume
+appv231 --cwd . -- --session <path-or-session-id>
+appv231 --cwd . -- --no-session
+```
+
+Default startup creates a new persistent session. Inside the TUI, use `/resume`
+to switch, `/new` to start fresh, and `/session` to inspect the active file and
+session ID.

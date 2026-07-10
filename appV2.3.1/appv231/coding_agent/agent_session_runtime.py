@@ -12,6 +12,7 @@ from typing import Any
 
 from appv231.coding_agent.agent_session import AgentSession
 from appv231.coding_agent.extensions import emit_session_shutdown_event
+from appv231.coding_agent.session_catalog import SessionCatalog
 
 
 @dataclass
@@ -123,23 +124,26 @@ class AgentSessionRuntime:
 
         previous_session_file = self._session.session_path
         target_session_file = str(options.get("session_path") or self._next_session_path())
-        self._teardown_current("new", target_session_file)
-        self._apply(
-            self._create_runtime(
-                {
-                    "cwd": self.cwd,
-                    "agentDir": self._services.get("agentDir"),
-                    "session_path": target_session_file,
-                    "parent_session_path": options.get("parent_session_path") or options.get("parentSession"),
-                    "session_start_event": {
-                        "type": "session_start",
-                        "reason": "new",
-                        "previousSessionFile": previous_session_file,
-                    },
-                }
-            )
+        replacement = self._create_runtime(
+            {
+                "cwd": self.cwd,
+                "agentDir": self._services.get("agentDir"),
+                "session_path": target_session_file,
+                "parent_session_path": options.get("parent_session_path") or options.get("parentSession"),
+                "session_start_event": {
+                    "type": "session_start",
+                    "reason": "new",
+                    "previousSessionFile": previous_session_file,
+                },
+                "defer_session_start": True,
+            }
         )
-        self._finish_session_replacement(options.get("with_session") or options.get("withSession"))
+        self._activate_replacement(
+            replacement,
+            reason="new",
+            target_session_file=target_session_file,
+            with_session=options.get("with_session") or options.get("withSession"),
+        )
         return {"cancelled": False}
 
     newSession = new_session
@@ -157,22 +161,25 @@ class AgentSessionRuntime:
             assert_session_cwd_exists(target_session_file, stored_cwd, self.cwd)
         next_cwd = str(cwd_override or stored_cwd or self.cwd)
         previous_session_file = self._session.session_path
-        self._teardown_current("resume", target_session_file)
-        self._apply(
-            self._create_runtime(
-                {
-                    "cwd": next_cwd,
-                    "agentDir": self._services.get("agentDir"),
-                    "session_path": target_session_file,
-                    "session_start_event": {
-                        "type": "session_start",
-                        "reason": "resume",
-                        "previousSessionFile": previous_session_file,
-                    },
-                }
-            )
+        replacement = self._create_runtime(
+            {
+                "cwd": next_cwd,
+                "agentDir": self._services.get("agentDir"),
+                "session_path": target_session_file,
+                "session_start_event": {
+                    "type": "session_start",
+                    "reason": "resume",
+                    "previousSessionFile": previous_session_file,
+                },
+                "defer_session_start": True,
+            }
         )
-        self._finish_session_replacement(options.get("with_session") or options.get("withSession"))
+        self._activate_replacement(
+            replacement,
+            reason="resume",
+            target_session_file=target_session_file,
+            with_session=options.get("with_session") or options.get("withSession"),
+        )
         return {"cancelled": False}
 
     switchSession = switch_session
@@ -319,9 +326,27 @@ class AgentSessionRuntime:
     def _apply(self, raw_result: CreateAgentSessionRuntimeResult | AgentSession | dict[str, Any]) -> None:
         result = _coerce_result(raw_result)
         self._session = result.session
-        self._services = result.services or self._services
+        self._services = {**self._services, **result.services}
         self._diagnostics = result.diagnostics
         self._model_fallback_message = result.model_fallback_message
+
+    def _activate_replacement(
+        self,
+        raw_result: CreateAgentSessionRuntimeResult | AgentSession | dict[str, Any],
+        *,
+        reason: str,
+        target_session_file: str,
+        with_session: Callable[[AgentSession], object] | None,
+    ) -> None:
+        result = _coerce_result(raw_result)
+        try:
+            self._teardown_current(reason, target_session_file)
+        except BaseException:
+            result.session.dispose()
+            raise
+        self._apply(result)
+        self._session.emit_deferred_session_start()
+        self._finish_session_replacement(with_session)
 
     def _finish_session_replacement(self, with_session: Callable[[AgentSession], object] | None = None) -> None:
         if self._rebind_session:
@@ -330,18 +355,24 @@ class AgentSessionRuntime:
             with_session(self._session)
 
     def _next_session_path(self) -> str:
-        session_dir = self._session_dir()
-        session_dir.mkdir(parents=True, exist_ok=True)
-        while True:
-            path = session_dir / f"session-{uuid.uuid4().hex}.jsonl"
-            if not path.exists():
-                return str(path)
+        catalog = self._services.get("sessionCatalog") or self._services.get("session_catalog")
+        if not isinstance(catalog, SessionCatalog):
+            catalog = SessionCatalog(
+                str(self._services.get("agentDir") or Path.home() / ".appv231" / "agent")
+            )
+        path, _session_id = catalog.new_session_path(self.cwd)
+        return path
 
     def _session_dir(self) -> Path:
         current_path = self._session.session_path
         if current_path:
             return Path(current_path).expanduser().resolve().parent
-        return Path(self.cwd).expanduser().resolve() / ".appv231-sessions"
+        catalog = self._services.get("sessionCatalog") or self._services.get("session_catalog")
+        if isinstance(catalog, SessionCatalog):
+            return catalog.workspace_directory(self.cwd)
+        return SessionCatalog(
+            str(self._services.get("agentDir") or Path.home() / ".appv231" / "agent")
+        ).workspace_directory(self.cwd)
 
 
 def _coerce_result(raw_result: CreateAgentSessionRuntimeResult | AgentSession | dict[str, Any]) -> CreateAgentSessionRuntimeResult:

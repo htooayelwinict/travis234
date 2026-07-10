@@ -24,6 +24,7 @@ from appv231.ai.providers.capabilities import ProviderParamWarning
 from appv231.ai.providers.model_catalog import get_last_openrouter_live_catalog_error, get_live_openrouter_models
 from appv231.ai.providers.params import GenerationParams, compact_generation_params_display
 from appv231.compaction import estimate_tokens
+from appv231.coding_agent.session_catalog import SessionInfo
 from appv231.coding_agent.session_commands import SessionCommandExecutor
 from appv231.tui.component import (
     CombinedAutocompleteProvider,
@@ -79,10 +80,12 @@ class InteractiveMode:
         prompt_label: str = "appv231> ",
         generation_params: GenerationParams | None = None,
         generation_param_warnings: list[ProviderParamWarning] | None = None,
+        open_resume_picker: bool = False,
     ) -> None:
         self.app = app
         self.generation_params = generation_params
         self.generation_param_warnings = list(generation_param_warnings or [])
+        self._open_resume_picker = bool(open_resume_picker)
         self.tui = app.tui
         self.input_fn = input_fn or input
         self._line_input_mode = input_fn is not None
@@ -111,6 +114,7 @@ class InteractiveMode:
         self._unsubscribe_footer_branch_change: Callable[[], None] | None = None
         self._unsubscribe_tui_terminal_input: Callable[[], None] | None = None
         self._unsubscribe_tui_scroll_change: Callable[[], None] | None = None
+        self._unsubscribe_app_session_rebound: Callable[[], None] | None = None
         self.built_in_header = Text(self._startup_text())
         self.header_container = Container([self.built_in_header, Spacer(1)])
         self.custom_header: object | None = None
@@ -144,6 +148,11 @@ class InteractiveMode:
         self._pending_model_picker_trace: tuple[int, str] | None = None
         self._last_turn_finished_at = 0.0
         self._last_idle_ctrl_c_at = 0.0
+        subscribe_rebound = getattr(app, "subscribe_session_rebound", None)
+        if callable(subscribe_rebound):
+            self._unsubscribe_app_session_rebound = subscribe_rebound(
+                lambda _session: self.tui.post(self._rebind_session_ui)
+            )
         self.setup_autocomplete_provider()
 
     def init(self) -> None:
@@ -217,6 +226,9 @@ class InteractiveMode:
             {"name": "models", "description": "List available models"},
             {"name": "params", "description": "Show active provider generation parameters"},
             {"name": "quit", "description": "Exit the interactive session"},
+            {"name": "resume", "description": "Switch to a previous session"},
+            {"name": "new", "description": "Start a new persistent session"},
+            {"name": "session", "description": "Show active session details"},
         ]
         runner = getattr(self.app.session, "extension_runner", None)
         if runner is not None and hasattr(runner, "get_all_registered_commands"):
@@ -270,6 +282,10 @@ class InteractiveMode:
         self.init()
         previous_sigint_handler = self._install_sigint_handler()
         try:
+            if self._open_resume_picker:
+                self._open_resume_picker = False
+                if not self._run_resume_command(startup=True):
+                    return 0
             while True:
                 submitted: list[str] = []
                 submitted_queue: queue.Queue[str] = queue.Queue()
@@ -343,6 +359,16 @@ class InteractiveMode:
                 if _is_help_command(prompt):
                     self._run_help_command()
                     continue
+                session_command = _parse_session_command(prompt)
+                if session_command == "resume":
+                    self._run_resume_command()
+                    continue
+                if session_command == "new":
+                    self._run_new_session_command()
+                    continue
+                if session_command == "session":
+                    self._run_session_info_command()
+                    continue
                 bash_command = _parse_bash_command(prompt)
                 if bash_command:
                     self._run_bash_command(bash_command[0], exclude_from_context=bash_command[1])
@@ -408,6 +434,9 @@ class InteractiveMode:
             if self._unsubscribe_tui_scroll_change is not None:
                 self._unsubscribe_tui_scroll_change()
                 self._unsubscribe_tui_scroll_change = None
+            if self._unsubscribe_app_session_rebound is not None:
+                self._unsubscribe_app_session_rebound()
+                self._unsubscribe_app_session_rebound = None
             self.footer_data_provider.dispose()
             if self.app.event_trace is not None:
                 self.app.event_trace.write("shutdown", {"status": "ok"})
@@ -866,6 +895,126 @@ class InteractiveMode:
             "Type /exit or /quit to leave."
         )
 
+    def _session_candidates(self) -> list[SessionInfo]:
+        catalog = self.app.session_catalog
+        current_path = self.app.session.session_path
+        active = Path(current_path).expanduser().resolve() if current_path else None
+        ordered = [*catalog.list_for_cwd(str(self.app.cwd)), *catalog.list_all()]
+        seen: set[Path] = set()
+        candidates: list[SessionInfo] = []
+        for info in ordered:
+            path = info.path.resolve()
+            if path == active or path in seen:
+                continue
+            seen.add(path)
+            candidates.append(info)
+        return candidates
+
+    @staticmethod
+    def _session_label(info: SessionInfo) -> str:
+        title = info.name or info.preview or "(empty session)"
+        model = f" | {info.model}" if info.model else ""
+        return f"{title} | {info.cwd} | {info.session_id[:8]}{model} | {info.path.name}"
+
+    def _run_resume_command(self, *, startup: bool = False) -> bool:
+        candidates = self._session_candidates()
+        if not candidates:
+            self.history.add(StatusLine("No previous sessions available.", kind="warning"))
+            self.status.set_message("Idle")
+            self._refresh_footer()
+            self.tui.request_render()
+            return False
+        labels = [self._session_label(info) for info in candidates]
+        selected = self.prompt_extension_select("Resume session", labels, kind="session")
+        if selected is None:
+            if not startup:
+                self.status.set_message("Idle")
+                self._refresh_footer()
+            return False
+        info = candidates[labels.index(selected)]
+        self.status.set_message("Switching session")
+        self._refresh_footer()
+        self.tui.request_render()
+        try:
+            result = self._run_session_command(
+                "resume",
+                lambda: self.app.switch_session(str(info.path)),
+            )
+            if result.get("cancelled"):
+                self.history.add(StatusLine("Session switch cancelled.", kind="session"))
+                return False
+            if self.tui.dispatcher.is_owner_thread():
+                self.tui.drain_dispatcher()
+            self.history.add(StatusLine(f"Resumed session: {self.app.session.session_id}", kind="session"))
+            return True
+        except Exception as error:  # noqa: BLE001 - selection failures remain visible without losing current state.
+            self.history.add(StatusLine(f"Session switch failed: {error}", kind="error"))
+            return False
+        finally:
+            self.status.set_message("Idle")
+            self._refresh_footer()
+            self.tui.request_render()
+
+    def _run_new_session_command(self) -> None:
+        self.status.set_message("Starting new session")
+        self._refresh_footer()
+        self.tui.request_render()
+        try:
+            result = self._run_session_command("new-session", self.app.new_session)
+            if result.get("cancelled"):
+                self.history.add(StatusLine("New session cancelled.", kind="session"))
+                return
+            if self.tui.dispatcher.is_owner_thread():
+                self.tui.drain_dispatcher()
+            self.history.add(StatusLine(f"Started new session: {self.app.session.session_id}", kind="session"))
+        except Exception as error:  # noqa: BLE001 - command errors are rendered and the old session remains active.
+            self.history.add(StatusLine(f"Could not start session: {error}", kind="error"))
+        finally:
+            self.status.set_message("Idle")
+            self._refresh_footer()
+            self.tui.request_render()
+
+    def _run_session_info_command(self) -> None:
+        session = self.app.session
+        session_file = session.session_path or "ephemeral"
+        session_id = session.session_id or "ephemeral"
+        usage = _footer_usage_stats(session.messages)
+        self.history.add(StatusLine("Session", kind="session"))
+        for line in (
+            f"File: {session_file}",
+            f"ID: {session_id}",
+            f"Messages: {len(session.messages)}",
+            f"Context: ~{estimate_tokens(session.messages):,} tokens",
+            f"Usage: {usage['input']:,} input / {usage['output']:,} output tokens",
+            f"Model: {session.model.provider}/{session.model.id}",
+            f"Thinking: {session.thinking_level}",
+        ):
+            self.history.add(Text(line))
+        self.status.set_message("Idle")
+        self._refresh_footer()
+        self.tui.request_render()
+
+    def _rebind_session_ui(self) -> None:
+        if self._unsubscribe_session_events is not None:
+            self._unsubscribe_session_events()
+            self._unsubscribe_session_events = None
+        self.history.clear()
+        self._history_populated = False
+        self.app.renderer.set_output_container(self.history)
+        self.app.renderer.set_hidden_thinking_label(self.hidden_thinking_label)
+        self.app.renderer.set_hide_thinking_block(self.hide_thinking_block)
+        self._populate_existing_history()
+        self.built_in_header.set_text(self._startup_text())
+        self.footer.cwd = str(self.app.cwd)
+        self.setup_autocomplete_provider()
+        if self._initialized:
+            self._unsubscribe_session_events = self.app.session.subscribe(
+                lambda event: self.tui.post(lambda: self._handle_session_event(event))
+            )
+        self._refresh_footer()
+        self.tui.scroll_to_bottom()
+        self.tui.request_render(force=True)
+
     def _run_help_command(self) -> None:
         self.history.add(StatusLine("TUI commands", kind="help"))
         for line in (
@@ -877,6 +1026,9 @@ class InteractiveMode:
             "/logout - Remove provider authentication.",
             "/compact or /compress - Safely compress conversation context.",
             "/compact deep [focus] - Run bounded multi-pass compaction toward a fresh-session baseline.",
+            "/resume - Switch to a previous session.",
+            "/new - Start a new persistent session.",
+            "/session - Show active session details.",
             "/allow package-install [uses] - Allow explicit package installation for this session.",
             "/agents - List delegated subagents.",
             "/delegate <role> <task> - Spawn a subagent for explicit multi-agent work.",
@@ -1919,6 +2071,16 @@ def _is_prompt_level_skill_trigger(prompt: str) -> bool:
 
 def _is_help_command(prompt: str) -> bool:
     return prompt == "/help" or prompt.startswith("/help ")
+
+
+def _parse_session_command(prompt: str) -> str | None:
+    if prompt == "/resume":
+        return "resume"
+    if prompt == "/new":
+        return "new"
+    if prompt == "/session":
+        return "session"
+    return None
 
 
 def _parse_auth_command(prompt: str) -> tuple[str, str | None] | None:

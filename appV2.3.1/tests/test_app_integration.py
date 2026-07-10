@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
+
+import pytest
 
 from appv231.agent.types import AgentTool, AgentToolResult
 from appv231.app import CodingApp
@@ -21,6 +24,8 @@ from appv231.ai.providers.faux import create_faux_provider, faux_model, text_res
 from appv231.ai.stream import ApiProvider, register_api_provider, reset_api_providers
 from appv231.coding_agent import SettingsManager
 from appv231.coding_agent.provider_control_plane import ProviderControlPlane
+from appv231.coding_agent.session_catalog import SessionCatalog
+from appv231.coding_agent.session_store import SessionStore
 from appv231.tui.terminal import FakeTerminal
 
 
@@ -54,6 +59,142 @@ def test_end_to_end_coding_app_read_tool_and_render(tmp_path: Path) -> None:
         b.text for m in app.messages if getattr(m, "role", None) == "toolResult" for b in m.content
     )
     assert calls["n"] == 2
+
+
+def _seed_restorable_app_session(
+    path: Path,
+    cwd: Path,
+    model: Model,
+    *,
+    marker: str = "persisted marker",
+) -> None:
+    cwd.mkdir(parents=True, exist_ok=True)
+    store = SessionStore(str(path), cwd=str(cwd.resolve()), session_id=path.stem)
+    store.append_model_change(model.provider, model.id)
+    store.append_thinking_level_change("medium")
+    store.append_message(UserMessage(content=marker, timestamp=now_ms()))
+
+
+def test_coding_app_initial_session_restores_registered_model_thinking_and_messages(tmp_path: Path) -> None:
+    initial_model = faux_model()
+    saved_model = replace(initial_model, id="saved-model", name="Saved Model")
+    control_plane = ProviderControlPlane.in_memory()
+    control_plane.ensure_model(initial_model)
+    control_plane.ensure_model(saved_model)
+    session_path = tmp_path / "saved.jsonl"
+    _seed_restorable_app_session(session_path, tmp_path, saved_model)
+
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=initial_model,
+        enable_tui=False,
+        session_path=str(session_path),
+        provider_control_plane=control_plane,
+    )
+
+    assert app.session.model is saved_model
+    assert app.session.thinking_level == "medium"
+    assert [message.content for message in app.messages if isinstance(message, UserMessage)] == ["persisted marker"]
+    assert app.session.provider_control_plane is control_plane
+
+
+def test_coding_app_switch_session_rebinds_session_local_state_transactionally(tmp_path: Path) -> None:
+    first_cwd = tmp_path / "first"
+    second_cwd = tmp_path / "second"
+    first_cwd.mkdir()
+    initial_model = faux_model()
+    saved_model = replace(initial_model, id="saved-model", name="Saved Model")
+    control_plane = ProviderControlPlane.in_memory()
+    control_plane.ensure_model(initial_model)
+    control_plane.ensure_model(saved_model)
+    agent_dir = tmp_path / "agent"
+    catalog = SessionCatalog(str(agent_dir))
+    initial_path, initial_id = catalog.new_session_path(str(first_cwd), "initial")
+    target_path, _target_id = catalog.new_session_path(str(second_cwd), "target")
+    _seed_restorable_app_session(Path(target_path), second_cwd, saved_model)
+    app = CodingApp(
+        cwd=str(first_cwd),
+        model=initial_model,
+        terminal=FakeTerminal(),
+        enable_tui=False,
+        session_path=initial_path,
+        session_id=initial_id,
+        agent_dir=str(agent_dir),
+        provider_control_plane=control_plane,
+    )
+    old_session = app.session
+    old_compaction = app.compaction
+    old_renderer = app.renderer
+    rebound: list[object] = []
+    app.subscribe_session_rebound(rebound.append)
+
+    result = app.switch_session(target_path)
+
+    assert result == {"cancelled": False}
+    assert app.session_runtime.session is app.session
+    assert app.session is not old_session
+    assert app.compaction is not old_compaction
+    assert app.renderer is not old_renderer
+    assert app.cwd == str(second_cwd.resolve())
+    assert app.session.cwd == str(second_cwd.resolve())
+    assert app.session.model is saved_model
+    assert app.session.thinking_level == "medium"
+    assert [message.content for message in app.messages if isinstance(message, UserMessage)] == ["persisted marker"]
+    assert app.session.provider_control_plane is control_plane
+    assert app.session._compaction_manager is app.compaction
+    assert rebound == [app.session]
+
+
+def test_coding_app_failed_switch_keeps_original_session_and_subscriptions(tmp_path: Path, monkeypatch) -> None:
+    model = faux_model()
+    agent_dir = tmp_path / "agent"
+    catalog = SessionCatalog(str(agent_dir))
+    session_path, session_id = catalog.new_session_path(str(tmp_path), "initial")
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=model,
+        enable_tui=False,
+        session_path=session_path,
+        session_id=session_id,
+        agent_dir=str(agent_dir),
+    )
+    old_session = app.session
+    old_compaction = app.compaction
+    old_unsubscribe = old_session._unsubscribe_agent
+    rebound: list[object] = []
+    app.subscribe_session_rebound(rebound.append)
+
+    def fail_create(_options):
+        raise RuntimeError("target initialization failed")
+
+    monkeypatch.setattr(app.session_runtime, "_create_runtime", fail_create)
+
+    with pytest.raises(RuntimeError, match="target initialization failed"):
+        app.switch_session(str(tmp_path / "missing.jsonl"), cwd_override=str(tmp_path))
+
+    assert app.session is old_session
+    assert app.session_runtime.session is old_session
+    assert app.compaction is old_compaction
+    assert old_session._unsubscribe_agent is old_unsubscribe
+    assert rebound == []
+
+
+def test_coding_app_new_session_from_ephemeral_uses_app_owned_catalog(tmp_path: Path) -> None:
+    agent_dir = tmp_path / "agent"
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        enable_tui=False,
+        session_path=None,
+        agent_dir=str(agent_dir),
+    )
+    assert app.session.session_path is None
+
+    result = app.new_session()
+
+    assert result == {"cancelled": False}
+    assert app.session.session_path is not None
+    assert Path(app.session.session_path).is_relative_to(agent_dir / "sessions")
 
 
 def test_coding_app_wires_settings_retry_for_sse_idle_timeout(tmp_path: Path) -> None:

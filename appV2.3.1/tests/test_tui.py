@@ -116,7 +116,13 @@ from appv231.ai.model_resolver import ScopedModel
 from appv231.app import CodingApp
 from appv231.compaction.timing import ManualCompressionStatus
 from appv231.coding_agent import BashResult
-from appv231.coding_agent.session_store import BashExecutionMessage, BranchSummaryMessage, CustomMessage
+from appv231.coding_agent.session_catalog import SessionCatalog
+from appv231.coding_agent.session_store import (
+    BashExecutionMessage,
+    BranchSummaryMessage,
+    CustomMessage,
+    SessionStore,
+)
 from appv231.coding_agent.subagents import CallableSubagentBackend
 from appv231.coding_agent.tools.bash import BashOperations
 from appv231.coding_agent.tools.read import create_read_tool_definition
@@ -3635,6 +3641,162 @@ def test_interactive_mode_runs_help_command_without_model_turn(tmp_path) -> None
     assert "TUI commands" in rendered
     assert "/model" in rendered
     assert "model should not run" not in rendered
+
+
+def _seed_tui_resume_session(agent_dir, cwd, *, session_id="resume-target", marker="persisted marker"):
+    catalog = SessionCatalog(str(agent_dir))
+    path, resolved_id = catalog.new_session_path(str(cwd), session_id=session_id)
+    store = SessionStore(path, cwd=str(cwd.resolve()), session_id=resolved_id)
+    model = faux_model()
+    store.append_model_change(model.provider, model.id)
+    store.append_thinking_level_change("medium")
+    store.append_message(UserMessage(content=marker, timestamp=now_ms()))
+    return path
+
+
+def test_interactive_mode_resume_rebinds_history_footer_and_session_subscription(tmp_path) -> None:
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "unused")))
+    agent_dir = tmp_path / "agent"
+    target_path = _seed_tui_resume_session(agent_dir, tmp_path)
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=140, rows=40),
+        enable_tui=True,
+        session_path=None,
+        agent_dir=str(agent_dir),
+    )
+    mode = InteractiveMode(app, input_fn=lambda prompt: "1")
+    mode.init()
+    old_subscription = mode._unsubscribe_session_events
+
+    try:
+        assert mode._run_resume_command() is True
+
+        rendered = strip_ansi("\n".join(app.tui.render(140)))
+        assert app.session.session_path == target_path
+        assert "persisted marker" in rendered
+        assert "Resumed session: resume-target" in rendered
+        assert mode.footer.cwd == str(tmp_path.resolve())
+        assert mode.footer.thinking_level == "medium"
+        assert mode._unsubscribe_session_events is not old_subscription
+        assert app.renderer.output_container is mode.history
+    finally:
+        mode.footer_data_provider.dispose()
+        app.tui.stop()
+
+
+def test_interactive_mode_new_and_session_commands_do_not_call_model(tmp_path) -> None:
+    calls = {"model": 0}
+
+    def script(model, context):
+        calls["model"] += 1
+        return text_response_events(model, "model should not run")
+
+    register_api_provider(create_faux_provider(script))
+    agent_dir = tmp_path / "agent"
+    catalog = SessionCatalog(str(agent_dir))
+    initial_path, initial_id = catalog.new_session_path(str(tmp_path), "initial")
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=160, rows=40),
+        enable_tui=True,
+        session_path=initial_path,
+        session_id=initial_id,
+        agent_dir=str(agent_dir),
+    )
+    inputs = iter(["/session", "/new", "/session", "/exit"])
+    mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
+
+    mode.run()
+
+    rendered = strip_ansi("\n".join(app.tui.render(160)))
+    full_history = strip_ansi("\n".join(mode.history.render(2_000)))
+    assert calls["model"] == 0
+    assert app.session.session_path != initial_path
+    assert "Session" in rendered
+    assert f"File: {app.session.session_path}" in full_history
+    assert f"ID: {app.session.session_id}" in full_history
+    assert "Model: faux/faux-model" in full_history
+    assert "model should not run" not in rendered
+
+
+def test_interactive_mode_startup_resume_selects_before_first_editor_prompt(tmp_path) -> None:
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "unused")))
+    agent_dir = tmp_path / "agent"
+    target_path = _seed_tui_resume_session(agent_dir, tmp_path, marker="startup marker")
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=140, rows=40),
+        enable_tui=True,
+        session_path=None,
+        agent_dir=str(agent_dir),
+    )
+    inputs = iter(["1", "/exit"])
+    mode = InteractiveMode(
+        app,
+        input_fn=lambda prompt: next(inputs),
+        open_resume_picker=True,
+    )
+
+    exit_code = mode.run()
+
+    rendered = strip_ansi("\n".join(app.tui.render(140)))
+    assert exit_code == 0
+    assert app.session.session_path == target_path
+    assert "startup marker" in rendered
+
+
+def test_interactive_mode_startup_resume_cancellation_stays_ephemeral_and_exits(tmp_path) -> None:
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "unused")))
+    agent_dir = tmp_path / "agent"
+    target_path = _seed_tui_resume_session(agent_dir, tmp_path)
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=140, rows=40),
+        enable_tui=True,
+        session_path=None,
+        agent_dir=str(agent_dir),
+    )
+    mode = InteractiveMode(app, input_fn=lambda prompt: "", open_resume_picker=True)
+
+    exit_code = mode.run()
+
+    assert exit_code == 0
+    assert app.session.session_path is None
+    assert [str(path) for path in agent_dir.rglob("*.jsonl")] == [target_path]
+
+
+def test_interactive_mode_help_and_autocomplete_include_session_commands(tmp_path) -> None:
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "unused")))
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=140, rows=40),
+        enable_tui=True,
+        session_path=None,
+        agent_dir=str(tmp_path / "agent"),
+    )
+    inputs = iter(["/help", "/exit"])
+    mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
+
+    mode.run()
+
+    rendered = strip_ansi("\n".join(app.tui.render(140)))
+    assert "/resume - Switch to a previous session." in rendered
+    assert "/new - Start a new persistent session." in rendered
+    assert "/session - Show active session details." in rendered
+    suggestions = mode.create_base_autocomplete_provider().getSuggestions(
+        ["/se"],
+        0,
+        3,
+        {"signal": None, "force": False},
+    )
+    labels = [item["label"] for item in suggestions["items"]]
+    assert "session" in labels
 
 
 def test_interactive_mode_reports_unknown_slash_command_without_model_turn(tmp_path) -> None:
