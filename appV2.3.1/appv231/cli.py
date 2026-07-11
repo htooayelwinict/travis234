@@ -527,6 +527,28 @@ def main(argv: list[str] | None = None) -> int:
         conversation_log=ConversationLogWriter(args.conversation_log) if args.conversation_log else None,
         **runtime_options,
     )
+    try:
+        return _run_configured_app(
+            app,
+            args,
+            config,
+            generation_warnings,
+            open_resume_picker=startup_session.open_resume_picker,
+        )
+    finally:
+        close = getattr(app, "close", None)
+        if callable(close):
+            close()
+
+
+def _run_configured_app(
+    app,
+    args: argparse.Namespace,
+    config: ModelConfig,
+    generation_warnings: list[str],
+    *,
+    open_resume_picker: bool,
+) -> int:
     if args.allow_package_install:
         app.session.grant_capability("package_mutation", uses=1)
 
@@ -541,7 +563,7 @@ def main(argv: list[str] | None = None) -> int:
             app,
             generation_params=config.generation_params,
             generation_param_warnings=generation_warnings,
-            open_resume_picker=startup_session.open_resume_picker,
+            open_resume_picker=open_resume_picker,
         ).run()
 
     while True:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import shlex
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -24,6 +26,7 @@ from appv231.ai.providers.faux import create_faux_provider, faux_model, text_res
 from appv231.ai.stream import ApiProvider, register_api_provider, reset_api_providers
 from appv231.coding_agent import SettingsManager
 from appv231.coding_agent.provider_control_plane import ProviderControlPlane
+from appv231.coding_agent.processes.types import ProcessClosedError, ProcessNotFoundError, ProcessState
 from appv231.coding_agent.session_catalog import SessionCatalog
 from appv231.coding_agent.session_store import SessionStore
 from appv231.tui.terminal import FakeTerminal
@@ -31,6 +34,103 @@ from appv231.tui.terminal import FakeTerminal
 
 def setup_function() -> None:
     reset_api_providers()
+
+
+def _python_command(source: str) -> str:
+    return f"{shlex.quote(sys.executable)} -c {shlex.quote(source)}"
+
+
+def test_coding_app_owns_managed_process_service_and_closes_it_idempotently(tmp_path: Path) -> None:
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), enable_tui=False)
+    service = app.process_service
+    bash = app.session.get_tool_definition("bash")
+    assert bash is not None
+    started = bash.execute(
+        "managed",
+        {"command": _python_command("import time; time.sleep(30)"), "yield_time_ms": 0},
+    )
+
+    assert app.session.get_tool_definition("process") is not None
+    assert started.details["status"] == "running"
+    assert service.list(app.process_owner())[0].state is ProcessState.RUNNING
+
+    app.close()
+    app.close()
+
+    with pytest.raises(ProcessClosedError, match="closed"):
+        service.subscribe(lambda _event: None)
+
+
+def test_coding_app_reuses_process_service_across_same_workspace_resume(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    agent_dir = tmp_path / "agent"
+    catalog = SessionCatalog(str(agent_dir))
+    initial_path, initial_id = catalog.new_session_path(str(workspace), "initial-process")
+    target_path, _target_id = catalog.new_session_path(str(workspace), "target-process")
+    model = faux_model()
+    _seed_restorable_app_session(Path(target_path), workspace, model)
+    app = CodingApp(
+        cwd=str(workspace),
+        model=model,
+        enable_tui=False,
+        session_path=initial_path,
+        session_id=initial_id,
+        agent_dir=str(agent_dir),
+    )
+    service = app.process_service
+    bash = app.session.get_tool_definition("bash")
+    assert bash is not None
+    started = bash.execute(
+        "managed",
+        {"command": _python_command("import time; time.sleep(30)"), "yield_time_ms": 0},
+    )
+    try:
+        app.switch_session(target_path)
+
+        assert app.process_service is service
+        assert app.session.process_service is service
+        resumed = service.poll(app.process_owner(), started.details["sessionId"], 0, wait_ms=0)
+        assert resumed.state is ProcessState.RUNNING
+    finally:
+        app.close()
+
+
+def test_coding_app_hides_old_workspace_process_after_cross_workspace_resume(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    agent_dir = tmp_path / "agent"
+    catalog = SessionCatalog(str(agent_dir))
+    initial_path, initial_id = catalog.new_session_path(str(first), "initial-process")
+    target_path, _target_id = catalog.new_session_path(str(second), "target-process")
+    model = faux_model()
+    _seed_restorable_app_session(Path(target_path), second, model)
+    app = CodingApp(
+        cwd=str(first),
+        model=model,
+        enable_tui=False,
+        session_path=initial_path,
+        session_id=initial_id,
+        agent_dir=str(agent_dir),
+    )
+    service = app.process_service
+    first_owner = app.process_owner()
+    bash = app.session.get_tool_definition("bash")
+    assert bash is not None
+    started = bash.execute(
+        "managed",
+        {"command": _python_command("import time; time.sleep(30)"), "yield_time_ms": 0},
+    )
+    try:
+        app.switch_session(target_path)
+
+        assert app.process_owner() != first_owner
+        with pytest.raises(ProcessNotFoundError):
+            service.poll(app.process_owner(), started.details["sessionId"], 0, wait_ms=0)
+        assert service.poll(first_owner, started.details["sessionId"], 0, wait_ms=0).state is ProcessState.RUNNING
+    finally:
+        app.close()
 
 
 def test_end_to_end_coding_app_read_tool_and_render(tmp_path: Path) -> None:

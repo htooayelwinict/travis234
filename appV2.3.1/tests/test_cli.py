@@ -50,7 +50,11 @@ def test_cli_without_prompt_starts_interactive_tui(monkeypatch, tmp_path) -> Non
             self.enable_tui = enable_tui
             self.thinking_level = thinking_level
             self.scoped_models = scoped_models
+            self.closed = False
             created["app"] = self
+
+        def close(self):
+            self.closed = True
 
     class FakeInteractiveMode:
         def __init__(self, app, **kwargs):
@@ -76,6 +80,7 @@ def test_cli_without_prompt_starts_interactive_tui(monkeypatch, tmp_path) -> Non
     assert app.enable_tui is True
     assert app.thinking_level == "off"
     assert app.scoped_models == []
+    assert app.closed is True
 
 
 def _install_session_cli_fakes(monkeypatch, captured: dict[str, object]) -> None:

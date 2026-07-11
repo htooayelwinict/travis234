@@ -11,7 +11,7 @@ import json
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Literal, Mapping, Optional
 
 from appv231.ai.stream import complete_simple_sync
 from appv231.ai.model_resolver import ScopedModel
@@ -25,6 +25,8 @@ from appv231.coding_agent.branch_summarization import SUMMARIZATION_SYSTEM_PROMP
 from appv231.coding_agent.config import get_agent_dir
 from appv231.coding_agent.settings_manager import SettingsManager
 from appv231.coding_agent.provider_control_plane import ProviderControlPlane
+from appv231.coding_agent.processes.service import ProcessSessionService
+from appv231.coding_agent.processes.types import ProcessOwner
 from appv231.coding_agent.session_catalog import SessionCatalog
 from appv231.coding_agent.session_store import SessionStore
 from appv231.compaction.compressor import ContextCompressor, estimate_tokens
@@ -116,6 +118,9 @@ class CodingApp:
         self._max_iterations = max_iterations
         self._tool_loop_guardrails = tool_loop_guardrails
         self._agent_dir = str(Path(agent_dir or get_agent_dir()).expanduser().resolve())
+        self._app_instance_id = uuid.uuid4().hex
+        self.process_service = ProcessSessionService()
+        self._closed = False
         configured_session_dir = _call_setting(self._settings_manager, "getSessionDir", "get_session_dir")
         self.session_catalog = SessionCatalog(
             self._agent_dir,
@@ -198,6 +203,8 @@ class CodingApp:
             defer_session_start=defer_session_start,
             agent_dir=self._agent_dir,
             provider_control_plane=self.provider_control_plane,
+            process_service=self.process_service,
+            process_owner=self._process_owner_for(resolved_cwd),
         )
         if fresh_session and session._session_store is not None:
             session._session_store.append_model_change(session.model.provider, session.model.id)
@@ -304,6 +311,43 @@ class CodingApp:
 
     def new_session(self) -> dict[str, bool]:
         return self.session_runtime.new_session()
+
+    def process_owner(self, origin: Literal["agent", "user"] = "agent") -> ProcessOwner:
+        return self._process_owner_for(self.cwd, origin=origin)
+
+    def _process_owner_for(
+        self,
+        cwd: str,
+        *,
+        origin: Literal["agent", "user"] = "agent",
+    ) -> ProcessOwner:
+        return ProcessOwner(
+            app_instance_id=self._app_instance_id,
+            workspace_key=str(Path(cwd).expanduser().resolve()),
+            origin=origin,
+        )
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        first_error: BaseException | None = None
+        try:
+            self._unbind_session()
+        except BaseException as error:  # noqa: BLE001 - complete all lifecycle cleanup before re-raising.
+            first_error = error
+        try:
+            self.process_service.close()
+        except BaseException as error:  # noqa: BLE001
+            if first_error is None:
+                first_error = error
+        try:
+            self.session_runtime.dispose()
+        except BaseException as error:  # noqa: BLE001
+            if first_error is None:
+                first_error = error
+        if first_error is not None:
+            raise first_error
 
     def _transform_context(self, messages, signal=None):
         # Hermes preflight timing-compaction phase.
