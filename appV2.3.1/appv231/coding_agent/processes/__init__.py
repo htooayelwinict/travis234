@@ -1,5 +1,6 @@
 """Managed process sessions for the coding-agent profile."""
 
+from appv231.coding_agent.processes.local import create_local_process_transport
 from appv231.coding_agent.processes.output import SanitizedOutputSpool
 from appv231.coding_agent.processes.service import ProcessSessionService, ProcessTransportFactory
 from appv231.coding_agent.processes.transport import ProcessTransport, SignalName
@@ -40,4 +41,5 @@ __all__ = [
     "SanitizedOutputSpool",
     "SignalName",
     "StopCause",
+    "create_local_process_transport",
 ]

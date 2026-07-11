@@ -25,10 +25,10 @@ class ExecutionBackend:
             [shell, "-c", command],
             cwd=cwd,
             env=dict(env),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            start_new_session=os.name == "posix",
+            stdin=options.get("stdin", subprocess.DEVNULL),
+            stdout=options.get("stdout", subprocess.PIPE),
+            stderr=options.get("stderr", subprocess.PIPE),
+            start_new_session=bool(options.get("start_new_session", os.name == "posix")),
         )
 
 
