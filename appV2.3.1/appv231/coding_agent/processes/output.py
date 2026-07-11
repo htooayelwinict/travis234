@@ -10,6 +10,12 @@ import threading
 from pathlib import Path
 
 from appv231.coding_agent.processes.types import InvalidCursorError, OutputSlice
+from appv231.coding_agent.tools.truncate import (
+    DEFAULT_MAX_BYTES,
+    DEFAULT_MAX_LINES,
+    TruncationResult,
+    truncate_tail,
+)
 
 
 class _TerminalSanitizer:
@@ -81,6 +87,14 @@ class SanitizedOutputSpool:
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self._sanitizer = _TerminalSanitizer()
         self._written_bytes = 0
+        self._tail = ""
+        self._tail_starts_partial = False
+        self._newline_count = 0
+        self._saw_text = False
+        self._ends_with_newline = False
+        self._last_line_bytes = 0
+        self._was_truncated = False
+        self._truncated_by: str | None = None
         self._finished = False
         self._closed = False
         self._lock = threading.RLock()
@@ -152,6 +166,36 @@ class SanitizedOutputSpool:
                 raise
             return Path(destination)
 
+    def tail_snapshot(
+        self,
+        *,
+        max_lines: int = DEFAULT_MAX_LINES,
+        max_bytes: int = DEFAULT_MAX_BYTES,
+    ) -> TruncationResult:
+        if max_lines != DEFAULT_MAX_LINES or max_bytes != DEFAULT_MAX_BYTES:
+            raise ValueError("Managed process tail uses the coding-agent output limits")
+        with self._lock:
+            total_lines = self._newline_count + int(self._saw_text and not self._ends_with_newline)
+            output_lines = self._line_count(self._tail)
+            output_bytes = len(self._tail.encode("utf-8"))
+            return TruncationResult(
+                content=self._tail,
+                truncated=self._was_truncated,
+                truncated_by=self._truncated_by,
+                output_lines=output_lines,
+                total_lines=total_lines,
+                first_line_exceeds_limit=False,
+                total_bytes=self._written_bytes,
+                output_bytes=output_bytes,
+                last_line_partial=self._tail_starts_partial,
+                max_lines=max_lines,
+                max_bytes=max_bytes,
+            )
+
+    def get_last_line_bytes(self) -> int:
+        with self._lock:
+            return self._last_line_bytes
+
     def close(self, *, remove: bool = True) -> None:
         with self._lock:
             if self._closed:
@@ -169,6 +213,24 @@ class SanitizedOutputSpool:
         self._file.seek(0, os.SEEK_END)
         self._file.write(encoded)
         self._written_bytes += len(encoded)
+        self._newline_count += text.count("\n")
+        self._saw_text = True
+        self._ends_with_newline = text.endswith("\n")
+        if "\n" in text:
+            self._last_line_bytes = len(text.rsplit("\n", 1)[-1].encode("utf-8"))
+        else:
+            self._last_line_bytes += len(encoded)
+        candidate = self._tail + text
+        prior_starts_partial = self._tail_starts_partial
+        result = truncate_tail(candidate, max_lines=DEFAULT_MAX_LINES, max_bytes=DEFAULT_MAX_BYTES)
+        start_index = len(candidate) - len(result.content)
+        self._tail_starts_partial = (
+            prior_starts_partial if start_index == 0 else candidate[start_index - 1] != "\n"
+        ) or result.last_line_partial
+        self._tail = result.content
+        if result.truncated:
+            self._was_truncated = True
+            self._truncated_by = result.truncated_by
 
     @staticmethod
     def _valid_utf8_prefix(data: bytes) -> bytes:
@@ -183,6 +245,12 @@ class SanitizedOutputSpool:
                 prefix.decode("utf-8")
                 return prefix
             raise
+
+    @staticmethod
+    def _line_count(content: str) -> int:
+        if not content:
+            return 0
+        return content.count("\n") + int(not content.endswith("\n"))
 
 
 __all__ = ["SanitizedOutputSpool"]

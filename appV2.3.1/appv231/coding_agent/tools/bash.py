@@ -8,6 +8,7 @@ import shutil
 import signal as signal_module
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -19,6 +20,8 @@ from appv231.ai.types import TextContent
 from appv231.coding_agent.artifacts import ArtifactRegistry
 from appv231.coding_agent.config import get_bin_dir
 from appv231.coding_agent.execution_backend import ExecutionBackend, TrustedLocalBackend
+from appv231.coding_agent.processes.service import ProcessSessionService, ProcessTransportFactory
+from appv231.coding_agent.processes.types import ProcessLaunchRequest, ProcessOwner, ProcessSnapshot, ProcessState
 from appv231.coding_agent.tools.output_spool import OutputSnapshot, OutputSpool
 from appv231.coding_agent.tools.truncate import (
     DEFAULT_MAX_BYTES,
@@ -33,6 +36,15 @@ BASH_SCHEMA = {
     "properties": {
         "command": {"type": "string", "description": "Bash command to execute"},
         "timeout": {"type": "number", "description": "Timeout in seconds (optional, no default timeout)"},
+        "yield_time_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 30000,
+            "description": "Initial wait before returning a running process handle; this is not a timeout",
+        },
+        "tty": {"type": "boolean", "description": "Allocate a POSIX PTY for interactive commands"},
+        "rows": {"type": "integer", "minimum": 2, "maximum": 200},
+        "cols": {"type": "integer", "minimum": 20, "maximum": 500},
     },
     "required": ["command"],
 }
@@ -285,6 +297,10 @@ def _execute_bash(
     command_prefix: str | None,
     spawn_hook: BashSpawnHook | None,
     artifacts: ArtifactRegistry | None,
+    shell_path: str | None,
+    process_service: ProcessSessionService | None,
+    process_owner: ProcessOwner | None,
+    transport_factory: ProcessTransportFactory | None,
     tool_call_id,
     args,
     signal=None,
@@ -295,6 +311,18 @@ def _execute_bash(
     timeout = args.get("timeout")
     resolved_command = f"{command_prefix}\n{command}" if command_prefix else command
     spawn_context = _resolve_spawn_context(resolved_command, cwd, spawn_hook)
+    if process_service is not None and process_owner is not None and transport_factory is not None:
+        return _execute_managed_bash(
+            process_service,
+            process_owner,
+            transport_factory,
+            spawn_context,
+            shell_path,
+            artifacts,
+            args,
+            signal,
+            on_update,
+        )
     output = OutputSpool(
         temp_file_prefix="pi-bash",
         artifact_registry=artifacts,
@@ -376,6 +404,118 @@ def _execute_bash(
         update_dirty = False
 
 
+def _execute_managed_bash(
+    service: ProcessSessionService,
+    owner: ProcessOwner,
+    transport_factory: ProcessTransportFactory,
+    spawn_context: BashSpawnContext,
+    shell_path: str | None,
+    artifacts: ArtifactRegistry | None,
+    args,
+    signal,
+    on_update,
+) -> AgentToolResult:
+    yield_time_ms = args.get("yield_time_ms", 10_000)
+    timeout = args.get("timeout")
+    tty = args.get("tty", False)
+    rows = args.get("rows", 24)
+    cols = args.get("cols", 80)
+    if not isinstance(yield_time_ms, int) or isinstance(yield_time_ms, bool) or not 0 <= yield_time_ms <= 30_000:
+        raise ValueError("yield_time_ms must be an integer between 0 and 30000")
+    if timeout is not None and (not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0):
+        raise ValueError("timeout must be a positive number")
+    if not isinstance(tty, bool):
+        raise ValueError("tty must be a boolean")
+    if not tty and ("rows" in args or "cols" in args):
+        raise ValueError("rows and cols require tty=true")
+    if on_update:
+        on_update(AgentToolResult(content=[], details=None))
+    last_update_at = 0.0
+
+    def handle_update(update: ProcessSnapshot) -> None:
+        nonlocal last_update_at
+        if on_update is None:
+            return
+        now = time.monotonic()
+        if now - last_update_at < BASH_UPDATE_THROTTLE_SECONDS:
+            return
+        last_update_at = now
+        on_update(
+            AgentToolResult(
+                content=[TextContent(text=update.output)],
+                details=update.as_details(),
+            )
+        )
+
+    snapshot = service.start(
+        owner,
+        ProcessLaunchRequest(
+            command=spawn_context.command,
+            cwd=spawn_context.cwd,
+            env=spawn_context.env,
+            shell_path=shell_path or os.environ.get("SHELL") or "/bin/bash",
+            tty=tty,
+            rows=rows,
+            cols=cols,
+            timeout_seconds=timeout,
+        ),
+        transport_factory,
+        yield_time_ms=yield_time_ms,
+        signal=signal,
+        on_update=handle_update if on_update is not None else None,
+    )
+    return _managed_bash_result(service, owner, snapshot, signal, artifacts, timeout)
+
+
+def _managed_bash_result(
+    service: ProcessSessionService,
+    owner: ProcessOwner,
+    snapshot: ProcessSnapshot,
+    signal,
+    artifacts: ArtifactRegistry | None,
+    timeout: float | None,
+) -> AgentToolResult:
+    details = snapshot.as_details()
+    tail = service.tail_snapshot(owner, snapshot.session_id) if snapshot.state.terminal else None
+    output = tail.content if tail is not None else snapshot.output
+    output = output or "(no output)"
+    if tail is not None and tail.truncated:
+        exported = service.export_output(owner, snapshot.session_id, tempfile.gettempdir())
+        artifact = artifacts.register(exported, kind="bash-output", access="read") if artifacts is not None else None
+        details.update(
+            {
+                "truncation": truncation_to_details(tail),
+                "fullOutputPath": str(exported),
+                "artifactId": artifact.id if artifact is not None else None,
+            }
+        )
+        start_line = tail.total_lines - tail.output_lines + 1
+        output = _append_status(
+            output,
+            f"[Showing lines {start_line}-{tail.total_lines} of {tail.total_lines}. Full output: {exported}]",
+        )
+    if snapshot.state is ProcessState.EXITED:
+        if snapshot.exit_code not in (None, 0):
+            raise RuntimeError(_append_status(output, f"Command exited with code {snapshot.exit_code}"))
+        return AgentToolResult(content=[TextContent(text=output)], details=details)
+    if snapshot.state is ProcessState.TIMED_OUT:
+        suffix = f" after {timeout:g} seconds" if timeout is not None else ""
+        raise RuntimeError(_append_status(output, f"Command timed out{suffix}"))
+    if snapshot.state is ProcessState.TERMINATED:
+        status = "Command aborted" if _is_aborted(signal) else "Command terminated"
+        raise RuntimeError(_append_status(output, status))
+    if snapshot.state is ProcessState.FAILED:
+        raise RuntimeError(_append_status(output, "Command failed to execute"))
+    footer = (
+        f"Process {snapshot.session_id} is {snapshot.state.value}; command continues in the background. "
+        f"Use process.poll with cursor {snapshot.next_cursor}."
+    )
+    return AgentToolResult(
+        content=[TextContent(text=_append_status(snapshot.output, footer))],
+        details=details,
+    )
+
+
 def create_bash_tool_definition(
     cwd: str,
     operations: BashOperations | None = None,
@@ -384,7 +524,11 @@ def create_bash_tool_definition(
     spawn_hook: BashSpawnHook | None = None,
     artifacts: ArtifactRegistry | None = None,
     backend: ExecutionBackend | None = None,
+    process_service: ProcessSessionService | None = None,
+    process_owner: ProcessOwner | None = None,
+    transport_factory: ProcessTransportFactory | None = None,
 ) -> ToolDefinition:
+    use_managed_process = operations is None and process_service is not None
     ops = operations or create_local_bash_operations(shell_path=shell_path, backend=backend)
     return ToolDefinition(
         name="bash",
@@ -392,13 +536,27 @@ def create_bash_tool_definition(
         description=(
             f"Execute a bash command in the current working directory. Returns stdout and stderr. Output is "
             f"truncated to last {DEFAULT_MAX_LINES} lines or {DEFAULT_MAX_BYTES // 1024}KB (whichever is hit first). "
-            "If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds."
+            "If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds. "
+            "Managed sessions return a process handle after yield_time_ms (default 10000); this yield does not kill the command."
         ),
         parameters=BASH_SCHEMA,
         prompt_snippet="Execute bash commands (ls, grep, find, etc.)",
         prompt_guidelines=[],
         execute=lambda tid, args, signal=None, on_update=None, ctx=None: _execute_bash(
-            cwd, ops, command_prefix, spawn_hook, artifacts, tid, args, signal, on_update, ctx
+            cwd,
+            ops,
+            command_prefix,
+            spawn_hook,
+            artifacts,
+            shell_path,
+            process_service if use_managed_process else None,
+            process_owner if use_managed_process else None,
+            transport_factory if use_managed_process else None,
+            tid,
+            args,
+            signal,
+            on_update,
+            ctx,
         ),
         render_call=lambda args, ctx=None: f"bash {args.get('command', '')}",
     )
@@ -412,6 +570,9 @@ def create_bash_tool(
     spawn_hook: BashSpawnHook | None = None,
     artifacts: ArtifactRegistry | None = None,
     backend: ExecutionBackend | None = None,
+    process_service: ProcessSessionService | None = None,
+    process_owner: ProcessOwner | None = None,
+    transport_factory: ProcessTransportFactory | None = None,
 ) -> AgentTool:
     return wrap_tool_definition(
         create_bash_tool_definition(
@@ -422,6 +583,9 @@ def create_bash_tool(
             spawn_hook=spawn_hook,
             artifacts=artifacts,
             backend=backend,
+            process_service=process_service,
+            process_owner=process_owner,
+            transport_factory=transport_factory,
         ),
         lambda: ToolContext(cwd=cwd),
     )

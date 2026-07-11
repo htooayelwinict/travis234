@@ -19,6 +19,7 @@ from appv231.coding_agent.tools.file_mutation_queue import with_file_mutation_qu
 from appv231.coding_agent.tools.find import create_find_tool, create_find_tool_definition
 from appv231.coding_agent.tools.grep import create_grep_tool, create_grep_tool_definition
 from appv231.coding_agent.tools.ls import create_ls_tool, create_ls_tool_definition
+from appv231.coding_agent.tools.process import create_process_tool, create_process_tool_definition
 from appv231.coding_agent.tools.read import create_read_tool, create_read_tool_definition
 from appv231.coding_agent.tools.truncate import (
     DEFAULT_MAX_BYTES,
@@ -72,7 +73,17 @@ _OPTION_ALIASES = {
 
 _SUPPORTED_DEFINITION_OPTIONS = {
     "read": {"operations", "auto_resize_images", "image_resizer", "workspace", "artifacts"},
-    "bash": {"operations", "command_prefix", "shell_path", "spawn_hook", "artifacts", "backend"},
+    "bash": {
+        "operations",
+        "command_prefix",
+        "shell_path",
+        "spawn_hook",
+        "artifacts",
+        "backend",
+        "process_service",
+        "process_owner",
+        "transport_factory",
+    },
     "edit": {"workspace"},
     "write": {"operations", "workspace"},
     "grep": {"operations", "workspace"},
@@ -144,6 +155,8 @@ createReadToolDefinition = create_read_tool_definition
 createBashTool = create_bash_tool
 createBashToolDefinition = create_bash_tool_definition
 createLocalBashOperations = create_local_bash_operations
+createProcessTool = create_process_tool
+createProcessToolDefinition = create_process_tool_definition
 createEditTool = create_edit_tool
 createEditToolDefinition = create_edit_tool_definition
 createWriteTool = create_write_tool

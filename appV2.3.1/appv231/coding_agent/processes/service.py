@@ -30,6 +30,7 @@ from appv231.coding_agent.processes.types import (
 
 ProcessTransportFactory = Callable[[ProcessLaunchRequest], ProcessTransport]
 ProcessListener = Callable[[ProcessEvent], None]
+ProcessOutputListener = Callable[[ProcessSnapshot], None]
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,7 @@ class _ManagedProcess:
         self.input_error: str | None = None
         self.output_error: str | None = None
         self.event_emitted = False
+        self.foreground_update: ProcessOutputListener | None = None
         self.force_finalize = threading.Event()
         self.wakeup = threading.Event()
         self.lock = threading.RLock()
@@ -120,6 +122,7 @@ class ProcessSessionService:
         *,
         yield_time_ms: int = 10_000,
         signal=None,
+        on_update: ProcessOutputListener | None = None,
     ) -> ProcessSnapshot:
         if not 0 <= yield_time_ms <= 30_000:
             raise ValueError("yield_time_ms must be between 0 and 30000")
@@ -136,6 +139,7 @@ class ProcessSessionService:
 
         session_id = f"proc_{secrets.token_hex(16)}"
         record = _ManagedProcess(session_id, owner, request, transport, output, self._clock())
+        record.foreground_update = on_update
         try:
             with self._lock:
                 self._starting -= 1
@@ -315,6 +319,10 @@ class ProcessSessionService:
                 raise ProcessStateError("Cannot export output while process is active")
         return record.output.export_copy(directory)
 
+    def tail_snapshot(self, owner: ProcessOwner, session_id: str):
+        record = self._get_record(owner, session_id)
+        return record.output.tail_snapshot()
+
     def _reserve_start(self) -> None:
         self._prune()
         with self._lock:
@@ -360,12 +368,19 @@ class ProcessSessionService:
     def _read_output(self, record: _ManagedProcess, source) -> None:
         try:
             while True:
-                data = source.read(4096)
+                read = getattr(source, "read1", source.read)
+                data = read(4096)
                 if not data:
                     return
                 record.output.append(data)
                 with record.condition:
+                    listener = record.foreground_update
                     record.condition.notify_all()
+                if listener is not None:
+                    try:
+                        listener(self._snapshot(record, 0, self._max_output_bytes))
+                    except BaseException:
+                        pass
         except BaseException as error:  # noqa: BLE001 - reader failure is retained as process metadata.
             with record.condition:
                 record.output_error = str(error)
@@ -460,6 +475,7 @@ class ProcessSessionService:
             should_abort = False
             with record.condition:
                 if record.state.terminal:
+                    record.foreground_update = None
                     return self._snapshot(record, 0, self._max_output_bytes)
                 if signal is not None and getattr(signal, "aborted", False) and record.stop_cause is None:
                     should_abort = True
@@ -470,6 +486,7 @@ class ProcessSessionService:
                     remaining = deadline - self._clock()
                     if remaining <= 0:
                         record.detached = True
+                        record.foreground_update = None
                         return self._snapshot(record, 0, self._max_output_bytes)
                     record.condition.wait(min(remaining, 0.01))
             if should_abort:

@@ -60,6 +60,9 @@ from appv231.coding_agent.capabilities import CapabilityViolation, WorkspaceCapa
 from appv231.coding_agent.config import get_docs_path, get_examples_path, get_readme_path
 from appv231.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
 from appv231.coding_agent.execution_backend import select_execution_backend
+from appv231.coding_agent.processes.local import create_local_process_transport
+from appv231.coding_agent.processes.service import ProcessSessionService
+from appv231.coding_agent.processes.types import ProcessOwner
 from appv231.coding_agent.provider_control_plane import ProviderControlPlane
 from appv231.coding_agent.resource_loader import DefaultResourceLoader
 from appv231.coding_agent.session_store import (
@@ -82,6 +85,7 @@ from appv231.coding_agent.subagents import (
 from appv231.coding_agent.tools import create_all_tool_definitions
 from appv231.coding_agent.tools.bash import BASH_SCHEMA, BashExecOptions, BashOperations, create_local_bash_operations, get_shell_env
 from appv231.coding_agent.tools.output_spool import OutputSpool
+from appv231.coding_agent.tools.process import create_process_tool_definition
 from appv231.coding_agent.tools.types import (
     ToolContext,
     ToolDefinition,
@@ -927,6 +931,8 @@ class AgentSession:
         max_iterations: int = 90,
         tool_loop_guardrails: ToolCallGuardrailConfig | Mapping[str, object] | None = None,
         provider_control_plane: ProviderControlPlane | None = None,
+        process_service: ProcessSessionService | None = None,
+        process_owner: ProcessOwner | None = None,
     ) -> None:
         self.cwd = cwd
         self.provider_control_plane = provider_control_plane or ProviderControlPlane.create_default()
@@ -936,6 +942,10 @@ class AgentSession:
         self._workspace = WorkspaceCapability(Path(cwd))
         self._artifacts = ArtifactRegistry()
         self.execution_backend = select_execution_backend(cwd)
+        if (process_service is None) != (process_owner is None):
+            raise ValueError("process_service and process_owner must be provided together")
+        self.process_service = process_service
+        self.process_owner = process_owner
         self.settings_manager = settings_manager or SettingsManager.inMemory()
         self._stream_fn = stream_fn or self.provider_control_plane.stream_simple
         self._allowed_tool_names = set(allowed_tool_names) if allowed_tool_names is not None else None
@@ -1065,6 +1075,8 @@ class AgentSession:
                 *create_all_tool_definitions(cwd, self._builtin_tool_options()),
                 *self._create_subagent_tool_definitions(),
             ]
+            if self.process_service is not None and self.process_owner is not None and self._is_allowed_tool("process"):
+                base_definitions.append(create_process_tool_definition(self.process_service, self.process_owner))
             base_tools = [
                 wrap_tool_definition(definition, lambda: ToolContext(cwd=self.cwd, model=self.model))
                 for definition in base_definitions
@@ -1087,7 +1099,7 @@ class AgentSession:
             if tool_definitions is not None
             else list(allowed_tool_names)
             if allowed_tool_names is not None
-            else _DEFAULT_ACTIVE_TOOL_NAMES
+            else self._default_active_tool_names()
         )
         self.system_prompt = self._build_system_prompt([])
         self.agent = Agent(
@@ -1158,6 +1170,12 @@ class AgentSession:
             "shell_command_prefix",
         )
 
+    def _default_active_tool_names(self) -> list[str]:
+        names = list(_DEFAULT_ACTIVE_TOOL_NAMES)
+        if self.process_service is not None and self._is_allowed_tool("process"):
+            names.insert(2, "process")
+        return names
+
     def _settings_shell_path(self) -> str | None:
         return _settings_value(
             self.settings_manager,
@@ -1191,6 +1209,23 @@ class AgentSession:
             "imageAutoResize",
             "image_auto_resize",
         )
+        bash_options: dict[str, object] = {
+            "command_prefix": self._settings_shell_command_prefix(),
+            "shell_path": self._settings_shell_path(),
+            "artifacts": self._artifacts,
+            "backend": self.execution_backend,
+        }
+        if self.process_service is not None and self.process_owner is not None and self._is_allowed_tool("process"):
+            bash_options.update(
+                {
+                    "process_service": self.process_service,
+                    "process_owner": self.process_owner,
+                    "transport_factory": lambda request: create_local_process_transport(
+                        request,
+                        self.execution_backend,
+                    ),
+                }
+            )
         return {
             "read": {
                 "auto_resize_images": True if auto_resize_images is None else bool(auto_resize_images),
@@ -1202,12 +1237,7 @@ class AgentSession:
             "grep": {"workspace": self._workspace},
             "find": {"workspace": self._workspace},
             "ls": {"workspace": self._workspace},
-            "bash": {
-                "command_prefix": self._settings_shell_command_prefix(),
-                "shell_path": self._settings_shell_path(),
-                "artifacts": self._artifacts,
-                "backend": self.execution_backend,
-            },
+            "bash": bash_options,
         }
 
     def _refresh_tool_registry(self) -> None:
