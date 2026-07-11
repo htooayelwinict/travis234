@@ -7,6 +7,7 @@ AssistantMessageComponent + ToolExecutionComponent + an event->component bridge.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -146,6 +147,11 @@ class ToolExecutionComponent(Container):
         return [truncate_to_width(line, width) for line in lines]
 
     def _render_call(self) -> Any:
+        if self.tool_name == "process" and isinstance(self.args, Mapping):
+            action = str(self.args.get("action") or "")
+            session_id = str(self.args.get("session_id") or "")
+            suffix = f" {session_id[:13]}" if session_id else ""
+            return f"process {action}{suffix}".strip()
         if self.tool_definition and self.tool_definition.render_call:
             try:
                 return self.tool_definition.render_call(
@@ -176,6 +182,9 @@ class ToolExecutionComponent(Container):
             text = str(result)
         if not self.expanded and not self.is_error:
             text = _collapse_result_text(text)
+        process_marker = _running_process_marker(result)
+        if process_marker:
+            text = f"{text.rstrip()}\n{process_marker}" if text else process_marker
         prefix = "x" if self.is_error else "ok"
         return f"[{prefix}] {text}".rstrip()
 
@@ -570,6 +579,16 @@ def _render_result_block(block: Any) -> str:
     if isinstance(block, ImageContent):
         return f"[image: {block.mime_type}]"
     return str(block)
+
+
+def _running_process_marker(result: Any) -> str:
+    details = getattr(result, "details", None)
+    if not isinstance(details, Mapping) or details.get("status") != "running":
+        return ""
+    session_id = details.get("sessionId")
+    if not isinstance(session_id, str) or re.fullmatch(r"proc_[0-9a-f]{32}", session_id) is None:
+        return ""
+    return f"running: {session_id[:13]}"
 
 
 def _collapse_result_text(text: str, max_lines: int = 10, max_chars: int = 6_000) -> str:

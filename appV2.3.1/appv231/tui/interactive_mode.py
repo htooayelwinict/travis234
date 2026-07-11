@@ -26,6 +26,7 @@ from appv231.ai.providers.params import GenerationParams, compact_generation_par
 from appv231.compaction import estimate_tokens
 from appv231.coding_agent.session_catalog import SessionInfo
 from appv231.coding_agent.session_commands import SessionCommandExecutor
+from appv231.coding_agent.processes.types import ProcessEvent, ProcessSnapshot, ProcessState
 from appv231.tui.component import (
     CombinedAutocompleteProvider,
     Component,
@@ -115,6 +116,9 @@ class InteractiveMode:
         self._unsubscribe_tui_terminal_input: Callable[[], None] | None = None
         self._unsubscribe_tui_scroll_change: Callable[[], None] | None = None
         self._unsubscribe_app_session_rebound: Callable[[], None] | None = None
+        self._unsubscribe_process_events: Callable[[], None] | None = None
+        self._notified_processes: set[str] = set()
+        self._process_cursors: dict[str, int] = {}
         self.built_in_header = Text(self._startup_text())
         self.header_container = Container([self.built_in_header, Spacer(1)])
         self.custom_header: object | None = None
@@ -183,6 +187,12 @@ class InteractiveMode:
             self._unsubscribe_tui_terminal_input = self.tui.add_input_listener(self._handle_tui_terminal_input)
         if self._unsubscribe_tui_scroll_change is None:
             self._unsubscribe_tui_scroll_change = self.tui.add_scroll_listener(self._refresh_footer_history_hint)
+        process_service = getattr(self.app, "process_service", None)
+        subscribe_process = getattr(process_service, "subscribe", None)
+        if self._unsubscribe_process_events is None and callable(subscribe_process):
+            self._unsubscribe_process_events = subscribe_process(
+                lambda event: self.tui.post(lambda: self._handle_process_event(event))
+            )
         self._update_available_provider_count()
         self._refresh_footer()
         self.tui.start()
@@ -225,6 +235,7 @@ class InteractiveMode:
             {"name": "model", "description": "Switch model"},
             {"name": "models", "description": "List available models"},
             {"name": "params", "description": "Show active provider generation parameters"},
+            {"name": "processes", "description": "Inspect and control managed processes"},
             {"name": "quit", "description": "Exit the interactive session"},
             {"name": "resume", "description": "Switch to a previous session"},
             {"name": "new", "description": "Start a new persistent session"},
@@ -369,6 +380,9 @@ class InteractiveMode:
                 if session_command == "session":
                     self._run_session_info_command()
                     continue
+                if _is_processes_command(prompt):
+                    self._run_processes_command()
+                    continue
                 bash_command = _parse_bash_command(prompt)
                 if bash_command:
                     self._run_bash_command(bash_command[0], exclude_from_context=bash_command[1])
@@ -437,6 +451,9 @@ class InteractiveMode:
             if self._unsubscribe_app_session_rebound is not None:
                 self._unsubscribe_app_session_rebound()
                 self._unsubscribe_app_session_rebound = None
+            if self._unsubscribe_process_events is not None:
+                self._unsubscribe_process_events()
+                self._unsubscribe_process_events = None
             self.footer_data_provider.dispose()
             if self.app.event_trace is not None:
                 self.app.event_trace.write("shutdown", {"status": "ok"})
@@ -994,6 +1011,81 @@ class InteractiveMode:
         self._refresh_footer()
         self.tui.request_render()
 
+    def _run_processes_command(self) -> None:
+        service = getattr(self.app, "process_service", None)
+        owner_factory = getattr(self.app, "process_owner", None)
+        if service is None or not callable(owner_factory):
+            self.history.add(StatusLine("Managed process service is unavailable.", kind="error"))
+            self.tui.request_render()
+            return
+        owner = owner_factory()
+        snapshots = list(service.list(owner))
+        if not snapshots:
+            self.history.add(StatusLine("No managed processes for this workspace.", kind="process"))
+            self.tui.request_render()
+            return
+        labels = [self._process_label(snapshot) for snapshot in snapshots]
+        selected = self.prompt_extension_select("Managed processes", labels, kind="process")
+        if selected is None:
+            return
+        snapshot = snapshots[labels.index(selected)]
+        actions = ["Refresh"] if snapshot.state.terminal else ["Refresh", "Interrupt", "Terminate", "Kill"]
+        action = self.prompt_extension_select("Process action", actions, kind="process")
+        if action is None:
+            return
+        try:
+            if action == "Refresh":
+                cursor = self._process_cursors.get(snapshot.session_id, 0)
+                snapshot = service.poll(owner, snapshot.session_id, cursor, wait_ms=0, max_bytes=8192)
+                self._process_cursors[snapshot.session_id] = snapshot.next_cursor
+            elif action == "Interrupt":
+                snapshot = service.interrupt(owner, snapshot.session_id, wait_ms=0)
+            elif action == "Terminate":
+                snapshot = service.terminate(owner, snapshot.session_id, wait_ms=250)
+            else:
+                snapshot = service.kill(owner, snapshot.session_id)
+            self._render_process_snapshot(snapshot)
+        except Exception as error:  # noqa: BLE001 - user controls render failures without leaving the TUI.
+            self.history.add(StatusLine(f"Process action failed: {error}", kind="error"))
+        finally:
+            self.status.set_message("Idle")
+            self._refresh_footer()
+            self.tui.request_render()
+
+    @staticmethod
+    def _process_label(snapshot: ProcessSnapshot) -> str:
+        mode = "tty" if snapshot.tty else "pipe"
+        elapsed = max(0, snapshot.elapsed_ms // 1000)
+        command = _short_status_text(snapshot.command, limit=80)
+        return f"{snapshot.session_id[:13]} | {snapshot.state.value} | {elapsed}s | {mode} | {command}"
+
+    def _render_process_snapshot(self, snapshot: ProcessSnapshot) -> None:
+        if snapshot.output:
+            self.history.add(Text(snapshot.output))
+        exit_text = f" ({snapshot.exit_code})" if snapshot.exit_code is not None else ""
+        self.history.add(
+            StatusLine(
+                f"Process {snapshot.session_id} {snapshot.state.value}{exit_text}",
+                kind="process",
+            )
+        )
+
+    def _handle_process_event(self, event: ProcessEvent) -> None:
+        if self._shutdown_requested or not event.state.terminal or event.session_id in self._notified_processes:
+            return
+        owner_factory = getattr(self.app, "process_owner", None)
+        if not callable(owner_factory) or event.owner != owner_factory():
+            return
+        self._notified_processes.add(event.session_id)
+        exit_text = f" ({event.exit_code})" if event.exit_code is not None else ""
+        self.history.add(
+            StatusLine(
+                f"Process {event.session_id} {event.state.value}{exit_text}",
+                kind="process",
+            )
+        )
+        self.tui.request_render()
+
     def _rebind_session_ui(self) -> None:
         if self._unsubscribe_session_events is not None:
             self._unsubscribe_session_events()
@@ -1029,6 +1121,7 @@ class InteractiveMode:
             "/resume - Switch to a previous session.",
             "/new - Start a new persistent session.",
             "/session - Show active session details.",
+            "/processes - Inspect and control managed processes.",
             "/allow package-install [uses] - Allow explicit package installation for this session.",
             "/agents - List delegated subagents.",
             "/delegate <role> <task> - Spawn a subagent for explicit multi-agent work.",
@@ -2071,6 +2164,10 @@ def _is_prompt_level_skill_trigger(prompt: str) -> bool:
 
 def _is_help_command(prompt: str) -> bool:
     return prompt == "/help" or prompt.startswith("/help ")
+
+
+def _is_processes_command(prompt: str) -> bool:
+    return prompt == "/processes"
 
 
 def _parse_session_command(prompt: str) -> str | None:

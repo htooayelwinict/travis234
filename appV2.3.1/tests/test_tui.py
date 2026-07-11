@@ -9,6 +9,8 @@ import threading
 import time
 import urllib.error
 
+import pytest
+
 import appv231.tui.interactive_mode as interactive_mode
 from appv231.ai.providers import model_catalog
 from appv231.ai.providers.model_catalog import openrouter_live_catalog_item_to_model
@@ -116,6 +118,7 @@ from appv231.ai.model_resolver import ScopedModel
 from appv231.app import CodingApp
 from appv231.compaction.timing import ManualCompressionStatus
 from appv231.coding_agent import BashResult
+from appv231.coding_agent.processes.types import ProcessEvent, ProcessOwner, ProcessSnapshot, ProcessState
 from appv231.coding_agent.session_catalog import SessionCatalog
 from appv231.coding_agent.session_store import (
     BashExecutionMessage,
@@ -3386,6 +3389,40 @@ def test_tool_execution_collapses_huge_single_line_generic_result_before_renderi
     assert len(rendered) < 8_000
 
 
+def test_tool_execution_fallback_never_renders_process_stdin_payload() -> None:
+    component = ToolExecutionComponent(
+        "process",
+        {
+            "action": "write",
+            "session_id": "proc_0123456789abcdef",
+            "input": "TOP-SECRET-PAYLOAD",
+        },
+    )
+
+    rendered = "\n".join(component.render(80))
+
+    assert "process write proc_01234567" in rendered
+    assert "TOP-SECRET-PAYLOAD" not in rendered
+
+
+def test_tool_execution_renders_stable_running_process_marker() -> None:
+    component = ToolExecutionComponent("bash", {"command": "sleep 30"})
+    component.update_result(
+        AgentToolResult(
+            content=[TextContent(text="START\n")],
+            details={
+                "status": "running",
+                "sessionId": "proc_0123456789abcdef0123456789abcdef",
+            },
+        ),
+        is_error=False,
+    )
+
+    rendered = "\n".join(component.render(80))
+
+    assert "running: proc_01234567" in rendered
+
+
 def test_user_and_skill_invocation_components_render_like_pi() -> None:
     from appv231.tui import SkillInvocationMessageComponent, UserMessageComponent, parse_skill_block
 
@@ -3789,6 +3826,7 @@ def test_interactive_mode_help_and_autocomplete_include_session_commands(tmp_pat
     assert "/resume - Switch to a previous session." in rendered
     assert "/new - Start a new persistent session." in rendered
     assert "/session - Show active session details." in rendered
+    assert "/processes - Inspect and control managed processes." in rendered
     suggestions = mode.create_base_autocomplete_provider().getSuggestions(
         ["/se"],
         0,
@@ -3797,6 +3835,198 @@ def test_interactive_mode_help_and_autocomplete_include_session_commands(tmp_pat
     )
     labels = [item["label"] for item in suggestions["items"]]
     assert "session" in labels
+    process_suggestions = mode.create_base_autocomplete_provider().getSuggestions(
+        ["/pro"],
+        0,
+        4,
+        {"signal": None, "force": False},
+    )
+    assert "processes" in [item["label"] for item in process_suggestions["items"]]
+
+
+def test_interactive_mode_process_completion_uses_dispatcher_without_model_turn(tmp_path) -> None:
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=140, rows=40),
+        enable_tui=True,
+    )
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+    mode.init()
+    before_messages = list(app.messages)
+    listener = app.process_service._listeners[0]  # noqa: SLF001 - verify service/TUI subscription boundary.
+    event = ProcessEvent(
+        "proc_0123456789abcdef",
+        ProcessState.EXITED,
+        0,
+        app.process_owner(),
+    )
+    def emit_events() -> None:
+        listener(event)
+        listener(event)
+        listener(ProcessEvent(event.session_id, ProcessState.RUNNING, None, event.owner))
+        listener(
+            ProcessEvent(
+                "proc_other_workspace",
+                ProcessState.EXITED,
+                0,
+                ProcessOwner(event.owner.app_instance_id, str(tmp_path / "other"), "agent"),
+            )
+        )
+
+    worker = threading.Thread(target=emit_events)
+    worker.start()
+    worker.join(timeout=1)
+
+    try:
+        before_drain = strip_ansi("\n".join(mode.history.render(200)))
+        mode.tui.drain_dispatcher()
+        after_drain = strip_ansi("\n".join(mode.history.render(200)))
+
+        assert "proc_0123456789abcdef" not in before_drain
+        assert "Process proc_0123456789abcdef exited (0)" in after_drain
+        assert after_drain.count("Process proc_0123456789abcdef exited (0)") == 1
+        assert "proc_other_workspace" not in after_drain
+        assert app.messages == before_messages
+    finally:
+        if mode._unsubscribe_process_events is not None:
+            mode._unsubscribe_process_events()
+        mode.footer_data_provider.dispose()
+        mode.tui.stop()
+        app.close()
+
+
+def test_interactive_mode_processes_refreshes_job_without_model_turn(tmp_path) -> None:
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=160, rows=40),
+        enable_tui=True,
+    )
+    bash = app.session.get_tool_definition("bash")
+    assert bash is not None
+    started = bash.execute("managed", {"command": "sleep 30", "yield_time_ms": 0})
+    prompts = iter(["/processes", "/exit"])
+    mode = InteractiveMode(app, input_fn=lambda prompt: next(prompts))
+
+    def select(title, choices, options=None, *, kind="select"):
+        return "Refresh" if "action" in title.lower() else choices[0]
+
+    mode.prompt_extension_select = select
+    app.run_turn = lambda *_args, **_kwargs: pytest.fail("/processes must not call the model")
+    try:
+        assert mode.run() == 0
+        rendered = strip_ansi("\n".join(mode.history.render(2_000)))
+
+        assert started.details["sessionId"] in rendered
+        assert "running" in rendered
+        assert app.process_service._listeners == []  # noqa: SLF001 - run() must unsubscribe.
+    finally:
+        app.close()
+
+
+@pytest.mark.parametrize(
+    ("selected_action", "service_method", "expected_kwargs"),
+    [
+        ("Refresh", "poll", {"wait_ms": 0, "max_bytes": 8192}),
+        ("Interrupt", "interrupt", {"wait_ms": 0}),
+        ("Terminate", "terminate", {"wait_ms": 250}),
+        ("Kill", "kill", {}),
+    ],
+)
+def test_interactive_mode_processes_routes_explicit_controls(
+    tmp_path,
+    monkeypatch,
+    selected_action,
+    service_method,
+    expected_kwargs,
+) -> None:
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=80, rows=24),
+        enable_tui=True,
+    )
+    snapshot = ProcessSnapshot(
+        session_id="proc_0123456789abcdef0123456789abcdef",
+        state=ProcessState.RUNNING,
+        output="",
+        cursor=0,
+        next_cursor=0,
+        output_size=0,
+        exit_code=None,
+        tty=False,
+        elapsed_ms=1_000,
+        command="printf ready",
+        cwd=str(tmp_path),
+    )
+    calls = []
+    monkeypatch.setattr(app.process_service, "list", lambda owner: (snapshot,))
+
+    def invoke(owner, session_id, *args, **kwargs):
+        calls.append((owner, session_id, args, kwargs))
+        return snapshot
+
+    monkeypatch.setattr(app.process_service, service_method, invoke)
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+
+    def select(title, choices, options=None, *, kind="select"):
+        if title == "Managed processes":
+            return choices[0]
+        assert choices == ["Refresh", "Interrupt", "Terminate", "Kill"]
+        return selected_action
+
+    mode.prompt_extension_select = select
+    before_messages = list(app.messages)
+    try:
+        mode._run_processes_command()
+
+        expected_args = (0,) if service_method == "poll" else ()
+        assert calls == [(app.process_owner(), snapshot.session_id, expected_args, expected_kwargs)]
+        assert app.messages == before_messages
+    finally:
+        mode.footer_data_provider.dispose()
+        app.close()
+
+
+def test_interactive_mode_terminal_process_offers_only_refresh(tmp_path, monkeypatch) -> None:
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=80, rows=24),
+        enable_tui=True,
+    )
+    snapshot = ProcessSnapshot(
+        session_id="proc_0123456789abcdef0123456789abcdef",
+        state=ProcessState.EXITED,
+        output="",
+        cursor=0,
+        next_cursor=0,
+        output_size=0,
+        exit_code=0,
+        tty=True,
+        elapsed_ms=1_000,
+        command="x" * 200,
+        cwd=str(tmp_path),
+    )
+    monkeypatch.setattr(app.process_service, "list", lambda owner: (snapshot,))
+    monkeypatch.setattr(app.process_service, "poll", lambda *args, **kwargs: snapshot)
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+    seen = []
+
+    def select(title, choices, options=None, *, kind="select"):
+        seen.append((title, choices))
+        return choices[0]
+
+    mode.prompt_extension_select = select
+    try:
+        mode._run_processes_command()
+
+        assert seen[1] == ("Process action", ["Refresh"])
+        assert len(seen[0][1][0]) <= 13 + len(" | exited | 1s | tty | ") + 80
+    finally:
+        mode.footer_data_provider.dispose()
+        app.close()
 
 
 def test_interactive_mode_reports_unknown_slash_command_without_model_turn(tmp_path) -> None:
