@@ -22,7 +22,7 @@ _SEPARATORS = frozenset({"&&", "||", ";", "|"})
 
 class PackageMutationPolicy:
     def evaluate(self, call: ToolCallView, context: CodingTurnContext) -> PolicyDecision:
-        if call.name != "bash" or not _is_package_mutation(call.args.get("command")):
+        if not _is_package_mutation(_package_mutation_payload(call)):
             return Allow()
         if context.capabilities.consume(PACKAGE_MUTATION_CAPABILITY):
             return Allow()
@@ -30,6 +30,14 @@ class PackageMutationPolicy:
             PACKAGE_MUTATION_CAPABILITY,
             "Package installation or dependency mutation requires an explicit capability grant.",
         )
+
+
+def _package_mutation_payload(call: ToolCallView) -> object:
+    if call.name == "bash":
+        return call.args.get("command")
+    if call.name == "process" and call.args.get("action") == "write":
+        return call.args.get("input")
+    return None
 
 
 def _is_package_mutation(command: object) -> bool:

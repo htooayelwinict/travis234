@@ -21,6 +21,7 @@ from appv231.coding_agent.policies.types import (
 from appv231.coding_agent.policies.tool_guardrails import (
     ToolCallGuardrailConfig,
     ToolCallGuardrailController,
+    _tool_call_may_change_state,
 )
 
 
@@ -95,6 +96,45 @@ def test_package_mutation_consumes_exactly_one_grant() -> None:
     assert isinstance(policy.evaluate(_bash("npm install y"), _context(capabilities)), RequireConsent)
 
 
+def test_process_write_package_mutation_requires_and_consumes_capability() -> None:
+    capabilities = TurnCapabilities()
+    policy = PackageMutationPolicy()
+    call = ToolCallView(
+        id="process-write",
+        name="process",
+        args={"action": "write", "session_id": "proc_x", "input": "npm install left-pad\n"},
+    )
+
+    assert isinstance(policy.evaluate(call, _context(capabilities)), RequireConsent)
+    capabilities.grant("package_mutation", uses=1)
+    assert isinstance(policy.evaluate(call, _context(capabilities)), Allow)
+    assert isinstance(policy.evaluate(call, _context(capabilities)), RequireConsent)
+
+
+def test_process_non_package_input_and_observations_do_not_consume_capability() -> None:
+    capabilities = TurnCapabilities()
+    capabilities.grant("package_mutation", uses=1)
+    policy = PackageMutationPolicy()
+
+    for call in (
+        ToolCallView(id="poll", name="process", args={"action": "poll", "session_id": "proc_x", "cursor": 0}),
+        ToolCallView(id="write", name="process", args={"action": "write", "session_id": "proc_x", "input": "y\n"}),
+    ):
+        assert isinstance(policy.evaluate(call, _context(capabilities)), Allow)
+
+    assert isinstance(policy.evaluate(_bash("npm install left-pad"), _context(capabilities)), Allow)
+
+
+def test_process_write_package_detection_is_explicitly_best_effort_for_fragments() -> None:
+    call = ToolCallView(
+        id="fragment",
+        name="process",
+        args={"action": "write", "session_id": "proc_x", "input": "npm inst"},
+    )
+
+    assert isinstance(PackageMutationPolicy().evaluate(call, _context()), Allow)
+
+
 def test_prompt_text_never_grants_package_mutation() -> None:
     context = _context()
     assert "npm install" in context.latest_user_message
@@ -113,6 +153,58 @@ def test_blocking_disabled_disables_loop_halts_but_keeps_guidance() -> None:
     assert any(decision.action == "warn" for decision in decisions)
     assert all(decision.action not in {"block", "halt"} for decision in decisions)
     assert controller.before_call("read", {"path": "missing"}).action == "allow"
+
+
+def test_process_poll_and_list_are_observations_but_controls_are_mutations() -> None:
+    assert _tool_call_may_change_state("process", {"action": "poll", "session_id": "proc_x", "cursor": 0}) is False
+    assert _tool_call_may_change_state("process", {"action": "list"}) is False
+    for action in ("write", "resize", "interrupt", "terminate", "kill"):
+        assert _tool_call_may_change_state("process", {"action": action}) is True
+
+
+def test_process_same_cursor_no_progress_warns_then_halts() -> None:
+    controller = ToolCallGuardrailController(
+        ToolCallGuardrailConfig(
+            no_progress_warn_after=2,
+            no_progress_block_after=3,
+            consecutive_no_progress_warn_after=99,
+            consecutive_no_progress_block_after=99,
+        )
+    )
+    args = {"action": "poll", "session_id": "proc_x", "cursor": 10, "yield_time_ms": 1000}
+
+    first = controller.after_call("process", args, "still running", failed=False)
+    second = controller.after_call("process", {**args, "yield_time_ms": 2000}, "still running", failed=False)
+    third = controller.after_call("process", {**args, "yield_time_ms": 3000}, "still running", failed=False)
+
+    assert first.action == "allow"
+    assert second.action == "warn"
+    assert second.code == "idempotent_no_progress_warning"
+    assert third.action == "halt"
+    assert third.code == "idempotent_no_progress_block"
+
+
+def test_process_advancing_cursor_is_progress_even_when_status_text_matches() -> None:
+    controller = ToolCallGuardrailController(
+        ToolCallGuardrailConfig(no_progress_warn_after=2, no_progress_block_after=3)
+    )
+
+    first = controller.after_call(
+        "process",
+        {"action": "poll", "session_id": "proc_x", "cursor": 0},
+        "still running",
+        failed=False,
+    )
+    second = controller.after_call(
+        "process",
+        {"action": "poll", "session_id": "proc_x", "cursor": 20},
+        "still running",
+        failed=False,
+    )
+
+    assert first.action == "allow"
+    assert second.action == "allow"
+    assert second.count == 1
 
 
 @pytest.mark.parametrize("requested", ["../outside.txt", "sub/../../outside.txt"])

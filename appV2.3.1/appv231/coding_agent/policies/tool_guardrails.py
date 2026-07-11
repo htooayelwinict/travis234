@@ -322,7 +322,7 @@ class ToolCallGuardrailController:
         if (
             self.config.blocking_enabled
             and
-            self._is_idempotent(tool_name)
+            self._is_idempotent(tool_name, args)
             and self._consecutive_signature == signature
             and self._consecutive_count >= self.config.consecutive_no_progress_block_after - 1
         ):
@@ -363,7 +363,7 @@ class ToolCallGuardrailController:
             self._halt_decision = decision
             return decision
 
-        if self._is_idempotent(tool_name):
+        if self._is_idempotent(tool_name, args):
             progress_signature = _no_progress_signature(tool_name, _coerce_args(args), self.cwd) or signature
             record = self._no_progress.get(progress_signature)
             if record is not None:
@@ -524,7 +524,7 @@ class ToolCallGuardrailController:
                     signature=signature,
                 )
 
-        if not self._is_idempotent(tool_name):
+        if not self._is_idempotent(tool_name, args):
             self._forget_no_progress(tool_name, args, signature)
             self._reset_consecutive()
             return mutating_no_progress_decision or ToolGuardrailDecision(tool_name=tool_name, signature=signature)
@@ -628,7 +628,9 @@ class ToolCallGuardrailController:
             signature=signature,
         )
 
-    def _is_idempotent(self, tool_name: str) -> bool:
+    def _is_idempotent(self, tool_name: str, args: Mapping[str, Any]) -> bool:
+        if tool_name == "process":
+            return args.get("action") in {"poll", "list"}
         if tool_name in self.config.mutating_tools:
             return False
         return tool_name in self.config.idempotent_tools
@@ -668,6 +670,8 @@ def _file_mutation_path_key(tool_name: str, args: Mapping[str, Any], cwd: str | 
 
 
 def _tool_call_may_change_state(tool_name: str, args: Mapping[str, Any]) -> bool:
+    if tool_name == "process":
+        return args.get("action") not in {"poll", "list"}
     if tool_name in MUTATING_TOOL_NAMES:
         return True
     if tool_name != "bash":
@@ -788,6 +792,17 @@ def _coerce_args(args: Mapping[str, Any] | None) -> Mapping[str, Any]:
 
 
 def _no_progress_signature(tool_name: str, args: Mapping[str, Any], cwd: str | None = None) -> ToolCallSignature | None:
+    if tool_name == "process" and args.get("action") in {"poll", "list"}:
+        semantic = {"action": args.get("action")}
+        if args.get("action") == "poll":
+            semantic.update(
+                {
+                    "session_id": args.get("session_id"),
+                    "cursor": args.get("cursor"),
+                }
+            )
+        semantic_key = json.dumps(semantic, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return ToolCallSignature(tool_name=tool_name, args_hash=_sha256(semantic_key))
     if tool_name != "bash":
         return None
     command = args.get("command")
