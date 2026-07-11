@@ -309,6 +309,25 @@ def test_write_is_ordered_and_eof_closes_after_payload(service, owner) -> None:
     assert transport.writes == [b"first", b"second"]
 
 
+def test_write_rejects_input_queued_after_eof(tmp_path: Path, owner) -> None:
+    service = ProcessSessionService(
+        directory=tmp_path / "processes",
+        termination_grace_seconds=0.01,
+    )
+    gate = threading.Event()
+    transport = FakeProcessTransport(write_gate=gate)
+    started = service.start(owner, request(), Factory(transport), yield_time_ms=0)
+    try:
+        service.write(owner, started.session_id, "last", eof=True, wait_ms=0)
+        assert transport.write_started.wait(1)
+
+        with pytest.raises(ProcessStateError, match="stdin is closed"):
+            service.write(owner, started.session_id, "too late", wait_ms=0)
+    finally:
+        gate.set()
+        service.close()
+
+
 def test_write_enforces_per_call_and_pending_limits(tmp_path: Path, owner) -> None:
     service = ProcessSessionService(
         directory=tmp_path / "processes",
@@ -400,6 +419,84 @@ def test_listener_failure_does_not_kill_monitor_or_other_listeners(service, owne
     assert events[0].session_id == started.session_id
 
 
+def test_kill_immediately_escalates_existing_terminate_without_relabeling(tmp_path: Path, owner) -> None:
+    service = ProcessSessionService(
+        directory=tmp_path / "processes",
+        termination_grace_seconds=0.5,
+    )
+    transport = FakeProcessTransport(exit_on_signals={"kill"})
+    started = service.start(owner, request(), Factory(transport), yield_time_ms=0)
+    worker = threading.Thread(
+        target=lambda: service.terminate(owner, started.session_id, wait_ms=0),
+    )
+    worker.start()
+    eventually(lambda: transport.signals == ["terminate"])
+    try:
+        service.kill(owner, started.session_id)
+
+        assert transport.signals == ["terminate", "kill"]
+        terminal = service.poll(owner, started.session_id, 0, wait_ms=1_000)
+        assert terminal.state is ProcessState.TERMINATED
+    finally:
+        worker.join(timeout=1)
+        service.close()
+
+
+def test_close_escalates_and_waits_for_in_flight_control(tmp_path: Path, owner, monkeypatch) -> None:
+    service = ProcessSessionService(
+        directory=tmp_path / "processes",
+        termination_grace_seconds=0.05,
+    )
+    transport = FakeProcessTransport(exit_on_signals={"kill"})
+    started = service.start(owner, request(), Factory(transport), yield_time_ms=0)
+    snapshot_entered = threading.Event()
+    release_snapshot = threading.Event()
+    close_finished = threading.Event()
+    errors = []
+    original_wait = service._wait_after_control
+
+    def gated_wait(*args, **kwargs):
+        snapshot_entered.set()
+        assert release_snapshot.wait(1)
+        return original_wait(*args, **kwargs)
+
+    monkeypatch.setattr(service, "_wait_after_control", gated_wait)
+
+    def terminate() -> None:
+        try:
+            service.terminate(owner, started.session_id, wait_ms=0)
+        except BaseException as error:  # noqa: BLE001 - assertion captures cross-thread lifecycle errors.
+            errors.append(error)
+
+    def close() -> None:
+        try:
+            service.close()
+        finally:
+            close_finished.set()
+
+    worker = threading.Thread(target=terminate)
+    worker.start()
+    eventually(lambda: transport.signals == ["terminate"])
+    closer = threading.Thread(target=close)
+    closer.start()
+    try:
+        assert snapshot_entered.wait(1)
+        close_finished.wait(0.2)
+        release_snapshot.set()
+        worker.join(timeout=1)
+        closer.join(timeout=1)
+
+        assert transport.signals == ["terminate", "kill"]
+        assert errors == []
+        assert not worker.is_alive()
+        assert not closer.is_alive()
+    finally:
+        release_snapshot.set()
+        worker.join(timeout=1)
+        closer.join(timeout=1)
+        service.close()
+
+
 def test_close_terminates_all_processes_then_is_idempotent(tmp_path: Path, owner) -> None:
     service = ProcessSessionService(
         directory=tmp_path / "processes",
@@ -422,9 +519,9 @@ def test_close_terminates_all_processes_then_is_idempotent(tmp_path: Path, owner
 
 def test_close_does_not_signal_process_that_already_exited(tmp_path: Path, owner) -> None:
     service = ProcessSessionService(directory=tmp_path / "processes")
-    transport = FakeProcessTransport(close_output_on_exit=False)
+    transport = FakeProcessTransport()
     service.start(owner, request(), Factory(transport), yield_time_ms=0)
-    transport.exit(0, close_output=False)
+    transport.exit(0)
 
     service.close()
 
@@ -455,5 +552,53 @@ def test_terminal_ttl_prunes_completed_record(tmp_path: Path, owner) -> None:
         assert service.list(owner) == ()
         with pytest.raises(ProcessNotFoundError):
             service.poll(owner, completed.session_id, 0, wait_ms=0)
+    finally:
+        service.close()
+
+
+def test_terminal_elapsed_time_stops_at_completion(tmp_path: Path, owner) -> None:
+    now = [10.0]
+    service = ProcessSessionService(
+        directory=tmp_path / "processes",
+        clock=lambda: now[0],
+    )
+    try:
+        completed = service.start(
+            owner,
+            request("short"),
+            Factory(FakeProcessTransport(initial_exit_code=0)),
+            yield_time_ms=1_000,
+        )
+        now[0] += 100
+
+        retained = service.list(owner)[0]
+
+        assert retained.elapsed_ms == completed.elapsed_ms
+    finally:
+        service.close()
+
+
+def test_list_orders_active_then_newest_terminal_completion(tmp_path: Path, owner) -> None:
+    now = [1.0]
+    service = ProcessSessionService(
+        directory=tmp_path / "processes",
+        clock=lambda: now[0],
+    )
+    first_transport = FakeProcessTransport()
+    first = service.start(owner, request("first"), Factory(first_transport), yield_time_ms=0)
+    now[0] = 2.0
+    second_transport = FakeProcessTransport()
+    second = service.start(owner, request("second"), Factory(second_transport), yield_time_ms=0)
+    try:
+        now[0] = 3.0
+        second_transport.exit(0)
+        eventually(lambda: service.poll(owner, second.session_id, 0, wait_ms=0).state.terminal)
+        now[0] = 4.0
+        first_transport.exit(0)
+        eventually(lambda: service.poll(owner, first.session_id, 0, wait_ms=0).state.terminal)
+
+        retained = service.list(owner)
+
+        assert [snapshot.session_id for snapshot in retained] == [first.session_id, second.session_id]
     finally:
         service.close()

@@ -114,6 +114,31 @@ def test_managed_bash_default_yield_is_independent_from_timeout(tmp_path: Path) 
     assert service.request.timeout_seconds == 600
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("rows", 1),
+        ("rows", True),
+        ("cols", 19),
+        ("cols", 501),
+    ],
+)
+def test_managed_bash_validates_pty_dimensions_before_start(tmp_path: Path, field: str, value) -> None:
+    class NoStartService:
+        def start(self, *args, **kwargs):
+            pytest.fail("invalid PTY dimensions must not start a process")
+
+    definition = create_bash_tool_definition(
+        str(tmp_path),
+        process_service=NoStartService(),
+        process_owner=ProcessOwner("app", str(tmp_path), "agent"),
+        transport_factory=lambda _request: None,
+    )
+
+    with pytest.raises(ValueError, match=field):
+        definition.execute("call", {"command": "true", "tty": True, field: value})
+
+
 def test_managed_bash_yields_handle_then_process_poll_collects_completion(managed_tools) -> None:
     service, owner, bash, process = managed_tools
     command = python_command("import time; print('START', flush=True); time.sleep(.2); print('DONE')")

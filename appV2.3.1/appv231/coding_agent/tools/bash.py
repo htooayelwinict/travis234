@@ -428,6 +428,13 @@ def _execute_managed_bash(
         raise ValueError("tty must be a boolean")
     if not tty and ("rows" in args or "cols" in args):
         raise ValueError("rows and cols require tty=true")
+    if tty:
+        for field, value, lower, upper in (
+            ("rows", rows, 2, 200),
+            ("cols", cols, 20, 500),
+        ):
+            if not isinstance(value, int) or isinstance(value, bool) or not lower <= value <= upper:
+                raise ValueError(f"{field} must be an integer between {lower} and {upper}")
     if on_update:
         on_update(AgentToolResult(content=[], details=None))
     last_update_at = 0.0

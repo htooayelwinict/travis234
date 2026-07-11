@@ -211,6 +211,32 @@ def test_terminate_kills_descendant_in_same_process_group(service, owner, tmp_pa
         pytest.fail("descendant survived process-group termination")
 
 
+@pytest.mark.skipif(os.name != "posix", reason="process groups require POSIX")
+def test_leader_exit_cleans_descendant_that_keeps_output_open(service, owner, tmp_path: Path) -> None:
+    child_pid_path = tmp_path / "orphan.pid"
+    source = (
+        "import pathlib,subprocess,sys; "
+        "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']); "
+        f"pathlib.Path({str(child_pid_path)!r}).write_text(str(p.pid))"
+    )
+    started = service.start(owner, request(python_command(source), tmp_path), local_factory(), yield_time_ms=0)
+    deadline = time.monotonic() + 2
+    while not child_pid_path.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    child_pid = int(child_pid_path.read_text())
+    try:
+        terminal, _output = collect_until_terminal(service, owner, started)
+
+        assert terminal.state is ProcessState.EXITED
+        deadline = time.monotonic() + 2
+        while _process_is_live(child_pid) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert not _process_is_live(child_pid)
+    finally:
+        if _process_is_live(child_pid):
+            os.kill(child_pid, signal.SIGKILL)
+
+
 @pytest.mark.skipif(os.name != "posix", reason="v1 PTY is POSIX-only")
 def test_pty_transport_reports_tty_and_accepts_input(service, owner, tmp_path: Path) -> None:
     source = "import os,sys; print(os.isatty(0), flush=True); print(sys.stdin.readline().strip(), flush=True)"

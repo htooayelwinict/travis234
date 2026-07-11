@@ -20,6 +20,7 @@ from appv231.coding_agent.tools.truncate import (
 
 class _TerminalSanitizer:
     _STRING_INTRODUCERS = {"]", "P", "X", "^", "_"}
+    _C1_STRING_INTRODUCERS = {"\x90", "\x98", "\x9d", "\x9e", "\x9f"}
 
     def __init__(self) -> None:
         self._state = "normal"
@@ -67,6 +68,10 @@ class _TerminalSanitizer:
             self._pending_cr = True
         elif character == "\x1b":
             self._state = "escape"
+        elif character == "\x9b":
+            self._state = "csi"
+        elif character in self._C1_STRING_INTRODUCERS:
+            self._state = "string"
         elif character in {"\t", "\n"}:
             output.append(character)
         elif ord(character) < 0x20 or 0x7F <= ord(character) <= 0x9F:

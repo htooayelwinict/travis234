@@ -81,6 +81,15 @@ def test_output_spool_discards_control_sequence_split_at_finish(tmp_path: Path) 
     assert spool.read(0, 1024).text == "kept"
 
 
+def test_output_spool_removes_c1_string_and_csi_sequences(tmp_path: Path) -> None:
+    spool = SanitizedOutputSpool(tmp_path)
+
+    spool.append("safe\u009d52;c;secret\u009cafter\u009b31mred\u009b0m".encode("utf-8"))
+    spool.finish()
+
+    assert spool.read(0, 1024).text == "safeafterred"
+
+
 def test_output_spool_validates_cursor_and_utf8_boundary(tmp_path: Path) -> None:
     spool = SanitizedOutputSpool(tmp_path)
     spool.append("a\N{SNOWMAN}b".encode("utf-8"))

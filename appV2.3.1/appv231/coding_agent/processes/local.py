@@ -221,8 +221,6 @@ def _create_pty_transport(request: ProcessLaunchRequest, backend: ExecutionBacke
 
 
 def _signal_process_group(process: subprocess.Popen, signal_name: SignalName) -> None:
-    if process.poll() is not None:
-        return
     if os.name == "posix":
         selected = {
             "interrupt": signal.SIGINT,
@@ -230,9 +228,11 @@ def _signal_process_group(process: subprocess.Popen, signal_name: SignalName) ->
             "kill": signal.SIGKILL,
         }[signal_name]
         try:
-            os.killpg(os.getpgid(process.pid), selected)
+            os.killpg(process.pid, selected)
         except ProcessLookupError:
             return
+        return
+    if process.poll() is not None:
         return
     if signal_name == "interrupt" and hasattr(signal, "CTRL_BREAK_EVENT"):
         process.send_signal(signal.CTRL_BREAK_EVENT)

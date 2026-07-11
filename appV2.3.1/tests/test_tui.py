@@ -4029,6 +4029,19 @@ def test_interactive_mode_terminal_process_offers_only_refresh(tmp_path, monkeyp
         app.close()
 
 
+@pytest.mark.parametrize(
+    ("state", "actions"),
+    [
+        (ProcessState.RUNNING, ["Refresh", "Interrupt", "Terminate", "Kill"]),
+        (ProcessState.STOPPING, ["Refresh", "Kill"]),
+        (ProcessState.DRAINING, ["Refresh"]),
+        (ProcessState.EXITED, ["Refresh"]),
+    ],
+)
+def test_interactive_mode_process_actions_match_state(state, actions) -> None:
+    assert InteractiveMode._process_actions(state) == actions
+
+
 def test_interactive_mode_reports_unknown_slash_command_without_model_turn(tmp_path) -> None:
     calls = {"model": 0}
 

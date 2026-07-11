@@ -1029,7 +1029,7 @@ class InteractiveMode:
         if selected is None:
             return
         snapshot = snapshots[labels.index(selected)]
-        actions = ["Refresh"] if snapshot.state.terminal else ["Refresh", "Interrupt", "Terminate", "Kill"]
+        actions = self._process_actions(snapshot.state)
         action = self.prompt_extension_select("Process action", actions, kind="process")
         if action is None:
             return
@@ -1051,6 +1051,14 @@ class InteractiveMode:
             self.status.set_message("Idle")
             self._refresh_footer()
             self.tui.request_render()
+
+    @staticmethod
+    def _process_actions(state: ProcessState) -> list[str]:
+        if state is ProcessState.RUNNING:
+            return ["Refresh", "Interrupt", "Terminate", "Kill"]
+        if state is ProcessState.STOPPING:
+            return ["Refresh", "Kill"]
+        return ["Refresh"]
 
     @staticmethod
     def _process_label(snapshot: ProcessSnapshot) -> str:

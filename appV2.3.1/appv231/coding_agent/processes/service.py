@@ -8,6 +8,7 @@ import shutil
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -69,7 +70,10 @@ class _ManagedProcess:
         self.input_closed = False
         self.input_error: str | None = None
         self.output_error: str | None = None
+        self.terminate_sent = False
+        self.kill_sent = False
         self.event_emitted = False
+        self.active_calls = 0
         self.foreground_update: ProcessOutputListener | None = None
         self.force_finalize = threading.Event()
         self.wakeup = threading.Event()
@@ -140,12 +144,15 @@ class ProcessSessionService:
         session_id = f"proc_{secrets.token_hex(16)}"
         record = _ManagedProcess(session_id, owner, request, transport, output, self._clock())
         record.foreground_update = on_update
+        retained = False
         try:
             with self._lock:
                 self._starting -= 1
                 if self._closed:
                     raise ProcessClosedError("Process service is closed")
+                record.active_calls = 1
                 self._records[session_id] = record
+                retained = True
             self._start_workers(record)
             return self._wait_for_initial_handoff(record, yield_time_ms, signal)
         except BaseException:
@@ -154,6 +161,9 @@ class ProcessSessionService:
             transport.close()
             output.close(remove=True)
             raise
+        finally:
+            if retained:
+                self._release_record_call(record)
 
     def poll(
         self,
@@ -167,15 +177,15 @@ class ProcessSessionService:
         self._validate_wait(wait_ms)
         if not 1 <= max_bytes <= self._max_output_bytes:
             raise ValueError(f"max_bytes must be between 1 and {self._max_output_bytes}")
-        record = self._get_record(owner, session_id)
-        deadline = self._clock() + wait_ms / 1000
-        with record.condition:
-            while record.output.size <= cursor and not record.state.terminal:
-                remaining = deadline - self._clock()
-                if remaining <= 0:
-                    break
-                record.condition.wait(min(remaining, 0.05))
-        return self._snapshot(record, cursor, max_bytes)
+        with self._record_call(owner, session_id) as record:
+            deadline = self._clock() + wait_ms / 1000
+            with record.condition:
+                while record.output.size <= cursor and not record.state.terminal:
+                    remaining = deadline - self._clock()
+                    if remaining <= 0:
+                        break
+                    record.condition.wait(min(remaining, 0.05))
+            return self._snapshot(record, cursor, max_bytes)
 
     def write(
         self,
@@ -190,31 +200,33 @@ class ProcessSessionService:
         encoded = data.encode("utf-8")
         if len(encoded) > self._max_input_bytes:
             raise ProcessInputLimitError(f"Process input accepts at most {self._max_input_bytes} bytes per call")
-        record = self._get_record(owner, session_id)
-        cursor = record.output.size
-        with record.condition:
-            self._require_running(record, "write")
-            if record.input_closed:
-                raise ProcessStateError("Process stdin is closed")
-            if record.pending_input_bytes + len(encoded) > self._max_pending_input_bytes:
-                raise ProcessInputLimitError(
-                    f"Process pending input accepts at most {self._max_pending_input_bytes} bytes"
-                )
-            record.pending_input_bytes += len(encoded)
-            record.input_queue.put_nowait(_InputItem(encoded, eof))
-            record.condition.notify_all()
-        return self._wait_after_control(record, cursor, wait_ms)
+        with self._record_call(owner, session_id) as record:
+            cursor = record.output.size
+            with record.condition:
+                self._require_running(record, "write")
+                if record.input_closed:
+                    raise ProcessStateError("Process stdin is closed")
+                if record.pending_input_bytes + len(encoded) > self._max_pending_input_bytes:
+                    raise ProcessInputLimitError(
+                        f"Process pending input accepts at most {self._max_pending_input_bytes} bytes"
+                    )
+                record.pending_input_bytes += len(encoded)
+                if eof:
+                    record.input_closed = True
+                record.input_queue.put_nowait(_InputItem(encoded, eof))
+                record.condition.notify_all()
+            return self._wait_after_control(record, cursor, wait_ms)
 
     def resize(self, owner: ProcessOwner, session_id: str, *, rows: int, cols: int) -> ProcessSnapshot:
         if not 2 <= rows <= 200 or not 20 <= cols <= 500:
             raise ValueError("PTY dimensions are outside supported bounds")
-        record = self._get_record(owner, session_id)
-        with record.condition:
-            self._require_running(record, "resize")
-            if not record.request.tty:
-                raise ProcessStateError("resize requires tty=true")
-            record.transport.resize(rows, cols)
-        return self._snapshot(record, record.output.size, self._max_output_bytes)
+        with self._record_call(owner, session_id) as record:
+            with record.condition:
+                self._require_running(record, "resize")
+                if not record.request.tty:
+                    raise ProcessStateError("resize requires tty=true")
+                record.transport.resize(rows, cols)
+            return self._snapshot(record, record.output.size, self._max_output_bytes)
 
     def interrupt(
         self,
@@ -224,13 +236,13 @@ class ProcessSessionService:
         wait_ms: int = 1_000,
     ) -> ProcessSnapshot:
         self._validate_wait(wait_ms)
-        record = self._get_record(owner, session_id)
-        cursor = record.output.size
-        with record.condition:
-            self._require_running(record, "interrupt")
-            record.transport.signal_group("interrupt")
-            record.wakeup.set()
-        return self._wait_after_control(record, cursor, wait_ms)
+        with self._record_call(owner, session_id) as record:
+            cursor = record.output.size
+            with record.condition:
+                self._require_running(record, "interrupt")
+                record.transport.signal_group("interrupt")
+                record.wakeup.set()
+            return self._wait_after_control(record, cursor, wait_ms)
 
     def terminate(
         self,
@@ -240,23 +252,37 @@ class ProcessSessionService:
         wait_ms: int = 2_000,
     ) -> ProcessSnapshot:
         self._validate_wait(wait_ms)
-        record = self._get_record(owner, session_id)
-        cursor = record.output.size
-        self._begin_stop(record, StopCause.TERMINATE)
-        return self._wait_after_control(record, cursor, wait_ms)
+        with self._record_call(owner, session_id) as record:
+            cursor = record.output.size
+            self._begin_stop(record, StopCause.TERMINATE)
+            return self._wait_after_control(record, cursor, wait_ms)
 
     def kill(self, owner: ProcessOwner, session_id: str) -> ProcessSnapshot:
-        record = self._get_record(owner, session_id)
-        cursor = record.output.size
-        self._begin_stop(record, StopCause.KILL)
-        return self._snapshot(record, cursor, self._max_output_bytes)
+        with self._record_call(owner, session_id) as record:
+            cursor = record.output.size
+            self._begin_stop(record, StopCause.KILL)
+            return self._snapshot(record, cursor, self._max_output_bytes)
 
     def list(self, owner: ProcessOwner) -> tuple[ProcessSnapshot, ...]:
         self._prune()
         with self._lock:
+            if self._closed:
+                return ()
             records = [record for record in self._records.values() if record.owner == owner]
-        records.sort(key=lambda record: (record.state.terminal, -record.started_at))
-        return tuple(self._snapshot(record, record.output.size, self._max_output_bytes) for record in records)
+            for record in records:
+                with record.condition:
+                    record.active_calls += 1
+        try:
+            records.sort(
+                key=lambda record: (
+                    record.state.terminal,
+                    -(record.terminal_at if record.terminal_at is not None else record.started_at),
+                )
+            )
+            return tuple(self._snapshot(record, record.output.size, self._max_output_bytes) for record in records)
+        finally:
+            for record in records:
+                self._release_record_call(record)
 
     def subscribe(self, listener: ProcessListener) -> Callable[[], None]:
         with self._lock:
@@ -280,19 +306,14 @@ class ProcessSessionService:
             self._listeners.clear()
 
         active = [record for record in records if not record.state.terminal]
-        claimed: list[_ManagedProcess] = []
         for record in active:
             if self._claim_stop(record, StopCause.SHUTDOWN):
-                claimed.append(record)
                 self._safe_signal(record, "terminate")
-            else:
-                record.transport.close()
-                record.wakeup.set()
-        self._wait_transports(claimed, self._termination_grace_seconds)
-        for record in claimed:
+        self._wait_transports(active, self._termination_grace_seconds)
+        for record in active:
             if record.transport.poll() is None:
                 self._safe_signal(record, "kill")
-        self._wait_transports(claimed, self._termination_grace_seconds)
+        self._wait_transports(active, self._termination_grace_seconds)
         for record in active:
             if record.transport.poll() is None:
                 record.force_finalize.set()
@@ -306,6 +327,7 @@ class ProcessSessionService:
             record.input_queue.put_nowait(None)
             if record.input_thread is not None:
                 record.input_thread.join(timeout=0.2)
+            self._wait_for_record_calls(record)
             record.transport.close()
             record.output.close(remove=True)
         with self._lock:
@@ -313,15 +335,15 @@ class ProcessSessionService:
         shutil.rmtree(self._directory, ignore_errors=True)
 
     def export_output(self, owner: ProcessOwner, session_id: str, directory: str | Path) -> Path:
-        record = self._get_record(owner, session_id)
-        with record.condition:
-            if not record.state.terminal:
-                raise ProcessStateError("Cannot export output while process is active")
-        return record.output.export_copy(directory)
+        with self._record_call(owner, session_id) as record:
+            with record.condition:
+                if not record.state.terminal:
+                    raise ProcessStateError("Cannot export output while process is active")
+            return record.output.export_copy(directory)
 
     def tail_snapshot(self, owner: ProcessOwner, session_id: str):
-        record = self._get_record(owner, session_id)
-        return record.output.tail_snapshot()
+        with self._record_call(owner, session_id) as record:
+            return record.output.tail_snapshot()
 
     def _reserve_start(self) -> None:
         self._prune()
@@ -465,6 +487,15 @@ class ProcessSessionService:
             while record.reader_count and self._clock() < deadline:
                 record.condition.wait(min(0.02, max(0, deadline - self._clock())))
         if record.reader_count:
+            try:
+                record.transport.signal_group("kill")
+            except BaseException as error:  # noqa: BLE001 - descriptor cleanup still runs.
+                with record.condition:
+                    record.output_error = str(error)
+            with record.condition:
+                if record.reader_count:
+                    record.condition.wait_for(lambda: record.reader_count == 0, timeout=0.2)
+        if record.reader_count:
             record.transport.close()
         for thread in record.reader_threads:
             thread.join(timeout=0.1)
@@ -515,9 +546,13 @@ class ProcessSessionService:
             return True
 
     def _begin_stop(self, record: _ManagedProcess, cause: StopCause) -> None:
-        if not self._claim_stop(record, cause):
+        claimed = self._claim_stop(record, cause)
+        if cause is StopCause.KILL:
+            self._safe_signal(record, "kill")
             return
-        if cause in {StopCause.KILL, StopCause.ABORT_BEFORE_YIELD}:
+        if not claimed:
+            return
+        if cause is StopCause.ABORT_BEFORE_YIELD:
             self._safe_signal(record, "kill")
             return
         self._safe_signal(record, "terminate")
@@ -527,6 +562,17 @@ class ProcessSessionService:
 
     @staticmethod
     def _safe_signal(record: _ManagedProcess, signal_name: str) -> None:
+        with record.condition:
+            if record.transport.poll() is not None:
+                return
+            if signal_name == "terminate":
+                if record.terminate_sent or record.kill_sent:
+                    return
+                record.terminate_sent = True
+            elif signal_name == "kill":
+                if record.kill_sent:
+                    return
+                record.kill_sent = True
         try:
             record.transport.signal_group(signal_name)  # type: ignore[arg-type]
         except BaseException as error:  # noqa: BLE001 - monitor still observes process state.
@@ -550,6 +596,7 @@ class ProcessSessionService:
     ) -> ProcessSnapshot:
         output = record.output.read(cursor, max_bytes)
         with record.condition:
+            elapsed_at = record.terminal_at if record.terminal_at is not None else self._clock()
             return ProcessSnapshot(
                 session_id=record.session_id,
                 state=record.state,
@@ -559,18 +606,42 @@ class ProcessSessionService:
                 output_size=record.output.size,
                 exit_code=record.exit_code,
                 tty=record.request.tty,
-                elapsed_ms=max(0, int((self._clock() - record.started_at) * 1000)),
+                elapsed_ms=max(0, int((elapsed_at - record.started_at) * 1000)),
                 command=record.request.command,
                 cwd=record.request.cwd,
             )
 
-    def _get_record(self, owner: ProcessOwner, session_id: str) -> _ManagedProcess:
+    @contextmanager
+    def _record_call(self, owner: ProcessOwner, session_id: str):
+        record = self._acquire_record_call(owner, session_id)
+        try:
+            yield record
+        finally:
+            self._release_record_call(record)
+
+    def _acquire_record_call(self, owner: ProcessOwner, session_id: str) -> _ManagedProcess:
         self._prune()
         with self._lock:
+            if self._closed:
+                raise ProcessClosedError("Process service is closed")
             record = self._records.get(session_id)
             if record is None or record.owner != owner:
                 raise ProcessNotFoundError(session_id)
+            with record.condition:
+                record.active_calls += 1
             return record
+
+    @staticmethod
+    def _release_record_call(record: _ManagedProcess) -> None:
+        with record.condition:
+            record.active_calls = max(0, record.active_calls - 1)
+            record.condition.notify_all()
+
+    @staticmethod
+    def _wait_for_record_calls(record: _ManagedProcess) -> None:
+        with record.condition:
+            while record.active_calls:
+                record.condition.wait(0.05)
 
     @staticmethod
     def _require_running(record: _ManagedProcess, action: str) -> None:
@@ -599,7 +670,11 @@ class ProcessSessionService:
     def _prune(self) -> None:
         now = self._clock()
         with self._lock:
-            terminal = [record for record in self._records.values() if record.state.terminal]
+            terminal = [
+                record
+                for record in self._records.values()
+                if record.state.terminal and record.active_calls == 0
+            ]
             terminal.sort(key=lambda record: record.terminal_at or record.started_at)
             expired = {
                 record.session_id
