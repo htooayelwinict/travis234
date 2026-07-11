@@ -156,6 +156,29 @@ def test_managed_bash_yields_handle_then_process_poll_collects_completion(manage
     assert f"output size {terminal.details['outputSize']}" in text(terminal)
 
 
+def test_running_process_results_expose_suggested_poll_delay(managed_tools) -> None:
+    _service, _owner, bash, process = managed_tools
+    started = bash.execute(
+        "bash",
+        {"command": python_command("import time; time.sleep(1)"), "yield_time_ms": 0},
+    )
+
+    polled = process.execute(
+        "poll",
+        {
+            "action": "poll",
+            "session_id": started.details["sessionId"],
+            "cursor": started.details["nextCursor"],
+            "yield_time_ms": 0,
+        },
+    )
+
+    assert started.details["status"] == "running"
+    assert polled.details["status"] == "running"
+    assert "Suggested poll delay: 1000 ms." in text(started)
+    assert "Suggested poll delay: 1000 ms." in text(polled)
+
+
 def test_managed_bash_streams_sanitized_updates_before_handoff(managed_tools) -> None:
     _service, _owner, bash, _process = managed_tools
     updates = []
@@ -304,6 +327,28 @@ def test_agent_session_exposes_process_only_when_service_is_injected(tmp_path: P
     finally:
         plain.shutdown()
         managed.shutdown()
+        service.close()
+
+
+def test_agent_session_prompt_keeps_required_managed_process_work_pending(tmp_path: Path) -> None:
+    service = ProcessSessionService(directory=tmp_path / ".processes")
+    owner = ProcessOwner("app", str(tmp_path.resolve()), "agent")
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        process_service=service,
+        process_owner=owner,
+    )
+    try:
+        assert (
+            "When a managed process result is required for the current request, treat status=running as unfinished work"
+            in session.system_prompt
+        )
+        assert "honor the suggested poll delay reported by bash/process" in session.system_prompt
+        assert "poll to a terminal state and inspect its final output before claiming completion" in session.system_prompt
+        assert "Leave a process detached only when the user explicitly requested it" in session.system_prompt
+    finally:
+        session.shutdown()
         service.close()
 
 

@@ -7,6 +7,9 @@ from enum import StrEnum
 from typing import Literal, Mapping
 
 
+DEFAULT_PROCESS_POLL_DELAY_MS = 1000
+
+
 class ProcessState(StrEnum):
     STARTING = "starting"
     RUNNING = "running"
@@ -74,7 +77,7 @@ class ProcessSnapshot:
     elapsed_ms: int
     command: str = ""
     cwd: str = ""
-    suggested_poll_delay_ms: int = 1000
+    suggested_poll_delay_ms: int = DEFAULT_PROCESS_POLL_DELAY_MS
 
     def as_details(self) -> dict[str, object]:
         return {
@@ -132,6 +135,7 @@ class InvalidCursorError(ProcessSessionError):
 
 
 __all__ = [
+    "DEFAULT_PROCESS_POLL_DELAY_MS",
     "InvalidCursorError",
     "OutputSlice",
     "ProcessClosedError",

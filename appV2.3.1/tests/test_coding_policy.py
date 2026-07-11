@@ -162,7 +162,7 @@ def test_process_poll_and_list_are_observations_but_controls_are_mutations() -> 
         assert _tool_call_may_change_state("process", {"action": action}) is True
 
 
-def test_process_same_cursor_no_progress_warns_then_halts() -> None:
+def test_process_cooperative_same_cursor_polls_do_not_trigger_no_progress() -> None:
     controller = ToolCallGuardrailController(
         ToolCallGuardrailConfig(
             no_progress_warn_after=2,
@@ -171,11 +171,31 @@ def test_process_same_cursor_no_progress_warns_then_halts() -> None:
             consecutive_no_progress_block_after=99,
         )
     )
-    args = {"action": "poll", "session_id": "proc_x", "cursor": 10, "yield_time_ms": 1000}
+    args = {"action": "poll", "session_id": "proc_x", "cursor": 10}
 
     first = controller.after_call("process", args, "still running", failed=False)
-    second = controller.after_call("process", {**args, "yield_time_ms": 2000}, "still running", failed=False)
+    second = controller.after_call("process", args, "still running", failed=False)
     third = controller.after_call("process", {**args, "yield_time_ms": 3000}, "still running", failed=False)
+
+    assert first.action == "allow"
+    assert second.action == "allow"
+    assert third.action == "allow"
+
+
+def test_process_zero_wait_same_cursor_busy_poll_warns_then_halts() -> None:
+    controller = ToolCallGuardrailController(
+        ToolCallGuardrailConfig(
+            no_progress_warn_after=2,
+            no_progress_block_after=3,
+            consecutive_no_progress_warn_after=99,
+            consecutive_no_progress_block_after=99,
+        )
+    )
+    args = {"action": "poll", "session_id": "proc_x", "cursor": 10, "yield_time_ms": 0}
+
+    first = controller.after_call("process", args, "still running", failed=False)
+    second = controller.after_call("process", args, "still running", failed=False)
+    third = controller.after_call("process", args, "still running", failed=False)
 
     assert first.action == "allow"
     assert second.action == "warn"
@@ -204,7 +224,6 @@ def test_process_advancing_cursor_is_progress_even_when_status_text_matches() ->
 
     assert first.action == "allow"
     assert second.action == "allow"
-    assert second.count == 1
 
 
 @pytest.mark.parametrize("requested", ["../outside.txt", "sub/../../outside.txt"])

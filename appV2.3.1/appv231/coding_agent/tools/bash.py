@@ -515,7 +515,8 @@ def _managed_bash_result(
         raise RuntimeError(_append_status(output, "Command failed to execute"))
     footer = (
         f"Process {snapshot.session_id} is {snapshot.state.value}; command continues in the background. "
-        f"Use process.poll with cursor {snapshot.next_cursor}."
+        f"Use process.poll with cursor {snapshot.next_cursor}. "
+        f"Suggested poll delay: {snapshot.suggested_poll_delay_ms} ms."
     )
     return AgentToolResult(
         content=[TextContent(text=_append_status(snapshot.output, footer))],

@@ -7,7 +7,12 @@ from collections.abc import Mapping
 from appv231.agent.types import AgentTool, AgentToolResult
 from appv231.ai.types import TextContent
 from appv231.coding_agent.processes.service import ProcessSessionService
-from appv231.coding_agent.processes.types import ProcessOwner, ProcessSnapshot, ProcessState
+from appv231.coding_agent.processes.types import (
+    DEFAULT_PROCESS_POLL_DELAY_MS,
+    ProcessOwner,
+    ProcessSnapshot,
+    ProcessState,
+)
 from appv231.coding_agent.tools.types import ToolDefinition, wrap_tool_definition
 
 PROCESS_ACTIONS = ("poll", "write", "resize", "interrupt", "terminate", "kill", "list")
@@ -53,7 +58,19 @@ def create_process_tool_definition(
         prompt_snippet="Poll and control managed background commands",
         prompt_guidelines=[
             "Use the nextCursor returned by bash/process so output is not repeated.",
-            "Do not busy-poll unchanged processes; honor suggestedPollDelayMs and continue other work when possible.",
+            (
+                "Do not busy-poll unchanged processes; honor the suggested poll delay reported by bash/process and "
+                "continue other work when possible."
+            ),
+            (
+                "When a managed process result is required for the current request, treat status=running as unfinished "
+                "work: continue useful independent work when possible, then poll to a terminal state and inspect its "
+                "final output before claiming completion."
+            ),
+            (
+                "Leave a process detached only when the user explicitly requested it or its result is not required; "
+                "report the process ID and current status."
+            ),
         ],
         execute=lambda tid, args, signal=None, on_update=None, ctx=None: _execute_process(
             service,
@@ -93,7 +110,7 @@ def _execute_process(
             owner,
             session_id,
             args["cursor"],
-            wait_ms=args.get("yield_time_ms", 1000),
+            wait_ms=args.get("yield_time_ms", DEFAULT_PROCESS_POLL_DELAY_MS),
             max_bytes=args.get("max_bytes", 51_200),
         )
     elif action == "write":
@@ -182,7 +199,10 @@ def _snapshot_footer(snapshot: ProcessSnapshot) -> str:
         return f"Process {snapshot.session_id} was terminated (exit {snapshot.exit_code}); {position}."
     if snapshot.state is ProcessState.FAILED:
         return f"Process {snapshot.session_id} failed; {position}."
-    return f"Process {snapshot.session_id} is {snapshot.state.value}; {position}."
+    return (
+        f"Process {snapshot.session_id} is {snapshot.state.value}; {position}. "
+        f"Suggested poll delay: {snapshot.suggested_poll_delay_ms} ms."
+    )
 
 
 def _list_result(snapshots: tuple[ProcessSnapshot, ...]) -> AgentToolResult:

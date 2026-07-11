@@ -11,6 +11,9 @@ from typing import Any, Mapping
 
 from appv231.coding_agent.policies.types import Allow, Block, CodingTurnContext, PolicyDecision, ToolCallView
 
+# Keep this aligned with ProcessSnapshot without importing the process package into policy initialization.
+COOPERATIVE_PROCESS_POLL_WAIT_MS = 1000
+
 IDEMPOTENT_TOOL_NAMES = frozenset(
     {
         "read",
@@ -630,7 +633,11 @@ class ToolCallGuardrailController:
 
     def _is_idempotent(self, tool_name: str, args: Mapping[str, Any]) -> bool:
         if tool_name == "process":
-            return args.get("action") in {"poll", "list"}
+            action = args.get("action")
+            if action == "poll":
+                wait_ms = args.get("yield_time_ms", COOPERATIVE_PROCESS_POLL_WAIT_MS)
+                return isinstance(wait_ms, int) and wait_ms < COOPERATIVE_PROCESS_POLL_WAIT_MS
+            return action == "list"
         if tool_name in self.config.mutating_tools:
             return False
         return tool_name in self.config.idempotent_tools
