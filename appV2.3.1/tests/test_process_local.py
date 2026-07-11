@@ -70,6 +70,20 @@ def collect_until_terminal(
     return current, output
 
 
+def _process_is_live(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    if Path("/proc/self/stat").exists():
+        try:
+            state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+        except FileNotFoundError:
+            return False
+        return state != "Z"
+    return True
+
+
 @pytest.fixture
 def owner() -> ProcessOwner:
     return ProcessOwner("app-local", "/workspace", "agent")
@@ -189,9 +203,7 @@ def test_terminate_kills_descendant_in_same_process_group(service, owner, tmp_pa
     assert terminal.state is ProcessState.TERMINATED
     deadline = time.monotonic() + 2
     while time.monotonic() < deadline:
-        try:
-            os.kill(child_pid, 0)
-        except ProcessLookupError:
+        if not _process_is_live(child_pid):
             break
         time.sleep(0.01)
     else:
