@@ -79,7 +79,7 @@ test("package web-search skill uses curl-only network retrieval", () => {
   assert.doesNotMatch(webSearchSkill, /xml\.etree/i);
 });
 
-test("release image combines python 3.13 with official Node 20 without Debian npm", () => {
+test("release image combines python 3.13 and Node 20 with full passwordless sudo", () => {
   const dockerfile = fs.readFileSync(path.resolve(packageRoot, "..", "..", "Dockerfile.appv231.release"), "utf8");
 
   assert.match(dockerfile, /^FROM python:3\.13-slim/m);
@@ -98,7 +98,7 @@ test("release image combines python 3.13 with official Node 20 without Debian np
   assert.match(dockerfile, /\bnpm\b/);
   assert.match(dockerfile, /useradd .*appv231/);
   assert.match(dockerfile, /env_keep \+= "DEBIAN_FRONTEND"/);
-  assert.match(dockerfile, /appv231 ALL=.*NOPASSWD:.*apt-get/);
+  assert.match(dockerfile, /appv231 ALL=\(ALL:ALL\) NOPASSWD: ALL/);
   assert.match(dockerfile, /USER appv231/);
 });
 

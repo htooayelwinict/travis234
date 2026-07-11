@@ -379,9 +379,9 @@ docker run --rm -it \
 ```
 
 The image runs as the named `appv231` user. It includes Node.js and npm for
-common JavaScript project workflows, and it has narrow passwordless sudo for
-`apt`, `apt-get`, and `dpkg` so a session can install other project tools when
-needed.
+common JavaScript project workflows, and `appv231` has unrestricted passwordless
+sudo inside the sandbox container so development tools can install and configure
+their required system dependencies.
 
 ## Local development from this repo
 

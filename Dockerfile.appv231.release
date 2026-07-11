@@ -25,8 +25,8 @@ RUN apt-get update \
     && useradd --create-home --home-dir /agent-home --shell /bin/bash appv231 \
     && mkdir -p /workspace /agent-home/agent \
     && chown -R appv231:appv231 /workspace /agent-home \
-    && printf 'Defaults:appv231 env_keep += "DEBIAN_FRONTEND"\nappv231 ALL=(root) NOPASSWD: /usr/bin/apt-get, /usr/bin/apt, /usr/bin/dpkg\n' > /etc/sudoers.d/appv231-apt \
-    && chmod 0440 /etc/sudoers.d/appv231-apt
+    && printf 'Defaults:appv231 env_keep += "DEBIAN_FRONTEND"\nappv231 ALL=(ALL:ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/appv231 \
+    && chmod 0440 /etc/sudoers.d/appv231
 
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
 COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
