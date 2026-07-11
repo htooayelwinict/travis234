@@ -152,6 +152,8 @@ def test_managed_bash_yields_handle_then_process_poll_collects_completion(manage
     assert "DONE" in output
     assert terminal.details["status"] == "exited"
     assert terminal.details["exitCode"] == 0
+    assert f"next cursor {terminal.details['nextCursor']}" in text(terminal)
+    assert f"output size {terminal.details['outputSize']}" in text(terminal)
 
 
 def test_managed_bash_streams_sanitized_updates_before_handoff(managed_tools) -> None:

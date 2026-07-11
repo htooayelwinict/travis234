@@ -173,18 +173,16 @@ def _snapshot_result(snapshot: ProcessSnapshot) -> AgentToolResult:
 
 
 def _snapshot_footer(snapshot: ProcessSnapshot) -> str:
+    position = f"next cursor {snapshot.next_cursor}, output size {snapshot.output_size}"
     if snapshot.state is ProcessState.EXITED:
-        return f"Process {snapshot.session_id} exited with code {snapshot.exit_code}."
+        return f"Process {snapshot.session_id} exited with code {snapshot.exit_code}; {position}."
     if snapshot.state is ProcessState.TIMED_OUT:
-        return f"Process {snapshot.session_id} timed out (exit {snapshot.exit_code})."
+        return f"Process {snapshot.session_id} timed out (exit {snapshot.exit_code}); {position}."
     if snapshot.state is ProcessState.TERMINATED:
-        return f"Process {snapshot.session_id} was terminated (exit {snapshot.exit_code})."
+        return f"Process {snapshot.session_id} was terminated (exit {snapshot.exit_code}); {position}."
     if snapshot.state is ProcessState.FAILED:
-        return f"Process {snapshot.session_id} failed."
-    return (
-        f"Process {snapshot.session_id} is {snapshot.state.value}; "
-        f"next cursor {snapshot.next_cursor}, output size {snapshot.output_size}."
-    )
+        return f"Process {snapshot.session_id} failed; {position}."
+    return f"Process {snapshot.session_id} is {snapshot.state.value}; {position}."
 
 
 def _list_result(snapshots: tuple[ProcessSnapshot, ...]) -> AgentToolResult:
