@@ -1,6 +1,8 @@
 """Managed process sessions for the coding-agent profile."""
 
 from appv231.coding_agent.processes.output import SanitizedOutputSpool
+from appv231.coding_agent.processes.service import ProcessSessionService, ProcessTransportFactory
+from appv231.coding_agent.processes.transport import ProcessTransport, SignalName
 from appv231.coding_agent.processes.types import (
     InvalidCursorError,
     OutputSlice,
@@ -29,9 +31,13 @@ __all__ = [
     "ProcessNotFoundError",
     "ProcessOwner",
     "ProcessSessionError",
+    "ProcessSessionService",
     "ProcessSnapshot",
     "ProcessState",
     "ProcessStateError",
+    "ProcessTransport",
+    "ProcessTransportFactory",
     "SanitizedOutputSpool",
+    "SignalName",
     "StopCause",
 ]
