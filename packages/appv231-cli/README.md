@@ -59,3 +59,20 @@ appv231 --cwd . -- --no-session
 Default startup creates a new persistent session. Inside the TUI, use `/resume`
 to switch, `/new` to start fresh, and `/session` to inspect the active file and
 session ID.
+
+## Managed commands
+
+Coding-agent `bash` calls wait up to 10 seconds for a normal result. A command
+still running after that window receives an opaque `proc_...` handle and
+continues in the same app instance. The window is not a timeout. Use an explicit
+command timeout or process controls to stop it; without either, it can run until
+natural exit or app shutdown.
+
+Use `/processes` to refresh, interrupt, terminate, or kill workspace-owned
+processes. The agent can also poll, write input, resize an opt-in PTY, and list
+processes through its `process` tool. Pipe mode remains the default.
+
+Managed processes survive model turns and in-process `/new` or `/resume`
+changes, but appv231 terminates them on exit. They cannot be resumed after an
+application or container restart. User `!command` and `!!command` shortcuts are
+still synchronous.

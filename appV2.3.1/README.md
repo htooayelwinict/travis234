@@ -156,11 +156,30 @@ Inside appv231:
 /resume                switch to a previous session
 /new                   start a new persistent session
 /session               show session file, ID, messages, usage, model, and thinking
+/processes             inspect and control managed commands for this workspace
 /delegate              spawn a delegated worker through the runtime command path
 /agents                list delegated workers and status
 /cancel-agent <id>     mark a delegated worker cancelled
 /exit                  leave the TUI
 ```
+
+## Managed commands
+
+Coding-agent `bash` calls wait up to 10 seconds for a normal result by default.
+If a command is still running, it receives an opaque `proc_...` handle and
+continues in the same app instance. This yield window is not a timeout. An
+omitted command timeout lets the job run until it exits, is stopped explicitly,
+or appv231 shuts down.
+
+The agent can poll, write input, resize a PTY, interrupt, terminate, kill, and
+list its workspace-owned processes. `/processes` provides explicit refresh and
+signal controls in the TUI. Pipe mode is the default; PTY mode is opt-in for
+commands that require terminal behavior.
+
+Managed processes can survive model turns and in-process `/new` or `/resume`
+session changes, but they end when appv231 exits and cannot be recovered after
+an application or container restart. User-entered `!command` and `!!command`
+shortcuts remain synchronous in this release.
 
 Subagent skill workflows can also be triggered in natural language. For example:
 
