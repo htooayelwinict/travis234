@@ -13,6 +13,7 @@ from appv231.coding_agent.artifacts import ArtifactRegistry
 from appv231.coding_agent.processes.service import ProcessSessionService
 from appv231.coding_agent.processes.types import (
     DEFAULT_PROCESS_POLL_DELAY_MS,
+    InvalidCursorError,
     ProcessOwner,
     ProcessSnapshot,
     ProcessState,
@@ -235,23 +236,29 @@ def _execute_process(
         return _list_result(service.list(owner))
     session_id = args["session_id"]
     if action == "poll":
-        snapshot = service.poll(
-            owner,
-            session_id,
-            args["cursor"],
-            wait_ms=args.get("yield_time_ms", DEFAULT_PROCESS_POLL_DELAY_MS),
-            max_bytes=args.get("max_bytes", 51_200),
-        )
+        try:
+            snapshot = service.poll(
+                owner,
+                session_id,
+                args["cursor"],
+                wait_ms=args.get("yield_time_ms", DEFAULT_PROCESS_POLL_DELAY_MS),
+                max_bytes=args.get("max_bytes", 51_200),
+            )
+        except InvalidCursorError as error:
+            return _recover_invalid_cursor(service, owner, session_id, args, error, artifacts)
     elif action == "wait":
-        snapshot = service.wait_terminal(
-            owner,
-            session_id,
-            args["cursor"],
-            wait_ms=args.get("wait_time_ms", 60_000),
-            max_bytes=args.get("max_bytes", 51_200),
-            signal=signal,
-            on_update=(lambda update: on_update(_snapshot_result(update))) if on_update else None,
-        )
+        try:
+            snapshot = service.wait_terminal(
+                owner,
+                session_id,
+                args["cursor"],
+                wait_ms=args.get("wait_time_ms", 60_000),
+                max_bytes=args.get("max_bytes", 51_200),
+                signal=signal,
+                on_update=(lambda update: on_update(_snapshot_result(update))) if on_update else None,
+            )
+        except InvalidCursorError as error:
+            return _recover_invalid_cursor(service, owner, session_id, args, error, artifacts)
         if snapshot.state.terminal:
             return _terminal_process_result(service, owner, snapshot, artifacts)
     elif action == "write":
@@ -279,6 +286,38 @@ def _execute_process(
     else:
         snapshot = service.kill(owner, session_id)
     return _snapshot_result(snapshot)
+
+
+def _recover_invalid_cursor(
+    service: ProcessSessionService,
+    owner: ProcessOwner,
+    session_id: str,
+    args: Mapping[str, object],
+    error: InvalidCursorError,
+    artifacts: ArtifactRegistry | None,
+) -> AgentToolResult:
+    snapshot = service.poll(
+        owner,
+        session_id,
+        0,
+        wait_ms=0,
+        max_bytes=args.get("max_bytes", 51_200),
+    )
+    result = (
+        _terminal_process_result(service, owner, snapshot, artifacts)
+        if snapshot.state.terminal
+        else _snapshot_result(snapshot)
+    )
+    details = dict(result.details or {})
+    details["recoveredCursor"] = error.cursor
+    warning = (
+        f"Recovered from invalid cursor {error.cursor}; current output size was {error.output_size}. "
+        "Returned available output from cursor 0."
+    )
+    return AgentToolResult(
+        content=[TextContent(text=f"{warning}\n\n"), *result.content],
+        details=details,
+    )
 
 
 def _validate_args(raw_args) -> dict[str, object]:

@@ -36,7 +36,13 @@ BASH_SCHEMA = {
     "type": "object",
     "properties": {
         "command": {"type": "string", "description": "Bash command to execute"},
-        "timeout": {"type": "number", "description": "Timeout in seconds (optional, no default timeout)"},
+        "timeout": {
+            "type": "number",
+            "description": (
+                "Hard execution deadline in seconds (optional, no default). Never infer this from expected duration; "
+                "omit it unless the user or task requires the command to be killed at a deadline"
+            ),
+        },
         "yield_time_ms": {
             "type": "integer",
             "minimum": 0,
@@ -569,7 +575,8 @@ def create_bash_tool_definition(
         description=(
             f"Execute a bash command in the current working directory. Returns stdout and stderr. Output is "
             f"truncated to last {DEFAULT_MAX_LINES} lines or {DEFAULT_MAX_BYTES // 1024}KB (whichever is hit first). "
-            "If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds. "
+            "If truncated, full output is saved to a temp file. timeout is an optional hard execution deadline; "
+            "Never infer a timeout from expected command duration. "
             "Managed sessions return a process handle after yield_time_ms (default 10000); this yield does not kill the command."
         ),
         parameters=BASH_SCHEMA,

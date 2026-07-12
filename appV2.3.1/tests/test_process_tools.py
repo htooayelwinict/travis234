@@ -650,6 +650,46 @@ def test_process_wait_uses_terminal_wait_streams_updates_and_is_sequential(manag
     assert process.execution_mode == "sequential"
 
 
+@pytest.mark.parametrize(
+    ("action", "timing"),
+    [
+        ("wait", {"wait_time_ms": 60_000}),
+        ("poll", {"yield_time_ms": 1_000}),
+    ],
+)
+def test_process_reads_recover_an_impossible_future_cursor(managed_tools, action, timing) -> None:
+    _service, _owner, bash, process = managed_tools
+    started = bash.execute(
+        "bash",
+        {
+            "command": python_command("print('complete output')"),
+            "yield_time_ms": 0,
+        },
+    )
+
+    result = process.execute(
+        "wait",
+        {
+            "action": action,
+            "session_id": started.details["sessionId"],
+            "cursor": 10_000,
+            **timing,
+        },
+    )
+
+    assert result.details["status"] == "exited"
+    assert result.details["recoveredCursor"] == 10_000
+    assert "complete output" in text(result)
+    assert "Recovered from invalid cursor 10000" in text(result)
+
+
+def test_managed_bash_warns_models_not_to_infer_execution_deadlines(managed_tools) -> None:
+    _service, _owner, _bash, _process = managed_tools
+    definition = create_bash_tool_definition(".")
+
+    assert "Never infer a timeout from expected command duration" in definition.description
+
+
 def test_process_normalizes_poll_with_wait_deadline_to_terminal_wait(managed_tools) -> None:
     _service, _owner, bash, process = managed_tools
     started = bash.execute(
