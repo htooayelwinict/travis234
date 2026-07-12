@@ -60,6 +60,7 @@ from appv231.coding_agent.capabilities import CapabilityViolation, WorkspaceCapa
 from appv231.coding_agent.config import get_docs_path, get_examples_path, get_readme_path
 from appv231.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
 from appv231.coding_agent.execution_backend import select_execution_backend
+from appv231.coding_agent.mailbox import CodingTurnMailbox, MailboxKind
 from appv231.coding_agent.processes.local import create_local_process_transport
 from appv231.coding_agent.processes.service import ProcessSessionService
 from appv231.coding_agent.processes.types import ProcessOwner
@@ -977,8 +978,7 @@ class AgentSession:
         self.subagents = SubagentSupervisor(max_threads=3, max_depth=1, event_sink=self._handle_subagent_event)
         self.subagents.register_backend(CallableSubagentBackend("internal", self._run_internal_subagent))
         self.subagents.register_backend(CodexExecBackend(log_dir=self._subagent_log_dir))
-        self._steering_messages: list[str] = []
-        self._follow_up_messages: list[str] = []
+        self._turn_mailbox = CodingTurnMailbox()
         self._pending_next_turn_messages: list[AgentMessage] = []
         self._pending_bash_messages: list[BashExecutionMessage] = []
         self._bash_signal: AbortSignal | None = None
@@ -1392,6 +1392,7 @@ class AgentSession:
                 self.set_active_tools_by_name(self.get_active_tool_names())
 
     def dispose(self) -> None:
+        self._turn_mailbox.close()
         try:
             self.agent.abort()
         except Exception:
@@ -2532,6 +2533,7 @@ class AgentSession:
             self._extension_shutdown_handler()
 
     def shutdown(self, reason: str = "quit", target_session_file: str | None = None) -> None:
+        self._turn_mailbox.close()
         self.subagents.shutdown(wait=False, reason="Session shutdown.")
         event: dict[str, object] = {"type": "session_shutdown", "reason": reason}
         if target_session_file is not None:
@@ -2666,19 +2668,56 @@ class AgentSession:
     def grant_capability(self, name: str, uses: int = 1) -> None:
         self._turn_capabilities.grant(name, uses)
 
-    def steer(self, text: str, images: list[ImageContent] | None = None) -> None:
+    def steer(self, text: str, images: list[ImageContent] | None = None) -> str:
         self._raise_if_extension_command(text)
-        self._steering_messages.append(text)
+        queued = self._turn_mailbox.enqueue("steering", text, images)
+        if not self.agent.state.is_streaming:
+            self._flush_turn_mailbox_kind("steering")
         self._emit_queue_update()
-        self.agent.steer(_user_message(text, images))
+        return queued.id
 
-    def follow_up(self, text: str, images: list[ImageContent] | None = None) -> None:
+    def follow_up(self, text: str, images: list[ImageContent] | None = None) -> str:
         self._raise_if_extension_command(text)
-        self._follow_up_messages.append(text)
+        queued = self._turn_mailbox.enqueue("follow_up", text, images)
+        if not self.agent.state.is_streaming:
+            self._flush_turn_mailbox_kind("follow_up")
         self._emit_queue_update()
-        self.agent.follow_up(_user_message(text, images))
+        return queued.id
 
     followUp = follow_up
+
+    def _flush_turn_mailbox(self) -> None:
+        self._flush_turn_mailbox_kind("steering")
+        self._flush_turn_mailbox_kind("follow_up")
+
+    def _flush_turn_mailbox_kind(self, kind: MailboxKind) -> None:
+        if kind == "steering":
+            mode = self.agent.steering_mode
+            sender = self.agent.steer
+        else:
+            mode = self.agent.follow_up_mode
+            sender = self.agent.follow_up
+        for queued in self._turn_mailbox.drain(kind, mode=mode):
+            message = _user_message(queued.text, list(queued.images))
+            setattr(message, "_coding_queue_id", queued.id)
+            sender(message)
+
+    def _restore_unacknowledged_turn_messages(self) -> None:
+        restored = self._turn_mailbox.restore_unacknowledged()
+        if not restored:
+            return
+        restored_ids = {item.id for item in restored}
+        self.agent._steering.messages = [  # noqa: SLF001 - coding adapter owns tagged messages.
+            message
+            for message in self.agent._steering.messages  # noqa: SLF001
+            if getattr(message, "_coding_queue_id", None) not in restored_ids
+        ]
+        self.agent._follow_up.messages = [  # noqa: SLF001 - coding adapter owns tagged messages.
+            message
+            for message in self.agent._follow_up.messages  # noqa: SLF001
+            if getattr(message, "_coding_queue_id", None) not in restored_ids
+        ]
+        self._emit_queue_update()
 
     def _steer_tool_loop_recovery(self, decision: ToolGuardrailDecision) -> None:
         if decision.action != "warn" or not decision.message:
@@ -2785,6 +2824,7 @@ class AgentSession:
         if isinstance(context, AbortSignal) and signal is None:
             signal = context
             context = None
+        self._flush_turn_mailbox()
         active_tool_names = self.get_active_tool_names()
         self.system_prompt = self._build_system_prompt(active_tool_names)
         self.agent.state.system_prompt = self.system_prompt
@@ -2837,17 +2877,17 @@ class AgentSession:
         )
 
     def clear_queue(self) -> dict[str, list[str]]:
-        steering = list(self._steering_messages)
-        follow_up = list(self._follow_up_messages)
-        self._steering_messages = []
-        self._follow_up_messages = []
+        steering = [item.text for item in self._turn_mailbox.clear("steering")]
+        follow_up = [item.text for item in self._turn_mailbox.clear("follow_up")]
         self.agent.clear_all_queues()
         self._emit_queue_update()
         return {"steering": steering, "follow_up": follow_up}
 
     @property
     def pending_message_count(self) -> int:
-        return len(self._steering_messages) + len(self._follow_up_messages)
+        return len(self._turn_mailbox.snapshot("steering")) + len(
+            self._turn_mailbox.snapshot("follow_up")
+        )
 
     @property
     def has_pending_bash_messages(self) -> bool:
@@ -2866,10 +2906,10 @@ class AgentSession:
         return self.is_bash_running
 
     def get_steering_messages(self) -> list[str]:
-        return list(self._steering_messages)
+        return [item.text for item in self._turn_mailbox.snapshot("steering")]
 
     def get_follow_up_messages(self) -> list[str]:
-        return list(self._follow_up_messages)
+        return [item.text for item in self._turn_mailbox.snapshot("follow_up")]
 
     @property
     def is_streaming(self) -> bool:
@@ -3884,15 +3924,11 @@ class AgentSession:
             if replacement is not None:
                 _replace_message_in_place(event.message, replacement)
         if event.type == "message_start" and getattr(event.message, "role", None) == "user":
-            message_text = _get_user_message_text(event.message)
-            if message_text:
-                if message_text in self._steering_messages:
-                    self._steering_messages.remove(message_text)
-                    self._emit_queue_update()
-                elif message_text in self._follow_up_messages:
-                    self._follow_up_messages.remove(message_text)
-                    self._emit_queue_update()
+            queue_id = getattr(event.message, "_coding_queue_id", None)
+            if isinstance(queue_id, str) and self._turn_mailbox.acknowledge(queue_id):
+                self._emit_queue_update()
         if event.type == "agent_end":
+            self._restore_unacknowledged_turn_messages()
             setattr(event, "will_retry", self._will_retry_after_agent_end(event))
             setattr(event, "willRetry", getattr(event, "will_retry"))
         if event.type == "message_end" and self._session_store:
@@ -3939,8 +3975,8 @@ class AgentSession:
     def _emit_queue_update(self) -> None:
         self._emit(
             QueueUpdateEvent(
-                steering=list(self._steering_messages),
-                follow_up=list(self._follow_up_messages),
+                steering=self.get_steering_messages(),
+                follow_up=self.get_follow_up_messages(),
             )
         )
 

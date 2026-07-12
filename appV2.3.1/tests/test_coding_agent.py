@@ -6289,6 +6289,70 @@ def test_agent_session_prompt_queues_during_streaming_by_behavior(tmp_path: Path
     assert session.pending_message_count == 0
 
 
+def test_concurrent_external_steering_is_delivered_once_with_distinct_ids(tmp_path: Path) -> None:
+    model = faux_model()
+    provider_entered = threading.Event()
+    release_provider = threading.Event()
+    calls = {"count": 0}
+
+    def stream_fn(active_model, context, options):
+        calls["count"] += 1
+        events = text_response_events(active_model, f"turn {calls['count']}")
+        if calls["count"] > 1:
+            return create_faux_provider(lambda _model, _context: events).stream_simple(
+                active_model,
+                context,
+                options,
+            )
+        stream = create_assistant_message_event_stream()
+        stream.push(events[0])
+        provider_entered.set()
+
+        def finish() -> None:
+            release_provider.wait(timeout=2)
+            for event in events[1:]:
+                stream.push(event)
+
+        threading.Thread(target=finish, daemon=True).start()
+        return stream
+
+    session = AgentSession(cwd=str(tmp_path), model=model)
+    errors = []
+
+    def run_turn() -> None:
+        try:
+            session.prompt("initial", stream_fn=stream_fn)
+        except BaseException as error:  # noqa: BLE001 - capture worker failure for assertion.
+            errors.append(error)
+
+    turn = threading.Thread(target=run_turn)
+    turn.start()
+    assert provider_entered.wait(timeout=1)
+
+    first_id = session.steer("duplicate")
+    second_id = session.steer("duplicate")
+    release_provider.set()
+    turn.join(timeout=2)
+
+    user_text = [_user_text(message) for message in session.messages if isinstance(message, UserMessage)]
+    assert not turn.is_alive()
+    assert errors == []
+    assert first_id != second_id
+    assert user_text.count("duplicate") == 2
+    assert session.pending_message_count == 0
+
+
+def test_unacknowledged_external_message_restores_without_core_duplicate(tmp_path: Path) -> None:
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+    message_id = session.steer("retry me")
+    assert len(session.agent._steering.messages) == 1
+
+    session._restore_unacknowledged_turn_messages()
+
+    assert session.agent._steering.messages == []
+    assert [item.id for item in session._turn_mailbox.snapshot("steering")] == [message_id]
+    assert session.get_steering_messages() == ["retry me"]
+
 def test_agent_session_input_extension_transforms_and_handles_prompt(tmp_path: Path) -> None:
     model = faux_model()
     provider_user_texts: list[str] = []
