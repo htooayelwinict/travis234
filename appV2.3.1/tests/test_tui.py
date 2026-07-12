@@ -8,6 +8,7 @@ import select
 import threading
 import time
 import urllib.error
+from types import SimpleNamespace
 
 import pytest
 
@@ -3456,6 +3457,30 @@ def test_tool_execution_fallback_never_renders_process_stdin_payload() -> None:
 
     assert "process write proc_01234567" in rendered
     assert "TOP-SECRET-PAYLOAD" not in rendered
+
+
+def test_tool_execution_uses_process_definition_renderer_for_wait_metadata() -> None:
+    definition = SimpleNamespace(
+        render_call=lambda args, ctx: (
+            f"process {args['action']} {args['session_id'][:13]} "
+            f"cursor={args['cursor']} wait={args['wait_time_ms']}ms"
+        ),
+        render_result=None,
+    )
+    component = ToolExecutionComponent(
+        "process",
+        {
+            "action": "wait",
+            "session_id": "proc_0123456789abcdef",
+            "cursor": 8,
+            "wait_time_ms": 60_000,
+        },
+        tool_definition=definition,
+    )
+
+    rendered = "\n".join(component.render(100))
+
+    assert "process wait proc_01234567 cursor=8 wait=60000ms" in rendered
 
 
 def test_tool_execution_renders_stable_running_process_marker() -> None:

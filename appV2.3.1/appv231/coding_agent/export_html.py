@@ -820,6 +820,7 @@ _EXPORT_CSS = """
     }
     .tool-params-content { display: none; margin: 6px 0 0 12px; }
     .tool-item.params-expanded .tool-params-content { display: block; }
+    .tool-param-variant-title { margin: 8px 0 4px; color: var(--text); font-weight: 700; }
     .tool-param { margin: 4px 0; }
     .tool-param-name { color: var(--accent); }
     .tool-param-type, .tool-param-required, .tool-param-optional { color: var(--muted); }
@@ -2633,6 +2634,15 @@ _EXPORT_JS = r"""
         }
       });
 
+      function getToolParameterVariants(parameters) {
+        if (!parameters || typeof parameters !== 'object') return [];
+        const variants = Array.isArray(parameters.oneOf) ? parameters.oneOf : [parameters];
+        return variants.filter(variant => (
+          variant && typeof variant === 'object' && variant.properties &&
+          Object.keys(variant.properties).length > 0
+        ));
+      }
+
       function renderHeader() {
         const totalCost = globalStats.cost.input + globalStats.cost.output + globalStats.cost.cacheRead + globalStats.cost.cacheWrite;
 
@@ -2696,23 +2706,28 @@ _EXPORT_JS = r"""
             <div class="tools-header">Available Tools</div>
             <div class="tools-content">
               ${tools.map(t => {
-                const hasParams = t.parameters && typeof t.parameters === 'object' && t.parameters.properties && Object.keys(t.parameters.properties).length > 0;
-                if (!hasParams) {
+                const variants = getToolParameterVariants(t.parameters);
+                if (variants.length === 0) {
                   return `<div class="tool-item"><span class="tool-item-name">${escapeHtml(t.name)}</span> - <span class="tool-item-desc">${escapeHtml(t.description)}</span></div>`;
                 }
-                const params = t.parameters;
-                const properties = params.properties;
-                const required = params.required || [];
                 let paramsHtml = '';
-                for (const [name, prop] of Object.entries(properties)) {
-                  const isRequired = required.includes(name);
-                  const typeStr = prop.type || 'any';
-                  const reqLabel = isRequired ? '<span class="tool-param-required">required</span>' : '<span class="tool-param-optional">optional</span>';
-                  paramsHtml += `<div class="tool-param"><span class="tool-param-name">${escapeHtml(name)}</span> <span class="tool-param-type">${escapeHtml(typeStr)}</span> ${reqLabel}`;
-                  if (prop.description) {
-                    paramsHtml += `<div class="tool-param-desc">${escapeHtml(prop.description)}</div>`;
+                for (const variant of variants) {
+                  const properties = variant.properties;
+                  const required = variant.required || [];
+                  if (variants.length > 1) {
+                    const variantTitle = variant.title || t.name;
+                    paramsHtml += `<div class="tool-param-variant-title">${escapeHtml(variantTitle)}</div>`;
                   }
-                  paramsHtml += '</div>';
+                  for (const [name, prop] of Object.entries(properties)) {
+                    const isRequired = required.includes(name);
+                    const typeStr = prop.const !== undefined ? JSON.stringify(prop.const) : (prop.type || 'any');
+                    const reqLabel = isRequired ? '<span class="tool-param-required">required</span>' : '<span class="tool-param-optional">optional</span>';
+                    paramsHtml += `<div class="tool-param"><span class="tool-param-name">${escapeHtml(name)}</span> <span class="tool-param-type">${escapeHtml(typeStr)}</span> ${reqLabel}`;
+                    if (prop.description) {
+                      paramsHtml += `<div class="tool-param-desc">${escapeHtml(prop.description)}</div>`;
+                    }
+                    paramsHtml += '</div>';
+                  }
                 }
                 return `<div class="tool-item" onclick="if(window.getSelection().toString())return;this.classList.toggle('params-expanded')"><span class="tool-item-name">${escapeHtml(t.name)}</span> - <span class="tool-item-desc">${escapeHtml(t.description)}</span> <span class="tool-params-hint"></span><div class="tool-params-content">${paramsHtml}</div></div>`;
               }).join('')}

@@ -8985,6 +8985,20 @@ def test_agent_session_export_to_html_uses_pi_visual_edge_styles(tmp_path: Path)
     assert ".hljs-keyword, .hljs-selector-tag { color: var(--syntaxKeyword); }" in html
 
 
+def test_agent_session_export_to_html_renders_discriminated_tool_parameter_variants(tmp_path: Path) -> None:
+    session_path = tmp_path / "html-tool-variants.jsonl"
+    export_path = tmp_path / "exports" / "tool-variants.html"
+    session = AgentSession(cwd=str(tmp_path), model=faux_model(), session_path=str(session_path))
+
+    session.export_to_html(str(export_path))
+
+    html = export_path.read_text(encoding="utf-8")
+    assert "function getToolParameterVariants(parameters)" in html
+    assert "Array.isArray(parameters.oneOf)" in html
+    assert "variant.title" in html
+    assert "tool-param-variant-title" in html
+
+
 def test_agent_session_export_to_html_wires_tree_search_and_filters(tmp_path: Path) -> None:
     session_path = tmp_path / "html-filter.jsonl"
     export_path = tmp_path / "exports" / "filter.html"

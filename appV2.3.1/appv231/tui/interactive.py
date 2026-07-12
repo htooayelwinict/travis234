@@ -147,11 +147,6 @@ class ToolExecutionComponent(Container):
         return [truncate_to_width(line, width) for line in lines]
 
     def _render_call(self) -> Any:
-        if self.tool_name == "process" and isinstance(self.args, Mapping):
-            action = str(self.args.get("action") or "")
-            session_id = str(self.args.get("session_id") or "")
-            suffix = f" {session_id[:13]}" if session_id else ""
-            return f"process {action}{suffix}".strip()
         if self.tool_definition and self.tool_definition.render_call:
             try:
                 return self.tool_definition.render_call(
@@ -160,6 +155,11 @@ class ToolExecutionComponent(Container):
                 )
             except Exception:  # noqa: BLE001 - rendering must not crash tool execution
                 return f"$ {self.tool_name} {_short_args(self.args)}"
+        if self.tool_name == "process" and isinstance(self.args, Mapping):
+            action = str(self.args.get("action") or "")
+            session_id = str(self.args.get("session_id") or "")
+            suffix = f" {session_id[:13]}" if session_id else ""
+            return f"process {action}{suffix}".strip()
         return f"$ {self.tool_name} {_short_args(self.args)}"
 
     def _render_result(self) -> Any:

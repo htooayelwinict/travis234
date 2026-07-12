@@ -91,7 +91,7 @@ from appv231.coding_agent.subagents import (
 from appv231.coding_agent.tools import create_all_tool_definitions
 from appv231.coding_agent.tools.bash import BASH_SCHEMA, BashExecOptions, BashOperations, create_local_bash_operations, get_shell_env
 from appv231.coding_agent.tools.output_spool import OutputSpool
-from appv231.coding_agent.tools.process import create_process_tool_definition
+from appv231.coding_agent.tools.process import PROCESS_ACTIONS, create_process_tool_definition, prepare_process_arguments
 from appv231.coding_agent.tools.types import (
     ToolContext,
     ToolDefinition,
@@ -3946,6 +3946,8 @@ class AgentSession:
             replacement = self._extension_runner.emit_message_end({"type": "message_end", "message": event.message})
             if replacement is not None:
                 _replace_message_in_place(event.message, replacement)
+        if event.type == "message_end" and isinstance(event.message, AssistantMessage):
+            _canonicalize_process_tool_calls(event.message)
         if event.type == "message_start" and getattr(event.message, "role", None) == "user":
             queue_id = getattr(event.message, "_coding_queue_id", None)
             if isinstance(queue_id, str) and self._turn_mailbox.acknowledge(queue_id):
@@ -4938,6 +4940,26 @@ def _replace_message_in_place(target: AgentMessage, replacement: AgentMessage) -
     if hasattr(target, "__dict__") and hasattr(replacement, "__dict__"):
         target.__dict__.clear()
         target.__dict__.update(replacement.__dict__)
+
+
+def _canonicalize_process_tool_calls(message: AssistantMessage) -> None:
+    for block in message.content:
+        if not isinstance(block, ToolCall):
+            continue
+        if block.name.startswith("process."):
+            action = block.name.removeprefix("process.")
+            existing_action = block.arguments.get("action")
+            if action not in PROCESS_ACTIONS or existing_action not in (None, action):
+                continue
+            block.name = "process"
+            block.arguments["action"] = action
+        if block.name != "process":
+            continue
+        try:
+            prepare_process_arguments(block.arguments)
+        except ValueError:
+            # Invalid calls remain intact so normal tool validation can report the exact model output.
+            continue
 
 
 def _reject_unexpected_args(args, allowed: set[str]) -> None:

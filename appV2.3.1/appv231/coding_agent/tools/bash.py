@@ -23,6 +23,7 @@ from appv231.coding_agent.execution_backend import ExecutionBackend, TrustedLoca
 from appv231.coding_agent.processes.service import ProcessSessionService, ProcessTransportFactory
 from appv231.coding_agent.processes.types import ProcessLaunchRequest, ProcessOwner, ProcessSnapshot, ProcessState
 from appv231.coding_agent.tools.output_spool import OutputSnapshot, OutputSpool
+from appv231.coding_agent.tools.process import format_process_wait_instruction
 from appv231.coding_agent.tools.truncate import (
     DEFAULT_MAX_BYTES,
     DEFAULT_MAX_LINES,
@@ -537,8 +538,8 @@ def _managed_bash_result(
         raise RuntimeError(_append_status(output, "Command failed to execute"))
     footer = (
         f"Process {snapshot.session_id} is {snapshot.state.value}; command continues in the background. "
-        f"Use process.wait with cursor {snapshot.next_cursor} when the final result is required. "
-        f"Use process.poll for interactive or quick status checks. "
+        f"{format_process_wait_instruction(snapshot.session_id, snapshot.next_cursor)} "
+        f"Use the poll action for interactive or quick status checks. "
         f"Suggested poll delay: {snapshot.suggested_poll_delay_ms} ms."
     )
     return AgentToolResult(

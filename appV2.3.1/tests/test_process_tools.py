@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 from appv231.ai.providers.faux import create_faux_provider, faux_model, text_response_events, tool_call_response_events
+from appv231.ai.types import AssistantMessage
+from appv231.ai.validation import compile_tool_schema
 from appv231.coding_agent.agent_session import AgentSession
 from appv231.coding_agent.artifacts import ArtifactRegistry
 from appv231.coding_agent.execution_backend import TrustedLocalBackend
@@ -21,8 +23,9 @@ from appv231.coding_agent.processes.types import (
     ProcessSnapshot,
     ProcessState,
 )
+from appv231.coding_agent.tools import process as process_tool_module
 from appv231.coding_agent.tools.bash import BashOperations, create_bash_tool, create_bash_tool_definition
-from appv231.coding_agent.tools.process import create_process_tool, create_process_tool_definition
+from appv231.coding_agent.tools.process import PROCESS_SCHEMA, create_process_tool, create_process_tool_definition
 from appv231.coding_agent.tools.truncate import truncate_tail
 
 
@@ -53,6 +56,99 @@ def collect(service, owner, process_tool, started, timeout: float = 5):
         output += text(current)
         cursor = current.details["nextCursor"]
     return current, output
+
+
+def test_process_schema_matches_action_specific_runtime_contracts() -> None:
+    schema = compile_tool_schema(PROCESS_SCHEMA)
+    valid = [
+        {"action": "poll", "session_id": "proc_x", "cursor": 0, "yield_time_ms": 1_000},
+        {"action": "wait", "session_id": "proc_x", "cursor": 4, "wait_time_ms": 60_000},
+        {"action": "write", "session_id": "proc_x", "input": "yes\n", "eof": False},
+        {"action": "resize", "session_id": "proc_x", "rows": 24, "cols": 80},
+        {"action": "interrupt", "session_id": "proc_x", "yield_time_ms": 1_000},
+        {"action": "terminate", "session_id": "proc_x", "yield_time_ms": 2_000},
+        {"action": "kill", "session_id": "proc_x"},
+        {"action": "list"},
+    ]
+    invalid = [
+        {"action": "wait", "session_id": "proc_x"},
+        {"action": "wait", "session_id": "proc_x", "cursor": 0, "yield_time_ms": 10_000},
+        {"action": "poll", "session_id": "proc_x", "cursor": 0, "wait_time_ms": 60_000},
+        {"action": "write", "session_id": "proc_x", "input": "yes\n", "cursor": 0},
+        {"action": "list", "session_id": "proc_x"},
+    ]
+
+    assert all(not schema.errors(arguments) for arguments in valid)
+    assert all(schema.errors(arguments) for arguments in invalid)
+
+
+def test_process_argument_preparation_recovers_common_model_aliases_without_inventing_cursor() -> None:
+    wait_with_yield = {
+        "action": "wait",
+        "session_id": "proc_x",
+        "cursor": 4,
+        "yield_time_ms": 30_000,
+    }
+
+    assert process_tool_module.prepare_process_arguments(wait_with_yield) == {
+        "action": "wait",
+        "session_id": "proc_x",
+        "cursor": 4,
+        "wait_time_ms": 30_000,
+    }
+    assert wait_with_yield == {
+        "action": "wait",
+        "session_id": "proc_x",
+        "cursor": 4,
+        "wait_time_ms": 30_000,
+    }
+    assert process_tool_module.prepare_process_arguments(
+        {
+            "action": "poll",
+            "session_id": "proc_x",
+            "cursor": 4,
+            "yield_time_ms": 1_000,
+            "wait_time_ms": 60_000,
+        }
+    ) == {
+        "action": "wait",
+        "session_id": "proc_x",
+        "cursor": 4,
+        "wait_time_ms": 60_000,
+    }
+    assert process_tool_module.prepare_process_arguments(
+        {"action": "wait", "sessionId": "proc_x", "nextCursor": "9", "waitTimeMs": "60000"}
+    ) == {"action": "wait", "session_id": "proc_x", "cursor": 9, "wait_time_ms": 60_000}
+
+
+def test_process_argument_preparation_rejects_ambiguous_aliases_and_wait_timing() -> None:
+    with pytest.raises(ValueError, match="conflicting process arguments: session_id and sessionId"):
+        process_tool_module.prepare_process_arguments(
+            {
+                "action": "kill",
+                "session_id": "proc_a",
+                "sessionId": "proc_b",
+            }
+        )
+
+    with pytest.raises(ValueError, match="wait action received both wait_time_ms and yield_time_ms"):
+        process_tool_module.prepare_process_arguments(
+            {
+                "action": "wait",
+                "session_id": "proc_x",
+                "cursor": 4,
+                "wait_time_ms": 60_000,
+                "yield_time_ms": 1_000,
+            }
+        )
+
+
+def test_process_argument_preparation_explains_required_wait_shape() -> None:
+    with pytest.raises(ValueError, match=r"wait requires session_id; use tool process"):
+        process_tool_module.prepare_process_arguments({"action": "wait", "cursor": 4})
+
+    with pytest.raises(ValueError, match=r"cursor must be a nonnegative integer.*tool process"):
+        process_tool_module.prepare_process_arguments({"action": "poll", "session_id": "proc_x"})
 
 
 @pytest.fixture
@@ -184,6 +280,11 @@ def test_running_process_results_expose_suggested_poll_delay(managed_tools) -> N
 
     assert started.details["status"] == "running"
     assert polled.details["status"] == "running"
+    assert '"action":"wait"' in text(started)
+    assert '"wait_time_ms":60000' in text(started)
+    assert "Call the process tool with" in text(started)
+    assert "Do not pass yield_time_ms to the wait action." in text(started)
+    assert "process.wait" not in text(started)
     assert "Suggested poll delay: 1000 ms." in text(started)
     assert "Suggested poll delay: 1000 ms." in text(polled)
 
@@ -266,17 +367,20 @@ def test_process_tool_validates_action_specific_arguments_and_hides_stdin(manage
         process.execute("p", {"action": "poll", "cursor": 0})
     with pytest.raises(ValueError, match="cursor must be a nonnegative integer"):
         process.execute("p", {"action": "poll", "session_id": "proc_x", "cursor": -1})
-    with pytest.raises(ValueError, match="poll does not accept wait_time_ms"):
-        process.execute(
-            "p",
-            {
-                "action": "poll",
-                "session_id": "proc_x",
-                "cursor": 0,
-                "yield_time_ms": 0,
-                "wait_time_ms": 1_000,
-            },
-        )
+    assert definition.prepare_arguments(
+        {
+            "action": "poll",
+            "session_id": "proc_x",
+            "cursor": 0,
+            "yield_time_ms": 0,
+            "wait_time_ms": 1_000,
+        }
+    ) == {
+        "action": "wait",
+        "session_id": "proc_x",
+        "cursor": 0,
+        "wait_time_ms": 1_000,
+    }
     with pytest.raises(ValueError, match="write does not accept cursor"):
         process.execute(
             "p",
@@ -287,6 +391,22 @@ def test_process_tool_validates_action_specific_arguments_and_hides_stdin(manage
     )
     assert rendered == "process write proc_01234567"
     assert "never render me" not in rendered
+    assert definition.render_call(
+        {
+            "action": "wait",
+            "session_id": "proc_0123456789",
+            "cursor": 4,
+            "wait_time_ms": 60_000,
+        }
+    ) == "process wait proc_01234567 cursor=4 wait=60000ms"
+    assert definition.render_call(
+        {
+            "action": "poll",
+            "session_id": "proc_0123456789",
+            "cursor": 4,
+            "yield_time_ms": 1_000,
+        }
+    ) == "process poll proc_01234567 cursor=4 yield=1000ms"
 
 
 def test_process_list_is_scoped_and_bounds_displayed_command(managed_tools) -> None:
@@ -360,10 +480,14 @@ def test_agent_session_prompt_keeps_required_managed_process_work_pending(tmp_pa
         process_owner=owner,
     )
     try:
-        assert "Use process.poll only for interactive input, quick status checks" in session.system_prompt
-        assert "continue independent work first and then use process.wait" in session.system_prompt
+        assert "Use the poll action only for interactive input, quick status checks" in session.system_prompt
+        assert "continue independent work first and then use the wait action" in session.system_prompt
         assert "wait ignores output-only wakeups and does not set the command timeout" in session.system_prompt
-        assert "do not call process.poll before process.wait" in session.system_prompt
+        assert "do not call the poll action before the wait action" in session.system_prompt
+        assert 'Call tool process with {"action":"wait","session_id":"<id>","cursor":<nextCursor>,"wait_time_ms":60000}' in session.system_prompt
+        assert 'Call tool process with {"action":"poll","session_id":"<id>","cursor":<nextCursor>,"yield_time_ms":1000}' in session.system_prompt
+        assert "process.wait" not in session.system_prompt
+        assert "process.poll" not in session.system_prompt
         assert "Do not repeat unchanged file reads around process checks" in session.system_prompt
         assert "Leave a process detached only for a requested server/watcher" in session.system_prompt
     finally:
@@ -412,6 +536,83 @@ def test_agent_loop_continues_after_bash_yields_without_waiting_for_exit(tmp_pat
         assert jobs[0].state is ProcessState.RUNNING
         tool_result = next(message for message in session.messages if getattr(message, "role", None) == "toolResult")
         assert tool_result.details["status"] == "running"
+    finally:
+        session.shutdown()
+        service.close()
+
+
+def test_agent_loop_prepares_mixed_process_wait_arguments_before_schema_validation(tmp_path: Path) -> None:
+    model = faux_model()
+    service = ProcessSessionService(directory=tmp_path / ".processes")
+    owner = ProcessOwner("app", str(tmp_path.resolve()), "agent")
+    command = python_command("import time; time.sleep(.05); print('done')")
+    calls = {"count": 0}
+
+    def stream_fn(active_model, context, options):
+        calls["count"] += 1
+        tool_results = [message for message in context.messages if message.role == "toolResult"]
+        if calls["count"] == 1:
+            events = tool_call_response_events(
+                active_model,
+                "bash",
+                {"command": command, "yield_time_ms": 0},
+                call_id="managed-bash",
+            )
+        elif calls["count"] == 2:
+            started = tool_results[-1]
+            events = tool_call_response_events(
+                active_model,
+                "process.wait",
+                {
+                    "session_id": started.details["sessionId"],
+                    "cursor": str(started.details["nextCursor"]),
+                    "wait_time_ms": "1000",
+                },
+                call_id="mixed-process-wait",
+            )
+        else:
+            events = text_response_events(active_model, "complete")
+        return create_faux_provider(lambda _model, _context: events).stream_simple(active_model, context, options)
+
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=model,
+        session_path=str(tmp_path / "session.jsonl"),
+        process_service=service,
+        process_owner=owner,
+    )
+    try:
+        session.prompt("run it and wait", stream_fn=stream_fn)
+
+        tool_results = [message for message in session.messages if message.role == "toolResult"]
+        assert calls["count"] == 3
+        assert [message.tool_name for message in tool_results] == ["bash", "process"]
+        assert tool_results[-1].details["status"] == "exited"
+        assert tool_results[-1].details["exitCode"] == 0
+        assert "done" in tool_results[-1].content[0].text
+
+        process_call = next(
+            block
+            for message in session.messages
+            if isinstance(message, AssistantMessage)
+            for block in message.content
+            if getattr(block, "name", None) == "process"
+        )
+        assert process_call.arguments == {
+            "action": "wait",
+            "session_id": process_call.arguments["session_id"],
+            "cursor": process_call.arguments["cursor"],
+            "wait_time_ms": 1_000,
+        }
+
+        persisted_process_call = next(
+            block
+            for entry in session._session_store.entries  # noqa: SLF001 - verifies the resumable transcript contract.
+            if entry.get("type") == "message" and entry.get("message", {}).get("role") == "assistant"
+            for block in entry["message"].get("content", [])
+            if block.get("name") == "process"
+        )
+        assert persisted_process_call["arguments"] == process_call.arguments
     finally:
         session.shutdown()
         service.close()
