@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -94,6 +95,29 @@ def test_package_mutation_consumes_exactly_one_grant() -> None:
 
     assert isinstance(policy.evaluate(_bash("npm install x"), _context(capabilities)), Allow)
     assert isinstance(policy.evaluate(_bash("npm install y"), _context(capabilities)), RequireConsent)
+
+
+def test_concurrent_grant_is_consumed_by_next_same_turn_package_call() -> None:
+    capabilities = TurnCapabilities()
+    policy = PackageMutationPolicy()
+    ready = threading.Event()
+    evaluate = threading.Event()
+    decisions = []
+
+    def protected_call() -> None:
+        ready.set()
+        assert evaluate.wait(timeout=1)
+        decisions.append(policy.evaluate(_bash("npm install x"), _context(capabilities)))
+
+    worker = threading.Thread(target=protected_call)
+    worker.start()
+    assert ready.wait(timeout=1)
+    capabilities.grant("package_mutation", uses=1)
+    evaluate.set()
+    worker.join(timeout=1)
+
+    assert decisions == [Allow()]
+    assert capabilities.remaining("package_mutation") == 0
 
 
 def test_process_write_package_mutation_requires_and_consumes_capability() -> None:

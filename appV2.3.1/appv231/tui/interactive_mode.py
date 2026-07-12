@@ -1310,10 +1310,7 @@ class InteractiveMode:
             self._show_status("Capability use count must be a positive integer", kind="error")
             return
         try:
-            self._command_executor().submit(
-                "grant-capability",
-                lambda: self.app.session.grant_capability("package_mutation", uses),
-            ).result()
+            self.app.session.grant_capability("package_mutation", uses)
         except Exception as error:  # noqa: BLE001 - command failures are local TUI status.
             self._show_status(f"Capability grant failed: {error}", kind="error")
             return

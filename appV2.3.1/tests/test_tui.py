@@ -4138,6 +4138,34 @@ def test_interactive_mode_allow_package_install_grants_bounded_capability(tmp_pa
     assert "model should not run" not in rendered
 
 
+def test_allow_grants_during_active_turn_without_waiting_for_turn_executor(tmp_path) -> None:
+    terminal = FakeTerminal(columns=120)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+    turn_started = threading.Event()
+    release_turn = threading.Event()
+    submitted = threading.Event()
+    future = mode._command_executor().submit(
+        "turn",
+        lambda: (turn_started.set(), release_turn.wait(timeout=2)),
+    )
+    assert turn_started.wait(timeout=1)
+    thread = threading.Thread(
+        target=lambda: (mode._run_allow_command("package-install", 1), submitted.set())
+    )
+    thread.start()
+    try:
+        assert submitted.wait(timeout=0.25)
+        assert app.session._turn_capabilities.remaining("package_mutation") == 1
+        assert release_turn.is_set() is False
+    finally:
+        release_turn.set()
+        future.result(timeout=1)
+        thread.join(timeout=1)
+        mode._command_executor().close()
+        app.close()
+
+
 def test_interactive_mode_allow_rejects_unknown_or_nonpositive_grants(tmp_path) -> None:
     register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
     terminal = FakeTerminal(columns=120)
