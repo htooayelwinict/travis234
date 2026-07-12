@@ -44,6 +44,23 @@ class ProcessOwner:
     workspace_key: str
     origin: Literal["agent", "user"] = "agent"
 
+    @property
+    def persistence_scope(self) -> tuple[str, str]:
+        return (self.workspace_key, self.origin)
+
+
+@dataclass(frozen=True)
+class ProcessCompletionRecord:
+    session_id: str
+    state: ProcessState
+    exit_code: int | None
+    output_size: int
+    elapsed_ms: int
+    completed_at: float
+    launch_session_id: str | None
+    failure_code: str | None
+    tty: bool = False
+
 
 @dataclass(frozen=True)
 class ProcessLaunchRequest:
@@ -55,6 +72,7 @@ class ProcessLaunchRequest:
     rows: int = 24
     cols: int = 80
     timeout_seconds: float | None = None
+    launch_session_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -78,9 +96,12 @@ class ProcessSnapshot:
     command: str = ""
     cwd: str = ""
     suggested_poll_delay_ms: int = DEFAULT_PROCESS_POLL_DELAY_MS
+    durable_output: bool = False
+    full_output_path: str | None = None
+    failure_code: str | None = None
 
     def as_details(self) -> dict[str, object]:
-        return {
+        details: dict[str, object] = {
             "status": self.state.value,
             "sessionId": self.session_id,
             "cursor": self.cursor,
@@ -91,6 +112,13 @@ class ProcessSnapshot:
             "elapsedMs": self.elapsed_ms,
             "suggestedPollDelayMs": self.suggested_poll_delay_ms,
         }
+        if self.durable_output:
+            details["durableOutput"] = True
+        if self.full_output_path is not None:
+            details["fullOutputPath"] = self.full_output_path
+        if self.failure_code is not None:
+            details["failureCode"] = self.failure_code
+        return details
 
 
 @dataclass(frozen=True)
@@ -103,6 +131,12 @@ class ProcessEvent:
 
 class ProcessSessionError(RuntimeError):
     """Base error for managed process operations."""
+
+
+class ProcessWaitCancelledError(ProcessSessionError):
+    def __init__(self, session_id: str) -> None:
+        super().__init__(f"Process wait cancelled: {session_id}")
+        self.session_id = session_id
 
 
 class ProcessNotFoundError(ProcessSessionError):
@@ -139,6 +173,7 @@ __all__ = [
     "InvalidCursorError",
     "OutputSlice",
     "ProcessClosedError",
+    "ProcessCompletionRecord",
     "ProcessEvent",
     "ProcessInputLimitError",
     "ProcessLaunchRequest",
@@ -149,5 +184,6 @@ __all__ = [
     "ProcessSnapshot",
     "ProcessState",
     "ProcessStateError",
+    "ProcessWaitCancelledError",
     "StopCause",
 ]

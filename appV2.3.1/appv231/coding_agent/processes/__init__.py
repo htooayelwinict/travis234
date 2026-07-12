@@ -1,5 +1,6 @@
 """Managed process sessions for the coding-agent profile."""
 
+from appv231.coding_agent.processes.completions import ProcessCompletionStore
 from appv231.coding_agent.processes.local import create_local_process_transport
 from appv231.coding_agent.processes.output import SanitizedOutputSpool
 from appv231.coding_agent.processes.service import ProcessSessionService, ProcessTransportFactory
@@ -8,6 +9,7 @@ from appv231.coding_agent.processes.types import (
     InvalidCursorError,
     OutputSlice,
     ProcessClosedError,
+    ProcessCompletionRecord,
     ProcessEvent,
     ProcessInputLimitError,
     ProcessLaunchRequest,
@@ -18,6 +20,7 @@ from appv231.coding_agent.processes.types import (
     ProcessSnapshot,
     ProcessState,
     ProcessStateError,
+    ProcessWaitCancelledError,
     StopCause,
 )
 
@@ -25,6 +28,8 @@ __all__ = [
     "InvalidCursorError",
     "OutputSlice",
     "ProcessClosedError",
+    "ProcessCompletionRecord",
+    "ProcessCompletionStore",
     "ProcessEvent",
     "ProcessInputLimitError",
     "ProcessLaunchRequest",
@@ -36,6 +41,7 @@ __all__ = [
     "ProcessSnapshot",
     "ProcessState",
     "ProcessStateError",
+    "ProcessWaitCancelledError",
     "ProcessTransport",
     "ProcessTransportFactory",
     "SanitizedOutputSpool",
