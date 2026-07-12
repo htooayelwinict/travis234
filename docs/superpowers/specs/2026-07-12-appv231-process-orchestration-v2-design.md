@@ -56,6 +56,7 @@ production JSONL analysis:
 | Concurrent steering could lose a message | Coding-agent steering enters a thread-safe mailbox and is flushed on the run thread. |
 | SessionStore reparsed the whole JSONL on every append | Appends synchronize only the unseen file suffix under the existing file lock. |
 | A spool write failure could still publish `exited` | Output failure deterministically fails and stops the managed job. |
+| Active managed output could grow until the filesystem filled | Sanitized output has explicit per-process and app-wide live-spool budgets; crossing one fails and stops only the producing job. |
 | Hidden jobs from another workspace consumed the only active slots | Quotas are per owner scope with a separate app-wide safety ceiling. |
 | A child that escaped the process group could survive timeout | Local containment tracks and terminates descendants in addition to the process group. |
 | Large detached output had no terminal artifact contract | Every truncated terminal result exposes a durable sanitized artifact. |
@@ -81,13 +82,13 @@ unchanged appv231.agent loop       unchanged Hermes compaction
        |       |        |
        |       |        +-- owner-aware quotas
        |       +----------- host-side terminal wait
-       +------------------- deterministic state machine
+       +------------------- deterministic state/output budgets
               |
       +-------+-------------------+
       |                           |
       v                           v
 Local ProcessTransport     ProcessCompletionStore
-group + descendants        atomic metadata + output
+group + descendants        indexed metadata + atomic output
       |
       v
 pipe or PTY subprocess
@@ -106,7 +107,7 @@ process state, or coding policy moves into the redzone.
 
 ### 1. ProcessSessionService v2
 
-The service remains the sole in-memory lifecycle authority. It gains four
+The service remains the sole in-memory lifecycle authority. It gains five
 capabilities while preserving its current public state machine:
 
 - `wait_terminal`: wait for terminal state or a host deadline while ignoring
@@ -117,6 +118,10 @@ capabilities while preserving its current public state machine:
   allowing in-memory eviction.
 - deterministic output failure: a spool/read failure claims failure, stops the
   process tree, drains what remains, and publishes `failed`, never `exited`.
+- bounded live output: defaults cap one sanitized spool at 64 MiB and all live
+  spools at 512 MiB. Crossing either cap publishes `failed` with
+  `failureCode=output_limit`, preserves the already captured sanitized output,
+  and stops that process tree. Command duration alone never triggers this cap.
 
 The new service interface is:
 
@@ -173,13 +178,15 @@ Terminal results move from a best-effort temp spool to a bounded durable coding
 artifact before live eviction. The store lives below:
 
 ```text
-<agent-dir>/process-results/<workspace-hash>/<process-id>.json
-<agent-dir>/process-results/<workspace-hash>/<process-id>.log
+<agent-dir>/process-results/index.sqlite3
+<agent-dir>/process-results/objects/<workspace-hash>/<process-id>-<object-id>.log
 ```
 
-Directories are mode 0700 and files are mode 0600. Metadata writes use a temp
-file, `fsync`, and atomic replacement. Output is already UTF-8 decoded and
-terminal-control sanitized by `SanitizedOutputSpool`.
+Directories are mode 0700 and database/output files are mode 0600. SQLite uses
+indexed transactions, full synchronization, a busy timeout, and an explicit
+schema version; output uses temp-file `fsync` plus atomic replacement. Output
+is already UTF-8 decoded and terminal-control sanitized by
+`SanitizedOutputSpool`.
 
 Metadata contains only:
 
@@ -192,16 +199,24 @@ Metadata contains only:
 
 It does not contain environment values, an OS PID, or raw command text.
 
-Defaults are seven-day retention and a 256 MiB app-wide output ceiling, with
-oldest-terminal eviction. The existing fifteen-minute/64-record in-memory cache
-remains a fast path. `poll` and `wait` fall back to the durable store after live
-eviction or application restart, using workspace and origin checks rather than
-the obsolete app-instance ID. A running process missing from both stores is
+Defaults are seven-day retention, a 256 MiB app-wide output ceiling, and 10,000
+terminal records, with indexed oldest-terminal eviction. Retention work is
+`O(log n + k log n)` for `k` evictions rather than a directory scan on every
+completion. The existing fifteen-minute/64-record in-memory cache remains a
+fast path. `poll` and `wait` fall back to the durable store after live eviction
+or application restart, using workspace and origin checks rather than the
+obsolete app-instance ID. A running process missing from both stores is
 reported as unavailable after restart, not as still running.
 
-If terminal output exceeds the normal tool-result limits, the tool result
-contains the tail plus a durable `fullOutputPath`/artifact reference. The model
-never receives the private live-spool path.
+If terminal output exceeds the normal tool-result limits, one terminal tool
+result contains the bounded unread tail, advances `nextCursor` to the terminal
+output size, and includes a durable `fullOutputPath` plus session-scoped
+`artifactId`. The durable path is registered as a borrowed artifact: the read
+tool can authorize it, but closing a session artifact registry cannot delete
+completion-store data. A resumed session registers a new borrowed reference
+only after an owner-authorized poll/wait resolves that process. The model never
+receives the private live-spool path. Durable tail extraction reads backward in
+bounded blocks and does not load a full 64 MiB artifact into memory.
 
 ### 4. Local Process Containment
 
@@ -247,7 +262,10 @@ the compressor package is untouched.
 
 At most sixteen process records are included. Preference order is running,
 stopping/draining, recently terminal but not fully observed, then unavailable
-handles referenced in the retained context.
+handles referenced in the retained context. The scanner selects at most 64
+structured candidates by historical state/recency, then resolves durable rows
+in one batch query; provider preparation never performs one database query per
+old handle.
 
 ### 6. CodingTurnMailbox
 
@@ -277,11 +295,13 @@ can consume the grant on its next protected tool call in the same turn.
 `ProcessSessionService` with `origin="user"`:
 
 1. Capture the current session binding and exclusion flag.
-2. Start the command without waiting for the model-turn executor.
-3. Drain output on a controller worker and post bounded chunks through the TUI
+2. Return a local command handle before extension dispatch or process launch.
+3. Resolve `user_bash` extension results/operations on the controller worker;
+   default execution launches through the managed process service.
+4. Drain output on a controller worker and post bounded chunks through the TUI
    dispatcher.
-4. On terminal state, render completion immediately.
-5. Queue JSONL/session-state recording without blocking the input thread.
+5. On terminal state, render completion immediately.
+6. Queue JSONL/session-state recording without blocking the input thread.
 
 `!` remains visible to future model context; `!!` remains excluded. Completion
 is recorded against the launch session even if the user switches sessions
@@ -296,7 +316,9 @@ Cancellation routing is deterministic:
 
 The user command controller supports multiple jobs, but only the focused/latest
 job receives shortcut cancellation. `/processes` remains the explicit selector
-for controlling any other agent- or user-origin job.
+for controlling any other agent- or user-origin job. The controller accepts at
+most four active user commands, including extension-backed custom operations,
+so those operations cannot bypass process-service owner quotas.
 
 ### 8. Incremental SessionStore Synchronization
 
@@ -371,10 +393,16 @@ writer and recovery tests remain behavioral gates, not benchmarks only.
 
 - Spool append/read/finish failure: claim process failure, terminate the tree,
   retain a sanitized failure code, and publish `failed`.
+- Live output budget exceeded: preserve the bounded sanitized prefix/artifact,
+  terminate that process tree, and publish `failed` with `output_limit`; do not
+  reinterpret the event as an execution timeout.
 - Completion persistence failure: keep the live terminal record and output;
   expose `durableOutput=false`; do not lie that recovery is available.
-- Durable result corruption: quarantine the record, return a bounded
-  unavailable error, and never execute or trust stored text as instructions.
+- Durable row/log corruption: quarantine or delete the invalid row/object,
+  return a bounded unavailable error, and never execute or trust stored text as
+  instructions. A corrupt SQLite index is moved aside with its journal files
+  and replaced by an empty versioned index; orphan logs are cleaned only under
+  the store's interprocess maintenance lock.
 - Wait cancellation: return/raise cancellation for the tool wait without
   terminating a detached job.
 - Process execution timeout: terminate the process tree and publish
@@ -397,19 +425,22 @@ writer and recovery tests remain behavioral gates, not benchmarks only.
 - Existing session branch, fork, resume, export, and recovery behavior remains.
 - Extensions continue to receive ordinary tool and result events. New process
   metadata is bounded and contains no command environment.
+- `user_bash` handler order and payload remain stable, but those handlers and
+  custom operations execute on the user-command worker so the TUI input owner
+  stays responsive; custom operations must honor their abort signal.
 - The npm launcher requires no API change. A Python dependency change, if used
   by local descendant containment, is included automatically in the image
   installation and does not require npm package publication by itself.
 
 ## Rollout Sequence
 
-1. Fix process correctness: output failure, owner quotas, sequential execution,
-   descendant cleanup, terminal artifacts, and completion persistence.
-2. Add host-side process wait and model guidance.
-3. Add context reconciliation and compaction details.
-4. Add the coding mailbox and asynchronous TUI control plane.
-5. Replace full SessionStore append reload with suffix synchronization.
-6. Run focused, full-suite, source-TUI, and production-container verification.
+1. Complete process runtime v2: output failure/budgets, owner quotas,
+   descendant cleanup, terminal artifacts, completion persistence, host-side
+   wait, sequential execution, and model guidance.
+2. Add the coding mailbox and asynchronous TUI control plane.
+3. Replace full SessionStore append reload with suffix synchronization, then add
+   context reconciliation and coding-adapter compaction details.
+4. Run focused, full-suite, source-TUI, and production-container verification.
 
 Each stage is independently revertible and must leave both redzones with zero
 diff.
@@ -423,26 +454,29 @@ Implementation is not complete until tests prove:
 2. Poll remains cursor deterministic and suitable for interactive commands.
 3. Wait cancellation leaves a detached process alive.
 4. Spool failure publishes `failed` and never `exited`.
-5. Per-owner quotas isolate workspaces/origins while the global ceiling holds.
-6. Timeout, terminate, kill, and app close remove process-group and escaped
+5. Per-process/app-wide spool budgets bound disk growth and publish
+   `output_limit` without confusing it with a timeout.
+6. Per-owner quotas isolate workspaces/origins while the global ceiling holds.
+7. Timeout, terminate, kill, and app close remove process-group and escaped
    descendant fixtures on the production Linux path.
-7. Terminal output survives live TTL eviction and a new CodingApp instance.
-8. Large detached output returns a durable full-output artifact.
-9. Old running transcript handles become terminal-from-store or unavailable,
+8. Terminal output survives live TTL eviction and a new CodingApp instance.
+9. Large detached output returns one bounded terminal result plus a readable
+   borrowed artifact that remains after session-registry close.
+10. Old running transcript handles become terminal-from-store or unavailable,
    never falsely live.
-10. Compaction retains bounded process state with zero edits under
+11. Compaction retains bounded process state with zero edits under
     `appv231/compaction/`.
-11. `!` and `/allow` complete or acknowledge while an agent tool wait is active.
-12. One Ctrl-C cancels the focused user shell or active turn and the TUI remains
+12. `!` and `/allow` complete or acknowledge while an agent tool wait is active.
+13. One Ctrl-C cancels the focused user shell or active turn and the TUI remains
     responsive.
-13. Concurrent steering messages are neither lost nor merged by equal text.
-14. Two SessionStore instances still append without lost/torn records.
-15. Two thousand single-writer appends stay within the suffix-parse budget.
-16. `process.execution_mode` is sequential and conflicting batched controls
+14. Concurrent steering messages are neither lost nor merged by equal text.
+15. Two SessionStore instances still append without lost/torn records.
+16. Two thousand single-writer appends stay within the suffix-parse budget.
+17. `process.execution_mode` is sequential and conflicting batched controls
     execute in provider order.
-17. Full Python tests, package build, source TUI protocol, and production-image
+18. Full Python tests, package build, source TUI protocol, and production-image
     TUI protocol pass.
-18. `git diff --name-only` contains no path under either redzone.
+19. `git diff --name-only` contains no path under either redzone.
 
 ## Non-Goals
 
@@ -456,4 +490,3 @@ Implementation is not complete until tests prove:
 - No attempt to turn lexical command policy into a security sandbox.
 - No GHCR push, npm publication, or GitHub release as part of implementation
   unless separately requested.
-
