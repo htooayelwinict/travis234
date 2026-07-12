@@ -1664,8 +1664,61 @@ def test_interactive_mode_editor_escape_aborts_active_turn_bash(tmp_path, monkey
     finally:
         app.session._bash_signal = None
 
-    assert aborts == ["agent", "bash"]
+    assert aborts == ["agent"]
     assert mode.status._message == "Aborting"
+
+
+def test_ctrl_c_interrupts_focused_user_command_without_aborting_agent(tmp_path, monkeypatch) -> None:
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=120),
+        enable_tui=True,
+    )
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+    interrupts = []
+    agent_aborts = []
+    assert mode._user_commands is not None
+    monkeypatch.setattr(
+        mode._user_commands,
+        "interrupt_focused",
+        lambda: interrupts.append(True) or True,
+    )
+    monkeypatch.setattr(mode, "_is_turn_active", lambda: True)
+    monkeypatch.setattr(app.session.agent, "abort", lambda: agent_aborts.append(True))
+
+    mode._handle_editor_escape()
+
+    assert interrupts == [True]
+    assert agent_aborts == []
+    assert mode.status._message == "Interrupting user command"
+    mode._user_commands.close()
+    mode.footer_data_provider.dispose()
+    app.close()
+
+
+def test_ctrl_c_aborts_agent_only_once_without_focused_user_command(tmp_path, monkeypatch) -> None:
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=120),
+        enable_tui=True,
+    )
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+    aborts = []
+    assert mode._user_commands is not None
+    monkeypatch.setattr(mode._user_commands, "interrupt_focused", lambda: False)
+    monkeypatch.setattr(mode, "_is_turn_active", lambda: True)
+    monkeypatch.setattr(app.session.agent, "abort", lambda: aborts.append(True))
+
+    mode._handle_editor_escape()
+    mode._handle_editor_escape()
+
+    assert aborts == [True]
+    assert mode._agent_abort_requested is True
+    mode._user_commands.close()
+    mode.footer_data_provider.dispose()
+    app.close()
 
 
 def test_interactive_mode_escape_aborted_tool_turn_returns_to_idle(tmp_path) -> None:

@@ -186,6 +186,7 @@ class InteractiveMode:
         self._pending_model_picker_trace: tuple[int, str] | None = None
         self._last_turn_finished_at = 0.0
         self._last_idle_ctrl_c_at = 0.0
+        self._agent_abort_requested = False
         subscribe_rebound = getattr(app, "subscribe_session_rebound", None)
         if callable(subscribe_rebound):
             self._unsubscribe_app_session_rebound = subscribe_rebound(
@@ -560,7 +561,8 @@ class InteractiveMode:
             pass
 
     def _handle_sigint(self, _signum, _frame) -> None:
-        if self._is_turn_active() or self.app.session.is_streaming or self.app.session.is_bash_running:
+        has_user_command = self._user_commands is not None and bool(self._user_commands.list())
+        if has_user_command or self._is_turn_active() or self.app.session.is_streaming or self.app.session.is_bash_running:
             self._last_idle_ctrl_c_at = 0.0
             self._handle_editor_escape()
             return
@@ -805,6 +807,7 @@ class InteractiveMode:
             self.tui.post(lambda: self._finish_turn_thread(before_compressions, before_tokens))
 
     def _finish_turn_thread(self, before_compressions: int, before_tokens: int) -> None:
+        self._agent_abort_requested = False
         self._render_auto_compaction_notice(before_compressions, before_tokens)
         with self._turn_lock:
             next_prompt = None if self._shutdown_requested or not self._queued_after_turn else self._queued_after_turn.pop(0)
@@ -837,11 +840,17 @@ class InteractiveMode:
         return True
 
     def _handle_editor_escape(self) -> None:
+        if self._user_commands is not None and self._user_commands.interrupt_focused():
+            self.status.set_message("Interrupting user command")
+            self._refresh_footer()
+            self.tui.request_render()
+            return
+
         if self._is_turn_active() or self.app.session.is_streaming:
-            self.status.set_message("Aborting")
-            self.app.session.agent.abort()
-            if self.app.session.is_bash_running:
-                self.app.session.abort_bash()
+            if not self._agent_abort_requested:
+                self._agent_abort_requested = True
+                self.status.set_message("Aborting")
+                self.app.session.agent.abort()
             self._refresh_footer()
             self.tui.request_render()
             return
