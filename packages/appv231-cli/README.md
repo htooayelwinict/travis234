@@ -62,17 +62,32 @@ session ID.
 
 ## Managed commands
 
-Coding-agent `bash` calls wait up to 10 seconds for a normal result. A command
-still running after that window receives an opaque `proc_...` handle and
-continues in the same app instance. The window is not a timeout. Use an explicit
-command timeout or process controls to stop it; without either, it can run until
-natural exit or app shutdown.
+Coding-agent `bash` calls use a default 10-second yield. The yield does not kill
+the command and does not change the command timeout. A command still running at
+the end of that window returns an opaque `proc_...` handle. An omitted execution
+timeout lets the job run until natural exit, explicit process control, an output
+limit, or appv231 shutdown.
 
-Use `/processes` to refresh, interrupt, terminate, or kill workspace-owned
-processes. The agent can also poll, write input, resize an opt-in PTY, and list
-processes through its `process` tool. Pipe mode remains the default.
+Use `process.poll` for quick or interactive incremental observation. Use
+`process.wait` to wait from 1 to 900 seconds for terminal state without returning
+on every output chunk. The wait duration does not change the command timeout. If
+the wait deadline expires first, it returns `running`; the command is not killed,
+and another wait can continue from the returned cursor.
 
-Managed processes survive model turns and in-process `/new` or `/resume`
-changes, but appv231 terminates them on exit. They cannot be resumed after an
-application or container restart. User `!command` and `!!command` shortcuts are
-still synchronous.
+Live sanitized output is bounded to 64 MiB per process and 512 MiB app-wide by
+default. Crossing a spool limit stops only that producer and reports `failed`
+with `output_limit`; elapsed time alone never produces that failure. Terminal
+metadata and output are recoverable for seven days, subject to a bounded 256 MiB
+completion store. appv231 cannot reattach a running process after an application restart
+or container restart.
+
+The agent can poll, wait, write input, resize an opt-in PTY, interrupt, terminate,
+kill, and list workspace-owned processes. `/processes` refreshes and controls both
+agent and user jobs. Ctrl-C targets the focused user command first, then one active
+agent turn, and only uses the idle-TUI exit behavior when neither is active.
+
+User `!command` and `!!command` run asynchronously; `!!` output remains excluded
+from model context. `/allow package-install` can grant bounded package capability
+while an agent turn is active. Extension `user_bash` handlers preserve their
+payload and launch order, run on the command worker, and custom operations must
+honor cancellation.

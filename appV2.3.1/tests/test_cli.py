@@ -31,6 +31,24 @@ def _disable_real_startup_live_catalog_fetch(monkeypatch) -> None:
     monkeypatch.setenv("APPV231_MODEL_CATALOG_STARTUP_FETCH", "false")
 
 
+def test_readme_documents_process_wait_and_async_user_shell() -> None:
+    app_root = Path(__file__).resolve().parents[1]
+    repository_root = app_root.parent
+    readmes = [
+        (app_root / "README.md").read_text(encoding="utf-8"),
+        (repository_root / "packages/appv231-cli/README.md").read_text(encoding="utf-8"),
+    ]
+
+    for readme in readmes:
+        assert "process.wait" in readme
+        assert "does not change the command timeout" in readme
+        assert "command is not killed" in readme
+        assert "64 MiB per process" in readme
+        assert "output_limit" in readme
+        assert "!command` and `!!command` run asynchronously" in readme
+        assert "cannot reattach a running process after an application restart" in readme
+
+
 def test_coding_app_plain_mode_does_not_render_live_tui(tmp_path, capsys) -> None:
     register_api_provider(create_faux_provider(lambda m, c: text_response_events(m, "plain reply")))
     app = CodingApp(cwd=str(tmp_path), model=faux_model(), enable_tui=False)
