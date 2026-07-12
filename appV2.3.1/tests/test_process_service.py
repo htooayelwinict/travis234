@@ -129,6 +129,12 @@ class FakeProcessTransport:
         if signal_name in self._exit_on_signals:
             self.exit(-9 if signal_name == "kill" else -15)
 
+    def refresh_tree(self) -> None:
+        pass
+
+    def signal_tree(self, signal_name: str) -> None:
+        self.signal_group(signal_name)
+
     def close(self) -> None:
         self.closed = True
         self.reader.close()

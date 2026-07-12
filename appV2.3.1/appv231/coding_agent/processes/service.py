@@ -67,6 +67,7 @@ class _ManagedProcess:
         self.transport = transport
         self.output = output
         self.started_at = started_at
+        self.next_tree_refresh_at = started_at
         self.state = ProcessState.RUNNING
         self.stop_cause: StopCause | None = None
         self.exit_code: int | None = None
@@ -331,7 +332,7 @@ class ProcessSessionService:
             cursor = record.output.size
             with record.condition:
                 self._require_running(record, "interrupt")
-                record.transport.signal_group("interrupt")
+                record.transport.signal_tree("interrupt")
                 record.wakeup.set()
             return self._wait_after_control(record, cursor, wait_ms)
 
@@ -599,6 +600,10 @@ class ProcessSessionService:
                 else None
             )
             while True:
+                now = self._clock()
+                if now >= record.next_tree_refresh_at:
+                    record.transport.refresh_tree()
+                    record.next_tree_refresh_at = now + 0.1
                 exit_code = record.transport.poll()
                 if exit_code is not None or record.force_finalize.is_set():
                     break
@@ -656,7 +661,7 @@ class ProcessSessionService:
                 record.condition.wait(min(0.02, max(0, deadline - self._clock())))
         if record.reader_count:
             try:
-                record.transport.signal_group("kill")
+                record.transport.signal_tree("kill")
             except BaseException as error:  # noqa: BLE001 - descriptor cleanup still runs.
                 with record.condition:
                     record.output_error = str(error)
@@ -742,7 +747,7 @@ class ProcessSessionService:
                     return
                 record.kill_sent = True
         try:
-            record.transport.signal_group(signal_name)  # type: ignore[arg-type]
+            record.transport.signal_tree(signal_name)  # type: ignore[arg-type]
         except BaseException as error:  # noqa: BLE001 - monitor still observes process state.
             with record.condition:
                 record.input_error = str(error)

@@ -11,6 +11,7 @@ import threading
 from pathlib import Path
 
 from appv231.coding_agent.execution_backend import ExecutionBackend
+from appv231.coding_agent.processes.containment import ProcessTreeController
 from appv231.coding_agent.processes.transport import ProcessTransport, SignalName
 from appv231.coding_agent.processes.types import ProcessLaunchRequest, ProcessStateError
 
@@ -24,6 +25,7 @@ class _PipeTransport(ProcessTransport):
         self._close_lock = threading.Lock()
         self._closed = False
         self._stdin_closed = False
+        self._tree = ProcessTreeController(process.pid)
 
     def read_sources(self):
         return tuple(source for source in (self._process.stdout, self._process.stderr) if source is not None)
@@ -55,6 +57,13 @@ class _PipeTransport(ProcessTransport):
 
     def signal_group(self, signal_name: SignalName) -> None:
         _signal_process_group(self._process, signal_name)
+
+    def refresh_tree(self) -> None:
+        self._tree.refresh()
+
+    def signal_tree(self, signal_name: SignalName) -> None:
+        _signal_process_group(self._process, signal_name)
+        self._tree.signal(signal_name)
 
     def close(self) -> None:
         with self._close_lock:
@@ -125,6 +134,7 @@ class _PTYTransport(ProcessTransport):
         self._stdin_closed = False
         self._close_lock = threading.Lock()
         self._closed = False
+        self._tree = ProcessTreeController(process.pid)
 
     def read_sources(self):
         return (self._endpoint,)
@@ -154,6 +164,13 @@ class _PTYTransport(ProcessTransport):
 
     def signal_group(self, signal_name: SignalName) -> None:
         _signal_process_group(self._process, signal_name)
+
+    def refresh_tree(self) -> None:
+        self._tree.refresh()
+
+    def signal_tree(self, signal_name: SignalName) -> None:
+        _signal_process_group(self._process, signal_name)
+        self._tree.signal(signal_name)
 
     def close(self) -> None:
         with self._close_lock:

@@ -12,6 +12,7 @@ from unittest.mock import patch
 import pytest
 
 from appv231.coding_agent.execution_backend import ExecutionBackend, TrustedLocalBackend
+from appv231.coding_agent.processes.containment import ProcessTreeController
 from appv231.coding_agent.processes.local import create_local_process_transport
 from appv231.coding_agent.processes.service import ProcessSessionService
 from appv231.coding_agent.processes.types import (
@@ -277,3 +278,84 @@ def test_local_transport_rejects_pty_on_non_posix(tmp_path: Path) -> None:
     with patch("appv231.coding_agent.processes.local.os.name", "nt"):
         with pytest.raises(RuntimeError, match="PTY mode requires POSIX"):
             create_local_process_transport(launch, TrustedLocalBackend())
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process-tree containment requires POSIX")
+def test_timeout_kills_descendant_that_calls_setsid(tmp_path: Path, owner) -> None:
+    service = ProcessSessionService(
+        directory=tmp_path / "processes",
+        termination_grace_seconds=0.1,
+        drain_timeout_seconds=0.5,
+    )
+    pid_file = tmp_path / "escaped.pid"
+    child = (
+        "import os,pathlib,time; os.setsid(); "
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid())); time.sleep(60)"
+    )
+    parent = (
+        "import subprocess,sys,time; "
+        f"subprocess.Popen([sys.executable,'-c',{child!r}]); time.sleep(60)"
+    )
+    escaped_pid: int | None = None
+    try:
+        started = service.start(
+            owner,
+            request(python_command(parent), tmp_path, timeout=0.4),
+            local_factory(),
+            yield_time_ms=0,
+        )
+        deadline = time.monotonic() + 2
+        while not pid_file.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        escaped_pid = int(pid_file.read_text())
+        terminal, _output = collect_until_terminal(service, owner, started)
+
+        assert terminal.state is ProcessState.TIMED_OUT
+        deadline = time.monotonic() + 3
+        while _process_is_live(escaped_pid) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert not _process_is_live(escaped_pid)
+    finally:
+        service.close()
+        if escaped_pid is not None and _process_is_live(escaped_pid):
+            os.kill(escaped_pid, signal.SIGKILL)
+
+
+def test_process_tree_skips_reused_pid(monkeypatch) -> None:
+    sent: list[tuple[int, int]] = []
+
+    class FakeProcess:
+        def __init__(self, pid: int, created: float, *, children=(), parents=()) -> None:
+            self.pid = pid
+            self.created = created
+            self.child_items = list(children)
+            self.parent_items = list(parents)
+
+        def create_time(self) -> float:
+            return self.created
+
+        def children(self, recursive: bool = False):
+            return list(self.child_items)
+
+        def parents(self):
+            return list(self.parent_items)
+
+        def send_signal(self, selected: int) -> None:
+            sent.append((self.pid, selected))
+
+    root = FakeProcess(1, 10.0)
+    original_child = FakeProcess(2, 20.0, parents=[root])
+    root.child_items = [original_child]
+    processes = {1: root, 2: original_child}
+    monkeypatch.setattr(
+        "appv231.coding_agent.processes.containment.psutil.Process",
+        lambda pid: processes[pid],
+    )
+    controller = ProcessTreeController(1)
+    controller.refresh()
+
+    root.child_items = []
+    processes[2] = FakeProcess(2, 30.0)
+    controller.signal("kill")
+
+    assert all(pid != 2 for pid, _signal in sent)
