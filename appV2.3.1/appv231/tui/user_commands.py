@@ -157,6 +157,12 @@ class UserCommandController:
     def interrupt_focused(self) -> bool:
         with self._lock:
             state = self._states.get(self._focused_id or "")
+            command_id = state.handle.command_id if state is not None else None
+        return self.interrupt(command_id) if command_id is not None else False
+
+    def interrupt(self, command_id: str) -> bool:
+        with self._lock:
+            state = self._states.get(command_id)
             if state is None or state.done or state.interrupt_requested:
                 return False
             state.interrupt_requested = True
@@ -212,6 +218,7 @@ class UserCommandController:
                 state.signal,
             )
             if resolved.result is not None:
+                self._emit_output(state, resolved.result.output)
                 self._finalize_result(state, resolved.result)
             elif resolved.custom_runner is not None:
                 result = resolved.custom_runner(

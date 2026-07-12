@@ -4023,7 +4023,7 @@ def test_interactive_mode_terminal_process_offers_only_refresh(tmp_path, monkeyp
         mode._run_processes_command()
 
         assert seen[1] == ("Process action", ["Refresh"])
-        assert len(seen[0][1][0]) <= 13 + len(" | exited | 1s | tty | ") + 80
+        assert len(seen[0][1][0]) <= len("agent | ") + 13 + len(" | exited | 1s | tty | ") + 80
     finally:
         mode.footer_data_provider.dispose()
         app.close()
@@ -5731,6 +5731,142 @@ def test_interactive_mode_bang_runs_bash_without_model_and_records_context(tmp_p
     )
     assert "printf hi" in converted_text
     assert "printf secret" not in converted_text
+
+
+def test_bang_runs_while_agent_executor_is_occupied(tmp_path) -> None:
+    terminal = FakeTerminal(columns=120)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+    turn_started = threading.Event()
+    release_turn = threading.Event()
+    future = mode._command_executor().submit(
+        "turn",
+        lambda: (turn_started.set(), release_turn.wait(timeout=2)),
+    )
+    assert turn_started.wait(timeout=1)
+    try:
+        started = time.monotonic()
+        mode._run_bash_command("printf user", exclude_from_context=False)
+
+        assert time.monotonic() - started < 0.25
+        assert release_turn.is_set() is False
+        assert _wait_until(
+            lambda: (mode.tui.drain_dispatcher() or True)
+            and "user" in strip_ansi("\n".join(mode.history.render(120)))
+        )
+    finally:
+        release_turn.set()
+        future.result(timeout=1)
+        mode._user_commands.close()
+        mode.tui.drain_dispatcher()
+        mode._command_executor().close()
+        mode.footer_data_provider.dispose()
+        app.close()
+
+
+def test_slow_user_bash_extension_resolution_does_not_block_input(tmp_path) -> None:
+    terminal = FakeTerminal(columns=120)
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_handler(event):
+        entered.set()
+        release.wait(timeout=2)
+        return {
+            "result": BashResult("extension done", 0, False, False),
+        }
+
+    app.session.extension_runner.on("user_bash", slow_handler)
+    try:
+        started = time.monotonic()
+        mode._run_bash_command("printf extension", exclude_from_context=False)
+
+        assert time.monotonic() - started < 0.25
+        assert entered.wait(timeout=1)
+        mode._run_allow_command("package-install", 1)
+        assert app.session._turn_capabilities.remaining("package_mutation") == 1
+    finally:
+        release.set()
+        mode._user_commands.close()
+        mode.tui.drain_dispatcher()
+        if mode._session_commands is not None:
+            mode._session_commands.close()
+        mode.footer_data_provider.dispose()
+        app.close()
+
+
+def test_bang_completion_records_against_launch_session_after_resume(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    agent_dir = tmp_path / "agent"
+    catalog = SessionCatalog(str(agent_dir))
+    first_path, first_id = catalog.new_session_path(str(workspace), "first-bang")
+    second_path, second_id = catalog.new_session_path(str(workspace), "second-bang")
+    second_store = SessionStore(second_path, cwd=str(workspace), session_id=second_id)
+    second_store.append_model_change("faux", "faux-model")
+    second_store.append_thinking_level_change("off")
+    second_store.append_message(UserMessage(content="second session", timestamp=now_ms()))
+    app = CodingApp(
+        cwd=str(workspace),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=120),
+        enable_tui=True,
+        session_path=first_path,
+        session_id=first_id,
+        agent_dir=str(agent_dir),
+    )
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+    entered = threading.Event()
+    release = threading.Event()
+
+    def execute(command, cwd, options):
+        entered.set()
+        release.wait(timeout=2)
+        options.on_data(b"launch-session-output")
+        return {"exit_code": 0}
+
+    app.session.extension_runner.on(
+        "user_bash",
+        lambda event: {"operations": BashOperations(exec=execute)},
+    )
+    try:
+        mode._run_bash_command("delayed", exclude_from_context=False)
+        assert entered.wait(timeout=1)
+
+        app.switch_session(second_path)
+        release.set()
+        assert _wait_until(
+            lambda: (mode.tui.drain_dispatcher() or True)
+            and mode._user_commands is not None
+            and not mode._user_commands.list()
+        )
+        mode.tui.drain_dispatcher()
+        if mode._session_commands is not None:
+            mode._session_commands.close()
+
+        first_messages = SessionStore(first_path, cwd=str(workspace)).build_context().messages
+        second_messages = SessionStore(second_path, cwd=str(workspace)).build_context().messages
+        assert any(
+            getattr(message, "role", None) == "bashExecution"
+            and "launch-session-output" in message.output
+            for message in first_messages
+        )
+        assert not any(
+            getattr(message, "role", None) == "bashExecution"
+            and "launch-session-output" in message.output
+            for message in second_messages
+        )
+    finally:
+        release.set()
+        if mode._user_commands is not None:
+            mode._user_commands.close()
+        mode.tui.drain_dispatcher()
+        if mode._session_commands is not None:
+            mode._session_commands.close()
+        mode.footer_data_provider.dispose()
+        app.close()
 
 
 def test_interactive_mode_bang_uses_user_bash_extension_result(tmp_path) -> None:

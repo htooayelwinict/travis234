@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import time
 import uuid
 from pathlib import Path
@@ -26,8 +27,10 @@ from appv231.coding_agent.config import get_agent_dir
 from appv231.coding_agent.settings_manager import SettingsManager
 from appv231.coding_agent.provider_control_plane import ProviderControlPlane
 from appv231.coding_agent.processes.completions import ProcessCompletionStore
+from appv231.coding_agent.processes.local import create_local_process_transport
 from appv231.coding_agent.processes.service import ProcessSessionService
-from appv231.coding_agent.processes.types import ProcessOwner
+from appv231.coding_agent.processes.types import ProcessLaunchRequest, ProcessOwner
+from appv231.coding_agent.tools.bash import get_shell_env
 from appv231.coding_agent.session_catalog import SessionCatalog
 from appv231.coding_agent.session_store import SessionStore
 from appv231.compaction.compressor import ContextCompressor, estimate_tokens
@@ -322,6 +325,35 @@ class CodingApp:
 
     def process_owner(self, origin: Literal["agent", "user"] = "agent") -> ProcessOwner:
         return self._process_owner_for(self.cwd, origin=origin)
+
+    def user_command_request(
+        self,
+        command: str,
+        *,
+        session: AgentSession,
+        command_prefix: str | None = None,
+        shell_path: str | None = None,
+    ) -> ProcessLaunchRequest:
+        prefix = (
+            command_prefix
+            if command_prefix is not None
+            else session._settings_shell_command_prefix()
+        )
+        resolved_command = f"{prefix}\n{command}" if prefix else command
+        shell = shell_path or session._settings_shell_path() or os.environ.get("SHELL") or "/bin/bash"
+        return ProcessLaunchRequest(
+            command=resolved_command,
+            cwd=session.cwd,
+            env=get_shell_env(),
+            shell_path=shell,
+            launch_session_id=session.session_id or None,
+        )
+
+    @staticmethod
+    def user_command_transport(request: ProcessLaunchRequest):
+        from appv231.coding_agent.execution_backend import select_execution_backend
+
+        return create_local_process_transport(request, select_execution_backend(request.cwd))
 
     def _process_owner_for(
         self,

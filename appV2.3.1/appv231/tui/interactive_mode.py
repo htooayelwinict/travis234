@@ -24,9 +24,12 @@ from appv231.ai.providers.capabilities import ProviderParamWarning
 from appv231.ai.providers.model_catalog import get_last_openrouter_live_catalog_error, get_live_openrouter_models
 from appv231.ai.providers.params import GenerationParams, compact_generation_params_display
 from appv231.compaction import estimate_tokens
+from appv231.coding_agent.agent_session import BashResult
 from appv231.coding_agent.session_catalog import SessionInfo
 from appv231.coding_agent.session_commands import SessionCommandExecutor
 from appv231.coding_agent.processes.types import ProcessEvent, ProcessSnapshot, ProcessState
+from appv231.coding_agent.tools.bash import BashExecOptions, get_shell_env
+from appv231.coding_agent.tools.output_spool import OutputSpool
 from appv231.tui.component import (
     CombinedAutocompleteProvider,
     Component,
@@ -46,6 +49,12 @@ from appv231.tui.interactive import (
     user_message_to_component,
 )
 from appv231.tui.model_loader import ModelCatalogLoader
+from appv231.tui.user_commands import (
+    ResolvedUserCommand,
+    UserCommandBinding,
+    UserCommandController,
+    UserCommandHandle,
+)
 
 
 InputFn = Callable[[str], str]
@@ -119,6 +128,31 @@ class InteractiveMode:
         self._unsubscribe_process_events: Callable[[], None] | None = None
         self._notified_processes: set[str] = set()
         self._process_cursors: dict[str, int] = {}
+        self._user_command_components: dict[str, BashExecutionComponent] = {}
+        self._user_command_order: list[str] = []
+        self._completed_user_commands: dict[
+            str, tuple[UserCommandHandle, BashResult] | None
+        ] = {}
+        self._user_commands: UserCommandController | None = None
+        if all(
+            hasattr(self.app, name)
+            for name in ("process_service", "process_owner", "user_command_transport")
+        ):
+            self._user_commands = UserCommandController(
+                service=self.app.process_service,
+                owner_factory=lambda: self.app.process_owner(origin="user"),
+                resolver=self._resolve_user_command,
+                transport_factory=self.app.user_command_transport,
+                on_output=lambda command_id, text: self.tui.post(
+                    lambda: self._append_user_command_output(command_id, text)
+                ),
+                on_complete=lambda handle, result: self.tui.post(
+                    lambda: self._finish_user_command(handle, result)
+                ),
+                on_error=lambda handle, message: self.tui.post(
+                    lambda: self._fail_user_command(handle.command_id, message)
+                ),
+            )
         self.built_in_header = Text(self._startup_text())
         self.header_container = Container([self.built_in_header, Spacer(1)])
         self.custom_header: object | None = None
@@ -427,6 +461,9 @@ class InteractiveMode:
                 self._start_turn_thread(prompt, before_compressions, before_tokens)
         finally:
             self._shutdown_requested = True
+            if self._user_commands is not None:
+                self._user_commands.close()
+            self.tui.drain_dispatcher()
             self._wait_for_active_turn()
             self.tui.drain_dispatcher()
             self._run_loop_active = False
@@ -1018,17 +1055,52 @@ class InteractiveMode:
             self.history.add(StatusLine("Managed process service is unavailable.", kind="error"))
             self.tui.request_render()
             return
-        owner = owner_factory()
-        snapshots = list(service.list(owner))
-        if not snapshots:
+        rows: list[tuple[object, ProcessSnapshot]] = []
+        seen_process_ids: set[str] = set()
+        for owner in (owner_factory(origin="agent"), owner_factory(origin="user")):
+            for snapshot in service.list(owner):
+                if snapshot.session_id in seen_process_ids:
+                    continue
+                seen_process_ids.add(snapshot.session_id)
+                rows.append((owner, snapshot))
+        controller_rows = [
+            inspection
+            for inspection in (self._user_commands.list() if self._user_commands is not None else ())
+            if inspection.process_id is None or inspection.process_id not in seen_process_ids
+        ]
+        if not rows and not controller_rows:
             self.history.add(StatusLine("No managed processes for this workspace.", kind="process"))
             self.tui.request_render()
             return
-        labels = [self._process_label(snapshot) for snapshot in snapshots]
+        labels = [self._process_label(snapshot, owner.origin) for owner, snapshot in rows]
+        labels.extend(
+            f"user | {inspection.handle.command_id[:13]} | starting | custom | "
+            f"{_short_status_text(inspection.handle.command, limit=80)}"
+            for inspection in controller_rows
+        )
         selected = self.prompt_extension_select("Managed processes", labels, kind="process")
         if selected is None:
             return
-        snapshot = snapshots[labels.index(selected)]
+        selected_index = labels.index(selected)
+        if selected_index >= len(rows):
+            inspection = controller_rows[selected_index - len(rows)]
+            action = self.prompt_extension_select(
+                "Process action",
+                ["Interrupt"],
+                kind="process",
+            )
+            if action == "Interrupt":
+                assert self._user_commands is not None
+                self._user_commands.interrupt(inspection.handle.command_id)
+                self.history.add(
+                    StatusLine(
+                        f"Interrupting user command {inspection.handle.command_id}",
+                        kind="process",
+                    )
+                )
+                self.tui.request_render()
+            return
+        owner, snapshot = rows[selected_index]
         actions = self._process_actions(snapshot.state)
         action = self.prompt_extension_select("Process action", actions, kind="process")
         if action is None:
@@ -1061,11 +1133,11 @@ class InteractiveMode:
         return ["Refresh"]
 
     @staticmethod
-    def _process_label(snapshot: ProcessSnapshot) -> str:
+    def _process_label(snapshot: ProcessSnapshot, origin: str = "agent") -> str:
         mode = "tty" if snapshot.tty else "pipe"
         elapsed = max(0, snapshot.elapsed_ms // 1000)
         command = _short_status_text(snapshot.command, limit=80)
-        return f"{snapshot.session_id[:13]} | {snapshot.state.value} | {elapsed}s | {mode} | {command}"
+        return f"{origin} | {snapshot.session_id[:13]} | {snapshot.state.value} | {elapsed}s | {mode} | {command}"
 
     def _render_process_snapshot(self, snapshot: ProcessSnapshot) -> None:
         if snapshot.output:
@@ -1082,7 +1154,10 @@ class InteractiveMode:
         if self._shutdown_requested or not event.state.terminal or event.session_id in self._notified_processes:
             return
         owner_factory = getattr(self.app, "process_owner", None)
-        if not callable(owner_factory) or event.owner != owner_factory():
+        if not callable(owner_factory) or event.owner not in {
+            owner_factory(origin="agent"),
+            owner_factory(origin="user"),
+        }:
             return
         self._notified_processes.add(event.session_id)
         exit_text = f" ({event.exit_code})" if event.exit_code is not None else ""
@@ -1573,64 +1648,169 @@ class InteractiveMode:
         self.tui.request_render()
 
     def _run_bash_command(self, command: str, *, exclude_from_context: bool) -> None:
-        extension_result = self.app.session.extension_runner.emit_user_bash(
-            {
-                "type": "user_bash",
-                "command": command,
-                "excludeFromContext": exclude_from_context,
-                "cwd": str(self.app.cwd),
-            }
-        )
         component = BashExecutionComponent(command, exclude_from_context=exclude_from_context)
         self.history.add(component)
         self.status.set_message("Running bash")
         self._refresh_footer()
         self.tui.request_render()
-
-        if isinstance(extension_result, dict) and extension_result.get("result") is not None:
-            result = extension_result["result"]
-            if getattr(result, "output", None):
-                component.append_output(result.output)
-            component.set_complete(result.exit_code, result.cancelled, result.truncated, result.full_output_path)
-            self._run_session_command(
-                "record-bash",
-                lambda: self.app.session.record_bash_result(
-                    command,
-                    result,
-                    {"excludeFromContext": exclude_from_context},
-                ),
-            )
-            self.status.set_message("Running" if self._is_turn_active() else "Idle")
-            self._refresh_footer()
-            self.tui.request_render()
-            return
-
-        def on_chunk(chunk: str) -> None:
-            self.tui.post(lambda: (component.append_output(chunk), self.tui.request_render()))
-
         try:
-            options = {"excludeFromContext": exclude_from_context}
-            if isinstance(extension_result, dict) and extension_result.get("operations") is not None:
-                options["operations"] = extension_result["operations"]
-            if isinstance(extension_result, dict):
-                for key in ("commandPrefix", "command_prefix", "shellPath", "shell_path"):
-                    if extension_result.get(key) is not None:
-                        options[key] = extension_result[key]
-            result = self._run_session_command(
-                "bash",
-                lambda: self.app.session.execute_bash(
-                    command,
-                    on_chunk,
-                    options,
-                ),
+            if self._user_commands is None:
+                raise RuntimeError("User command controller is unavailable")
+            binding = UserCommandBinding(
+                session=self.app.session,
+                session_id=self.app.session.session_id or None,
+                session_path=self.app.session.session_path,
+                exclude_from_context=exclude_from_context,
             )
-            component.set_complete(result.exit_code, result.cancelled, result.truncated, result.full_output_path)
+            handle = self._user_commands.start(command, binding)
+            self._user_command_components[handle.command_id] = component
+            self._user_command_order.append(handle.command_id)
         except Exception as error:  # noqa: BLE001 - user bash errors are rendered in the TUI
             component.set_complete(None, False)
             self.history.add(StatusLine(f"Bash command failed: {error}", kind="error"))
-        self.status.set_message("Running" if self._is_turn_active() else "Idle")
+
+    def _resolve_user_command(
+        self,
+        command: str,
+        binding: UserCommandBinding,
+        signal,
+    ) -> ResolvedUserCommand:
+        session = binding.session
+        extension_result = session.extension_runner.emit_user_bash(
+            {
+                "type": "user_bash",
+                "command": command,
+                "excludeFromContext": binding.exclude_from_context,
+                "cwd": str(session.cwd),
+            }
+        )
+        if isinstance(extension_result, dict) and extension_result.get("result") is not None:
+            return ResolvedUserCommand.immediate(extension_result["result"])
+
+        command_prefix = None
+        shell_path = None
+        operations = None
+        if isinstance(extension_result, dict):
+            operations = extension_result.get("operations")
+            command_prefix = extension_result.get("commandPrefix", extension_result.get("command_prefix"))
+            shell_path = extension_result.get("shellPath", extension_result.get("shell_path"))
+        if operations is not None:
+            return ResolvedUserCommand.custom(
+                lambda abort, on_output: self._run_custom_user_command(
+                    command,
+                    binding,
+                    operations,
+                    command_prefix,
+                    abort,
+                    on_output,
+                )
+            )
+        return ResolvedUserCommand.managed(
+            self.app.user_command_request(
+                command,
+                session=session,
+                command_prefix=command_prefix,
+                shell_path=shell_path,
+            )
+        )
+
+    @staticmethod
+    def _run_custom_user_command(
+        command: str,
+        binding: UserCommandBinding,
+        operations,
+        command_prefix: str | None,
+        signal,
+        on_output: Callable[[str], None],
+    ) -> BashResult:
+        resolved_command = f"{command_prefix}\n{command}" if command_prefix else command
+        output = OutputSpool(
+            temp_file_prefix="pi-user-bash",
+            artifact_registry=binding.session._artifacts,
+            artifact_kind="user-bash-output",
+        )
+        exit_code = None
+        cancelled = False
+
+        def on_data(data: bytes) -> None:
+            output.append(data)
+            on_output(data.decode("utf-8", errors="replace"))
+
+        try:
+            result = operations.exec(
+                resolved_command,
+                binding.session.cwd,
+                BashExecOptions(on_data=on_data, signal=signal, env=get_shell_env()),
+            )
+            exit_code = result.get("exit_code")
+        except RuntimeError as error:
+            cancelled = str(error) == "aborted" or signal.aborted
+            if not cancelled:
+                raise
+        finally:
+            output.finish()
+        snapshot = output.snapshot(persist_if_truncated=True)
+        output.close()
+        return BashResult(
+            output=snapshot.content,
+            exit_code=exit_code,
+            cancelled=cancelled,
+            truncated=snapshot.truncation.truncated,
+            full_output_path=snapshot.full_output_path,
+        )
+
+    def _append_user_command_output(self, command_id: str, text: str) -> None:
+        component = self._user_command_components.get(command_id)
+        if component is not None:
+            component.append_output(text)
+            self.tui.request_render()
+
+    def _finish_user_command(self, handle: UserCommandHandle, result: BashResult) -> None:
+        component = self._user_command_components.pop(handle.command_id, None)
+        if component is not None:
+            component.set_complete(
+                result.exit_code,
+                result.cancelled,
+                result.truncated,
+                result.full_output_path,
+            )
+        self._completed_user_commands[handle.command_id] = (handle, result)
+        self._flush_completed_user_command_records()
+        has_user_commands = self._user_commands is not None and bool(self._user_commands.list())
+        self.status.set_message("Running bash" if has_user_commands else "Running" if self._is_turn_active() else "Idle")
         self._refresh_footer()
         self.tui.request_render()
+
+    def _fail_user_command(self, command_id: str, message: str) -> None:
+        component = self._user_command_components.pop(command_id, None)
+        if component is not None:
+            component.set_complete(None, False)
+        self.history.add(StatusLine(f"Bash command failed: {message}", kind="error"))
+        self._completed_user_commands[command_id] = None
+        self._flush_completed_user_command_records()
+        has_user_commands = self._user_commands is not None and bool(self._user_commands.list())
+        self.status.set_message("Running bash" if has_user_commands else "Running" if self._is_turn_active() else "Idle")
+        self._refresh_footer()
+        self.tui.request_render()
+
+    def _flush_completed_user_command_records(self) -> None:
+        while self._user_command_order:
+            command_id = self._user_command_order[0]
+            if command_id not in self._completed_user_commands:
+                return
+            self._user_command_order.pop(0)
+            completed = self._completed_user_commands.pop(command_id)
+            if completed is None:
+                continue
+            handle, result = completed
+            self._command_executor().submit(
+                "record-user-bash",
+                lambda handle=handle, result=result: handle.binding.session.record_bash_result(
+                    handle.command,
+                    result,
+                    {"excludeFromContext": handle.binding.exclude_from_context},
+                ),
+            )
 
     def _render_auto_compaction_notice(self, before_compressions: int, before_tokens: int) -> None:
         after_compressions = self.app.compaction.compressor.compression_count
