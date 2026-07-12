@@ -25,6 +25,7 @@ from appv231.coding_agent.branch_summarization import SUMMARIZATION_SYSTEM_PROMP
 from appv231.coding_agent.config import get_agent_dir
 from appv231.coding_agent.settings_manager import SettingsManager
 from appv231.coding_agent.provider_control_plane import ProviderControlPlane
+from appv231.coding_agent.processes.completions import ProcessCompletionStore
 from appv231.coding_agent.processes.service import ProcessSessionService
 from appv231.coding_agent.processes.types import ProcessOwner
 from appv231.coding_agent.session_catalog import SessionCatalog
@@ -119,7 +120,14 @@ class CodingApp:
         self._tool_loop_guardrails = tool_loop_guardrails
         self._agent_dir = str(Path(agent_dir or get_agent_dir()).expanduser().resolve())
         self._app_instance_id = uuid.uuid4().hex
-        self.process_service = ProcessSessionService()
+        self.process_completion_store = ProcessCompletionStore(
+            Path(self._agent_dir) / "process-results"
+        )
+        self.process_service = ProcessSessionService(
+            completion_store=self.process_completion_store,
+            max_active_per_owner=4,
+            max_active_total=16,
+        )
         self._closed = False
         configured_session_dir = _call_setting(self._settings_manager, "getSessionDir", "get_session_dir")
         self.session_catalog = SessionCatalog(
@@ -343,6 +351,11 @@ class CodingApp:
                 first_error = error
         try:
             self.session_runtime.dispose()
+        except BaseException as error:  # noqa: BLE001
+            if first_error is None:
+                first_error = error
+        try:
+            self.process_completion_store.close()
         except BaseException as error:  # noqa: BLE001
             if first_error is None:
                 first_error = error

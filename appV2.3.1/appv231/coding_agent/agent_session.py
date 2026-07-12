@@ -1222,6 +1222,7 @@ class AgentSession:
                 {
                     "process_service": self.process_service,
                     "process_owner": self.process_owner,
+                    "launch_session_id": self.session_id or None,
                     "transport_factory": lambda request: create_local_process_transport(
                         request,
                         self.execution_backend,

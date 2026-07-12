@@ -112,6 +112,7 @@ def test_managed_bash_default_yield_is_independent_from_timeout(tmp_path: Path) 
         process_service=service,
         process_owner=owner,
         transport_factory=lambda _request: None,
+        launch_session_id="session-abc",
     )
 
     result = definition.execute("call", {"command": "true", "timeout": 600})
@@ -119,6 +120,7 @@ def test_managed_bash_default_yield_is_independent_from_timeout(tmp_path: Path) 
     assert text(result) == "ok"
     assert service.yield_time_ms == 10_000
     assert service.request.timeout_seconds == 600
+    assert service.request.launch_session_id == "session-abc"
 
 
 @pytest.mark.parametrize(

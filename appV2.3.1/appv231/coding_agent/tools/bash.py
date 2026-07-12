@@ -301,6 +301,7 @@ def _execute_bash(
     process_service: ProcessSessionService | None,
     process_owner: ProcessOwner | None,
     transport_factory: ProcessTransportFactory | None,
+    launch_session_id: str | None,
     tool_call_id,
     args,
     signal=None,
@@ -319,6 +320,7 @@ def _execute_bash(
             spawn_context,
             shell_path,
             artifacts,
+            launch_session_id,
             args,
             signal,
             on_update,
@@ -411,6 +413,7 @@ def _execute_managed_bash(
     spawn_context: BashSpawnContext,
     shell_path: str | None,
     artifacts: ArtifactRegistry | None,
+    launch_session_id: str | None,
     args,
     signal,
     on_update,
@@ -465,6 +468,7 @@ def _execute_managed_bash(
             rows=rows,
             cols=cols,
             timeout_seconds=timeout,
+            launch_session_id=launch_session_id,
         ),
         transport_factory,
         yield_time_ms=yield_time_ms,
@@ -554,6 +558,7 @@ def create_bash_tool_definition(
     process_service: ProcessSessionService | None = None,
     process_owner: ProcessOwner | None = None,
     transport_factory: ProcessTransportFactory | None = None,
+    launch_session_id: str | None = None,
 ) -> ToolDefinition:
     use_managed_process = operations is None and process_service is not None
     ops = operations or create_local_bash_operations(shell_path=shell_path, backend=backend)
@@ -579,6 +584,7 @@ def create_bash_tool_definition(
             process_service if use_managed_process else None,
             process_owner if use_managed_process else None,
             transport_factory if use_managed_process else None,
+            launch_session_id if use_managed_process else None,
             tid,
             args,
             signal,
@@ -600,6 +606,7 @@ def create_bash_tool(
     process_service: ProcessSessionService | None = None,
     process_owner: ProcessOwner | None = None,
     transport_factory: ProcessTransportFactory | None = None,
+    launch_session_id: str | None = None,
 ) -> AgentTool:
     return wrap_tool_definition(
         create_bash_tool_definition(
@@ -613,6 +620,7 @@ def create_bash_tool(
             process_service=process_service,
             process_owner=process_owner,
             transport_factory=transport_factory,
+            launch_session_id=launch_session_id,
         ),
         lambda: ToolContext(cwd=cwd),
     )

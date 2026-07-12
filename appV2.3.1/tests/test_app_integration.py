@@ -133,6 +133,41 @@ def test_coding_app_hides_old_workspace_process_after_cross_workspace_resume(tmp
         app.close()
 
 
+def test_new_app_instance_recovers_terminal_process_completion(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    agent_dir = tmp_path / "agent"
+    first = CodingApp(
+        cwd=str(workspace),
+        model=faux_model(),
+        enable_tui=False,
+        agent_dir=str(agent_dir),
+    )
+    bash = first.session.get_tool_definition("bash")
+    assert bash is not None
+    result = bash.execute(
+        "managed",
+        {"command": _python_command("print('done', end='')"), "yield_time_ms": 2_000},
+    )
+    process_id = result.details["sessionId"]
+    first.close()
+
+    second = CodingApp(
+        cwd=str(workspace),
+        model=faux_model(),
+        enable_tui=False,
+        agent_dir=str(agent_dir),
+    )
+    try:
+        recovered = second.process_service.poll(second.process_owner(), process_id, 0, wait_ms=0)
+
+        assert recovered.state is ProcessState.EXITED
+        assert recovered.output == "done"
+        assert recovered.durable_output is True
+    finally:
+        second.close()
+
+
 def test_end_to_end_coding_app_read_tool_and_render(tmp_path: Path) -> None:
     (tmp_path / "notes.txt").write_text("integration body", encoding="utf-8")
     model = faux_model()
