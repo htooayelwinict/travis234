@@ -857,3 +857,32 @@ def test_live_budget_evicts_durable_terminal_before_limiting_active_producer(
     finally:
         service.close()
         store.close()
+
+
+def test_inspect_many_returns_metadata_without_command_or_output(service, owner) -> None:
+    transport = FakeProcessTransport(initial_output=b"private output")
+    started = service.start(
+        owner,
+        request("secret command"),
+        Factory(transport),
+        yield_time_ms=0,
+    )
+    eventually(lambda: service.poll(owner, started.session_id, 0, wait_ms=0).output_size > 0)
+
+    inspected = service.inspect_many(owner, [started.session_id])[0]
+
+    assert inspected is not None
+    assert inspected.state is ProcessState.RUNNING
+    assert inspected.output == ""
+    assert inspected.command == ""
+    assert inspected.cwd == ""
+    assert inspected.cursor == inspected.output_size
+
+
+def test_inspect_many_validates_bounded_unique_process_ids(service, owner) -> None:
+    with pytest.raises(ValueError, match="unique"):
+        service.inspect_many(owner, ["proc_" + "a" * 32] * 2)
+    with pytest.raises(ValueError, match="invalid"):
+        service.inspect_many(owner, ["proc_invalid"])
+    with pytest.raises(ValueError, match="at most 64"):
+        service.inspect_many(owner, [f"proc_{index:032x}" for index in range(65)])

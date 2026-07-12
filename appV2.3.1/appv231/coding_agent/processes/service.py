@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import queue
+import re
 import secrets
 import shutil
 import tempfile
@@ -43,6 +44,7 @@ from appv231.coding_agent.processes.types import (
 ProcessTransportFactory = Callable[[ProcessLaunchRequest], ProcessTransport]
 ProcessListener = Callable[[ProcessEvent], None]
 ProcessOutputListener = Callable[[ProcessSnapshot], None]
+_PROCESS_ID = re.compile(r"^proc_[0-9a-f]{32}$")
 
 
 @dataclass(frozen=True)
@@ -375,6 +377,57 @@ class ProcessSessionService:
         finally:
             for record in records:
                 self._release_record_call(record)
+
+    def inspect(self, owner: ProcessOwner, session_id: str) -> ProcessSnapshot | None:
+        try:
+            with self._record_call(owner, session_id) as record:
+                return self._metadata_snapshot(record)
+        except ProcessNotFoundError:
+            return self._inspect_completion(owner, session_id)
+
+    def inspect_many(
+        self,
+        owner: ProcessOwner,
+        session_ids,
+    ) -> tuple[ProcessSnapshot | None, ...]:
+        ids = tuple(session_ids)
+        if len(ids) > 64:
+            raise ValueError("inspect_many accepts at most 64 process IDs")
+        if len(set(ids)) != len(ids):
+            raise ValueError("inspect_many requires unique process IDs")
+        if any(not isinstance(value, str) or _PROCESS_ID.fullmatch(value) is None for value in ids):
+            raise ValueError("inspect_many received an invalid process ID")
+        if not ids:
+            return ()
+        self._prune()
+        acquired: dict[str, _ManagedProcess] = {}
+        with self._lock:
+            if self._closed:
+                raise ProcessClosedError("Process service is closed")
+            for session_id in ids:
+                record = self._records.get(session_id)
+                if record is None or record.owner != owner:
+                    continue
+                with record.condition:
+                    record.active_calls += 1
+                acquired[session_id] = record
+        live: dict[str, ProcessSnapshot] = {}
+        try:
+            for session_id, record in acquired.items():
+                live[session_id] = self._metadata_snapshot(record)
+        finally:
+            for record in acquired.values():
+                self._release_record_call(record)
+        missing = tuple(session_id for session_id in ids if session_id not in live)
+        durable: dict[str, ProcessSnapshot] = {}
+        if missing and self._completion_store is not None:
+            recovered = self._completion_store.inspect_many(owner, missing)
+            durable = {
+                session_id: snapshot
+                for session_id, snapshot in zip(missing, recovered)
+                if snapshot is not None
+            }
+        return tuple(live.get(session_id) or durable.get(session_id) for session_id in ids)
 
     def subscribe(self, listener: ProcessListener) -> Callable[[], None]:
         with self._lock:
@@ -782,6 +835,25 @@ class ProcessSessionService:
                 elapsed_ms=max(0, int((elapsed_at - record.started_at) * 1000)),
                 command=record.request.command,
                 cwd=record.request.cwd,
+                durable_output=record.durable_output,
+                full_output_path=record.full_output_path,
+                failure_code=record.failure_code,
+            )
+
+    def _metadata_snapshot(self, record: _ManagedProcess) -> ProcessSnapshot:
+        with record.condition:
+            elapsed_at = record.terminal_at if record.terminal_at is not None else self._clock()
+            output_size = record.output.size
+            return ProcessSnapshot(
+                session_id=record.session_id,
+                state=record.state,
+                output="",
+                cursor=output_size,
+                next_cursor=output_size,
+                output_size=output_size,
+                exit_code=record.exit_code,
+                tty=record.request.tty,
+                elapsed_ms=max(0, int((elapsed_at - record.started_at) * 1000)),
                 durable_output=record.durable_output,
                 full_output_path=record.full_output_path,
                 failure_code=record.failure_code,
