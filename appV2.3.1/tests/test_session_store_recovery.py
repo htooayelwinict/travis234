@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import threading
 from pathlib import Path
 
@@ -95,3 +96,49 @@ def test_two_store_instances_append_without_lost_or_torn_records(tmp_path: Path)
     messages = [entry["message"]["content"] for entry in loaded.get_branch() if entry["type"] == "message"]
     assert sorted(messages) == ["left", "right"]
     assert all(line.endswith(b"\n") for line in path.read_bytes().splitlines(keepends=True))
+
+
+def test_long_lived_stores_alternate_appends_without_full_reload(tmp_path: Path) -> None:
+    path = tmp_path / "session.jsonl"
+    left = _store(path, tmp_path)
+    right = _store(path, tmp_path)
+
+    for index in range(100):
+        selected = left if index % 2 == 0 else right
+        selected.append_message(UserMessage(content=f"message-{index}", timestamp=now_ms()))
+
+    loaded = _store(path, tmp_path)
+    assert len(loaded.file_entries) == 101
+    assert len({entry.get("id") for entry in loaded.entries}) == 100
+
+
+def test_explicit_branch_parent_survives_external_append(tmp_path: Path) -> None:
+    path = tmp_path / "session.jsonl"
+    left = _store(path, tmp_path)
+    right = _store(path, tmp_path)
+    branch_parent = left.append_message(UserMessage(content="parent", timestamp=now_ms()))
+    right.append_message(UserMessage(content="external", timestamp=now_ms()))
+
+    left.branch(branch_parent)
+    branched = left.append_message(UserMessage(content="branched", timestamp=now_ms()))
+
+    loaded = _store(path, tmp_path)
+    assert loaded.get_entry(branched)["parentId"] == branch_parent
+
+
+def test_store_reloads_after_inode_replacement_and_file_shrink(tmp_path: Path) -> None:
+    path = tmp_path / "session.jsonl"
+    store = _store(path, tmp_path)
+    store.append_message(UserMessage(content="before", timestamp=now_ms()))
+    replacement = tmp_path / "replacement.jsonl"
+    replacement_store = _store(replacement, tmp_path)
+    replacement_store.append_message(UserMessage(content="replacement", timestamp=now_ms()))
+    os.replace(replacement, path)
+
+    store.append_message(UserMessage(content="after-replace", timestamp=now_ms()))
+    assert len(store.file_entries) == 3
+
+    header = path.read_bytes().splitlines(keepends=True)[0]
+    path.write_bytes(header)
+    store.append_message(UserMessage(content="after-shrink", timestamp=now_ms()))
+    assert len(store.file_entries) == 2

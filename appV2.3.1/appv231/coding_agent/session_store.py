@@ -128,6 +128,9 @@ class SessionStore:
         self.by_id: dict[str, dict[str, Any]] = {}
         self.leaf_id: str | None = None
         self._disk_leaf_id: str | None = None
+        self._disk_offset = 0
+        self._disk_identity: tuple[int, int] | None = None
+        self._explicit_parent_selection = False
         self._thread_lock = threading.RLock()
         self.recovered_tail_path: Path | None = None
         with self._thread_lock, SessionFileLock(self.path):
@@ -152,12 +155,23 @@ class SessionStore:
         self.by_id = {}
         self.leaf_id = None
         self._disk_leaf_id = None
+        self._disk_offset = len(payload)
+        self._disk_identity = _disk_signature(self.path)
+        self._explicit_parent_selection = False
 
     def _load(self) -> None:
+        raw = self._read_range(0)
+        self._rebuild_from_bytes(raw)
+        stat = self.path.stat()
+        self._disk_offset = stat.st_size
+        self._disk_identity = (stat.st_dev, stat.st_ino)
+        self._explicit_parent_selection = False
+
+    def _rebuild_from_bytes(self, raw: bytes) -> None:
         self.file_entries = []
         self.by_id = {}
         self.leaf_id = None
-        raw = self.path.read_bytes()
+        self.recovered_tail_path = None
         lines = raw.splitlines(keepends=True)
         for index, raw_line in enumerate(lines):
             if not raw_line.strip():
@@ -173,12 +187,49 @@ class SessionStore:
                     )
                     break
                 raise SessionCorruptionError(self.path, index + 1, str(error)) from error
-            self.file_entries.append(entry)
-            entry_id = entry.get("id")
-            if entry.get("type") != "session" and entry_id:
-                self.by_id[entry_id] = entry
-                self.leaf_id = entry_id
+            self._apply_loaded_entry(entry)
         self._disk_leaf_id = self.leaf_id
+
+    def _read_range(self, start: int) -> bytes:
+        with self.path.open("rb") as handle:
+            handle.seek(start)
+            return handle.read()
+
+    def _sync_from_disk(self) -> None:
+        stat = self.path.stat()
+        identity = (stat.st_dev, stat.st_ino)
+        if self._disk_identity != identity or stat.st_size < self._disk_offset:
+            self._load()
+            return
+        if stat.st_size == self._disk_offset:
+            return
+        suffix = self._read_range(self._disk_offset)
+        if not suffix.endswith((b"\n", b"\r")):
+            self._load()
+            return
+        base_line = len(self.file_entries)
+        for line_number, raw_line in enumerate(suffix.splitlines(), start=1):
+            if not raw_line.strip():
+                continue
+            try:
+                entry = json.loads(raw_line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise SessionCorruptionError(
+                    self.path,
+                    base_line + line_number,
+                    str(error),
+                ) from error
+            self._apply_loaded_entry(entry)
+        self._disk_offset = stat.st_size
+        self._disk_identity = identity
+        self._disk_leaf_id = self.leaf_id
+
+    def _apply_loaded_entry(self, entry: dict[str, Any]) -> None:
+        self.file_entries.append(entry)
+        entry_id = entry.get("id")
+        if entry.get("type") != "session" and entry_id:
+            self.by_id[entry_id] = entry
+            self.leaf_id = entry_id
 
     def _recover_truncated_tail(self, *, valid_prefix: bytes, tail: bytes) -> Path:
         quarantine = self.path.with_name(f"{self.path.name}.truncated-{uuid.uuid4().hex}.partial")
@@ -266,14 +317,17 @@ class SessionStore:
         if details is not None:
             entry["details"] = details
         previous_leaf = self.leaf_id
+        previous_explicit = self._explicit_parent_selection
         if parent_id is not None:
             if parent_id not in self.by_id:
                 raise ValueError(f"Entry {parent_id} not found")
             self.leaf_id = parent_id
+            self._explicit_parent_selection = True
         try:
             return self._append_entry(entry, durable=True)
         except Exception:
             self.leaf_id = previous_leaf
+            self._explicit_parent_selection = previous_explicit
             raise
 
     def append_custom_entry(self, custom_type: str, data: Any | None = None) -> str:
@@ -314,9 +368,11 @@ class SessionStore:
         if entry_id not in self.by_id:
             raise ValueError(f"Invalid entry ID for branching: {entry_id}")
         self.leaf_id = entry_id
+        self._explicit_parent_selection = True
 
     def reset_leaf(self) -> None:
         self.leaf_id = None
+        self._explicit_parent_selection = True
 
     resetLeaf = reset_leaf
 
@@ -330,6 +386,7 @@ class SessionStore:
         if branch_from_id is not None and branch_from_id not in self.by_id:
             raise ValueError(f"Entry {branch_from_id} not found")
         self.leaf_id = branch_from_id
+        self._explicit_parent_selection = True
         entry = {
             "type": "branch_summary",
             "fromId": branch_from_id or "root",
@@ -476,8 +533,11 @@ class SessionStore:
     def _append_entry(self, entry: dict[str, Any], durable: bool = False) -> str:
         with self._thread_lock, SessionFileLock(self.path):
             selected_parent = self.leaf_id
-            follows_disk_leaf = selected_parent == self._disk_leaf_id
-            self._load()
+            follows_disk_leaf = (
+                not self._explicit_parent_selection
+                and selected_parent == self._disk_leaf_id
+            )
+            self._sync_from_disk()
             parent_id = self.leaf_id if follows_disk_leaf else selected_parent
             committed = {
                 **entry,
@@ -485,12 +545,22 @@ class SessionStore:
                 "parentId": parent_id,
                 "timestamp": _timestamp(),
             }
-            self._write_record(committed, durable=durable)
+            payload = _record_payload(committed)
+            self._write_record(committed, durable=durable, payload=payload)
             self._apply_committed_entry(committed)
+            self._disk_offset += len(payload)
+            self._disk_identity = _disk_signature(self.path)
+            self._explicit_parent_selection = False
             return committed["id"]
 
-    def _write_record(self, entry: dict[str, Any], *, durable: bool) -> None:
-        payload = (json.dumps(entry, separators=(",", ":")) + "\n").encode("utf-8")
+    def _write_record(
+        self,
+        entry: dict[str, Any],
+        *,
+        durable: bool,
+        payload: bytes | None = None,
+    ) -> None:
+        payload = payload if payload is not None else _record_payload(entry)
         descriptor = os.open(self.path, os.O_WRONLY | os.O_APPEND)
         try:
             view = memoryview(payload)
@@ -536,6 +606,15 @@ def _atomic_write(path: Path, payload: bytes) -> None:
             os.close(directory_descriptor)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _record_payload(entry: dict[str, Any]) -> bytes:
+    return (json.dumps(entry, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def _disk_signature(path: Path) -> tuple[int, int]:
+    stat = path.stat()
+    return (stat.st_dev, stat.st_ino)
 
 
 def _entry_to_message(entry: dict[str, Any]) -> AgentMessage | None:
