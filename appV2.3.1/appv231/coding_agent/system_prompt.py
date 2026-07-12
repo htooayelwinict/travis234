@@ -39,6 +39,17 @@ _LATEST_REQUEST_GUIDANCE = (
 )
 
 
+_CODING_VERIFICATION_GUIDANCE = (
+    "# Coding verification\n"
+    "Preserve existing passing tests as behavioral evidence. Add focused coverage without "
+    "replacing, weakening, or contradicting those tests unless the user changes the contract "
+    "or the test is demonstrably invalid. Keep new tests compatible with the project's declared "
+    "test runner and dependencies; inspect project configuration before changing test style or "
+    "introducing a plugin. If verification hangs, cancel the focused command once and inspect the "
+    "blocking condition before adding timeout wrappers or alternate runners."
+)
+
+
 def build_system_prompt(options: BuildSystemPromptOptions) -> str:
     prompt_cwd = options.cwd.replace("\\", "/")
     today = _date.today().strftime("%Y-%m-%d")
@@ -94,6 +105,7 @@ def build_system_prompt(options: BuildSystemPromptOptions) -> str:
     prompt = (
         f"{_PREAMBLE}\n\n"
         f"{_LATEST_REQUEST_GUIDANCE}\n\n"
+        f"{_CODING_VERIFICATION_GUIDANCE}\n\n"
         f"Available tools:\n{tools_list}\n\n"
         "In addition to the tools above, you may have access to other custom tools depending on the project.\n\n"
         f"Guidelines:\n{guidelines_text}"

@@ -1735,6 +1735,14 @@ def test_system_prompt_prioritizes_latest_user_request_over_generated_context(tm
     assert "If tests pass but encode the opposite" in prompt
 
 
+def test_system_prompt_preserves_test_contracts_and_runner_compatibility(tmp_path: Path) -> None:
+    prompt = build_system_prompt(BuildSystemPromptOptions(cwd=str(tmp_path)))
+
+    assert "Preserve existing passing tests as behavioral evidence" in prompt
+    assert "compatible with the project's declared test runner and dependencies" in prompt
+    assert "inspect the blocking condition before adding timeout wrappers" in prompt
+
+
 def test_system_prompt_routes_nested_file_writes_away_from_shell_setup(tmp_path: Path) -> None:
     write_definition = create_tool_definition("write", str(tmp_path))
     bash_definition = create_tool_definition("bash", str(tmp_path))
