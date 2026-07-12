@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import re
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING
 
 from appv231.agent.types import AgentMessage
 from appv231.ai.types import AssistantMessage, TextContent, UserMessage, empty_usage, now_ms
@@ -12,8 +14,37 @@ from appv231.compaction.compressor import (
     SUMMARY_PREFIX,
 )
 
+if TYPE_CHECKING:
+    from appv231.coding_agent.process_context import ProcessContextRecord
+
 _READ_FILES_TAG = "read-files"
 _MODIFIED_FILES_TAG = "modified-files"
+_MANAGED_PROCESSES_TAG = "managed-processes"
+_PROCESS_ID = re.compile(r"^proc_[0-9a-f]{32}$")
+_PROCESS_STATUSES = frozenset(
+    {
+        "starting",
+        "running",
+        "stopping",
+        "draining",
+        "exited",
+        "timed_out",
+        "terminated",
+        "failed",
+        "unavailable",
+    }
+)
+
+
+def merge_process_compaction_details(
+    details: object,
+    records: Sequence[ProcessContextRecord],
+) -> dict[str, object] | None:
+    merged = dict(details) if isinstance(details, Mapping) else {}
+    serialized = [record.as_compaction_details() for record in records[:16]]
+    if serialized:
+        merged["managedProcesses"] = serialized
+    return merged or None
 
 
 def to_compressor_messages(messages: Sequence[AgentMessage]) -> list[AgentMessage]:
@@ -58,6 +89,10 @@ def compaction_summary_with_details(summary: object, details: object) -> str:
         section = _file_detail_section(_MODIFIED_FILES_TAG, details.get("modifiedFiles"))
         if section:
             sections.append(section)
+    if f"<{_MANAGED_PROCESSES_TAG}>" not in text:
+        section = _process_detail_section(details.get("managedProcesses"))
+        if section:
+            sections.append(section)
     if not sections:
         return text
     return text.rstrip() + "\n\n" + "\n\n".join(sections)
@@ -78,6 +113,47 @@ def _file_detail_section(tag: str, value: object) -> str:
     return f"<{tag}>\n" + "\n".join(paths) + f"\n</{tag}>"
 
 
+def _process_detail_section(value: object) -> str:
+    if not isinstance(value, list):
+        return ""
+    lines: list[str] = []
+    for item in value[:16]:
+        if not isinstance(item, Mapping):
+            continue
+        session_id = item.get("sessionId")
+        status = item.get("status")
+        cursor = _nonnegative_int(item.get("cursor"))
+        output_size = _nonnegative_int(item.get("outputSize"))
+        if (
+            not isinstance(session_id, str)
+            or _PROCESS_ID.fullmatch(session_id) is None
+            or not isinstance(status, str)
+            or status not in _PROCESS_STATUSES
+            or cursor is None
+            or output_size is None
+        ):
+            continue
+        fields = [
+            session_id,
+            f"status={status}",
+            f"cursor={cursor}",
+            f"outputSize={output_size}",
+        ]
+        exit_code = item.get("exitCode")
+        if isinstance(exit_code, int) and not isinstance(exit_code, bool):
+            fields.append(f"exitCode={exit_code}")
+        if item.get("durableOutput") is True:
+            fields.append("durableOutput=true")
+        lines.append(" ".join(fields))
+    if not lines:
+        return ""
+    return f"<{_MANAGED_PROCESSES_TAG}>\n" + "\n".join(lines) + f"\n</{_MANAGED_PROCESSES_TAG}>"
+
+
+def _nonnegative_int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
 def _next_ordinary_role(messages: Sequence[AgentMessage], start: int) -> str | None:
     for message in messages[start:]:
         role = getattr(message, "role", None)
@@ -86,4 +162,8 @@ def _next_ordinary_role(messages: Sequence[AgentMessage], start: int) -> str | N
     return None
 
 
-__all__ = ["compaction_summary_with_details", "to_compressor_messages"]
+__all__ = [
+    "compaction_summary_with_details",
+    "merge_process_compaction_details",
+    "to_compressor_messages",
+]

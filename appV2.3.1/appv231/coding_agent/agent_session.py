@@ -54,7 +54,11 @@ from appv231.compaction.compressor import LEGACY_SUMMARY_PREFIX, SUMMARY_END_MAR
 from appv231.compaction.timing import CompactionManager
 from appv231.coding_agent.branch_summarization import generate_branch_summary
 from appv231.coding_agent.artifacts import ArtifactRegistry
-from appv231.coding_agent.compaction_adapter import compaction_summary_with_details, to_compressor_messages
+from appv231.coding_agent.compaction_adapter import (
+    compaction_summary_with_details,
+    merge_process_compaction_details,
+    to_compressor_messages,
+)
 from appv231.coding_agent.compaction_coordinator import CompactionCoordinator, CompactionDeferredError
 from appv231.coding_agent.capabilities import CapabilityViolation, WorkspaceCapability
 from appv231.coding_agent.config import get_docs_path, get_examples_path, get_readme_path
@@ -3269,11 +3273,15 @@ class AgentSession:
                 first_kept = self._first_kept_entry_id_for_status(status, before_entry_ids)
                 summary = status.summary or _extract_compaction_result_summary(status.messages)
                 tokens_before = status.tokens_before or estimate_tokens(compressor_messages)
+                details = merge_process_compaction_details(
+                    getattr(status, "details", None),
+                    self._process_context.resolve(before_messages) if self._process_context else (),
+                )
                 self._session_store.append_compaction(
                     summary,
                     first_kept,
                     tokens_before,
-                    details=getattr(status, "details", None),
+                    details=details,
                 )
                 status.first_kept_entry_id = first_kept
                 snapshot = self._session_store.build_context(default_thinking_level=self.thinking_level)
@@ -3320,11 +3328,15 @@ class AgentSession:
             else ""
         )
         parent_id = self._compaction_parent_entry_id(source_messages, context_entry_ids)
+        details = merge_process_compaction_details(
+            getattr(result, "details", None),
+            self._process_context.resolve(source_messages) if self._process_context else (),
+        )
         self._session_store.append_compaction(
             summary,
             first_kept,
             tokens_before,
-            details=getattr(result, "details", None),
+            details=details,
             parent_id=parent_id,
         )
         snapshot = self._session_store.build_context(default_thinking_level=self.thinking_level)

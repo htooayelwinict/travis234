@@ -7763,6 +7763,132 @@ def test_agent_session_manual_compaction_persists_pi_file_operation_details(tmp_
     }
 
 
+def test_agent_session_manual_compaction_persists_managed_process_ledger(tmp_path: Path) -> None:
+    from appv231.compaction import CompactionManager, ContextCompressor
+    from appv231.coding_agent.processes.service import ProcessSessionService
+    from appv231.coding_agent.processes.types import ProcessOwner
+
+    process_id = "proc_" + "f" * 32
+    session_path = tmp_path / "manual-compaction-process-details.jsonl"
+    service = ProcessSessionService(directory=tmp_path / "processes")
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        session_path=str(session_path),
+        compaction_manager=CompactionManager(
+            ContextCompressor(context_length=80, protect_first_n=1, protect_last_n=1),
+            summarizer=lambda prompt: "## Goal\nProcess-aware summary.",
+        ),
+        process_service=service,
+        process_owner=ProcessOwner("app", str(tmp_path), "agent"),
+    )
+    process_result = ToolResultMessage(
+        tool_call_id="bash-1",
+        tool_name="bash",
+        content=[TextContent(text="opaque output must not enter the ledger")],
+        details={
+            "sessionId": process_id,
+            "status": "running",
+            "nextCursor": 9,
+            "outputSize": 11,
+        },
+        is_error=False,
+        timestamp=now_ms(),
+    )
+    messages = [UserMessage(content="goal", timestamp=now_ms()), process_result]
+    messages.extend(
+        UserMessage(content=f"old filler {index} " * 40, timestamp=now_ms())
+        for index in range(12)
+    )
+    session.agent.state.messages = list(messages)
+    for message in messages:
+        session._session_store.append_message(message)
+
+    try:
+        session.compact()
+        persisted = [
+            json.loads(line)
+            for line in session_path.read_text(encoding="utf-8").splitlines()
+        ]
+        compaction_entry = next(entry for entry in persisted if entry["type"] == "compaction")
+        assert compaction_entry["details"]["managedProcesses"] == [
+            {
+                "sessionId": process_id,
+                "status": "unavailable",
+                "cursor": 9,
+                "outputSize": 11,
+                "exitCode": None,
+                "durableOutput": False,
+            }
+        ]
+        assert "opaque output" not in json.dumps(compaction_entry["details"])
+        summary_text = _user_text(default_convert_to_llm(session.messages)[0])
+        assert f"<managed-processes>\n{process_id} status=unavailable" in summary_text
+    finally:
+        session.shutdown()
+        service.close()
+
+
+def test_agent_session_applied_compaction_merges_managed_process_ledger(tmp_path: Path) -> None:
+    from appv231.coding_agent.processes.service import ProcessSessionService
+    from appv231.coding_agent.processes.types import ProcessOwner
+
+    process_id = "proc_" + "a" * 32
+    session_path = tmp_path / "applied-compaction-process-details.jsonl"
+    service = ProcessSessionService(directory=tmp_path / "processes")
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        session_path=str(session_path),
+        process_service=service,
+        process_owner=ProcessOwner("app", str(tmp_path), "agent"),
+    )
+    process_result = ToolResultMessage(
+        tool_call_id="bash-1",
+        tool_name="bash",
+        content=[TextContent(text="not persisted in details")],
+        details={
+            "sessionId": process_id,
+            "status": "running",
+            "nextCursor": 4,
+            "outputSize": 7,
+        },
+        is_error=False,
+        timestamp=now_ms(),
+    )
+    source_messages = [UserMessage(content="goal", timestamp=now_ms()), process_result]
+    session.agent.state.messages = list(source_messages)
+    for message in source_messages:
+        session._session_store.append_message(message)
+    result = SimpleNamespace(
+        compressed=True,
+        summary="Process-aware automatic summary.",
+        tokens_before=100,
+        details={"readFiles": ["src/a.py"]},
+        first_kept_message_index=None,
+    )
+
+    try:
+        session.apply_compaction_result([], result, source_messages=source_messages)
+        persisted = [
+            json.loads(line)
+            for line in session_path.read_text(encoding="utf-8").splitlines()
+        ]
+        compaction_entry = next(entry for entry in persisted if entry["type"] == "compaction")
+        assert compaction_entry["details"]["readFiles"] == ["src/a.py"]
+        assert compaction_entry["details"]["managedProcesses"][0] == {
+            "sessionId": process_id,
+            "status": "unavailable",
+            "cursor": 4,
+            "outputSize": 7,
+            "exitCode": None,
+            "durableOutput": False,
+        }
+    finally:
+        session.shutdown()
+        service.close()
+
+
 def test_session_store_build_context_recreates_compaction_summary_message(tmp_path: Path) -> None:
     store = SessionStore(str(tmp_path / "session.jsonl"), cwd=str(tmp_path))
     first_id = store.append_message(UserMessage(content="kept", timestamp=now_ms()))

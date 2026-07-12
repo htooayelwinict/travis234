@@ -5,6 +5,10 @@ from pathlib import Path
 from appv231.ai.types import AssistantMessage, TextContent, ToolCall, ToolResultMessage, empty_usage, now_ms
 from appv231.ai.providers.faux import create_faux_provider, faux_model, text_response_events
 from appv231.coding_agent.agent_session import AgentSession
+from appv231.coding_agent.compaction_adapter import (
+    compaction_summary_with_details,
+    merge_process_compaction_details,
+)
 from appv231.coding_agent.process_context import (
     ProcessContextRecord,
     ProcessContextResolver,
@@ -151,6 +155,67 @@ def test_process_context_message_contains_metadata_only() -> None:
     assert "status=running" in overlay.content
     assert "command" not in overlay.content
     assert "output" not in overlay.content.lower().replace("outputsize", "")
+
+
+def test_compaction_details_merge_process_ledger_without_losing_file_details() -> None:
+    records = [
+        ProcessContextRecord(
+            f"proc_{index:032x}",
+            "running",
+            index,
+            index * 2,
+            None,
+            False,
+        )
+        for index in range(20)
+    ]
+
+    details = merge_process_compaction_details(
+        {"readFiles": ["src/a.py"], "modifiedFiles": ["src/b.py"]},
+        records,
+    )
+
+    assert details["readFiles"] == ["src/a.py"]
+    assert details["modifiedFiles"] == ["src/b.py"]
+    assert len(details["managedProcesses"]) == 16
+    assert details["managedProcesses"][0] == {
+        "sessionId": "proc_00000000000000000000000000000000",
+        "status": "running",
+        "cursor": 0,
+        "outputSize": 0,
+        "exitCode": None,
+        "durableOutput": False,
+    }
+
+
+def test_compaction_summary_renders_valid_process_metadata_once() -> None:
+    process_id = "proc_" + "e" * 32
+    details = {
+        "managedProcesses": [
+            {
+                "sessionId": process_id,
+                "status": "exited",
+                "cursor": 12,
+                "outputSize": 20,
+                "exitCode": 0,
+                "durableOutput": True,
+            },
+            {"sessionId": "invalid", "status": "running"},
+        ]
+    }
+
+    rendered = compaction_summary_with_details("summary", details)
+    rendered_again = compaction_summary_with_details(rendered, details)
+
+    assert rendered.count("<managed-processes>") == 1
+    assert rendered_again.count("<managed-processes>") == 1
+    assert process_id in rendered
+    assert "status=exited" in rendered
+    assert "cursor=12" in rendered
+    assert "outputSize=20" in rendered
+    assert "exitCode=0" in rendered
+    assert "durableOutput=true" in rendered
+    assert "invalid" not in rendered
 
 
 def test_provider_receives_transient_process_overlay_without_jsonl_append(tmp_path: Path) -> None:
