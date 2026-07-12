@@ -68,6 +68,8 @@ def create_process_tool_definition(
             "Use the exact nextCursor returned by bash/process so output is not repeated.",
             "Use process.poll only for interactive input, quick status checks, or intentionally incremental output.",
             "When a command result is required, continue independent work first and then use process.wait; wait ignores output-only wakeups and does not set the command timeout.",
+            "When the final result is required, do not call process.poll before process.wait; use one wait from the latest cursor and act on its terminal result.",
+            "Do not repeat unchanged file reads around process checks; retain earlier read results unless a tool operation could have changed that file.",
             "Leave a process detached only for a requested server/watcher or when its result is not required.",
             "Set bash.timeout only when an actual execution deadline is intended.",
         ],

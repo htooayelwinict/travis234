@@ -352,6 +352,8 @@ def test_agent_session_prompt_keeps_required_managed_process_work_pending(tmp_pa
         assert "Use process.poll only for interactive input, quick status checks" in session.system_prompt
         assert "continue independent work first and then use process.wait" in session.system_prompt
         assert "wait ignores output-only wakeups and does not set the command timeout" in session.system_prompt
+        assert "do not call process.poll before process.wait" in session.system_prompt
+        assert "Do not repeat unchanged file reads around process checks" in session.system_prompt
         assert "Leave a process detached only for a requested server/watcher" in session.system_prompt
     finally:
         session.shutdown()
