@@ -9,13 +9,19 @@ import shutil
 import tempfile
 import threading
 import time
+from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
 from appv231.coding_agent.processes.completions import ProcessCompletionStore
-from appv231.coding_agent.processes.output import SanitizedOutputSpool
+from appv231.coding_agent.processes.output import (
+    DEFAULT_MAX_LIVE_SPOOL_BYTES,
+    DEFAULT_MAX_PROCESS_SPOOL_BYTES,
+    LiveSpoolBudget,
+    SanitizedOutputSpool,
+)
 from appv231.coding_agent.processes.transport import ProcessTransport
 from appv231.coding_agent.processes.types import (
     ProcessClosedError,
@@ -26,6 +32,7 @@ from appv231.coding_agent.processes.types import (
     ProcessLimitError,
     ProcessNotFoundError,
     ProcessOwner,
+    ProcessOutputLimitError,
     ProcessSnapshot,
     ProcessState,
     ProcessStateError,
@@ -94,7 +101,9 @@ class ProcessSessionService:
         self,
         *,
         directory: str | Path | None = None,
-        max_active: int = 4,
+        max_active: int | None = None,
+        max_active_per_owner: int = 4,
+        max_active_total: int = 16,
         max_terminal: int = 64,
         terminal_ttl_seconds: float = 900,
         max_output_bytes: int = 51_200,
@@ -105,15 +114,25 @@ class ProcessSessionService:
         clock: Callable[[], float] = time.monotonic,
         completion_store: ProcessCompletionStore | None = None,
         wall_clock: Callable[[], float] = time.time,
+        max_spool_bytes_per_process: int = DEFAULT_MAX_PROCESS_SPOOL_BYTES,
+        max_live_spool_bytes: int = DEFAULT_MAX_LIVE_SPOOL_BYTES,
     ) -> None:
-        if max_active < 1:
-            raise ValueError("max_active must be positive")
+        if max_active is not None:
+            max_active_per_owner = max_active
+            max_active_total = max_active
+        if max_active_per_owner < 1 or max_active_total < 1:
+            raise ValueError("active process limits must be positive")
+        if max_spool_bytes_per_process < 0 or max_live_spool_bytes < 0:
+            raise ValueError("process output limits must be nonnegative")
         self._directory = Path(directory) if directory is not None else Path(
             tempfile.mkdtemp(prefix="appv231-processes-")
         )
         self._directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._directory.chmod(0o700)
-        self._max_active = max_active
+        self._max_active_per_owner = max_active_per_owner
+        self._max_active_total = max_active_total
+        self._max_spool_bytes_per_process = max_spool_bytes_per_process
+        self._live_spool_budget = LiveSpoolBudget(max_live_spool_bytes)
         self._max_terminal = max(0, max_terminal)
         self._terminal_ttl_seconds = max(0, terminal_ttl_seconds)
         self._max_output_bytes = max_output_bytes
@@ -127,6 +146,7 @@ class ProcessSessionService:
         self._records: dict[str, _ManagedProcess] = {}
         self._listeners: list[ProcessListener] = []
         self._starting = 0
+        self._starting_by_owner: Counter[tuple[str, str]] = Counter()
         self._closed = False
         self._lock = threading.RLock()
 
@@ -144,13 +164,22 @@ class ProcessSessionService:
             raise ValueError("yield_time_ms must be between 0 and 30000")
         if request.timeout_seconds is not None and request.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
-        self._reserve_start()
-        output = SanitizedOutputSpool(self._directory)
+        self._reserve_start(owner)
+        try:
+            output = SanitizedOutputSpool(
+                self._directory,
+                max_bytes=self._max_spool_bytes_per_process,
+                live_budget=self._live_spool_budget,
+                pressure_reclaimer=self._reclaim_durable_terminal_spools,
+            )
+        except BaseException:
+            self._release_start(owner)
+            raise
         try:
             transport = transport_factory(request)
         except BaseException:
             output.close(remove=True)
-            self._release_start()
+            self._release_start(owner)
             raise
 
         session_id = f"proc_{secrets.token_hex(16)}"
@@ -160,6 +189,7 @@ class ProcessSessionService:
         try:
             with self._lock:
                 self._starting -= 1
+                self._decrement_starting_owner(owner)
                 if self._closed:
                     raise ProcessClosedError("Process service is closed")
                 record.active_calls = 1
@@ -417,19 +447,40 @@ class ProcessSessionService:
                 raise
             return self._completion_store.tail_snapshot(owner, session_id)
 
-    def _reserve_start(self) -> None:
+    def _reserve_start(self, owner: ProcessOwner) -> None:
         self._prune()
         with self._lock:
             if self._closed:
                 raise ProcessClosedError("Process service is closed")
             active = sum(not record.state.terminal for record in self._records.values()) + self._starting
-            if active >= self._max_active:
-                raise ProcessLimitError(f"Reached active process limit of {self._max_active}")
+            if active >= self._max_active_total:
+                raise ProcessLimitError(
+                    f"Reached app-wide active process limit of {self._max_active_total}"
+                )
+            scope = owner.persistence_scope
+            active_owner = sum(
+                not record.state.terminal and record.owner.persistence_scope == scope
+                for record in self._records.values()
+            ) + self._starting_by_owner[scope]
+            if active_owner >= self._max_active_per_owner:
+                raise ProcessLimitError(
+                    f"Reached owner scope active process limit of {self._max_active_per_owner}"
+                )
             self._starting += 1
+            self._starting_by_owner[scope] += 1
 
-    def _release_start(self) -> None:
+    def _release_start(self, owner: ProcessOwner) -> None:
         with self._lock:
             self._starting = max(0, self._starting - 1)
+            self._decrement_starting_owner(owner)
+
+    def _decrement_starting_owner(self, owner: ProcessOwner) -> None:
+        scope = owner.persistence_scope
+        remaining = self._starting_by_owner[scope] - 1
+        if remaining > 0:
+            self._starting_by_owner[scope] = remaining
+        else:
+            self._starting_by_owner.pop(scope, None)
 
     def _start_workers(self, record: _ManagedProcess) -> None:
         sources = record.transport.read_sources()
@@ -475,13 +526,45 @@ class ProcessSessionService:
                         listener(self._snapshot(record, 0, self._max_output_bytes))
                     except BaseException:
                         pass
-        except BaseException as error:  # noqa: BLE001 - reader failure is retained as process metadata.
-            with record.condition:
-                record.output_error = str(error)
+        except ProcessOutputLimitError as error:
+            self._claim_output_failure(record, error, failure_code="output_limit")
+        except BaseException as error:  # noqa: BLE001 - reader failure becomes bounded process metadata.
+            self._claim_output_failure(record, error)
         finally:
             with record.condition:
                 record.reader_count = max(0, record.reader_count - 1)
                 record.condition.notify_all()
+
+    def _claim_output_failure(
+        self,
+        record: _ManagedProcess,
+        error: BaseException,
+        *,
+        failure_code: str = "output_failure",
+    ) -> None:
+        if not self._set_output_failure(record, error, failure_code=failure_code):
+            return
+        self._safe_signal(record, "terminate")
+        self._wait_transports([record], self._termination_grace_seconds)
+        if record.transport.poll() is None:
+            self._safe_signal(record, "kill")
+
+    @staticmethod
+    def _set_output_failure(
+        record: _ManagedProcess,
+        error: BaseException,
+        *,
+        failure_code: str = "output_failure",
+    ) -> bool:
+        with record.condition:
+            if record.state.terminal or record.failure_code is not None:
+                return False
+            record.failure_code = failure_code
+            record.output_error = type(error).__name__[:80]
+            record.state = ProcessState.STOPPING
+            record.wakeup.set()
+            record.condition.notify_all()
+            return True
 
     def _pump_input(self, record: _ManagedProcess) -> None:
         while True:
@@ -531,8 +614,15 @@ class ProcessSessionService:
                 record.condition.notify_all()
             record.input_queue.put_nowait(None)
             self._drain_readers(record)
-            record.output.finish()
-            if record.stop_cause is StopCause.TIMEOUT:
+            try:
+                record.output.finish()
+            except ProcessOutputLimitError as error:
+                self._set_output_failure(record, error, failure_code="output_limit")
+            except BaseException as error:  # noqa: BLE001 - final decoder/spool failure is terminal.
+                self._set_output_failure(record, error)
+            if record.failure_code is not None:
+                terminal_state = ProcessState.FAILED
+            elif record.stop_cause is StopCause.TIMEOUT:
                 terminal_state = ProcessState.TIMED_OUT
             elif record.stop_cause is not None:
                 terminal_state = ProcessState.TERMINATED
@@ -547,14 +637,15 @@ class ProcessSessionService:
             self._emit_terminal(record)
         except BaseException as error:  # noqa: BLE001 - publish deterministic failure instead of losing monitor.
             with record.condition:
-                record.output_error = str(error)
-                record.state = ProcessState.FAILED
+                record.output_error = type(error).__name__[:80]
+                record.failure_code = record.failure_code or "output_failure"
                 record.terminal_at = self._clock()
             try:
                 record.output.finish()
             finally:
                 self._persist_completion(record, ProcessState.FAILED)
                 with record.condition:
+                    record.state = ProcessState.FAILED
                     record.condition.notify_all()
                 self._emit_terminal(record)
 
@@ -826,6 +917,24 @@ class ProcessSessionService:
         for record in removed:
             record.transport.close()
             record.output.close(remove=True)
+
+    def _reclaim_durable_terminal_spools(self, requested: int) -> None:
+        while self._live_spool_budget.available < requested:
+            with self._lock:
+                candidates = [
+                    record
+                    for record in self._records.values()
+                    if record.state.terminal and record.durable_output and record.active_calls == 0
+                ]
+                if not candidates:
+                    return
+                candidate = min(
+                    candidates,
+                    key=lambda record: record.terminal_at or record.started_at,
+                )
+                self._records.pop(candidate.session_id, None)
+            candidate.transport.close()
+            candidate.output.close(remove=True)
 
 
 __all__ = ["ProcessSessionService", "ProcessTransportFactory"]

@@ -10,12 +10,45 @@ import threading
 from pathlib import Path
 
 from appv231.coding_agent.processes.types import InvalidCursorError, OutputSlice
+from appv231.coding_agent.processes.types import ProcessOutputLimitError
 from appv231.coding_agent.tools.truncate import (
     DEFAULT_MAX_BYTES,
     DEFAULT_MAX_LINES,
     TruncationResult,
     truncate_tail,
 )
+
+DEFAULT_MAX_PROCESS_SPOOL_BYTES = 64 * 1024 * 1024
+DEFAULT_MAX_LIVE_SPOOL_BYTES = 512 * 1024 * 1024
+
+
+class LiveSpoolBudget:
+    def __init__(self, limit: int) -> None:
+        self._limit = max(0, limit)
+        self._used = 0
+        self._lock = threading.Lock()
+
+    @property
+    def used(self) -> int:
+        with self._lock:
+            return self._used
+
+    @property
+    def available(self) -> int:
+        with self._lock:
+            return self._limit - self._used
+
+    def reserve_up_to(self, requested: int) -> int:
+        with self._lock:
+            granted = min(max(0, requested), self._limit - self._used)
+            self._used += granted
+            return granted
+
+    def release(self, count: int) -> None:
+        with self._lock:
+            if count < 0 or count > self._used:
+                raise RuntimeError("live-spool accounting invariant violated")
+            self._used -= count
 
 
 class _TerminalSanitizer:
@@ -81,7 +114,14 @@ class _TerminalSanitizer:
 
 
 class SanitizedOutputSpool:
-    def __init__(self, directory: str | os.PathLike[str]) -> None:
+    def __init__(
+        self,
+        directory: str | os.PathLike[str],
+        *,
+        max_bytes: int = DEFAULT_MAX_PROCESS_SPOOL_BYTES,
+        live_budget: LiveSpoolBudget | None = None,
+        pressure_reclaimer=None,
+    ) -> None:
         self._directory = Path(directory)
         self._directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._directory.chmod(0o700)
@@ -89,6 +129,10 @@ class SanitizedOutputSpool:
         os.fchmod(fd, 0o600)
         self._path = Path(path)
         self._file = os.fdopen(fd, "w+b", buffering=0)
+        self._max_bytes = max(0, max_bytes)
+        self._live_budget = live_budget or LiveSpoolBudget(self._max_bytes)
+        self._pressure_reclaimer = pressure_reclaimer
+        self._reserved_bytes = 0
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self._sanitizer = _TerminalSanitizer()
         self._written_bytes = 0
@@ -129,10 +173,12 @@ class SanitizedOutputSpool:
         with self._lock:
             if self._finished:
                 return
-            text = self._decoder.decode(b"", final=True)
-            self._write_text(self._sanitizer.feed(text, final=True))
-            self._file.flush()
-            self._finished = True
+            try:
+                text = self._decoder.decode(b"", final=True)
+                self._write_text(self._sanitizer.feed(text, final=True))
+            finally:
+                self._file.flush()
+                self._finished = True
 
     def read(self, cursor: int, max_bytes: int) -> OutputSlice:
         if max_bytes <= 0:
@@ -202,40 +248,78 @@ class SanitizedOutputSpool:
             return self._last_line_bytes
 
     def close(self, *, remove: bool = True) -> None:
+        failure: BaseException | None = None
         with self._lock:
             if self._closed:
                 return
-            self.finish()
-            self._file.close()
-            self._closed = True
+            try:
+                self.finish()
+            except BaseException as error:  # noqa: BLE001 - cleanup remains mandatory.
+                failure = error
+            finally:
+                self._file.close()
+                self._live_budget.release(self._reserved_bytes)
+                self._reserved_bytes = 0
+                self._closed = True
         if remove:
             self._path.unlink(missing_ok=True)
+        if failure is not None:
+            raise failure
 
     def _write_text(self, text: str) -> None:
         if not text:
             return
         encoded = text.encode("utf-8")
-        self._file.seek(0, os.SEEK_END)
-        self._file.write(encoded)
-        self._written_bytes += len(encoded)
-        self._newline_count += text.count("\n")
-        self._saw_text = True
-        self._ends_with_newline = text.endswith("\n")
-        if "\n" in text:
-            self._last_line_bytes = len(text.rsplit("\n", 1)[-1].encode("utf-8"))
+        remaining = max(0, self._max_bytes - self._written_bytes)
+        requested = min(len(encoded), remaining)
+        granted = self._live_budget.reserve_up_to(requested)
+        if granted < requested and self._pressure_reclaimer is not None:
+            self._live_budget.release(granted)
+            self._pressure_reclaimer(requested)
+            granted = self._live_budget.reserve_up_to(requested)
+        prefix = self._valid_utf8_prefix(encoded[:granted])
+        self._live_budget.release(granted - len(prefix))
+        if prefix:
+            start = self._written_bytes
+            try:
+                self._file.seek(start)
+                written = 0
+                while written < len(prefix):
+                    count = self._file.write(prefix[written:])
+                    if count is None or count <= 0:
+                        raise OSError("output spool write made no progress")
+                    written += count
+            except BaseException:
+                self._file.seek(start)
+                self._file.truncate(start)
+                self._live_budget.release(len(prefix))
+                raise
+            self._reserved_bytes += len(prefix)
+            self._written_bytes += len(prefix)
+            text = prefix.decode("utf-8")
         else:
-            self._last_line_bytes += len(encoded)
-        candidate = self._tail + text
-        prior_starts_partial = self._tail_starts_partial
-        result = truncate_tail(candidate, max_lines=DEFAULT_MAX_LINES, max_bytes=DEFAULT_MAX_BYTES)
-        start_index = len(candidate) - len(result.content)
-        self._tail_starts_partial = (
-            prior_starts_partial if start_index == 0 else candidate[start_index - 1] != "\n"
-        ) or result.last_line_partial
-        self._tail = result.content
-        if result.truncated:
-            self._was_truncated = True
-            self._truncated_by = result.truncated_by
+            text = ""
+        self._newline_count += text.count("\n")
+        if text:
+            self._saw_text = True
+            self._ends_with_newline = text.endswith("\n")
+            if "\n" in text:
+                self._last_line_bytes = len(text.rsplit("\n", 1)[-1].encode("utf-8"))
+            else:
+                self._last_line_bytes += len(prefix)
+            candidate = self._tail + text
+            prior_starts_partial = self._tail_starts_partial
+            result = truncate_tail(candidate, max_lines=DEFAULT_MAX_LINES, max_bytes=DEFAULT_MAX_BYTES)
+            start_index = len(candidate) - len(result.content)
+            self._tail_starts_partial = (
+                prior_starts_partial if start_index == 0 else candidate[start_index - 1] != "\n"
+            ) or result.last_line_partial
+            self._tail = result.content
+            if result.truncated:
+                self._was_truncated = True
+                self._truncated_by = result.truncated_by
+        if len(prefix) < len(encoded):
+            raise ProcessOutputLimitError("Process sanitized output limit reached")
 
     @staticmethod
     def _valid_utf8_prefix(data: bytes) -> bytes:
@@ -258,4 +342,9 @@ class SanitizedOutputSpool:
         return content.count("\n") + int(not content.endswith("\n"))
 
 
-__all__ = ["SanitizedOutputSpool"]
+__all__ = [
+    "DEFAULT_MAX_LIVE_SPOOL_BYTES",
+    "DEFAULT_MAX_PROCESS_SPOOL_BYTES",
+    "LiveSpoolBudget",
+    "SanitizedOutputSpool",
+]

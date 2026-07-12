@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from appv231.coding_agent.processes.completions import ProcessCompletionStore
+from appv231.coding_agent.processes.output import SanitizedOutputSpool
 from appv231.coding_agent.processes.service import ProcessSessionService
 from appv231.coding_agent.processes.types import (
     ProcessInputLimitError,
@@ -707,6 +708,146 @@ def test_durable_completion_supports_wait_tail_and_export_after_eviction(
         assert tail.content == "final\n"
         assert exported.read_text(encoding="utf-8") == "final\n"
         assert exported.stat().st_mode & 0o777 == 0o600
+    finally:
+        service.close()
+        store.close()
+
+
+def test_spool_failure_stops_process_and_publishes_failed(
+    tmp_path: Path,
+    owner,
+    monkeypatch,
+) -> None:
+    service = ProcessSessionService(
+        directory=tmp_path / "processes",
+        termination_grace_seconds=0.01,
+    )
+    transport = FakeProcessTransport(exit_on_signals={"kill"})
+
+    def fail_append(self, data: bytes) -> None:
+        raise OSError("simulated full spool")
+
+    monkeypatch.setattr(SanitizedOutputSpool, "append", fail_append)
+    try:
+        started = service.start(owner, request("writer"), Factory(transport), yield_time_ms=0)
+        transport.emit(b"data")
+        terminal = service.wait_terminal(owner, started.session_id, 0, wait_ms=2_000)
+
+        assert terminal.state is ProcessState.FAILED
+        assert terminal.failure_code == "output_failure"
+        assert set(transport.signals) & {"terminate", "kill"}
+    finally:
+        service.close()
+
+
+def test_active_limit_is_per_owner_scope_with_global_ceiling(tmp_path: Path) -> None:
+    service = ProcessSessionService(
+        directory=tmp_path / "processes",
+        max_active_per_owner=1,
+        max_active_total=3,
+        termination_grace_seconds=0.01,
+    )
+    left = ProcessOwner("app", "/left", "agent")
+    right = ProcessOwner("app", "/right", "agent")
+    left_transport = FakeProcessTransport()
+    right_transport = FakeProcessTransport()
+    try:
+        service.start(left, request("left"), Factory(left_transport), yield_time_ms=0)
+
+        with pytest.raises(ProcessLimitError, match="owner scope"):
+            service.start(left, request("left-two"), Factory(FakeProcessTransport()), yield_time_ms=0)
+
+        assert service.start(
+            right,
+            request("right"),
+            Factory(right_transport),
+            yield_time_ms=0,
+        ).state is ProcessState.RUNNING
+    finally:
+        service.close()
+
+
+def test_process_output_limit_fails_only_producer_and_preserves_prefix(
+    tmp_path: Path,
+    owner,
+) -> None:
+    service = ProcessSessionService(
+        directory=tmp_path / "processes",
+        max_spool_bytes_per_process=8,
+        max_live_spool_bytes=32,
+        termination_grace_seconds=0.01,
+    )
+    transport = FakeProcessTransport(exit_on_signals={"kill"})
+    try:
+        started = service.start(owner, request("chatty"), Factory(transport), yield_time_ms=0)
+        transport.emit(b"123456789")
+        terminal = service.wait_terminal(owner, started.session_id, 0, wait_ms=2_000)
+
+        assert terminal.state is ProcessState.FAILED
+        assert terminal.failure_code == "output_limit"
+        assert terminal.output == "12345678"
+        assert terminal.output_size == 8
+    finally:
+        service.close()
+
+
+def test_spawn_failure_releases_owner_reservation(tmp_path: Path, owner) -> None:
+    service = ProcessSessionService(
+        directory=tmp_path / "processes",
+        max_active_per_owner=1,
+        termination_grace_seconds=0.01,
+    )
+    try:
+        with pytest.raises(queue.Empty):
+            service.start(owner, request("failed"), Factory(), yield_time_ms=0)
+
+        started = service.start(
+            owner,
+            request("replacement"),
+            Factory(FakeProcessTransport()),
+            yield_time_ms=0,
+        )
+        assert started.state is ProcessState.RUNNING
+    finally:
+        service.close()
+
+
+def test_live_budget_evicts_durable_terminal_before_limiting_active_producer(
+    tmp_path: Path,
+    owner,
+) -> None:
+    store = ProcessCompletionStore(tmp_path / "completions")
+    service = ProcessSessionService(
+        directory=tmp_path / "processes",
+        completion_store=store,
+        max_spool_bytes_per_process=8,
+        max_live_spool_bytes=8,
+        termination_grace_seconds=0.01,
+    )
+    try:
+        first = service.start(
+            owner,
+            request("first"),
+            Factory(FakeProcessTransport(initial_output=b"12345678", initial_exit_code=0)),
+            yield_time_ms=1_000,
+        )
+        second_transport = FakeProcessTransport()
+        second = service.start(
+            owner,
+            request("second"),
+            Factory(second_transport),
+            yield_time_ms=0,
+        )
+        second_transport.emit(b"abcdefgh")
+        second_transport.exit(0)
+
+        terminal = service.wait_terminal(owner, second.session_id, 0, wait_ms=2_000)
+        recovered_first = service.poll(owner, first.session_id, 0, wait_ms=0)
+
+        assert terminal.state is ProcessState.EXITED
+        assert terminal.output == "abcdefgh"
+        assert recovered_first.output == "12345678"
+        assert recovered_first.durable_output is True
     finally:
         service.close()
         store.close()

@@ -161,6 +161,10 @@ class ProcessInputLimitError(ProcessSessionError):
     pass
 
 
+class ProcessOutputLimitError(ProcessSessionError):
+    pass
+
+
 class InvalidCursorError(ProcessSessionError):
     def __init__(self, cursor: int, output_size: int) -> None:
         super().__init__(f"Invalid output cursor {cursor}; current output size is {output_size}")
@@ -180,6 +184,7 @@ __all__ = [
     "ProcessLimitError",
     "ProcessNotFoundError",
     "ProcessOwner",
+    "ProcessOutputLimitError",
     "ProcessSessionError",
     "ProcessSnapshot",
     "ProcessState",

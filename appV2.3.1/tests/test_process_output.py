@@ -7,10 +7,11 @@ from unittest.mock import patch
 
 import pytest
 
-from appv231.coding_agent.processes.output import SanitizedOutputSpool
+from appv231.coding_agent.processes.output import LiveSpoolBudget, SanitizedOutputSpool
 from appv231.coding_agent.processes.types import (
     InvalidCursorError,
     ProcessOwner,
+    ProcessOutputLimitError,
     ProcessSnapshot,
     ProcessState,
 )
@@ -178,3 +179,77 @@ def test_export_copy_does_not_inherit_permissive_umask(tmp_path: Path) -> None:
         os.umask(previous)
 
     assert exported.stat().st_mode & 0o777 == 0o600
+
+
+def test_output_limit_preserves_largest_complete_utf8_prefix(tmp_path: Path) -> None:
+    budget = LiveSpoolBudget(64)
+    spool = SanitizedOutputSpool(tmp_path, max_bytes=3, live_budget=budget)
+
+    with pytest.raises(ProcessOutputLimitError):
+        spool.append("a\N{SNOWMAN}b".encode("utf-8"))
+
+    assert spool.size == 1
+    assert spool.read(0, 16).text == "a"
+    assert budget.used == 1
+    spool.close(remove=True)
+    assert budget.used == 0
+
+
+def test_live_spool_budget_is_shared_and_released_exactly_once(tmp_path: Path) -> None:
+    budget = LiveSpoolBudget(5)
+    first = SanitizedOutputSpool(tmp_path, max_bytes=10, live_budget=budget)
+    second = SanitizedOutputSpool(tmp_path, max_bytes=10, live_budget=budget)
+    first.append(b"1234")
+
+    with pytest.raises(ProcessOutputLimitError):
+        second.append(b"abc")
+
+    assert first.read(0, 10).text == "1234"
+    assert second.read(0, 10).text == "a"
+    assert budget.used == 5
+    first.close(remove=True)
+    first.close(remove=True)
+    second.close(remove=True)
+    assert budget.used == 0
+
+
+def test_partial_spool_write_rolls_back_file_and_budget(tmp_path: Path) -> None:
+    class PartialThenFail:
+        def __init__(self, wrapped) -> None:
+            self.wrapped = wrapped
+            self.calls = 0
+
+        def write(self, data: bytes) -> int:
+            self.calls += 1
+            if self.calls == 1:
+                return self.wrapped.write(data[:2])
+            raise OSError("simulated partial write")
+
+        def __getattr__(self, name: str):
+            return getattr(self.wrapped, name)
+
+    budget = LiveSpoolBudget(16)
+    spool = SanitizedOutputSpool(tmp_path, max_bytes=16, live_budget=budget)
+    spool._file = PartialThenFail(spool._file)
+
+    with pytest.raises(OSError, match="partial write"):
+        spool.append(b"abcdef")
+
+    assert spool.size == 0
+    assert spool.path.read_bytes() == b""
+    assert budget.used == 0
+    spool.close(remove=True)
+
+
+def test_finish_limit_still_closes_removes_and_releases_spool(tmp_path: Path) -> None:
+    budget = LiveSpoolBudget(0)
+    spool = SanitizedOutputSpool(tmp_path, max_bytes=0, live_budget=budget)
+    path = spool.path
+    spool.append(b"\r")
+
+    with pytest.raises(ProcessOutputLimitError):
+        spool.close(remove=True)
+
+    assert spool.finished is True
+    assert budget.used == 0
+    assert not path.exists()
