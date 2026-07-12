@@ -61,6 +61,7 @@ from appv231.coding_agent.config import get_docs_path, get_examples_path, get_re
 from appv231.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
 from appv231.coding_agent.execution_backend import select_execution_backend
 from appv231.coding_agent.mailbox import CodingTurnMailbox, MailboxKind
+from appv231.coding_agent.process_context import ProcessContextResolver
 from appv231.coding_agent.processes.local import create_local_process_transport
 from appv231.coding_agent.processes.service import ProcessSessionService
 from appv231.coding_agent.processes.types import ProcessOwner
@@ -947,6 +948,11 @@ class AgentSession:
             raise ValueError("process_service and process_owner must be provided together")
         self.process_service = process_service
         self.process_owner = process_owner
+        self._process_context = (
+            ProcessContextResolver(process_service, process_owner)
+            if process_service is not None and process_owner is not None
+            else None
+        )
         self.settings_manager = settings_manager or SettingsManager.inMemory()
         self._stream_fn = stream_fn or self.provider_control_plane.stream_simple
         self._allowed_tool_names = set(allowed_tool_names) if allowed_tool_names is not None else None
@@ -2795,8 +2801,13 @@ class AgentSession:
         transformed = (
             self._caller_transform_context(messages, signal)
             if self._caller_transform_context is not None
-            else messages
+            else list(messages)
         )
+        if transformed is None:
+            transformed = list(messages)
+        overlay = self._process_context.overlay(transformed) if self._process_context is not None else None
+        if overlay is not None:
+            transformed = [*transformed, overlay]
         if self._extension_runner.has_handlers("context"):
             return self._extension_runner.emit_context(transformed)
         return transformed

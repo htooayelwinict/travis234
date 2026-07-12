@@ -3,10 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from appv231.ai.types import AssistantMessage, TextContent, ToolCall, ToolResultMessage, empty_usage, now_ms
+from appv231.ai.providers.faux import create_faux_provider, faux_model, text_response_events
+from appv231.coding_agent.agent_session import AgentSession
 from appv231.coding_agent.process_context import (
     ProcessContextRecord,
     ProcessContextResolver,
     referenced_process_ids,
+    process_context_message,
 )
 from appv231.coding_agent.processes.service import ProcessSessionService
 from appv231.coding_agent.processes.types import ProcessOwner, ProcessSnapshot, ProcessState
@@ -133,3 +136,82 @@ def test_resolver_bounds_large_history_to_one_64_id_batch_and_16_records() -> No
     assert len(calls[0]) == 64
     assert len(records) == 16
     assert all(record.status == "unavailable" for record in records)
+
+
+def test_process_context_message_contains_metadata_only() -> None:
+    process_id = "proc_" + "c" * 32
+    overlay = process_context_message(
+        [ProcessContextRecord(process_id, "running", 4, 8, None, False, None)]
+    )
+
+    assert overlay is not None
+    assert overlay.custom_type == "managed_process_state"
+    assert overlay.display is False
+    assert process_id in overlay.content
+    assert "status=running" in overlay.content
+    assert "command" not in overlay.content
+    assert "output" not in overlay.content.lower().replace("outputsize", "")
+
+
+def test_provider_receives_transient_process_overlay_without_jsonl_append(tmp_path: Path) -> None:
+    process_id = "proc_" + "d" * 32
+    session_path = tmp_path / "session.jsonl"
+    service = ProcessSessionService(directory=tmp_path / "processes")
+    owner = ProcessOwner("app", str(tmp_path), "agent")
+    seen = []
+
+    def stream_fn(model, context, options):
+        seen.append(list(context.messages))
+        events = text_response_events(model, "checked")
+        return create_faux_provider(lambda _model, _context: events).stream_simple(
+            model,
+            context,
+            options,
+        )
+
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        session_path=str(session_path),
+        process_service=service,
+        process_owner=owner,
+    )
+    stale = tool_result(process_id)
+    session.agent.state.messages = [stale]
+    session._session_store.append_message(stale)
+    try:
+        session.prompt("what is the build status?", stream_fn=stream_fn)
+
+        provider_text = "\n".join(
+            block.text
+            for message in seen[-1]
+            for block in getattr(message, "content", [])
+            if isinstance(block, TextContent)
+        )
+        assert provider_text.count("<managed-process-state>") == 1
+        assert "status=unavailable" in provider_text
+        assert "reason=application-restarted" in provider_text
+        assert not any(
+            getattr(message, "customType", None) == "managed_process_state"
+            for message in session.messages
+        )
+        assert "managed_process_state" not in session_path.read_text(encoding="utf-8")
+    finally:
+        session.shutdown()
+        service.close()
+
+
+def test_process_overlay_is_absent_without_structured_references(tmp_path: Path) -> None:
+    service = ProcessSessionService(directory=tmp_path / "processes")
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        process_service=service,
+        process_owner=ProcessOwner("app", str(tmp_path), "agent"),
+    )
+    try:
+        transformed = session._transform_context([])
+        assert transformed == []
+    finally:
+        session.shutdown()
+        service.close()

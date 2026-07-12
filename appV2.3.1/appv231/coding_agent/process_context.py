@@ -10,6 +10,8 @@ from appv231.agent.types import AgentMessage
 from appv231.ai.types import AssistantMessage, ToolCall
 from appv231.coding_agent.processes.service import ProcessSessionService
 from appv231.coding_agent.processes.types import ProcessOwner
+from appv231.coding_agent.session_store import CustomMessage
+from appv231.ai.types import now_ms
 
 _PROCESS_ID = re.compile(r"^proc_[0-9a-f]{32}$")
 _ACTIVE_STATUSES = frozenset({"starting", "running", "stopping", "draining"})
@@ -137,6 +139,39 @@ class ProcessContextResolver:
         )
         return tuple(records[:16])
 
+    def overlay(self, messages: Sequence[AgentMessage]) -> CustomMessage | None:
+        return process_context_message(self.resolve(messages))
+
+
+def process_context_message(
+    records: Sequence[ProcessContextRecord],
+) -> CustomMessage | None:
+    if not records:
+        return None
+    lines = ["<managed-process-state>"]
+    for record in records[:16]:
+        fields = [
+            record.session_id,
+            f"status={record.status}",
+            f"cursor={record.cursor}",
+            f"outputSize={record.output_size}",
+        ]
+        if record.exit_code is not None:
+            fields.append(f"exitCode={record.exit_code}")
+        if record.durable_output:
+            fields.append("durableOutput=true")
+        if record.reason:
+            fields.append(f"reason={record.reason}")
+        lines.append(" ".join(fields))
+    lines.append("</managed-process-state>")
+    return CustomMessage(
+        custom_type="managed_process_state",
+        content="\n".join(lines),
+        display=False,
+        details=None,
+        timestamp=now_ms(),
+    )
+
 
 def _collect_detail_reference(
     details: Mapping[str, object],
@@ -192,5 +227,6 @@ __all__ = [
     "ProcessContextRecord",
     "ProcessContextResolver",
     "ProcessReference",
+    "process_context_message",
     "referenced_process_ids",
 ]
