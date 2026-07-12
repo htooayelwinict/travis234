@@ -266,6 +266,17 @@ def test_process_tool_validates_action_specific_arguments_and_hides_stdin(manage
         process.execute("p", {"action": "poll", "cursor": 0})
     with pytest.raises(ValueError, match="cursor must be a nonnegative integer"):
         process.execute("p", {"action": "poll", "session_id": "proc_x", "cursor": -1})
+    with pytest.raises(ValueError, match="poll does not accept wait_time_ms"):
+        process.execute(
+            "p",
+            {
+                "action": "poll",
+                "session_id": "proc_x",
+                "cursor": 0,
+                "yield_time_ms": 0,
+                "wait_time_ms": 1_000,
+            },
+        )
     with pytest.raises(ValueError, match="write does not accept cursor"):
         process.execute(
             "p",
@@ -436,6 +447,30 @@ def test_process_wait_uses_terminal_wait_streams_updates_and_is_sequential(manag
     assert "done" in text(result)
     assert updates
     assert process.execution_mode == "sequential"
+
+
+def test_process_normalizes_poll_with_wait_deadline_to_terminal_wait(managed_tools) -> None:
+    _service, _owner, bash, process = managed_tools
+    started = bash.execute(
+        "bash",
+        {
+            "command": python_command("import time; time.sleep(.05); print('done')"),
+            "yield_time_ms": 0,
+        },
+    )
+
+    result = process.execute(
+        "wait",
+        {
+            "action": "poll",
+            "session_id": started.details["sessionId"],
+            "cursor": started.details["nextCursor"],
+            "wait_time_ms": 60_000,
+        },
+    )
+
+    assert result.details["status"] == "exited"
+    assert "done" in text(result)
 
 
 @pytest.mark.parametrize("wait_time_ms", [999, 900_001, True])

@@ -167,6 +167,9 @@ def _validate_args(raw_args) -> dict[str, object]:
     action = args.get("action")
     if action not in PROCESS_ACTIONS:
         raise ValueError(f"action must be one of: {', '.join(PROCESS_ACTIONS)}")
+    if action == "poll" and "wait_time_ms" in args and "yield_time_ms" not in args:
+        action = "wait"
+        args["action"] = action
     unexpected = set(args) - _ACTION_FIELDS[action]
     if unexpected:
         name = sorted(unexpected)[0]
