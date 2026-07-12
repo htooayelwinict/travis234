@@ -137,6 +137,7 @@ from appv231.coding_agent.extensions import (
     wrap_registered_tools,
 )
 from appv231.coding_agent.model_registry import ModelRegistry
+from appv231.coding_agent.mailbox import CodingTurnMailbox, MailboxKind, QueuedCodingMessage
 from appv231.coding_agent.resource_loader import (
     DefaultPackageManager,
     DefaultResourceLoader,
@@ -265,6 +266,9 @@ __all__ = [
     "InMemoryAuthStorageBackend",
     "InMemorySettingsStorage",
     "ModelRegistry",
+    "CodingTurnMailbox",
+    "MailboxKind",
+    "QueuedCodingMessage",
     "MissingSessionCwdError",
     "PACKAGE_NAME",
     "SettingsManager",
