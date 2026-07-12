@@ -15,6 +15,7 @@ class ArtifactRef:
     path: Path
     kind: str
     access: Literal["read"] = "read"
+    remove_on_close: bool = True
 
 
 class ArtifactRegistry:
@@ -29,6 +30,7 @@ class ArtifactRegistry:
         path: Path,
         kind: str,
         access: Literal["read"] = "read",
+        remove_on_close: bool = True,
     ) -> ArtifactRef:
         resolved = path.expanduser().resolve(strict=False)
         with self._lock:
@@ -36,8 +38,24 @@ class ArtifactRegistry:
                 raise RuntimeError("Artifact registry is closed")
             existing = self._by_path.get(resolved)
             if existing is not None:
+                if existing.remove_on_close and not remove_on_close:
+                    existing = ArtifactRef(
+                        id=existing.id,
+                        path=existing.path,
+                        kind=existing.kind,
+                        access=existing.access,
+                        remove_on_close=False,
+                    )
+                    self._by_id[existing.id] = existing
+                    self._by_path[resolved] = existing
                 return existing
-            ref = ArtifactRef(id=f"artifact-{uuid.uuid4().hex}", path=resolved, kind=kind, access=access)
+            ref = ArtifactRef(
+                id=f"artifact-{uuid.uuid4().hex}",
+                path=resolved,
+                kind=kind,
+                access=access,
+                remove_on_close=remove_on_close,
+            )
             self._by_id[ref.id] = ref
             self._by_path[resolved] = ref
             return ref
@@ -64,6 +82,8 @@ class ArtifactRegistry:
             self._by_path.clear()
         if remove_files:
             for ref in refs:
+                if not ref.remove_on_close:
+                    continue
                 try:
                     ref.path.unlink()
                 except FileNotFoundError:

@@ -1076,7 +1076,9 @@ class AgentSession:
                 *self._create_subagent_tool_definitions(),
             ]
             if self.process_service is not None and self.process_owner is not None and self._is_allowed_tool("process"):
-                base_definitions.append(create_process_tool_definition(self.process_service, self.process_owner))
+                base_definitions.append(
+                    create_process_tool_definition(self.process_service, self.process_owner, self._artifacts)
+                )
             base_tools = [
                 wrap_tool_definition(definition, lambda: ToolContext(cwd=self.cwd, model=self.model))
                 for definition in base_definitions

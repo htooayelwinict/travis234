@@ -66,3 +66,18 @@ def test_output_spool_registers_truncated_artifact(tmp_path: Path) -> None:
 
     assert snapshot.artifact_id is not None
     assert registry.resolve_read(snapshot.artifact_id) == Path(snapshot.full_output_path).resolve()
+
+
+def test_artifact_registry_preserves_borrowed_files_on_close(tmp_path: Path) -> None:
+    owned = tmp_path / "owned.log"
+    borrowed = tmp_path / "borrowed.log"
+    owned.write_text("owned", encoding="utf-8")
+    borrowed.write_text("borrowed", encoding="utf-8")
+    registry = ArtifactRegistry()
+    registry.register(owned, "output")
+    registry.register(borrowed, "process-output", remove_on_close=False)
+
+    registry.close(remove_files=True)
+
+    assert not owned.exists()
+    assert borrowed.exists()

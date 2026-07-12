@@ -487,8 +487,22 @@ def _managed_bash_result(
     output = tail.content if tail is not None else snapshot.output
     output = output or "(no output)"
     if tail is not None and tail.truncated:
-        exported = service.export_output(owner, snapshot.session_id, tempfile.gettempdir())
-        artifact = artifacts.register(exported, kind="bash-output", access="read") if artifacts is not None else None
+        borrowed = snapshot.durable_output and snapshot.full_output_path is not None
+        exported = (
+            Path(snapshot.full_output_path)
+            if borrowed
+            else service.export_output(owner, snapshot.session_id, tempfile.gettempdir())
+        )
+        artifact = (
+            artifacts.register(
+                exported,
+                kind="bash-output",
+                access="read",
+                remove_on_close=not borrowed,
+            )
+            if artifacts is not None
+            else None
+        )
         details.update(
             {
                 "truncation": truncation_to_details(tail),
@@ -512,10 +526,15 @@ def _managed_bash_result(
         status = "Command aborted" if _is_aborted(signal) else "Command terminated"
         raise RuntimeError(_append_status(output, status))
     if snapshot.state is ProcessState.FAILED:
+        if snapshot.failure_code == "output_limit":
+            raise RuntimeError(
+                _append_status(output, "Command stopped after reaching the sanitized-output budget (not a timeout)")
+            )
         raise RuntimeError(_append_status(output, "Command failed to execute"))
     footer = (
         f"Process {snapshot.session_id} is {snapshot.state.value}; command continues in the background. "
-        f"Use process.poll with cursor {snapshot.next_cursor}. "
+        f"Use process.wait with cursor {snapshot.next_cursor} when the final result is required. "
+        f"Use process.poll for interactive or quick status checks. "
         f"Suggested poll delay: {snapshot.suggested_poll_delay_ms} ms."
     )
     return AgentToolResult(

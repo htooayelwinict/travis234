@@ -678,7 +678,7 @@ def _file_mutation_path_key(tool_name: str, args: Mapping[str, Any], cwd: str | 
 
 def _tool_call_may_change_state(tool_name: str, args: Mapping[str, Any]) -> bool:
     if tool_name == "process":
-        return args.get("action") not in {"poll", "list"}
+        return args.get("action") not in {"poll", "wait", "list"}
     if tool_name in MUTATING_TOOL_NAMES:
         return True
     if tool_name != "bash":

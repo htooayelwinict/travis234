@@ -12,6 +12,7 @@ from appv231.ai.providers.faux import create_faux_provider, faux_model, text_res
 from appv231.coding_agent.agent_session import AgentSession
 from appv231.coding_agent.artifacts import ArtifactRegistry
 from appv231.coding_agent.execution_backend import TrustedLocalBackend
+from appv231.coding_agent.processes.completions import ProcessCompletionStore
 from appv231.coding_agent.processes.local import create_local_process_transport
 from appv231.coding_agent.processes.service import ProcessSessionService
 from appv231.coding_agent.processes.types import (
@@ -56,22 +57,28 @@ def collect(service, owner, process_tool, started, timeout: float = 5):
 
 @pytest.fixture
 def managed_tools(tmp_path: Path):
+    store = ProcessCompletionStore(tmp_path / ".completions")
     service = ProcessSessionService(
         directory=tmp_path / ".processes",
+        completion_store=store,
         termination_grace_seconds=0.05,
     )
+    artifacts = ArtifactRegistry()
     owner = ProcessOwner("app-tools", str(tmp_path.resolve()), "agent")
     backend = TrustedLocalBackend()
     factory = lambda request: create_local_process_transport(request, backend)
     bash = create_bash_tool(
         str(tmp_path),
+        artifacts=artifacts,
         process_service=service,
         process_owner=owner,
         transport_factory=factory,
     )
-    process = create_process_tool(service, owner)
+    process = create_process_tool(service, owner, artifacts)
     yield service, owner, bash, process
     service.close()
+    artifacts.close(remove_files=True)
+    store.close()
 
 
 def test_managed_bash_default_yield_is_independent_from_timeout(tmp_path: Path) -> None:
@@ -340,13 +347,10 @@ def test_agent_session_prompt_keeps_required_managed_process_work_pending(tmp_pa
         process_owner=owner,
     )
     try:
-        assert (
-            "When a managed process result is required for the current request, treat status=running as unfinished work"
-            in session.system_prompt
-        )
-        assert "honor the suggested poll delay reported by bash/process" in session.system_prompt
-        assert "poll to a terminal state and inspect its final output before claiming completion" in session.system_prompt
-        assert "Leave a process detached only when the user explicitly requested it" in session.system_prompt
+        assert "Use process.poll only for interactive input, quick status checks" in session.system_prompt
+        assert "continue independent work first and then use process.wait" in session.system_prompt
+        assert "wait ignores output-only wakeups and does not set the command timeout" in session.system_prompt
+        assert "Leave a process detached only for a requested server/watcher" in session.system_prompt
     finally:
         session.shutdown()
         service.close()
@@ -396,3 +400,161 @@ def test_agent_loop_continues_after_bash_yields_without_waiting_for_exit(tmp_pat
     finally:
         session.shutdown()
         service.close()
+
+
+def test_process_wait_uses_terminal_wait_streams_updates_and_is_sequential(managed_tools) -> None:
+    _service, _owner, bash, process = managed_tools
+    started = bash.execute(
+        "bash",
+        {
+            "command": python_command(
+                "import time; print('progress', flush=True); time.sleep(.1); print('done')"
+            ),
+            "yield_time_ms": 0,
+        },
+    )
+    updates = []
+
+    result = process.execute(
+        "wait",
+        {
+            "action": "wait",
+            "session_id": started.details["sessionId"],
+            "cursor": started.details["nextCursor"],
+            "wait_time_ms": 60_000,
+        },
+        on_update=updates.append,
+    )
+
+    assert result.details["status"] == "exited"
+    assert result.details["durableOutput"] is True
+    assert result.details["nextCursor"] == result.details["outputSize"]
+    assert "done" in text(result)
+    assert updates
+    assert process.execution_mode == "sequential"
+
+
+@pytest.mark.parametrize("wait_time_ms", [999, 900_001, True])
+def test_process_wait_validates_host_deadline(managed_tools, wait_time_ms) -> None:
+    service, owner, _bash, _process = managed_tools
+    definition = create_process_tool_definition(service, owner)
+
+    with pytest.raises(ValueError, match="wait_time_ms"):
+        definition.execute(
+            "wait",
+            {
+                "action": "wait",
+                "session_id": "proc_" + "a" * 32,
+                "cursor": 0,
+                "wait_time_ms": wait_time_ms,
+            },
+        )
+
+
+def test_process_wait_collapses_large_output_to_bounded_borrowed_artifact(tmp_path: Path) -> None:
+    store = ProcessCompletionStore(tmp_path / "completions")
+    service = ProcessSessionService(directory=tmp_path / "processes", completion_store=store)
+    artifacts = ArtifactRegistry()
+    owner = ProcessOwner("app", str(tmp_path.resolve()), "agent")
+    backend = TrustedLocalBackend()
+    bash = create_bash_tool(
+        str(tmp_path),
+        artifacts=artifacts,
+        process_service=service,
+        process_owner=owner,
+        transport_factory=lambda launch: create_local_process_transport(launch, backend),
+    )
+    process = create_process_tool(service, owner, artifacts)
+    try:
+        started = bash.execute(
+            "bash",
+            {"command": python_command("print('x' * (2 * 1024 * 1024))"), "yield_time_ms": 0},
+        )
+        result = process.execute(
+            "wait",
+            {
+                "action": "wait",
+                "session_id": started.details["sessionId"],
+                "cursor": started.details["nextCursor"],
+                "wait_time_ms": 60_000,
+            },
+        )
+        full_output = Path(result.details["fullOutputPath"])
+
+        assert result.details["nextCursor"] == result.details["outputSize"]
+        assert len(text(result).encode("utf-8")) < 60_000
+        assert result.details["truncation"]["truncated"] is True
+        assert artifacts.resolve_read(result.details["artifactId"]) == full_output
+        assert full_output.stat().st_size == 2 * 1024 * 1024 + 1
+        artifacts.close(remove_files=True)
+        assert full_output.exists()
+    finally:
+        service.close()
+        artifacts.close(remove_files=True)
+        store.close()
+
+
+def test_agent_uses_one_wait_call_despite_multiple_process_updates(tmp_path: Path) -> None:
+    store = ProcessCompletionStore(tmp_path / "completions")
+    service = ProcessSessionService(directory=tmp_path / "processes", completion_store=store)
+    owner = ProcessOwner("app", str(tmp_path.resolve()), "agent")
+    model = faux_model()
+    calls = {"count": 0}
+    command = python_command(
+        "import time; print('one', flush=True); time.sleep(.1); "
+        "print('two', flush=True); time.sleep(.1); print('three')"
+    )
+
+    def stream_fn(active_model, context, options):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            events = tool_call_response_events(
+                active_model,
+                "bash",
+                {"command": command, "yield_time_ms": 0},
+                call_id="bash-call",
+            )
+        elif calls["count"] == 2:
+            process_id = service.list(owner)[0].session_id
+            events = tool_call_response_events(
+                active_model,
+                "process",
+                {
+                    "action": "wait",
+                    "session_id": process_id,
+                    "cursor": 0,
+                    "wait_time_ms": 60_000,
+                },
+                call_id="wait-call",
+            )
+        else:
+            events = text_response_events(active_model, "completed")
+        return create_faux_provider(lambda _model, _context: events).stream_simple(
+            active_model,
+            context,
+            options,
+        )
+
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=model,
+        process_service=service,
+        process_owner=owner,
+    )
+    try:
+        messages = session.prompt("run the job and wait for its result", stream_fn=stream_fn)
+        process_results = [
+            message
+            for message in session.messages
+            if getattr(message, "role", None) == "toolResult"
+            and getattr(message, "tool_name", None) == "process"
+        ]
+
+        assert calls["count"] == 3
+        assert len(process_results) == 1
+        assert process_results[0].details["status"] == "exited"
+        assert messages[-1].content[0].text == "completed"
+    finally:
+        session.shutdown()
+        service.close()
+        store.close()

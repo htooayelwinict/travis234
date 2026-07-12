@@ -157,6 +157,7 @@ def test_blocking_disabled_disables_loop_halts_but_keeps_guidance() -> None:
 
 def test_process_poll_and_list_are_observations_but_controls_are_mutations() -> None:
     assert _tool_call_may_change_state("process", {"action": "poll", "session_id": "proc_x", "cursor": 0}) is False
+    assert _tool_call_may_change_state("process", {"action": "wait", "session_id": "proc_x", "cursor": 0}) is False
     assert _tool_call_may_change_state("process", {"action": "list"}) is False
     for action in ("write", "resize", "interrupt", "terminate", "kill"):
         assert _tool_call_may_change_state("process", {"action": action}) is True

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import tempfile
 from collections.abc import Mapping
+from pathlib import Path
 
 from appv231.agent.types import AgentTool, AgentToolResult
 from appv231.ai.types import TextContent
+from appv231.coding_agent.artifacts import ArtifactRegistry
 from appv231.coding_agent.processes.service import ProcessSessionService
 from appv231.coding_agent.processes.types import (
     DEFAULT_PROCESS_POLL_DELAY_MS,
@@ -14,8 +17,9 @@ from appv231.coding_agent.processes.types import (
     ProcessState,
 )
 from appv231.coding_agent.tools.types import ToolDefinition, wrap_tool_definition
+from appv231.coding_agent.tools.truncate import truncation_to_details
 
-PROCESS_ACTIONS = ("poll", "write", "resize", "interrupt", "terminate", "kill", "list")
+PROCESS_ACTIONS = ("poll", "wait", "write", "resize", "interrupt", "terminate", "kill", "list")
 PROCESS_SCHEMA = {
     "type": "object",
     "properties": {
@@ -25,6 +29,7 @@ PROCESS_SCHEMA = {
         "input": {"type": "string"},
         "eof": {"type": "boolean"},
         "yield_time_ms": {"type": "integer", "minimum": 0, "maximum": 30000},
+        "wait_time_ms": {"type": "integer", "minimum": 1000, "maximum": 900000},
         "max_bytes": {"type": "integer", "minimum": 1024, "maximum": 51200},
         "rows": {"type": "integer", "minimum": 2, "maximum": 200},
         "cols": {"type": "integer", "minimum": 20, "maximum": 500},
@@ -34,6 +39,7 @@ PROCESS_SCHEMA = {
 
 _ACTION_FIELDS = {
     "poll": {"action", "session_id", "cursor", "yield_time_ms", "max_bytes"},
+    "wait": {"action", "session_id", "cursor", "wait_time_ms", "max_bytes"},
     "write": {"action", "session_id", "input", "eof", "yield_time_ms"},
     "resize": {"action", "session_id", "rows", "cols"},
     "interrupt": {"action", "session_id", "yield_time_ms"},
@@ -46,35 +52,29 @@ _ACTION_FIELDS = {
 def create_process_tool_definition(
     service: ProcessSessionService,
     owner: ProcessOwner,
+    artifacts: ArtifactRegistry | None = None,
 ) -> ToolDefinition:
     return ToolDefinition(
         name="process",
         label="process",
         description=(
-            "Inspect or control commands returned by bash with status=running. Poll with the exact nextCursor; "
+            "Inspect or control commands returned by bash with status=running. Wait for required results; "
+            "poll with the exact nextCursor for interactive or incremental output; "
             "write input, resize a PTY, interrupt, terminate, kill, or list current-workspace jobs."
         ),
         parameters=PROCESS_SCHEMA,
         prompt_snippet="Poll and control managed background commands",
         prompt_guidelines=[
-            "Use the nextCursor returned by bash/process so output is not repeated.",
-            (
-                "Do not busy-poll unchanged processes; honor the suggested poll delay reported by bash/process and "
-                "continue other work when possible."
-            ),
-            (
-                "When a managed process result is required for the current request, treat status=running as unfinished "
-                "work: continue useful independent work when possible, then poll to a terminal state and inspect its "
-                "final output before claiming completion."
-            ),
-            (
-                "Leave a process detached only when the user explicitly requested it or its result is not required; "
-                "report the process ID and current status."
-            ),
+            "Use the exact nextCursor returned by bash/process so output is not repeated.",
+            "Use process.poll only for interactive input, quick status checks, or intentionally incremental output.",
+            "When a command result is required, continue independent work first and then use process.wait; wait ignores output-only wakeups and does not set the command timeout.",
+            "Leave a process detached only for a requested server/watcher or when its result is not required.",
+            "Set bash.timeout only when an actual execution deadline is intended.",
         ],
         execute=lambda tid, args, signal=None, on_update=None, ctx=None: _execute_process(
             service,
             owner,
+            artifacts,
             tid,
             args,
             signal,
@@ -82,16 +82,22 @@ def create_process_tool_definition(
             ctx,
         ),
         render_call=_render_process_call,
+        execution_mode="sequential",
     )
 
 
-def create_process_tool(service: ProcessSessionService, owner: ProcessOwner) -> AgentTool:
-    return wrap_tool_definition(create_process_tool_definition(service, owner))
+def create_process_tool(
+    service: ProcessSessionService,
+    owner: ProcessOwner,
+    artifacts: ArtifactRegistry | None = None,
+) -> AgentTool:
+    return wrap_tool_definition(create_process_tool_definition(service, owner, artifacts))
 
 
 def _execute_process(
     service: ProcessSessionService,
     owner: ProcessOwner,
+    artifacts: ArtifactRegistry | None,
     _tool_call_id,
     raw_args,
     signal=None,
@@ -100,7 +106,7 @@ def _execute_process(
 ) -> AgentToolResult:
     args = _validate_args(raw_args)
     action = args["action"]
-    if signal is not None and getattr(signal, "aborted", False):
+    if action != "wait" and signal is not None and getattr(signal, "aborted", False):
         raise RuntimeError("Operation aborted")
     if action == "list":
         return _list_result(service.list(owner))
@@ -113,6 +119,18 @@ def _execute_process(
             wait_ms=args.get("yield_time_ms", DEFAULT_PROCESS_POLL_DELAY_MS),
             max_bytes=args.get("max_bytes", 51_200),
         )
+    elif action == "wait":
+        snapshot = service.wait_terminal(
+            owner,
+            session_id,
+            args["cursor"],
+            wait_ms=args.get("wait_time_ms", 60_000),
+            max_bytes=args.get("max_bytes", 51_200),
+            signal=signal,
+            on_update=(lambda update: on_update(_snapshot_result(update))) if on_update else None,
+        )
+        if snapshot.state.terminal:
+            return _terminal_process_result(service, owner, snapshot, artifacts)
     elif action == "write":
         snapshot = service.write(
             owner,
@@ -153,7 +171,7 @@ def _validate_args(raw_args) -> dict[str, object]:
         raise ValueError(f"{action} does not accept {name}")
     if action != "list":
         _require_string(args, action, "session_id")
-    if action == "poll":
+    if action in {"poll", "wait"}:
         cursor = args.get("cursor")
         if not isinstance(cursor, int) or isinstance(cursor, bool) or cursor < 0:
             raise ValueError("cursor must be a nonnegative integer")
@@ -169,6 +187,10 @@ def _validate_args(raw_args) -> dict[str, object]:
         value = args["yield_time_ms"]
         if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 30_000:
             raise ValueError("yield_time_ms must be an integer between 0 and 30000")
+    if "wait_time_ms" in args:
+        value = args["wait_time_ms"]
+        if not isinstance(value, int) or isinstance(value, bool) or not 1_000 <= value <= 900_000:
+            raise ValueError("wait_time_ms must be an integer between 1000 and 900000")
     if "max_bytes" in args:
         value = args["max_bytes"]
         if not isinstance(value, int) or isinstance(value, bool) or not 1024 <= value <= 51_200:
@@ -198,11 +220,66 @@ def _snapshot_footer(snapshot: ProcessSnapshot) -> str:
     if snapshot.state is ProcessState.TERMINATED:
         return f"Process {snapshot.session_id} was terminated (exit {snapshot.exit_code}); {position}."
     if snapshot.state is ProcessState.FAILED:
+        if snapshot.failure_code == "output_limit":
+            return (
+                f"Process {snapshot.session_id} was stopped after reaching the sanitized-output budget; "
+                f"{position}. This was not a command timeout."
+            )
         return f"Process {snapshot.session_id} failed; {position}."
     return (
         f"Process {snapshot.session_id} is {snapshot.state.value}; {position}. "
+        f"Use process.wait when the final result is required. "
         f"Suggested poll delay: {snapshot.suggested_poll_delay_ms} ms."
     )
+
+
+def _terminal_process_result(
+    service: ProcessSessionService,
+    owner: ProcessOwner,
+    snapshot: ProcessSnapshot,
+    artifacts: ArtifactRegistry | None,
+) -> AgentToolResult:
+    tail = service.tail_snapshot(owner, snapshot.session_id)
+    details = snapshot.as_details()
+    details["nextCursor"] = snapshot.output_size
+    full_output_path = Path(snapshot.full_output_path) if snapshot.full_output_path else None
+    artifact = None
+    if full_output_path is not None and artifacts is not None:
+        artifact = artifacts.register(
+            full_output_path,
+            kind="process-output",
+            access="read",
+            remove_on_close=False,
+        )
+    elif tail.truncated:
+        full_output_path = service.export_output(owner, snapshot.session_id, tempfile.gettempdir())
+        if artifacts is not None:
+            artifact = artifacts.register(full_output_path, kind="process-output", access="read")
+    if full_output_path is not None:
+        details["fullOutputPath"] = str(full_output_path)
+    if artifact is not None:
+        details["artifactId"] = artifact.id
+    if tail.truncated:
+        details["truncation"] = truncation_to_details(tail)
+    terminal = ProcessSnapshot(
+        session_id=snapshot.session_id,
+        state=snapshot.state,
+        output=tail.content,
+        cursor=snapshot.cursor,
+        next_cursor=snapshot.output_size,
+        output_size=snapshot.output_size,
+        exit_code=snapshot.exit_code,
+        tty=snapshot.tty,
+        elapsed_ms=snapshot.elapsed_ms,
+        command=snapshot.command,
+        cwd=snapshot.cwd,
+        suggested_poll_delay_ms=snapshot.suggested_poll_delay_ms,
+        durable_output=snapshot.durable_output,
+        full_output_path=str(full_output_path) if full_output_path is not None else None,
+        failure_code=snapshot.failure_code,
+    )
+    result = _snapshot_result(terminal)
+    return AgentToolResult(content=result.content, details=details)
 
 
 def _list_result(snapshots: tuple[ProcessSnapshot, ...]) -> AgentToolResult:

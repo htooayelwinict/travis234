@@ -247,8 +247,8 @@ class ProcessSessionService:
         signal=None,
         on_update: ProcessOutputListener | None = None,
     ) -> ProcessSnapshot:
-        if not 0 <= wait_ms <= 60_000:
-            raise ValueError("wait_ms must be between 0 and 60000")
+        if not 0 <= wait_ms <= 900_000:
+            raise ValueError("wait_ms must be between 0 and 900000")
         if not 1 <= max_bytes <= self._max_output_bytes:
             raise ValueError(f"max_bytes must be between 1 and {self._max_output_bytes}")
         try:
