@@ -63,7 +63,8 @@ def test_process_schema_matches_action_specific_runtime_contracts() -> None:
     valid = [
         {"action": "poll", "session_id": "proc_x", "cursor": 0, "yield_time_ms": 1_000},
         {"action": "wait", "session_id": "proc_x", "cursor": 4, "wait_time_ms": 60_000},
-        {"action": "write", "session_id": "proc_x", "input": "yes\n", "eof": False},
+        {"action": "write", "session_id": "proc_x", "input": "yes", "eof": False},
+        {"action": "write_raw", "session_id": "proc_x", "input": "yes\n", "eof": False},
         {"action": "resize", "session_id": "proc_x", "rows": 24, "cols": 80},
         {"action": "interrupt", "session_id": "proc_x", "yield_time_ms": 1_000},
         {"action": "terminate", "session_id": "proc_x", "yield_time_ms": 2_000},
@@ -149,6 +150,14 @@ def test_process_argument_preparation_explains_required_wait_shape() -> None:
 
     with pytest.raises(ValueError, match=r"cursor must be a nonnegative integer.*tool process"):
         process_tool_module.prepare_process_arguments({"action": "poll", "session_id": "proc_x"})
+
+
+def test_process_argument_preparation_preserves_legacy_write_shapes() -> None:
+    submitted = {"action": "write_line", "session_id": "proc_x", "input": "yes"}
+    raw = {"action": "write", "session_id": "proc_x", "input": "yes\n"}
+
+    assert process_tool_module.prepare_process_arguments(submitted)["action"] == "write"
+    assert process_tool_module.prepare_process_arguments(raw)["action"] == "write_raw"
 
 
 @pytest.fixture
@@ -688,6 +697,90 @@ def test_managed_bash_warns_models_not_to_infer_execution_deadlines(managed_tool
     definition = create_bash_tool_definition(".")
 
     assert "Never infer a timeout from expected command duration" in definition.description
+
+
+def test_process_write_explains_raw_input_and_line_submission(managed_tools) -> None:
+    service, owner, _bash, _process = managed_tools
+    definition = create_process_tool_definition(service, owner)
+    write_schema = next(
+        item for item in definition.parameters["oneOf"] if item["properties"]["action"].get("const") == "write"
+    )
+    raw_schema = next(
+        item for item in definition.parameters["oneOf"] if item["properties"]["action"].get("const") == "write_raw"
+    )
+
+    assert "appends one newline" in write_schema["properties"]["input"]["description"]
+    assert "exactly as provided" in raw_schema["properties"]["input"]["description"]
+    assert any("write_raw" in guideline for guideline in definition.prompt_guidelines)
+
+
+def test_process_write_submits_one_line(managed_tools) -> None:
+    _service, _owner, bash, process = managed_tools
+    started = bash.execute(
+        "bash",
+        {
+            "command": python_command(
+                "import sys; print('READY', flush=True); line=sys.stdin.readline(); print('RECEIVED:'+line.rstrip('\\n'))"
+            ),
+            "yield_time_ms": 0,
+        },
+    )
+
+    written = process.execute(
+        "write-line",
+        {
+            "action": "write",
+            "session_id": started.details["sessionId"],
+            "input": "hello-process",
+            "yield_time_ms": 1_000,
+        },
+    )
+    result = process.execute(
+        "wait",
+        {
+            "action": "wait",
+            "session_id": started.details["sessionId"],
+            "cursor": written.details["nextCursor"],
+            "wait_time_ms": 60_000,
+        },
+    )
+
+    assert result.details["status"] == "exited"
+    assert result.details["exitCode"] == 0
+    assert "RECEIVED:hello-process" in text(result)
+
+
+def test_process_write_raw_preserves_exact_input(managed_tools) -> None:
+    _service, _owner, bash, process = managed_tools
+    started = bash.execute(
+        "bash",
+        {
+            "command": python_command("import sys; print(repr(sys.stdin.read(5)))"),
+            "yield_time_ms": 0,
+        },
+    )
+
+    written = process.execute(
+        "write-raw",
+        {
+            "action": "write_raw",
+            "session_id": started.details["sessionId"],
+            "input": "hello",
+            "yield_time_ms": 1_000,
+        },
+    )
+    result = process.execute(
+        "wait",
+        {
+            "action": "wait",
+            "session_id": started.details["sessionId"],
+            "cursor": written.details["nextCursor"],
+            "wait_time_ms": 60_000,
+        },
+    )
+
+    assert result.details["status"] == "exited"
+    assert "'hello'" in text(result)
 
 
 def test_process_normalizes_poll_with_wait_deadline_to_terminal_wait(managed_tools) -> None:

@@ -21,12 +21,17 @@ from appv231.coding_agent.processes.types import (
 from appv231.coding_agent.tools.types import ToolDefinition, wrap_tool_definition
 from appv231.coding_agent.tools.truncate import truncation_to_details
 
-PROCESS_ACTIONS = ("poll", "wait", "write", "resize", "interrupt", "terminate", "kill", "list")
+PROCESS_ACTIONS = ("poll", "wait", "write", "write_raw", "resize", "interrupt", "terminate", "kill", "list")
 
 _PROCESS_FIELDS = {
     "session_id": {"type": "string", "minLength": 1, "description": "Exact process session ID"},
     "cursor": {"type": "integer", "minimum": 0, "description": "Exact nextCursor from the last result"},
-    "input": {"type": "string", "description": "Input to write to the process"},
+    "input": {
+        "type": "string",
+        "description": (
+            "Raw input to write exactly as provided. Include a trailing newline (\\n) to submit a line or press Enter"
+        ),
+    },
     "eof": {"type": "boolean", "description": "Close stdin after writing"},
     "yield_time_ms": {
         "type": "integer",
@@ -51,6 +56,8 @@ def _process_action_schema(action: str, fields: tuple[str, ...], required: tuple
         "action": {"type": "string", "const": action, "description": f"Use exactly '{action}' for this action"}
     }
     properties.update({name: dict(_PROCESS_FIELDS[name]) for name in fields})
+    if action == "write":
+        properties["input"]["description"] = "One line of input without a newline; the tool appends one newline to press Enter"
     return {
         "type": "object",
         "title": f"{action} action",
@@ -67,6 +74,7 @@ PROCESS_SCHEMA = {
         _process_action_schema("poll", ("session_id", "cursor", "yield_time_ms", "max_bytes"), ("session_id", "cursor")),
         _process_action_schema("wait", ("session_id", "cursor", "wait_time_ms", "max_bytes"), ("session_id", "cursor")),
         _process_action_schema("write", ("session_id", "input", "eof", "yield_time_ms"), ("session_id", "input")),
+        _process_action_schema("write_raw", ("session_id", "input", "eof", "yield_time_ms"), ("session_id", "input")),
         _process_action_schema("resize", ("session_id", "rows", "cols"), ("session_id", "rows", "cols")),
         _process_action_schema("interrupt", ("session_id", "yield_time_ms"), ("session_id",)),
         _process_action_schema("terminate", ("session_id", "yield_time_ms"), ("session_id",)),
@@ -82,6 +90,7 @@ _ACTION_FIELDS = {
     "poll": {"action", "session_id", "cursor", "yield_time_ms", "max_bytes"},
     "wait": {"action", "session_id", "cursor", "wait_time_ms", "max_bytes"},
     "write": {"action", "session_id", "input", "eof", "yield_time_ms"},
+    "write_raw": {"action", "session_id", "input", "eof", "yield_time_ms"},
     "resize": {"action", "session_id", "rows", "cols"},
     "interrupt": {"action", "session_id", "yield_time_ms"},
     "terminate": {"action", "session_id", "yield_time_ms"},
@@ -126,6 +135,14 @@ def prepare_process_arguments(raw_args):
         args[field] = _coerce_process_integer(args[field])
 
     action = args.get("action")
+    if action == "write_line":
+        args["action"] = "write"
+        action = "write"
+    if action == "write" and isinstance(args.get("input"), str) and any(
+        character in args["input"] for character in "\r\n"
+    ):
+        args["action"] = "write_raw"
+        action = "write_raw"
     if action == "wait" and "yield_time_ms" in args:
         if "wait_time_ms" in args:
             raise ValueError("wait action received both wait_time_ms and yield_time_ms")
@@ -179,7 +196,7 @@ def create_process_tool_definition(
         description=(
             "Inspect or control commands returned by bash with status=running. Wait for required results; "
             "poll with the exact nextCursor for interactive or incremental output; "
-            "write input, resize a PTY, interrupt, terminate, kill, or list current-workspace jobs."
+            "write raw input or a submitted line, resize a PTY, interrupt, terminate, kill, or list current-workspace jobs."
         ),
         parameters=PROCESS_SCHEMA,
         prompt_snippet="Poll and control managed background commands",
@@ -190,6 +207,7 @@ def create_process_tool_definition(
             "When the final result is required, do not call the poll action before the wait action; use one wait from the latest cursor and act on its terminal result.",
             f"Exact terminal-wait shape: Call tool process with {PROCESS_WAIT_EXAMPLE}; never use yield_time_ms with wait.",
             f"Exact quick-poll shape: Call tool process with {PROCESS_POLL_EXAMPLE}; never use wait_time_ms with poll.",
+            "Use write to submit one line or press Enter. Use write_raw only for exact bytes, control sequences, or partial input.",
             "Do not repeat unchanged file reads around process checks; retain earlier read results unless a tool operation could have changed that file.",
             "Leave a process detached only for a requested server/watcher or when its result is not required.",
             "Set bash.timeout only when an actual execution deadline is intended.",
@@ -261,11 +279,14 @@ def _execute_process(
             return _recover_invalid_cursor(service, owner, session_id, args, error, artifacts)
         if snapshot.state.terminal:
             return _terminal_process_result(service, owner, snapshot, artifacts)
-    elif action == "write":
+    elif action in {"write", "write_raw"}:
+        input_text = args["input"]
+        if action == "write":
+            input_text += "\n"
         snapshot = service.write(
             owner,
             session_id,
-            args["input"],
+            input_text,
             eof=args.get("eof", False),
             wait_ms=args.get("yield_time_ms", 1000),
         )
@@ -338,8 +359,10 @@ def _validate_args(raw_args) -> dict[str, object]:
         cursor = args.get("cursor")
         if not isinstance(cursor, int) or isinstance(cursor, bool) or cursor < 0:
             raise ValueError("cursor must be a nonnegative integer")
-    elif action == "write":
+    elif action in {"write", "write_raw"}:
         _require_string(args, action, "input", allow_empty=True)
+        if action == "write" and any(character in args["input"] for character in "\r\n"):
+            raise ValueError("write input must contain exactly one line without a newline; use write_raw for exact input")
         if "eof" in args and not isinstance(args["eof"], bool):
             raise ValueError("eof must be a boolean")
     elif action == "resize":
