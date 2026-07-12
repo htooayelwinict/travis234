@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import queue
 import secrets
 import shutil
@@ -13,10 +14,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from appv231.coding_agent.processes.completions import ProcessCompletionStore
 from appv231.coding_agent.processes.output import SanitizedOutputSpool
 from appv231.coding_agent.processes.transport import ProcessTransport
 from appv231.coding_agent.processes.types import (
     ProcessClosedError,
+    ProcessCompletionRecord,
     ProcessEvent,
     ProcessInputLimitError,
     ProcessLaunchRequest,
@@ -26,6 +29,7 @@ from appv231.coding_agent.processes.types import (
     ProcessSnapshot,
     ProcessState,
     ProcessStateError,
+    ProcessWaitCancelledError,
     StopCause,
 )
 
@@ -73,6 +77,10 @@ class _ManagedProcess:
         self.terminate_sent = False
         self.kill_sent = False
         self.event_emitted = False
+        self.durable_output = False
+        self.full_output_path: str | None = None
+        self.failure_code: str | None = None
+        self.persistence_error: str | None = None
         self.active_calls = 0
         self.foreground_update: ProcessOutputListener | None = None
         self.force_finalize = threading.Event()
@@ -95,6 +103,8 @@ class ProcessSessionService:
         termination_grace_seconds: float = 2,
         drain_timeout_seconds: float = 1,
         clock: Callable[[], float] = time.monotonic,
+        completion_store: ProcessCompletionStore | None = None,
+        wall_clock: Callable[[], float] = time.time,
     ) -> None:
         if max_active < 1:
             raise ValueError("max_active must be positive")
@@ -112,6 +122,8 @@ class ProcessSessionService:
         self._termination_grace_seconds = max(0, termination_grace_seconds)
         self._drain_timeout_seconds = max(0, drain_timeout_seconds)
         self._clock = clock
+        self._wall_clock = wall_clock
+        self._completion_store = completion_store
         self._records: dict[str, _ManagedProcess] = {}
         self._listeners: list[ProcessListener] = []
         self._starting = 0
@@ -177,15 +189,64 @@ class ProcessSessionService:
         self._validate_wait(wait_ms)
         if not 1 <= max_bytes <= self._max_output_bytes:
             raise ValueError(f"max_bytes must be between 1 and {self._max_output_bytes}")
-        with self._record_call(owner, session_id) as record:
-            deadline = self._clock() + wait_ms / 1000
-            with record.condition:
-                while record.output.size <= cursor and not record.state.terminal:
-                    remaining = deadline - self._clock()
-                    if remaining <= 0:
-                        break
-                    record.condition.wait(min(remaining, 0.05))
-            return self._snapshot(record, cursor, max_bytes)
+        try:
+            with self._record_call(owner, session_id) as record:
+                deadline = self._clock() + wait_ms / 1000
+                with record.condition:
+                    while record.output.size <= cursor and not record.state.terminal:
+                        remaining = deadline - self._clock()
+                        if remaining <= 0:
+                            break
+                        record.condition.wait(min(remaining, 0.05))
+                return self._snapshot(record, cursor, max_bytes)
+        except ProcessNotFoundError:
+            recovered = self._resolve_completion(owner, session_id, cursor, max_bytes)
+            if recovered is not None:
+                return recovered
+            raise
+
+    def wait_terminal(
+        self,
+        owner: ProcessOwner,
+        session_id: str,
+        cursor: int,
+        *,
+        wait_ms: int = 60_000,
+        max_bytes: int = 51_200,
+        signal=None,
+        on_update: ProcessOutputListener | None = None,
+    ) -> ProcessSnapshot:
+        if not 0 <= wait_ms <= 60_000:
+            raise ValueError("wait_ms must be between 0 and 60000")
+        if not 1 <= max_bytes <= self._max_output_bytes:
+            raise ValueError(f"max_bytes must be between 1 and {self._max_output_bytes}")
+        try:
+            with self._record_call(owner, session_id) as record:
+                deadline = self._clock() + wait_ms / 1000
+                update_cursor = cursor
+                while True:
+                    with record.condition:
+                        if record.state.terminal:
+                            return self._snapshot(record, cursor, max_bytes)
+                        if signal is not None and getattr(signal, "aborted", False):
+                            raise ProcessWaitCancelledError(session_id)
+                        remaining = deadline - self._clock()
+                        if remaining <= 0:
+                            return self._snapshot(record, cursor, max_bytes)
+                        record.condition.wait(min(remaining, 0.1))
+                        current_size = record.output.size
+                    if on_update is not None and current_size > update_cursor:
+                        update = self._snapshot(record, update_cursor, max_bytes)
+                        update_cursor = update.next_cursor
+                        try:
+                            on_update(update)
+                        except BaseException:
+                            pass
+        except ProcessNotFoundError:
+            recovered = self._resolve_completion(owner, session_id, cursor, max_bytes)
+            if recovered is not None:
+                return recovered
+            raise
 
     def write(
         self,
@@ -335,15 +396,26 @@ class ProcessSessionService:
         shutil.rmtree(self._directory, ignore_errors=True)
 
     def export_output(self, owner: ProcessOwner, session_id: str, directory: str | Path) -> Path:
-        with self._record_call(owner, session_id) as record:
-            with record.condition:
-                if not record.state.terminal:
-                    raise ProcessStateError("Cannot export output while process is active")
-            return record.output.export_copy(directory)
+        try:
+            with self._record_call(owner, session_id) as record:
+                with record.condition:
+                    if not record.state.terminal:
+                        raise ProcessStateError("Cannot export output while process is active")
+                return record.output.export_copy(directory)
+        except ProcessNotFoundError:
+            recovered = self._inspect_completion(owner, session_id)
+            if recovered is None or recovered.full_output_path is None:
+                raise
+            return self._copy_durable_output(Path(recovered.full_output_path), directory)
 
     def tail_snapshot(self, owner: ProcessOwner, session_id: str):
-        with self._record_call(owner, session_id) as record:
-            return record.output.tail_snapshot()
+        try:
+            with self._record_call(owner, session_id) as record:
+                return record.output.tail_snapshot()
+        except ProcessNotFoundError:
+            if self._completion_store is None:
+                raise
+            return self._completion_store.tail_snapshot(owner, session_id)
 
     def _reserve_start(self) -> None:
         self._prune()
@@ -460,14 +532,17 @@ class ProcessSessionService:
             record.input_queue.put_nowait(None)
             self._drain_readers(record)
             record.output.finish()
+            if record.stop_cause is StopCause.TIMEOUT:
+                terminal_state = ProcessState.TIMED_OUT
+            elif record.stop_cause is not None:
+                terminal_state = ProcessState.TERMINATED
+            else:
+                terminal_state = ProcessState.EXITED
             with record.condition:
-                if record.stop_cause is StopCause.TIMEOUT:
-                    record.state = ProcessState.TIMED_OUT
-                elif record.stop_cause is not None:
-                    record.state = ProcessState.TERMINATED
-                else:
-                    record.state = ProcessState.EXITED
                 record.terminal_at = self._clock()
+            self._persist_completion(record, terminal_state)
+            with record.condition:
+                record.state = terminal_state
                 record.condition.notify_all()
             self._emit_terminal(record)
         except BaseException as error:  # noqa: BLE001 - publish deterministic failure instead of losing monitor.
@@ -475,10 +550,12 @@ class ProcessSessionService:
                 record.output_error = str(error)
                 record.state = ProcessState.FAILED
                 record.terminal_at = self._clock()
-                record.condition.notify_all()
             try:
                 record.output.finish()
             finally:
+                self._persist_completion(record, ProcessState.FAILED)
+                with record.condition:
+                    record.condition.notify_all()
                 self._emit_terminal(record)
 
     def _drain_readers(self, record: _ManagedProcess) -> None:
@@ -609,7 +686,69 @@ class ProcessSessionService:
                 elapsed_ms=max(0, int((elapsed_at - record.started_at) * 1000)),
                 command=record.request.command,
                 cwd=record.request.cwd,
+                durable_output=record.durable_output,
+                full_output_path=record.full_output_path,
+                failure_code=record.failure_code,
             )
+
+    def _persist_completion(self, record: _ManagedProcess, state: ProcessState) -> None:
+        if self._completion_store is None:
+            return
+        terminal_at = record.terminal_at if record.terminal_at is not None else self._clock()
+        completion = ProcessCompletionRecord(
+            session_id=record.session_id,
+            state=state,
+            exit_code=record.exit_code,
+            output_size=record.output.size,
+            elapsed_ms=max(0, int((terminal_at - record.started_at) * 1000)),
+            completed_at=self._wall_clock(),
+            launch_session_id=record.request.launch_session_id,
+            failure_code=record.failure_code,
+            tty=record.request.tty,
+        )
+        try:
+            output_path = self._completion_store.persist(record.owner, completion, record.output.path)
+        except Exception as error:  # noqa: BLE001 - terminal publication must survive persistence failure.
+            record.persistence_error = type(error).__name__[:80]
+            return
+        record.full_output_path = str(output_path)
+        record.durable_output = True
+
+    def _resolve_completion(
+        self,
+        owner: ProcessOwner,
+        session_id: str,
+        cursor: int,
+        max_bytes: int,
+    ) -> ProcessSnapshot | None:
+        if self._completion_store is None:
+            return None
+        return self._completion_store.resolve(owner, session_id, cursor=cursor, max_bytes=max_bytes)
+
+    def _inspect_completion(self, owner: ProcessOwner, session_id: str) -> ProcessSnapshot | None:
+        if self._completion_store is None:
+            return None
+        return self._completion_store.inspect(owner, session_id)
+
+    @staticmethod
+    def _copy_durable_output(source: Path, directory: str | Path) -> Path:
+        destination_dir = Path(directory)
+        destination_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        destination_dir.chmod(0o700)
+        descriptor, destination_name = tempfile.mkstemp(
+            prefix="process-output-",
+            suffix=".log",
+            dir=destination_dir,
+        )
+        destination = Path(destination_name)
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "wb") as target, source.open("rb") as origin:
+                shutil.copyfileobj(origin, target)
+        except BaseException:
+            destination.unlink(missing_ok=True)
+            raise
+        return destination
 
     @contextmanager
     def _record_call(self, owner: ProcessOwner, session_id: str):

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from appv231.coding_agent.processes.completions import ProcessCompletionStore
 from appv231.coding_agent.processes.service import ProcessSessionService
 from appv231.coding_agent.processes.types import (
     ProcessInputLimitError,
@@ -17,6 +18,7 @@ from appv231.coding_agent.processes.types import (
     ProcessOwner,
     ProcessState,
     ProcessStateError,
+    ProcessWaitCancelledError,
 )
 
 
@@ -602,3 +604,109 @@ def test_list_orders_active_then_newest_terminal_completion(tmp_path: Path, owne
         assert [snapshot.session_id for snapshot in retained] == [first.session_id, second.session_id]
     finally:
         service.close()
+
+
+def test_wait_terminal_ignores_output_updates_until_terminal(service, owner) -> None:
+    transport = FakeProcessTransport()
+    started = service.start(owner, request("chatty"), Factory(transport), yield_time_ms=0)
+    result = []
+    waiter = threading.Thread(
+        target=lambda: result.append(
+            service.wait_terminal(owner, started.session_id, 0, wait_ms=5_000)
+        )
+    )
+    waiter.start()
+    try:
+        transport.emit(b"one\n")
+        transport.emit(b"two\n")
+        time.sleep(0.05)
+        assert waiter.is_alive()
+
+        transport.exit(0)
+        waiter.join(timeout=1)
+
+        assert not waiter.is_alive()
+        assert result[0].state is ProcessState.EXITED
+        assert result[0].output == "one\ntwo\n"
+    finally:
+        transport.exit(0)
+        waiter.join(timeout=1)
+
+
+def test_wait_cancellation_does_not_kill_detached_job(service, owner) -> None:
+    signal = Signal(aborted=True)
+    transport = FakeProcessTransport()
+    started = service.start(owner, request("long"), Factory(transport), yield_time_ms=0)
+
+    with pytest.raises(ProcessWaitCancelledError):
+        service.wait_terminal(
+            owner,
+            started.session_id,
+            0,
+            wait_ms=60_000,
+            signal=signal,
+        )
+
+    assert transport.signals == []
+    assert service.poll(owner, started.session_id, 0, wait_ms=0).state is ProcessState.RUNNING
+
+
+def test_terminal_poll_falls_back_to_durable_completion_after_memory_eviction(
+    tmp_path: Path,
+    owner,
+) -> None:
+    store = ProcessCompletionStore(tmp_path / "completions")
+    service = ProcessSessionService(
+        directory=tmp_path / "processes",
+        completion_store=store,
+        terminal_ttl_seconds=0,
+    )
+    try:
+        completed = service.start(
+            owner,
+            request("short"),
+            Factory(FakeProcessTransport(initial_output=b"durable\n", initial_exit_code=0)),
+            yield_time_ms=1_000,
+        )
+
+        recovered = service.poll(owner, completed.session_id, 0, wait_ms=0)
+
+        assert recovered.state is ProcessState.EXITED
+        assert recovered.output == "durable\n"
+        assert recovered.durable_output is True
+        assert recovered.full_output_path is not None
+    finally:
+        service.close()
+        store.close()
+
+
+def test_durable_completion_supports_wait_tail_and_export_after_eviction(
+    tmp_path: Path,
+    owner,
+) -> None:
+    store = ProcessCompletionStore(tmp_path / "completions")
+    service = ProcessSessionService(
+        directory=tmp_path / "processes",
+        completion_store=store,
+        terminal_ttl_seconds=0,
+    )
+    try:
+        completed = service.start(
+            owner,
+            request("short"),
+            Factory(FakeProcessTransport(initial_output=b"final\n", initial_exit_code=0)),
+            yield_time_ms=1_000,
+        )
+        service.list(owner)
+
+        waited = service.wait_terminal(owner, completed.session_id, 0, wait_ms=1_000)
+        tail = service.tail_snapshot(owner, completed.session_id)
+        exported = service.export_output(owner, completed.session_id, tmp_path / "exports")
+
+        assert waited.output == "final\n"
+        assert tail.content == "final\n"
+        assert exported.read_text(encoding="utf-8") == "final\n"
+        assert exported.stat().st_mode & 0o777 == 0o600
+    finally:
+        service.close()
+        store.close()
