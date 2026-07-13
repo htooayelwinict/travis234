@@ -159,6 +159,7 @@ class CompactionManager:
         self.compressor.last_prompt_tokens = -1
         self.compressor.last_completion_tokens = 0
         self.compressor.awaiting_real_usage_after_compression = True
+        self.compressor._verify_compaction_cleared_threshold = True  # noqa: SLF001 - manager owns boundary verdict.
 
     def _record_compression_ledger(
         self,
@@ -366,6 +367,7 @@ class CompactionManager:
             trigger="overflow",
         )
         if compressed:
+            self._mark_compressed(recovered_messages)
             return recovered_messages, True
         already_compacted = any(
             self.compressor._is_context_summary_message(message)  # noqa: SLF001 - recovery needs compressor boundary state.
@@ -595,6 +597,8 @@ class CompactionManager:
         if deep_note:
             note = f"{note} {deep_note}" if note else deep_note
 
+        if compressed:
+            self._mark_compressed(new_messages)
         result = self._last_compression_result
         return ManualCompressionStatus(
             messages=new_messages,

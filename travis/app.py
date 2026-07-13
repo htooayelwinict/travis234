@@ -42,8 +42,6 @@ from travis.tui.terminal import ProcessTerminal, Terminal
 from travis.tui.tui import TUI
 
 DEFAULT_CONTEXT_LENGTH = 32000
-DEFAULT_COMPACTION_RESERVE_TOKENS = 16_384
-TRAVIS_STATIC_PROMPT_BREATHING_ROOM = 4_096
 
 
 def _resolve_session_retry_settings(settings_manager: object) -> tuple[bool, int, int]:
@@ -710,23 +708,16 @@ def _tool_result_guardrail_placeholder(message: ToolResultMessage, text: str) ->
 
 def _resolve_compaction_window(
     model: Model,
-    session: AgentSession,
+    _session: AgentSession,
     *,
     explicit_context_length: int | None,
 ) -> tuple[int, float]:
-    if explicit_context_length is not None:
-        return explicit_context_length, 0.5
-
-    context_length = int(model.context_window or 0) or DEFAULT_CONTEXT_LENGTH
-    if context_length <= DEFAULT_CONTEXT_LENGTH:
-        return context_length, 0.5
-
-    static_tokens = _estimate_static_prompt_tool_tokens(session)
-    reserve_tokens = DEFAULT_COMPACTION_RESERVE_TOKENS + static_tokens + TRAVIS_STATIC_PROMPT_BREATHING_ROOM
-    threshold_tokens = context_length - reserve_tokens
-    if threshold_tokens <= 0:
-        threshold_tokens = max(1, context_length // 2)
-    return context_length, threshold_tokens / context_length
+    context_length = (
+        explicit_context_length
+        if explicit_context_length is not None
+        else int(model.context_window or 0) or DEFAULT_CONTEXT_LENGTH
+    )
+    return context_length, 0.5
 
 
 def _estimate_static_prompt_tool_tokens(session: AgentSession) -> int:

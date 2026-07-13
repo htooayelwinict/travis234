@@ -437,6 +437,7 @@ class ContextCompressor:
         self._clock = clock
         self._previous_summary: str | None = None
         self._ineffective_compression_count = 0
+        self._verify_compaction_cleared_threshold = False
         self._summary_failure_cooldown_until = 0.0
         self._last_summary_error: str | None = None
         self._last_summary_dropped_count = 0
@@ -486,13 +487,22 @@ class ContextCompressor:
             if self.last_prompt_tokens < self.threshold_tokens:
                 if self.awaiting_real_usage_after_compression and self.last_compression_rough_tokens > 0:
                     self.last_rough_tokens_when_real_prompt_fit = self.last_compression_rough_tokens
+                self._ineffective_compression_count = 0
             else:
                 self.last_rough_tokens_when_real_prompt_fit = 0
+            if self._verify_compaction_cleared_threshold:
+                if self.last_prompt_tokens >= self.threshold_tokens:
+                    self._ineffective_compression_count += 1
+                else:
+                    self._ineffective_compression_count = 0
+        self._verify_compaction_cleared_threshold = False
         self.awaiting_real_usage_after_compression = False
 
     def should_defer_preflight_to_real_usage(self, rough_tokens: int) -> bool:
         if rough_tokens < self.threshold_tokens:
             return False
+        if self.awaiting_real_usage_after_compression:
+            return True
         if self.last_real_prompt_tokens <= 0:
             return False
         if self.last_real_prompt_tokens >= self.threshold_tokens:
@@ -1343,10 +1353,6 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         after = estimate_tokens(result)
         savings = _savings(before, after)
         self.last_compression_savings_pct = savings
-        if savings < 10:
-            self._ineffective_compression_count += 1
-        else:
-            self._ineffective_compression_count = 0
         self._previous_summary = summary_text
         self.compression_count += 1
         return CompressionResult(
