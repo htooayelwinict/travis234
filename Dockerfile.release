@@ -1,0 +1,40 @@
+FROM node:20-bookworm-slim AS node-runtime
+
+FROM python:3.13-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    TRAVIS234_NO_VENV_REEXEC=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    HOME=/travis-home \
+    TRAVIS234_CODING_AGENT_DIR=/travis-home/agent
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bash \
+        ca-certificates \
+        curl \
+        git \
+        libstdc++6 \
+        ripgrep \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --home-dir /travis-home --shell /bin/bash travis \
+    && mkdir -p /workspace /travis-home/agent /opt/travis234 \
+    && chown -R travis:travis /workspace /travis-home
+
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+
+WORKDIR /opt/travis234
+COPY pyproject.toml README.md LICENSE NOTICE.md ./
+COPY travis ./travis
+
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir .
+
+USER travis
+WORKDIR /workspace
+
+ENTRYPOINT ["travis234"]
+CMD ["--cwd", "/workspace"]

@@ -90,7 +90,7 @@ def test_runtime_patterns_cover_paths_without_generic_pi_false_positives() -> No
         "env/appv23",
         "images/appv22/runtime",
         "scripts/install-appv231-sandbox.sh",
-        "/agent-home/agent/sessions/",
+        "/pi-home/agent/sessions/",
         "/allthebest-home/agent/sessions/",
         "/appv231-home/agent/sessions/",
         "~/.agents/skills/",

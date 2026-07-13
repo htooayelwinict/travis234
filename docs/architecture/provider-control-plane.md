@@ -1,49 +1,15 @@
-# appv231 Provider Control Plane
+# Travis234 Provider Control Plane
 
-appv231 provider behavior is controlled outside the agent loop.
+Provider selection and credentials are controlled outside the generic agent loop.
 
-## Layers
+The control plane owns provider registration, model discovery, authentication storage, runtime model selection, and provider-specific transport configuration. The generic loop receives only the selected model, provider stream, messages, tools, and generation options.
 
-```text
-CLI/env/profile input
-  -> GenerationParams
-  -> ProviderCapabilities
-  -> transport payload
-  -> provider response normalization
-```
+This boundary keeps provider behavior out of these behavior-sensitive modules:
 
-## Red-Zone Rule
+- `travis/agent/agent_loop.py`
+- `travis/ai/types.py`
+- `travis/ai/stream.py`
+- `travis/compaction/`
+- `travis/coding_agent/session_store.py`
 
-Provider ergonomics must not require changes to:
-
-- `appV2.3.1/appv231/agent/agent_loop.py`
-- `appV2.3.1/appv231/ai/types.py`
-- `appV2.3.1/appv231/ai/stream.py`
-- `appV2.3.1/appv231/compaction/`
-- `appV2.3.1/appv231/coding_agent/session_store.py`
-
-If a provider feature needs those files, it is a kernel change and needs explicit approval.
-
-## Parameter Policy
-
-Direct providers use explicit capability policy. Unsupported user parameters are dropped only with warnings.
-
-Routing aggregators such as OpenRouter can receive provider-routing preferences through the provider payload object.
-
-Warnings are surfaced at the CLI boundary for the selected startup model, shown in the TUI `/params` command, and exposed to provider runtime callers through the optional `on_generation_warning` option callback.
-
-## Merge Order
-
-```text
-provider defaults < .env < process env < profile defaults < CLI flags < TUI session override
-```
-
-The current implementation supports:
-
-```text
-provider defaults < .env < process env < CLI flags
-```
-
-## Testing Rule
-
-Default tests use fake providers, payload snapshots, and monkeypatched HTTP clients. Live provider calls are manual verification only.
+Provider state must be changed through public registry operations. The control plane must not mutate registry-private collections or retain process-global ownership that bypasses the active application instance.

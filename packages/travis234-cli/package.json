@@ -1,0 +1,28 @@
+{
+  "name": "@htooayelwinict/travis234",
+  "version": "2.3.1",
+  "description": "Docker launcher for the Travis234 terminal coding agent.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "travis234": "bin/travis234.js"
+  },
+  "files": [
+    "agents/**/*.md",
+    "bin/travis234.js",
+    "skills/**/*.md",
+    "README.md",
+    "package.json"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "npm pack --dry-run",
+    "test": "node --test test/travis234-cli.test.js",
+    "pack:dry-run": "npm pack --dry-run"
+  }
+}

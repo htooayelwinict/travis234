@@ -1,30 +1,13 @@
 {
-  "name": "allthebest-appv231",
+  "name": "travis234-workspace",
   "version": "2.3.1",
-  "description": "Global launcher and installer wrapper for the appv231 Docker sandbox.",
   "private": true,
-  "license": "UNLICENSED",
-  "bin": {
-    "appv231-sandbox": "bin/appv231-sandbox.js"
-  },
-  "files": [
-    "bin/appv231-sandbox.js",
-    "skills/**/*.md",
-    "README.md",
-    "package.json"
-  ],
-  "engines": {
-    "node": ">=18"
-  },
+  "type": "module",
   "scripts": {
-    "build": "npm --prefix packages/appv231-cli run build",
-    "install:appv231": "bash scripts/install-appv231-sandbox.sh",
-    "image:appv231:release": "docker build --pull=false -f Dockerfile.appv231.release -t ghcr.io/htooayelwinict/appv231:production .",
-    "qa:appv231-cli": "npm --prefix packages/appv231-cli test && npm --prefix packages/appv231-cli run pack:dry-run",
-    "qa:installer": "node --test tests/appv231-sandbox-global.test.js && npm --prefix packages/appv231-cli test && bash -n scripts/install-appv231-sandbox.sh && npm pack --dry-run",
-    "test:global-sandbox": "node --test tests/appv231-sandbox-global.test.js",
-    "tui": "npm --prefix appV2.3.1 run tui --",
-    "tui:v231": "npm --prefix appV2.3.1 run tui --",
-    "tui:v231:sandbox": "npm --prefix appV2.3.1 run tui:sandbox --"
-  }
+    "tui": "python3 scripts/travis234_tui.py",
+    "tui:sandbox": "python3 scripts/travis234_sandbox.py",
+    "test:launcher": "npm --prefix packages/travis234-cli test",
+    "pack:launcher": "npm --prefix packages/travis234-cli run pack:dry-run"
+  },
+  "dependencies": {}
 }
