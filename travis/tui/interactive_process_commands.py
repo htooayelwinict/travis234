@@ -166,6 +166,16 @@ class InteractiveProcessCommands:
             owner_factory(origin="user"),
         }:
             return
+        if self.app.event_trace is not None:
+            self.app.event_trace.write(
+                "process_event",
+                {
+                    "process_id": event.session_id,
+                    "process_state": event.state.value,
+                    "origin": event.owner.origin,
+                    "status": "ok" if event.state.value == "exited" else event.state.value,
+                },
+            )
         self._notified_processes.add(event.session_id)
         exit_text = f" ({event.exit_code})" if event.exit_code is not None else ""
         self.history.add(
@@ -215,6 +225,8 @@ class InteractiveProcessCommands:
             handle = self._user_commands.start(command, binding)
             self._user_command_components[handle.command_id] = component
             self._user_command_order.append(handle.command_id)
+            if self.app.event_trace is not None:
+                self.app.event_trace.write("user_command_started", {"status": "ok"})
         except Exception as error:  # noqa: BLE001 - user bash errors are rendered in the TUI
             component.set_complete(None, False)
             self.history.add(StatusLine(f"Bash command failed: {error}", kind="error"))

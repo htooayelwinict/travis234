@@ -1,4 +1,4 @@
-"""CLI entrypoint for the travis+travis-compliant travis stack."""
+"""CLI entrypoint for the Travis234 terminal coding agent."""
 
 from __future__ import annotations
 
@@ -352,7 +352,7 @@ def _matching_live_model(env_model: Model, live_models: list[Model]) -> Model | 
     return None
 
 
-def _hydrate_live_models_for_list(config: ModelConfig, args: argparse.Namespace) -> None:
+def _hydrate_live_models_for_list(config: ModelConfig, args: argparse.Namespace, model_registry) -> None:
     env_model = _env_model_from_config(config)
     cli_models = _split_models_arg(args.models)
     live_models = _load_live_startup_models(
@@ -370,12 +370,13 @@ def _hydrate_live_models_for_list(config: ModelConfig, args: argparse.Namespace)
         list_models=True,
     ):
         print("OpenRouter live model catalog unavailable; showing registered models only.", file=sys.stderr)
-    for model in live_models:
-        register_model(model)
+    model_registry.replace_all(
+        _dedupe_startup_models([*model_registry.snapshot(), env_model, *live_models])
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run the travis travis+travis coding app")
+    parser = argparse.ArgumentParser(description="Run the Travis234 terminal coding agent")
     parser.add_argument("prompt", nargs="*", help="Prompt to run. If omitted, starts the interactive TUI.")
     parser.add_argument("--cwd", default=None, help="Working directory for tools")
     parser.add_argument(
@@ -486,11 +487,11 @@ def main(argv: list[str] | None = None) -> int:
     _load_persisted_auth_credentials()
     provider_control_plane = ProviderControlPlane.create_default()
     if args.list_providers:
-        _print_provider_list()
+        _print_provider_list(provider_control_plane.models)
         return 0
     if args.list_models:
-        _hydrate_live_models_for_list(config, args)
-        _print_model_list(verbose=args.verbose_models)
+        _hydrate_live_models_for_list(config, args, provider_control_plane.models)
+        _print_model_list(provider_control_plane.models, verbose=args.verbose_models)
         return 0
     try:
         startup = _startup_model_from_env(
@@ -612,15 +613,16 @@ def _config_with_cli_generation_params(config: ModelConfig, args: argparse.Names
     )
 
 
-def _print_provider_list() -> None:
-    providers = sorted(set(get_providers()))
+def _print_provider_list(model_registry) -> None:
+    providers = sorted(set(model_registry.get_providers()))
     for provider in providers:
         print(provider)
 
 
-def _print_model_list(*, verbose: bool = False) -> None:
-    for provider in sorted(get_providers()):
-        for model in sorted(get_models(provider), key=lambda item: item.id):
+def _print_model_list(model_registry, *, verbose: bool = False) -> None:
+    for provider in sorted(model_registry.get_providers()):
+        models = [model for model in model_registry.snapshot() if model.provider == provider]
+        for model in sorted(models, key=lambda item: item.id):
             if not verbose:
                 print(f"{provider}/{model.id}")
                 continue

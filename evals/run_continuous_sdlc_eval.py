@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -15,7 +17,7 @@ from evals.report import write_reports
 from evals.schema import Scenario, ScenarioResult, load_scenarios
 from evals.tui_driver import TuiDriver
 
-DEFAULT_COMPACT_AFTER = frozenset({4, 8, 12, 16, 20})
+DEFAULT_COMPACT_AFTER = frozenset()
 MIN_TURN_TIMEOUT_SECONDS = 900
 
 
@@ -53,10 +55,11 @@ def run_continuous_scenarios(
 
     trace_path = output / "trace.jsonl"
     conversation_path = output / "conversation.jsonl"
+    _seed_acceptance_agent_resources()
+    console_script = Path(sys.executable).with_name("travis234")
     command = [
-        sys.executable,
-        "-m",
-        "travis.cli",
+        str(console_script) if console_script.is_file() else sys.executable,
+        *([] if console_script.is_file() else ["-m", "travis.cli"]),
         "--cwd",
         str(workspace),
         "--dotenv",
@@ -73,10 +76,14 @@ def run_continuous_scenarios(
     driver = driver_factory(command, workspace, trace_path)
     results: list[ScenarioResult] = []
     try:
-        driver.wait_for_event("tui_ready", 60)
+        ready = driver.wait_for_event("tui_ready", 60)
+        session_id = str(ready.get("session_id") or "") or None
+        session_path = str(ready.get("session_path") or "") or None
         selected = driver.select_model(model_query, model_index, 60)
         provider = str(selected.get("provider") or "") or None
         model = str(selected.get("model") or "") or None
+        driver.send_line("/agents")
+        driver.wait_for_event("extension_command", 60)
         for index, scenario in enumerate(scenario_list, start=1):
             started = time.monotonic()
             turn_timeout = max(MIN_TURN_TIMEOUT_SECONDS, scenario.timeout_seconds)
@@ -133,17 +140,61 @@ def run_continuous_scenarios(
                 compactions=compacted,
                 duration_ms=int((time.monotonic() - started) * 1000),
                 failure_tail=failure_tail,
+                session_id=session_id,
+                session_path=session_path,
             )
             result_path = output / "runs" / scenario.id / "result.json"
             result_path.parent.mkdir(parents=True, exist_ok=True)
             result_path.write_text(json.dumps(asdict(result), indent=2) + "\n", encoding="utf-8")
             results.append(result)
 
+            if index == 11:
+                _exercise_ctrl_c_escalation(driver)
+
         driver.send_line("/exit")
         driver.wait_for_event("shutdown", 60)
     finally:
         driver.close()
     return results
+
+
+def _seed_acceptance_agent_resources() -> None:
+    configured = os.environ.get("TRAVIS234_CODING_AGENT_DIR")
+    if not configured:
+        return
+    agent_dir = Path(configured).expanduser().resolve()
+    skills_dir = agent_dir / "skills"
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    source_skill = Path(__file__).resolve().parents[1] / "skills" / "subagent-delegation"
+    if source_skill.is_dir():
+        shutil.copytree(source_skill, skills_dir / source_skill.name, dirs_exist_ok=True)
+    audit_skill = skills_dir / "acceptance-audit" / "SKILL.md"
+    audit_skill.parent.mkdir(parents=True, exist_ok=True)
+    audit_skill.write_text(
+        "---\n"
+        "name: acceptance-audit\n"
+        "description: Use when a prompt explicitly requests the acceptance-audit skill.\n"
+        "---\n\n"
+        "# Acceptance audit\n\n"
+        "When explicitly invoked, create `SKILL_APPLIED.txt` in the named scenario directory "
+        "with exactly `acceptance-audit skill applied\\n`, then continue the requested task.\n",
+        encoding="utf-8",
+    )
+
+
+def _exercise_ctrl_c_escalation(driver) -> None:
+    driver.send_line("!python3 -c 'import signal,time; signal.signal(signal.SIGINT, signal.SIG_IGN); time.sleep(300)'")
+    driver.wait_for_event("user_command_started", 30)
+    time.sleep(0.25)
+    driver.send_key(b"\x03")
+    first = driver.wait_for_event("user_command_interrupt", 30)
+    if int(first.get("interrupt_count") or 0) < 1:
+        raise RuntimeError("first Ctrl-C was not recorded")
+    driver.send_key(b"\x03")
+    second = driver.wait_for_event("user_command_interrupt", 30)
+    if int(second.get("interrupt_count") or 0) < 2:
+        raise RuntimeError("second Ctrl-C did not escalate")
+    driver.wait_for_event("process_event", 30)
 
 
 def _run_verifiers(scenario: Scenario, cwd: Path) -> tuple[list[int], str | None]:

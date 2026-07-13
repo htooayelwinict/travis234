@@ -290,10 +290,14 @@ class InteractiveExtensions:
         command, _args = parsed
         if getattr(command, "name", "") not in self.IMMEDIATE_EXTENSION_COMMANDS:
             return False
+        status = "ok"
         try:
             execute_command(prompt)
         except Exception as error:  # noqa: BLE001 - command failures should render, not crash the TUI
+            status = "error"
             self.history.add(StatusLine(f"Command failed: {error}", kind="error"))
+        if self.app.event_trace is not None:
+            self.app.event_trace.write("extension_command", {"status": status})
         return True
 
     def _is_registered_extension_command(self, prompt: str) -> bool:

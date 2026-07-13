@@ -1244,6 +1244,22 @@ def test_cli_list_models_exits_without_starting_app(monkeypatch, tmp_path, capsy
     assert "stepfun/step-3.7-flash" in capsys.readouterr().out
 
 
+def test_cli_list_models_includes_dotenv_model_from_isolated_control_plane(monkeypatch, tmp_path, capsys) -> None:
+    dotenv = tmp_path / ".env"
+    dotenv.write_text(
+        "TRAVIS234_WORKER_LLM_ENABLED=true\n"
+        "TRAVIS234_WORKER_LLM_MODEL=step-3.7-flash\n"
+        "TRAVIS234_WORKER_LLM_BASE_URL=https://api.stepfun.example/v1\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli, "register_builtin_providers", lambda dotenv_path, config=None: None)
+
+    code = cli.main(["--cwd", str(tmp_path), "--dotenv", str(dotenv), "--list-models"])
+
+    assert code == 0
+    assert "openrouter/step-3.7-flash" in capsys.readouterr().out
+
+
 def test_cli_list_models_without_openrouter_provider_does_not_fetch_live_catalog(monkeypatch, tmp_path, capsys) -> None:
     register_model(
         Model(

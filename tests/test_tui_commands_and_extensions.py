@@ -1413,7 +1413,7 @@ def test_interactive_mode_extension_shortcut_can_replace_and_restore_header(tmp_
     rendered = strip_ansi("\n".join(app.tui.render(140)))
     assert "custom header" in rendered
     assert "extension startup" in rendered
-    assert "travis travis+travis TUI" not in rendered
+    assert "Travis234 TUI" not in rendered
     assert custom_headers and custom_headers[-1].disposed is False
 
     assert mode._dispatch_extension_shortcut("ctrl+shift+g") is True
@@ -1421,7 +1421,7 @@ def test_interactive_mode_extension_shortcut_can_replace_and_restore_header(tmp_
     restored = strip_ansi("\n".join(app.tui.render(140)))
     assert custom_headers[-1].disposed is True
     assert "custom header" not in restored
-    assert "travis travis+travis TUI" in restored
+    assert "Travis234 TUI" in restored
 
 def test_interactive_mode_extension_shortcut_can_control_editor_text(tmp_path) -> None:
     calls = {"model": 0}
@@ -1680,7 +1680,7 @@ def test_interactive_mode_renders_real_prompt_loop(tmp_path) -> None:
 
     rendered = strip_ansi(terminal.output)
     assert exit_code == 0
-    assert "travis" in rendered
+    assert "Travis234" in rendered
     assert "Current working directory:" in rendered
     assert "hi" in rendered
     assert "> hi" not in rendered

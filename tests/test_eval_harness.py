@@ -11,6 +11,7 @@ import pytest
 
 import evals.run_sdlc_eval as run_sdlc_eval
 from evals.fixtures import build_fixture
+from evals.feature_audit import FeatureAudit, REQUIRED_FEATURES
 from evals.report import sanitized_tail, write_reports
 from evals.run_sdlc_eval import main, run_scenario
 from evals.schema import Scenario, ScenarioResult, load_scenarios
@@ -26,6 +27,13 @@ class FakeDriver:
 
     def wait_for_event(self, event_type: str, timeout: float):
         self.waits.append((event_type, timeout))
+        if event_type == "tui_ready":
+            return {
+                "event": event_type,
+                "status": "ok",
+                "session_id": "session-live",
+                "session_path": "/tmp/session-live.jsonl",
+            }
         return {"event": event_type, "status": "ok"}
 
     def select_model(self, query: str, index: int, timeout: float):
@@ -34,6 +42,9 @@ class FakeDriver:
 
     def send_line(self, text: str) -> None:
         self.lines.append(text)
+
+    def send_key(self, data: bytes) -> None:
+        self.lines.append(f"<key:{data.hex()}>")
 
     def close(self) -> None:
         self.closed = True
@@ -319,6 +330,7 @@ def test_continuous_eval_uses_one_tui_session_for_all_prompts(tmp_path: Path) ->
     assert driver.lines == [
         "/model mimo",
         "<select:1>",
+        "/agents",
         "SDLC scenario 01-first. Work only in scenarios/01-first. implement verify",
         "/compact",
         "/allow package-install",
@@ -326,11 +338,66 @@ def test_continuous_eval_uses_one_tui_session_for_all_prompts(tmp_path: Path) ->
         "/exit",
     ]
     assert [result.status for result in results] == ["passed", "passed"]
+    assert {result.session_id for result in results} == {"session-live"}
+    assert {result.session_path for result in results} == {"/tmp/session-live.jsonl"}
     assert driver.closed is True
     assert all(timeout >= 900 for event, timeout in driver.waits if event == "turn_end")
     assert ("capability_granted", 60) in driver.waits
     command = list(starts[0][0])
     assert "--conversation-log" in command
+
+
+def test_feature_audit_requires_every_live_capability(tmp_path: Path) -> None:
+    root = tmp_path / "live-21"
+    for index in range(1, 22):
+        scenario_id = {
+            1: "01-python-cli-feature",
+            2: "02-python-async-race",
+            3: "03-python-parser-refactor",
+            17: "17-failing-suite-diagnosis",
+            21: "21-release-packaging",
+        }.get(index, f"{index:02d}-scenario")
+        result = {
+            "scenario_id": scenario_id,
+            "status": "passed",
+            "session_id": "session-live",
+            "session_path": "/tmp/session-live.jsonl",
+        }
+        path = root / "runs" / scenario_id / "result.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(result), encoding="utf-8")
+    marker = root / "workspace/scenarios/03-python-parser-refactor/SKILL_APPLIED.txt"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("acceptance-audit skill applied\n", encoding="utf-8")
+    events = [
+        {"event": "model_selected", "provider": "openrouter", "model": "stepfun/step-3.7-flash"},
+        {"event": "extension_command", "status": "ok"},
+        {"event": "capability_granted", "status": "ok"},
+        {"event": "user_command_interrupt", "status": "ok", "interrupt_count": 2},
+        {"event": "process_event", "process_id": "p1", "process_state": "terminated", "status": "terminated"},
+        {"event": "compaction_end", "status": "ok", "trigger": "threshold", "compression_count": 1},
+        {"event": "shutdown", "status": "ok"},
+        {"event": "tool_end", "tool": "read", "status": "ok"},
+        {"event": "tool_end", "tool": "write", "status": "ok"},
+        {"event": "tool_end", "tool": "edit", "status": "ok"},
+        {"event": "tool_end", "tool": "bash", "status": "ok", "operation": "search"},
+        {"event": "tool_end", "tool": "read", "status": "error", "reason_code": "before_hook_block"},
+        {"event": "tool_end", "tool": "spawn_subagent", "status": "ok"},
+        *(
+            {"event": "tool_end", "tool": "process", "status": "ok", "action": action}
+            for action in ("start", "poll", "write", "interrupt")
+        ),
+    ]
+    (root / "trace.jsonl").write_text(
+        "".join(json.dumps(event) + "\n" for event in events),
+        encoding="utf-8",
+    )
+
+    audit = FeatureAudit.from_artifacts(root)
+
+    assert audit.passed is True
+    assert audit.missing_features == ()
+    assert set(audit.observed_features) == REQUIRED_FEATURES
 
 
 def _tree_hash(root: Path) -> str:

@@ -70,7 +70,7 @@ class InteractiveSessionCommands:
     def _startup_text(self) -> str:
         cwd = str(self.app.cwd).replace("\\", "/")
         return (
-            "travis travis+travis TUI\n"
+            "Travis234 TUI\n"
             "Current working directory: "
             f"{cwd}\n"
             "Type /exit or /quit to leave."

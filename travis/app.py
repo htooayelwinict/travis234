@@ -1,6 +1,6 @@
-"""Integrated travis+travis coding app: ai + agent + coding_agent + compaction + tui.
+"""Integrated Travis234 coding app: AI, agent, tools, compaction, and TUI.
 
-Capstone composition that wires the ported parity packages into one end-to-end
+Capstone composition that wires the runtime packages into one end-to-end
 application, with no imports of external source packages.
 """
 
@@ -462,12 +462,19 @@ class CodingApp:
     def _trace_session_event(self, event) -> None:
         event_type = getattr(event, "type", None)
         if event_type == "tool_execution_end":
+            tool_name = str(getattr(event, "tool_name", ""))
+            args = getattr(event, "args", None)
+            metadata = _safe_eval_tool_metadata(tool_name, args)
+            reason_code = getattr(event, "reason_code", None)
+            if isinstance(reason_code, str) and reason_code:
+                metadata["reason_code"] = reason_code
             self._trace(
                 "tool_end",
                 {
                     "tool_call_id": str(getattr(event, "tool_call_id", "")),
-                    "tool": str(getattr(event, "tool_name", "")),
+                    "tool": tool_name,
                     "status": "error" if getattr(event, "is_error", False) else "ok",
+                    **metadata,
                 },
             )
         elif event_type == "compaction_end":
@@ -476,6 +483,7 @@ class CodingApp:
                 {
                     "status": "error" if getattr(event, "error_message", None) else "ok",
                     "compression_count": self.compaction.compressor.compression_count,
+                    "trigger": str(getattr(event, "reason", "")),
                 },
             )
 
@@ -632,6 +640,32 @@ def _assistant_prompt_tokens(message: AssistantMessage) -> int:
     return message.usage.total_tokens or (
         message.usage.input + message.usage.output + message.usage.cache_read + message.usage.cache_write
     )
+
+
+def _safe_eval_tool_metadata(tool_name: str, args: object) -> dict[str, str]:
+    """Return allowlisted semantic tags without recording tool arguments."""
+
+    if not isinstance(args, Mapping):
+        return {}
+    if tool_name == "process":
+        action = args.get("action")
+        if isinstance(action, str) and action in {
+            "start", "poll", "write", "interrupt", "terminate", "kill", "list", "tail",
+        }:
+            return {"action": action}
+        return {}
+    if tool_name == "bash":
+        command = args.get("command")
+        if not isinstance(command, str):
+            return {}
+        lowered = command.lower()
+        if any(marker in lowered for marker in ("rg ", "grep ", "find ", "fd ")):
+            return {"operation": "search"}
+        if any(marker in lowered for marker in ("pytest", "node --test", "npm test")):
+            return {"operation": "test"}
+        if any(marker in lowered for marker in ("python -m build", "npm pack")):
+            return {"operation": "package_build"}
+    return {}
 
 
 _PROMPT_GUARDRAIL_ERROR_PATTERNS = (

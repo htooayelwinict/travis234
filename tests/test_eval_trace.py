@@ -46,6 +46,23 @@ def test_eval_trace_accepts_capability_grant_synchronization_event(tmp_path: Pat
     assert json.loads(path.read_text(encoding="utf-8"))["event"] == "capability_granted"
 
 
+def test_eval_trace_accepts_sanitized_feature_audit_metadata(tmp_path: Path) -> None:
+    path = tmp_path / "trace.jsonl"
+    writer = EvalTraceWriter(path)
+
+    writer.write(
+        "tui_ready",
+        {"session_id": "session-1", "session_path": "/tmp/session-1.jsonl", "provider": "openrouter", "model": "m"},
+    )
+    writer.write("tool_end", {"tool": "process", "action": "write", "status": "ok"})
+    writer.write("compaction_end", {"trigger": "threshold", "status": "ok", "compression_count": 1})
+    writer.write("user_command_interrupt", {"interrupt_count": 2, "status": "ok"})
+
+    events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert events[-1]["interrupt_count"] == 2
+    assert events[-2]["trigger"] == "threshold"
+
+
 def test_interactive_trace_emits_ordered_safe_lifecycle(tmp_path: Path) -> None:
     path = tmp_path / "trace.jsonl"
     writer = EvalTraceWriter(path, redactor=SecretRedactor(["private prompt text"]))
@@ -67,6 +84,9 @@ def test_interactive_trace_emits_ordered_safe_lifecycle(tmp_path: Path) -> None:
     event_types = [event["event"] for event in events]
     assert event_types.index("tui_ready") < event_types.index("turn_start")
     assert event_types.index("turn_start") < event_types.index("turn_end") < event_types.index("shutdown")
+    ready = next(event for event in events if event["event"] == "tui_ready")
+    assert ready["session_id"] == app.session.session_id
+    assert ready["session_path"] == app.session.session_path
     encoded = json.dumps(events)
     assert "private prompt text" not in encoded
     assert "private response text" not in encoded

@@ -27,6 +27,8 @@ class ScenarioResult:
     compactions: int
     duration_ms: int
     failure_tail: str | None = None
+    session_id: str | None = None
+    session_path: str | None = None
 
 
 def load_scenarios(path: str | Path | None = None) -> list[Scenario]:

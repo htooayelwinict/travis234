@@ -102,7 +102,12 @@ class InteractiveView:
         if self.app.event_trace is not None:
             self.app.event_trace.write(
                 "tui_ready",
-                {"provider": self.app.session.model.provider, "model": self.app.session.model.id},
+                {
+                    "provider": self.app.session.model.provider,
+                    "model": self.app.session.model.id,
+                    "session_id": self.app.session.session_id,
+                    "session_path": self.app.session.session_path,
+                },
             )
         self._initialized = True
 

@@ -192,6 +192,13 @@ class InteractiveTurnController:
 
     def _handle_editor_escape(self) -> None:
         if self._user_commands is not None and self._user_commands.interrupt_focused():
+            if self.app.event_trace is not None:
+                active = self._user_commands.list()
+                interrupt_count = max((item.interrupt_count for item in active), default=1)
+                self.app.event_trace.write(
+                    "user_command_interrupt",
+                    {"status": "ok", "interrupt_count": interrupt_count},
+                )
             self.status.set_message("Interrupting user command")
             self._refresh_footer()
             self.tui.request_render()

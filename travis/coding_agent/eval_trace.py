@@ -14,11 +14,13 @@ from pathlib import Path
 SAFE_EVENT_TYPES = {
     "tui_ready", "model_picker_ready", "model_selected", "turn_start", "tool_end",
     "compaction_end", "turn_end", "capability_granted", "fatal", "shutdown",
+    "process_event", "user_command_started", "user_command_interrupt", "extension_command",
 }
 SAFE_FIELDS = {
     "run_id", "turn_id", "tool_call_id", "tool", "status", "error_code", "duration_ms",
     "input_tokens", "output_tokens", "compression_count", "provider", "model", "model_count",
-    "picker_query",
+    "picker_query", "action", "operation", "reason_code", "trigger", "session_id", "session_path",
+    "process_id", "process_state", "origin", "interrupt_count",
 }
 _SECRET_SHAPE = re.compile(r"(?:sk-[A-Za-z0-9_-]{8,}|Bearer\s+\S+)", re.IGNORECASE)
 
