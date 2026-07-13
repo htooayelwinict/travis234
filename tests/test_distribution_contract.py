@@ -19,3 +19,12 @@ def test_npm_distribution_names_only_travis234() -> None:
     package = json.loads((ROOT / "packages/travis234-cli/package.json").read_text(encoding="utf-8"))
     assert package["name"] == "@htooayelwinict/travis234"
     assert package["bin"] == {"travis234": "bin/travis234.js"}
+
+
+def test_repository_has_one_sandbox_launcher_implementation() -> None:
+    import json
+
+    workspace = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+    assert workspace["scripts"]["tui:sandbox"] == "node packages/travis234-cli/bin/travis234.js"
+    assert not (ROOT / "travis/sandbox_launcher.py").exists()
+    assert not (ROOT / "scripts/travis234_sandbox.py").exists()
