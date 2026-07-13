@@ -108,6 +108,7 @@ def run_continuous_scenarios(
             context_percent: float | None = None
             context_estimated: bool | None = None
             context_confidence: str | None = None
+            provider_blocked = False
             prompt = _prompt_for(scenario)
             if scenario.allow_package_install:
                 driver.send_line("/allow package-install")
@@ -142,6 +143,14 @@ def run_continuous_scenarios(
                     fault_domain = fault_domain or "harness_failure"
                 else:
                     response = str(conversation.get("response") or "")
+                    recorded_status = str(
+                        conversation.get("status") or turn_end.get("status") or "ok"
+                    )
+                    if recorded_status != "ok":
+                        failure_tail = response or f"turn ended with status {recorded_status}"
+                        failure_evidence = failure_tail
+                        fault_domain = _fault_domain_for_turn_failure(failure_tail)
+                        provider_blocked = fault_domain.startswith("provider_")
             except TimeoutError:
                 failure_tail = "TimeoutError: timed out waiting for turn_end"
                 failure_evidence = failure_tail
@@ -159,7 +168,7 @@ def run_continuous_scenarios(
                 failure_evidence = failure_tail
                 fault_domain = _fault_domain_for_error(error)
 
-            if turn_finished:
+            if turn_finished and failure_tail is None:
                 verifier_codes, verifier_failure = _run_verifiers(
                     scenario,
                     scenario_workspaces[scenario.id],
@@ -222,6 +231,8 @@ def run_continuous_scenarios(
             os.chmod(result_path, 0o600)
             results.append(result)
 
+            if provider_blocked:
+                break
             if index == 11:
                 _exercise_ctrl_c_escalation(driver)
 
@@ -351,6 +362,35 @@ def _fault_domain_for_error(error: BaseException) -> str:
         )
     ):
         return "provider_network_failure"
+    return "agent_runtime_failure"
+
+
+def _fault_domain_for_turn_failure(message: str) -> str:
+    lowered = message.lower()
+    if any(marker in lowered for marker in ("http 402", "payment required", "billing or quota", "account limit")):
+        return "provider_billing_failure"
+    if any(marker in lowered for marker in ("http 401", "authentication failed")):
+        return "provider_authentication_failure"
+    if "prompt-injection guardrail" in lowered or "data-policy settings" in lowered:
+        return "provider_policy_failure"
+    if any(marker in lowered for marker in ("http 403", "authorization failed")):
+        return "provider_authorization_failure"
+    if any(marker in lowered for marker in ("http 429", "rate limit", "too many requests")):
+        return "provider_rate_limit"
+    if any(
+        marker in lowered
+        for marker in (
+            "connection reset",
+            "connection refused",
+            "dns",
+            "service unavailable",
+            "gateway timeout",
+            "network",
+        )
+    ):
+        return "provider_network_failure"
+    if any(marker in lowered for marker in ("provider message:", " api error (http ", "openrouter")):
+        return "provider_api_failure"
     return "agent_runtime_failure"
 
 

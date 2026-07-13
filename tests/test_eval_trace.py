@@ -8,6 +8,7 @@ import pytest
 from travis.ai.models import reset_models
 from travis.ai.providers.faux import create_faux_provider, faux_model, text_response_events
 from travis.ai.stream import register_api_provider, reset_api_providers
+from travis.ai.types import AssistantMessage, ErrorEvent, TextContent, empty_usage, now_ms
 from travis.app import CodingApp
 from travis.coding_agent.eval_trace import ConversationLogWriter, EvalTraceWriter, SecretRedactor
 from travis.tui.interactive_mode import InteractiveMode
@@ -168,3 +169,40 @@ def test_coding_app_writes_final_assistant_text_to_conversation_log(tmp_path: Pa
     assert record["prompt"] == "Repair the fixture"
     assert record["response"] == "Implemented and tested"
     assert record["status"] == "ok"
+
+
+def test_coding_app_records_provider_error_as_terminal_output(tmp_path: Path) -> None:
+    conversation_path = tmp_path / "conversation.jsonl"
+    trace_path = tmp_path / "trace.jsonl"
+
+    def provider_error(model, _context):
+        message = AssistantMessage(
+            content=[TextContent(text="")],
+            api=model.api,
+            provider=model.provider,
+            model=model.id,
+            usage=empty_usage(),
+            stop_reason="error",
+            error_message="OpenRouter billing or quota failed (HTTP 402): Payment Required",
+            timestamp=now_ms(),
+        )
+        return [ErrorEvent(reason="error", error=message)]
+
+    register_api_provider(create_faux_provider(provider_error))
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=120),
+        enable_tui=False,
+        conversation_log=ConversationLogWriter(conversation_path),
+        event_trace=EvalTraceWriter(trace_path),
+    )
+
+    app.run_turn("Repair the fixture")
+
+    record = json.loads(conversation_path.read_text(encoding="utf-8"))
+    events = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+    turn_end = next(event for event in events if event["event"] == "turn_end")
+    assert record["status"] == "error"
+    assert record["response"] == "Error: OpenRouter billing or quota failed (HTTP 402): Payment Required"
+    assert turn_end["status"] == "error"

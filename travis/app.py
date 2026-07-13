@@ -450,11 +450,18 @@ class CodingApp:
             )
             raise
         finally:
+            turn_messages = self.session.messages[before_message_count:]
+            terminal_message = _last_assistant_message(turn_messages)
+            if status == "ok" and terminal_message is not None:
+                if terminal_message.stop_reason == "error":
+                    status = "error"
+                elif terminal_message.stop_reason == "aborted":
+                    status = "aborted"
             if self.conversation_log is not None:
                 self.conversation_log.write(
                     turn_id=turn_id,
                     prompt=prompt,
-                    response=_assistant_text_after(self.session.messages, before_message_count),
+                    response=_assistant_log_text(turn_messages),
                     status=status,
                 )
             self._trace(
@@ -645,6 +652,19 @@ def _assistant_text_after(messages, start_index: int) -> str | None:
         return None
     text = "".join(block.text for block in message.content if isinstance(block, TextContent)).strip()
     return text or None
+
+
+def _assistant_log_text(messages) -> str | None:
+    message = _last_assistant_message(list(messages))
+    if message is None:
+        return None
+    text = "".join(block.text for block in message.content if isinstance(block, TextContent)).strip()
+    parts = [text] if text else []
+    if message.stop_reason == "error":
+        parts.append(f"Error: {message.error_message or 'Unknown error'}")
+    elif message.stop_reason == "aborted":
+        parts.append(message.error_message or "Operation aborted")
+    return "\n\n".join(parts) or None
 
 
 def _assistant_prompt_tokens(message: AssistantMessage) -> int:

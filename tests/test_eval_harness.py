@@ -481,6 +481,74 @@ def test_continuous_eval_uses_one_tui_session_for_all_prompts(tmp_path: Path) ->
     assert result_paths and all(path.stat().st_mode & 0o777 == 0o600 for path in result_paths)
 
 
+def test_continuous_eval_stops_and_classifies_provider_billing_failure(tmp_path: Path) -> None:
+    from evals.run_continuous_sdlc_eval import run_continuous_scenarios
+
+    verifier_marker = tmp_path / "verifier-ran"
+    scenarios = [
+        Scenario(
+            "01-first",
+            "first",
+            ("implement",),
+            (),
+            (
+                (
+                    sys.executable,
+                    "-c",
+                    f"from pathlib import Path; Path({str(verifier_marker)!r}).write_text('ran')",
+                ),
+            ),
+        ),
+        Scenario("02-second", "second", ("repair",), (), ((sys.executable, "-c", ""),)),
+    ]
+
+    class ProviderErrorDriver(FakeDriver):
+        def wait_for_event(self, event_type: str, timeout: float):
+            if event_type != "turn_end":
+                return super().wait_for_event(event_type, timeout)
+            self.waits.append((event_type, timeout))
+            self.turn_count += 1
+            turn_id = f"turn-{self.turn_count}"
+            assert self.conversation_path is not None
+            assert self.pending_prompt is not None
+            with self.conversation_path.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    json.dumps(
+                        {
+                            "turn_id": turn_id,
+                            "prompt": self.pending_prompt,
+                            "response": "Error: OpenRouter billing or quota failed (HTTP 402): Payment Required",
+                            "status": "error",
+                        }
+                    )
+                    + "\n"
+                )
+            return {"event": event_type, "status": "error", "turn_id": turn_id}
+
+    driver = ProviderErrorDriver()
+
+    def start(command, _cwd, _trace):
+        command_parts = list(command)
+        driver.conversation_path = Path(command_parts[command_parts.index("--conversation-log") + 1])
+        return driver
+
+    results = run_continuous_scenarios(
+        scenarios,
+        root=tmp_path / "eval",
+        dotenv=tmp_path / ".env",
+        driver_factory=start,
+    )
+
+    assert len(results) == 1
+    assert results[0].status == "failed"
+    assert results[0].fault_domain == "provider_billing_failure"
+    assert results[0].verifier_exit_codes == ()
+    assert verifier_marker.exists() is False
+    assert not any("02-second" in line for line in driver.lines)
+    assert driver.lines[-1] == "/exit"
+    assert driver.closed is True
+
+
 def test_continuous_eval_preflights_verifiers_before_starting_tui(tmp_path: Path) -> None:
     from evals.run_continuous_sdlc_eval import run_continuous_scenarios
 
