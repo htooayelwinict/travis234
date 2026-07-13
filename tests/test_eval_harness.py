@@ -177,6 +177,23 @@ def test_driver_fails_immediately_on_fatal_trace_event(tmp_path: Path) -> None:
         os.close(read_fd)
 
 
+def test_driver_accepts_exact_model_query_without_waiting_for_picker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    driver = object.__new__(TuiDriver)
+    sent: list[str] = []
+    selected = {
+        "event": "model_selected",
+        "provider": "openrouter",
+        "model": "stepfun/step-3.7-flash",
+    }
+    monkeypatch.setattr(driver, "send_line", sent.append)
+    monkeypatch.setattr(driver, "wait_for_events", lambda event_types, timeout: selected)
+
+    assert driver.select_model("stepfun/step-3.7-flash", 1, 60) == selected
+    assert sent == ["/model stepfun/step-3.7-flash"]
+
+
 def test_driver_writes_ansi_free_secret_redacted_terminal_transcript(tmp_path: Path) -> None:
     read_fd, write_fd = os.pipe()
     transcript = tmp_path / "terminal.log"
