@@ -116,7 +116,6 @@ _STREAMING_TOOL_ARGUMENT_PREVIEW_MAX_CHARS = 8_192
 from travis.ai.providers.sse_common import _StartEventState, _iter_sse_data
 from travis.ai.providers.streaming_json import (
     _parse_complete_tool_arguments, _parse_streaming_json, _parse_streaming_json_preview,
-    _strip_leaked_tool_xml,
 )
 
 def _responses_tool_call_id(call_id: str, item_id: str | None) -> str:
@@ -335,7 +334,7 @@ def _parse_codex_responses_sse_chunks(
                             if isinstance(part, dict)
                         )
                         if text:
-                            message.content[content_index].text = _strip_leaked_tool_xml(text)
+                            message.content[content_index].text = text
                     yield TextEndEvent(
                         content_index=content_index,
                         content=message.content[content_index].text,

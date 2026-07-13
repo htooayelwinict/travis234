@@ -53,7 +53,6 @@ PROVIDER_API = "openai-completions"
 PARTIAL_STREAM_STUB_ID = "partial-stream-stub"
 PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE = "partial_stream_dropped_tool_calls"
 MALFORMED_STREAMED_TOOL_CALL_ARGUMENTS_CODE = "malformed_streamed_tool_call_arguments"
-LEAKED_TOOL_PROTOCOL_TEXT_CODE = "leaked_tool_protocol_text"
 _MUTATING_TOOL_REQUIRED_ARGUMENTS = {"write": ("path", "content")}
 _VALID_JSON_ESCAPES = {'"', "\\", "/", "b", "f", "n", "r", "t", "u"}
 _REASONING_FIELDS = ("reasoning_content", "reasoning", "reasoning_text")
@@ -118,9 +117,9 @@ from travis.ai.providers.message_translation import _repair_tool_call_name_fragm
 from travis.ai.providers.responses_stream import _parse_codex_responses_sse_chunks
 from travis.ai.providers.sse_common import _StartEventState, _iter_sse_data, _map_stop_reason
 from travis.ai.providers.streaming_json import (
-    _looks_like_leaked_tool_protocol_text, _malformed_finished_mutating_tool_call_names,
+    _malformed_finished_mutating_tool_call_names,
     _malformed_finished_tool_call_names_against_active_schema, _parse_streaming_json,
-    _parse_streaming_json_preview, _strip_leaked_tool_xml,
+    _parse_streaming_json_preview,
 )
 
 def parse_sse_chunks(
@@ -166,7 +165,6 @@ def parse_sse_chunks(
     tool_arg_previews: dict[int, dict] = {}
     finish_reason = "stop"
     has_finish_reason = False
-    stream_leaked_tool_protocol_text = False
     usage = empty_usage()
 
     def content_index_of(block: TextContent | ThinkingContent | ToolCall) -> int:
@@ -178,7 +176,6 @@ def parse_sse_chunks(
     def end_content_events() -> Iterator:
         for content_index, block in enumerate(message.content):
             if isinstance(block, TextContent):
-                block.text = _strip_leaked_tool_xml(block.text)
                 yield TextEndEvent(content_index=content_index, content=block.text, partial=message)
             elif isinstance(block, ThinkingContent):
                 yield ThinkingEndEvent(content_index=content_index, content=block.thinking, partial=message)
@@ -191,10 +188,6 @@ def parse_sse_chunks(
         message.usage = usage
 
     def final_events() -> Iterator:
-        leaked_tool_protocol_text = stream_leaked_tool_protocol_text or any(
-            isinstance(block, TextContent) and _looks_like_leaked_tool_protocol_text(block.text)
-            for block in message.content
-        )
         malformed_mutating_tool_names: list[str] = []
         if has_finish_reason and finish_reason == "tool_calls":
             malformed_mutating_tool_names = (
@@ -207,11 +200,6 @@ def parse_sse_chunks(
             for block in message.content
             if isinstance(block, ToolCall)
         ]
-        has_remaining_tool_calls = bool(streamed_tool_names)
-        if leaked_tool_protocol_text and not has_remaining_tool_calls:
-            for block in message.content:
-                if isinstance(block, TextContent):
-                    block.text = ""
         yield from end_content_events()
         if malformed_mutating_tool_names:
             message.stop_reason = "length"
@@ -236,14 +224,6 @@ def parse_sse_chunks(
                     "finish_reason": None,
                 }
             )
-            message.diagnostics = diagnostics
-            yield DoneEvent(reason="length", message=message)
-            return
-        if leaked_tool_protocol_text and not has_remaining_tool_calls:
-            message.stop_reason = "length"
-            message.response_id = PARTIAL_STREAM_STUB_ID
-            diagnostics = list(message.diagnostics or [])
-            diagnostics.append({"code": LEAKED_TOOL_PROTOCOL_TEXT_CODE})
             message.diagnostics = diagnostics
             yield DoneEvent(reason="length", message=message)
             return
@@ -281,7 +261,6 @@ def parse_sse_chunks(
                     "pending_tool_call_parts": pending_tool_call_parts,
                     "tool_arg_bufs": tool_arg_bufs,
                     "tool_arg_previews": tool_arg_previews,
-                    "leaked_tool_protocol_text": stream_leaked_tool_protocol_text,
                     "content_index_of": content_index_of,
                     "ensure_start": start_state.ensure,
                 },
@@ -292,7 +271,6 @@ def parse_sse_chunks(
             text_index = state["text_index"]
             text_buf = state["text_buf"]
             thinking_index = state["thinking_index"]
-            stream_leaked_tool_protocol_text = bool(state.get("leaked_tool_protocol_text"))
             if state.get("finish_reason"):
                 finish_reason = state["finish_reason"]
                 has_finish_reason = True
@@ -381,24 +359,19 @@ def _parse_sse_payload(
 
     content_piece = delta.get("content")
     if content_piece:
-        if state.get("leaked_tool_protocol_text"):
-            pass
-        elif _looks_like_leaked_tool_protocol_text(text_buf + content_piece):
-            state["leaked_tool_protocol_text"] = True
-        else:
-            start = ensure_start()
-            if start:
-                state["started"] = True
-                yield start
-            if text_index is None:
-                text_index = len(message.content)
-                state["text_index"] = text_index
-                message.content.append(TextContent(text=""))
-                yield TextStartEvent(content_index=text_index, partial=message)
-            text_buf += content_piece
-            state["text_buf"] = text_buf
-            message.content[text_index].text = text_buf
-            yield TextDeltaEvent(content_index=text_index, delta=content_piece, partial=message)
+        start = ensure_start()
+        if start:
+            state["started"] = True
+            yield start
+        if text_index is None:
+            text_index = len(message.content)
+            state["text_index"] = text_index
+            message.content.append(TextContent(text=""))
+            yield TextStartEvent(content_index=text_index, partial=message)
+        text_buf += content_piece
+        state["text_buf"] = text_buf
+        message.content[text_index].text = text_buf
+        yield TextDeltaEvent(content_index=text_index, delta=content_piece, partial=message)
 
     for tc in delta.get("tool_calls") or []:
         stream_index = tc.get("index")

@@ -115,7 +115,7 @@ _STREAMING_TOOL_ARGUMENT_PREVIEW_MAX_CHARS = 8_192
 
 from travis.ai.providers.sse_common import _StartEventState, _iter_sse_data
 from travis.ai.providers.streaming_json import (
-    _parse_complete_tool_arguments, _parse_streaming_json_preview, _strip_leaked_tool_xml,
+    _parse_complete_tool_arguments, _parse_streaming_json_preview,
 )
 
 def _map_anthropic_stop_reason(reason: str | None) -> tuple[str, str | None]:
@@ -289,7 +289,6 @@ def _parse_anthropic_messages_sse_chunks(
                     continue
                 kind, content_index = slot
                 if kind == "text" and isinstance(message.content[content_index], TextContent):
-                    message.content[content_index].text = _strip_leaked_tool_xml(message.content[content_index].text)
                     yield TextEndEvent(
                         content_index=content_index,
                         content=message.content[content_index].text,

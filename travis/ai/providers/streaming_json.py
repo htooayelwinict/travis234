@@ -82,28 +82,6 @@ _OPENROUTER_PROMPT_GUARDRAIL_PATTERNS = (
     "prompt injection patterns detected",
     "system_prefix_spoofing",
 )
-_TOOL_CALL_LEAK_PATTERN = re.compile(r"(?:^|[\s>|])to=functions\.[A-Za-z_][\w.]*", re.IGNORECASE)
-_TOOL_PROTOCOL_XML_BLOCK_PATTERN = re.compile(
-    r"(?is)"
-    r"<(?:tool_call|tool_calls|tool_response|function_call|function_calls)\b[^>]*>.*?"
-    r"</(?:tool_call|tool_calls|tool_response|function_call|function_calls)>"
-    r"|<function\s+name\s*=\s*[\"'][^\"']+[\"'][^>]*>.*?</function>"
-)
-_TOOL_PROTOCOL_XML_LINE_PATTERN = re.compile(
-    r"(?im)^[ \t]*</?(?:parameter|function|tool_call|tool_calls|tool_response|function_call|function_calls)"
-    r"(?:[\s=>][^>]*)?>[ \t]*(?:\r?\n|$)"
-)
-_TOOL_PROTOCOL_XML_PREFIX_PATTERN = re.compile(
-    r"(?is)(?:^|[\s>])(?:"
-    r"</?(?:tool_call|tool_calls|tool_response|function_call|function_calls|parameter)(?:$|[\s=>_/])"
-    r"|<tool(?:$|_)"
-    r"|</tool(?:$|[_>\s])"
-    r"|<function\s+(?:$|name\s*=)"
-    r"|</function(?:$|[\s>])"
-    r"|<parameter(?:$|[\s=>])"
-    r"|</parameter(?:$|[\s>])"
-    r")"
-)
 _PROVIDER_ERROR_DETAIL_HEAD_CHARS = 450
 _PROVIDER_ERROR_DETAIL_TAIL_CHARS = 300
 _PROVIDER_ERROR_DETAIL_TRUNCATION_MARKER = "... [truncated provider error body] ..."
@@ -480,21 +458,3 @@ def _malformed_finished_tool_call_names_against_active_schema(
         block.arguments = validated_arguments
         tool_arg_bufs[content_index] = json.dumps(validated_arguments)
     return names
-
-
-def _looks_like_leaked_tool_protocol_text(text: str) -> bool:
-    return bool(
-        _TOOL_CALL_LEAK_PATTERN.search(text)
-        or _TOOL_PROTOCOL_XML_BLOCK_PATTERN.search(text)
-        or _TOOL_PROTOCOL_XML_LINE_PATTERN.search(text)
-        or _TOOL_PROTOCOL_XML_PREFIX_PATTERN.search(text)
-    )
-
-
-def _strip_leaked_tool_xml(text: str) -> str:
-    if not text:
-        return text
-    stripped = _TOOL_PROTOCOL_XML_BLOCK_PATTERN.sub("", text)
-    stripped = _TOOL_PROTOCOL_XML_LINE_PATTERN.sub("", stripped)
-    stripped = _TOOL_CALL_LEAK_PATTERN.sub("", stripped)
-    return stripped

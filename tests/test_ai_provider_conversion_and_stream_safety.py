@@ -467,7 +467,107 @@ def test_parse_sse_chunks_does_not_turn_text_xml_into_tool_call() -> None:
 
     done = events[-1]
     assert done.type == "done"
+    assert done.reason == "stop"
+    assert done.message.stop_reason == "stop"
     assert not any(isinstance(block, ToolCall) for block in done.message.content)
+    assert "".join(
+        block.text for block in done.message.content if isinstance(block, TextContent)
+    ) == text
+    assert "".join(
+        event.delta for event in events if isinstance(event, TextDeltaEvent)
+    ) == text
+
+
+def test_responses_stream_preserves_protocol_shaped_text_verbatim() -> None:
+    text = '<tool_response><output>literal fixture</output></tool_response>'
+    events = list(parse_sse_chunks([
+        "data: " + json.dumps({"type": "response.created", "response": {"id": "resp_text"}}),
+        "data: " + json.dumps({
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {"type": "message", "id": "msg_text", "content": []},
+        }),
+        "data: " + json.dumps({
+            "type": "response.output_text.delta",
+            "output_index": 0,
+            "delta": text,
+        }),
+        "data: " + json.dumps({
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+                "type": "message",
+                "id": "msg_text",
+                "content": [{"type": "output_text", "text": text}],
+            },
+        }),
+        "data: " + json.dumps({
+            "type": "response.completed",
+            "response": {"id": "resp_text", "status": "completed"},
+        }),
+    ], _model(), api_mode="codex_responses"))
+
+    done = events[-1]
+    assert done.type == "done"
+    assert done.reason == "stop"
+    assert not any(isinstance(block, ToolCall) for block in done.message.content)
+    assert "".join(
+        block.text for block in done.message.content if isinstance(block, TextContent)
+    ) == text
+    assert "".join(
+        event.delta for event in events if isinstance(event, TextDeltaEvent)
+    ) == text
+
+
+def test_anthropic_stream_preserves_protocol_shaped_text_verbatim() -> None:
+    text = '<function name="write"><parameter name="path">x.md</parameter></function>'
+    events = list(parse_sse_chunks([
+        "event: message_start",
+        "data: " + json.dumps({
+            "type": "message_start",
+            "message": {"id": "msg_text", "usage": {"input_tokens": 3, "output_tokens": 0}},
+        }),
+        "",
+        "event: content_block_start",
+        "data: " + json.dumps({
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        }),
+        "",
+        "event: content_block_delta",
+        "data: " + json.dumps({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": text},
+        }),
+        "",
+        "event: content_block_stop",
+        "data: " + json.dumps({"type": "content_block_stop", "index": 0}),
+        "",
+        "event: message_delta",
+        "data: " + json.dumps({
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 2},
+        }),
+        "",
+        "event: message_stop",
+        "data: " + json.dumps({"type": "message_stop"}),
+        "",
+    ], _model(), api_mode="anthropic_messages"))
+
+    done = events[-1]
+    assert done.type == "done"
+    assert done.reason == "stop"
+    assert not any(isinstance(block, ToolCall) for block in done.message.content)
+    assert "".join(
+        block.text for block in done.message.content if isinstance(block, TextContent)
+    ) == text
+    assert "".join(
+        event.delta for event in events if isinstance(event, TextDeltaEvent)
+    ) == text
+
 
 def test_parse_streaming_json_preserves_valid_prefix_before_unfinished_property_like_travis234() -> None:
     from travis.ai.providers.streaming_json import _parse_streaming_json
@@ -985,59 +1085,58 @@ def test_parse_sse_chunks_repairs_xml_polluted_tool_name() -> None:
     assert tool_call.name == "write"
     assert tool_call.arguments == {"path": "x.md", "content": "ok"}
 
-def test_parse_sse_chunks_marks_provider_text_tool_xml_as_incomplete() -> None:
-    leaked = 'Reading.\n<function name="write"><parameter name="path">/tmp/x</parameter></function>\nDone.'
+def test_parse_sse_chunks_preserves_provider_text_tool_xml_as_text() -> None:
+    text = 'Reading.\n<function name="write"><parameter name="path">/tmp/x</parameter></function>\nDone.'
     events = list(parse_sse_chunks([
-        "data: " + json.dumps({"choices": [{"delta": {"content": leaked}}]}),
+        "data: " + json.dumps({"choices": [{"delta": {"content": text}}]}),
         "data: " + json.dumps({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
     ], _model()))
 
     done = events[-1]
     assert done.type == "done"
-    assert done.reason == "length"
-    assert done.message.stop_reason == "length"
-    assert done.message.response_id == travis_env.PARTIAL_STREAM_STUB_ID
-    assert done.message.diagnostics == [{"code": "leaked_tool_protocol_text"}]
+    assert done.reason == "stop"
+    assert done.message.stop_reason == "stop"
+    assert done.message.response_id is None
+    assert done.message.diagnostics in (None, [])
     assert not any(
-        isinstance(block, TextContent) and "<function" in block.text
+        isinstance(block, ToolCall)
         for block in done.message.content
     )
+    assert "".join(
+        block.text for block in done.message.content if isinstance(block, TextContent)
+    ) == text
 
-def test_parse_sse_chunks_suppresses_streamed_provider_text_tool_xml() -> None:
-    leaked = "<tool_response>\n<output>File contents here</output>\n</tool_response>"
+def test_parse_sse_chunks_streams_provider_text_tool_xml_verbatim() -> None:
+    prefix = "I will write the file. "
+    text = "<tool_response>\n<output>File contents here</output>\n</tool_response>"
     events = list(parse_sse_chunks([
-        "data: " + json.dumps({"choices": [{"delta": {"content": "I will write the file. "}}]}),
-        "data: " + json.dumps({"choices": [{"delta": {"content": leaked}}]}),
+        "data: " + json.dumps({"choices": [{"delta": {"content": prefix}}]}),
+        "data: " + json.dumps({"choices": [{"delta": {"content": text}}]}),
         "data: " + json.dumps({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
     ], _model()))
 
-    assert not any(
-        isinstance(event, TextDeltaEvent) and "<tool_response>" in event.delta
-        for event in events
-    )
+    assert "".join(event.delta for event in events if isinstance(event, TextDeltaEvent)) == prefix + text
     done = events[-1]
     assert done.type == "done"
-    assert done.reason == "length"
-    assert done.message.stop_reason == "length"
-    assert done.message.diagnostics == [{"code": "leaked_tool_protocol_text"}]
+    assert done.reason == "stop"
+    assert done.message.stop_reason == "stop"
+    assert done.message.diagnostics in (None, [])
+    assert done.message.content[0].text == prefix + text
 
-def test_parse_sse_chunks_suppresses_fragmented_provider_text_tool_xml() -> None:
+def test_parse_sse_chunks_preserves_fragmented_provider_text_tool_xml() -> None:
+    fragments = ["I will write the file. ", "<tool", "_response", ">hidden</tool_response>"]
     events = list(parse_sse_chunks([
-        "data: " + json.dumps({"choices": [{"delta": {"content": "I will write the file. "}}]}),
-        "data: " + json.dumps({"choices": [{"delta": {"content": "<tool"}}]}),
-        "data: " + json.dumps({"choices": [{"delta": {"content": "_response"}}]}),
-        "data: " + json.dumps({"choices": [{"delta": {"content": ">hidden</tool_response>"}}]}),
+        *("data: " + json.dumps({"choices": [{"delta": {"content": fragment}}]}) for fragment in fragments),
         "data: " + json.dumps({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
     ], _model()))
 
-    assert not any(
-        isinstance(event, TextDeltaEvent) and "<tool" in event.delta
-        for event in events
-    )
+    expected = "".join(fragments)
+    assert "".join(event.delta for event in events if isinstance(event, TextDeltaEvent)) == expected
     done = events[-1]
     assert done.type == "done"
-    assert done.reason == "length"
-    assert done.message.diagnostics == [{"code": "leaked_tool_protocol_text"}]
+    assert done.reason == "stop"
+    assert done.message.diagnostics in (None, [])
+    assert done.message.content[0].text == expected
 
 def test_parse_sse_chunks_preserves_inline_function_prose_mentions() -> None:
     prose = "Use <function> declarations when explaining JavaScript hoisting."
