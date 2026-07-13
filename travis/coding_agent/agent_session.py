@@ -71,6 +71,7 @@ from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import ProcessOwner
 from travis.coding_agent.provider_control_plane import ProviderControlPlane
 from travis.coding_agent.resource_loader import DefaultResourceLoader
+from travis.coding_agent.session_index import SessionIndex
 from travis.coding_agent.session_store import (
     BashExecutionMessage,
     BranchSummaryMessage,
@@ -932,6 +933,7 @@ class AgentSession:
         defer_session_start: bool = False,
         resource_loader: DefaultResourceLoader | None = None,
         agent_dir: str | None = None,
+        session_index: SessionIndex | None = None,
         settings_manager: object | None = None,
         stream_fn=None,
         max_iterations: int = 90,
@@ -1048,7 +1050,13 @@ class AgentSession:
         self._retryable_error_predicate = retryable_error_predicate
         self._partial_stream_continue_retries = 0
         self._session_store = (
-            SessionStore(session_path, cwd=cwd, parent_session=parent_session_path, session_id=session_id)
+            SessionStore(
+                session_path,
+                cwd=cwd,
+                parent_session=parent_session_path,
+                session_id=session_id,
+                index=session_index,
+            )
             if session_path
             else None
         )
@@ -5077,6 +5085,7 @@ def create_agent_session(
     defer_session_start: bool = False,
     resource_loader: DefaultResourceLoader | None = None,
     agent_dir: str | None = None,
+    session_index: SessionIndex | None = None,
     settings_manager: object | None = None,
 ) -> AgentSession:
     return AgentSession(
@@ -5093,5 +5102,6 @@ def create_agent_session(
         defer_session_start=defer_session_start,
         resource_loader=resource_loader,
         agent_dir=agent_dir,
+        session_index=session_index,
         settings_manager=settings_manager,
     )

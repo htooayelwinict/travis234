@@ -231,6 +231,7 @@ def create_agent_session_from_services(options: dict[str, Any]) -> CreateAgentSe
             services["providerControlPlane"],
         ),
         provider_control_plane=services["providerControlPlane"],
+        session_index=services["sessionCatalog"].index,
         session_path=session_path,
         parent_session_path=options.get("parentSession", options.get("parent_session_path")),
         session_id=str(session_id) if session_id else None,

@@ -213,6 +213,7 @@ class CodingApp:
             session_start_event=session_start_event,
             defer_session_start=defer_session_start,
             agent_dir=self._agent_dir,
+            session_index=self.session_catalog.index,
             provider_control_plane=self.provider_control_plane,
             process_service=self.process_service,
             process_owner=self._process_owner_for(resolved_cwd),
@@ -388,6 +389,11 @@ class CodingApp:
                 first_error = error
         try:
             self.process_completion_store.close()
+        except BaseException as error:  # noqa: BLE001
+            if first_error is None:
+                first_error = error
+        try:
+            self.session_catalog.close()
         except BaseException as error:  # noqa: BLE001
             if first_error is None:
                 first_error = error

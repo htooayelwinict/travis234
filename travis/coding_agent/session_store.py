@@ -27,6 +27,7 @@ from travis.ai.types import (
     now_ms,
 )
 from travis.coding_agent.session_lock import SessionFileLock
+from travis.coding_agent.session_index import SessionIndex
 
 CURRENT_SESSION_VERSION = 3
 
@@ -121,8 +122,11 @@ class SessionStore:
         cwd: str,
         parent_session: str | None = None,
         session_id: str | None = None,
+        index: SessionIndex | None = None,
     ) -> None:
         self.path = Path(path)
+        self.index = index
+        self.index_diagnostics: list[str] = []
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.file_entries: list[dict[str, Any]] = []
         self.by_id: dict[str, dict[str, Any]] = {}
@@ -158,6 +162,11 @@ class SessionStore:
         self._disk_offset = len(payload)
         self._disk_identity = _disk_signature(self.path)
         self._explicit_parent_selection = False
+        if self.index is not None:
+            try:
+                self.index.record_header(self.path, header, self.path.stat())
+            except Exception as error:  # noqa: BLE001 - JSONL is authoritative; reconciliation repairs the cache.
+                self.index_diagnostics.append(str(error))
 
     def _load(self) -> None:
         raw = self._read_range(0)
@@ -573,6 +582,11 @@ class SessionStore:
                 os.fsync(descriptor)
         finally:
             os.close(descriptor)
+        if self.index is not None:
+            try:
+                self.index.record_append(self.path, entry, self.path.stat())
+            except Exception as error:  # noqa: BLE001 - JSONL append remains committed if indexing fails.
+                self.index_diagnostics.append(str(error))
 
     def _apply_committed_entry(self, entry: dict[str, Any]) -> None:
         self.file_entries.append(entry)
