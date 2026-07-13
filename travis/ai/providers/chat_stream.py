@@ -118,7 +118,7 @@ from travis.ai.providers.responses_stream import _parse_codex_responses_sse_chun
 from travis.ai.providers.sse_common import _StartEventState, _iter_sse_data, _map_stop_reason
 from travis.ai.providers.streaming_json import (
     _malformed_finished_mutating_tool_call_names,
-    _malformed_finished_tool_call_names_against_active_schema, _parse_streaming_json,
+    _parse_streaming_json,
     _parse_streaming_json_preview,
 )
 
@@ -190,10 +190,9 @@ def parse_sse_chunks(
     def final_events() -> Iterator:
         malformed_mutating_tool_names: list[str] = []
         if has_finish_reason and finish_reason == "tool_calls":
-            malformed_mutating_tool_names = (
-                _malformed_finished_tool_call_names_against_active_schema(message.content, tool_arg_bufs, tools)
-                if tools is not None
-                else _malformed_finished_mutating_tool_call_names(message.content, tool_arg_bufs)
+            malformed_mutating_tool_names = _malformed_finished_mutating_tool_call_names(
+                message.content,
+                tool_arg_bufs,
             )
         streamed_tool_names = [
             block.name or "?"

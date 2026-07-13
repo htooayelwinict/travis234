@@ -154,6 +154,35 @@ def test_process_argument_preparation_preserves_legacy_write_shapes() -> None:
     assert process_tool_module.prepare_process_arguments(raw)["action"] == "write_raw"
 
 
+@pytest.mark.parametrize("payload_field", ["content", "data"])
+def test_process_argument_preparation_normalizes_common_stdin_payload_names(
+    payload_field: str,
+) -> None:
+    arguments = {
+        "action": "write",
+        "session_id": "proc_x",
+        payload_field: "ping\n",
+    }
+
+    assert process_tool_module.prepare_process_arguments(arguments) == {
+        "action": "write_raw",
+        "session_id": "proc_x",
+        "input": "ping\n",
+    }
+
+
+def test_process_argument_preparation_rejects_ambiguous_stdin_payload_names() -> None:
+    with pytest.raises(ValueError, match="multiple stdin payload fields"):
+        process_tool_module.prepare_process_arguments(
+            {
+                "action": "write",
+                "session_id": "proc_x",
+                "input": "ping",
+                "content": "different",
+            }
+        )
+
+
 @pytest.fixture
 def managed_tools(tmp_path: Path):
     store = ProcessCompletionStore(tmp_path / ".completions")

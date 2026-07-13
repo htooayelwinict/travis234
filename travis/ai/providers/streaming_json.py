@@ -6,8 +6,7 @@ import json
 import re
 import threading
 import time
-from dataclasses import replace
-from typing import Any, Callable, Iterable, Iterator
+from typing import Any, Callable, Iterator
 
 import httpx
 
@@ -48,7 +47,6 @@ from travis.ai.types import (
     empty_usage,
     now_ms,
 )
-from travis.ai.validation import ToolValidationError, validate_tool_arguments
 PROVIDER_API = "openai-completions"
 PARTIAL_STREAM_STUB_ID = "partial-stream-stub"
 PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE = "partial_stream_dropped_tool_calls"
@@ -396,65 +394,14 @@ def _malformed_finished_mutating_tool_call_names(
     for content_index, block in enumerate(content):
         if not isinstance(block, ToolCall):
             continue
-        required = _MUTATING_TOOL_REQUIRED_ARGUMENTS.get(block.name)
-        if not required:
+        if block.name not in _MUTATING_TOOL_REQUIRED_ARGUMENTS:
             continue
         raw_arguments = tool_arg_bufs.get(content_index, "")
         if not raw_arguments.strip():
             continue
         try:
-            complete_arguments = json.loads(raw_arguments, strict=False)
+            json.loads(raw_arguments, strict=False)
         except (json.JSONDecodeError, TypeError, ValueError):
-            complete_arguments = None
-        if not isinstance(complete_arguments, dict):
             if block.name not in names:
                 names.append(block.name)
-            continue
-        parsed = _parse_streaming_json(raw_arguments)
-        if not isinstance(parsed, dict) or any(key not in parsed for key in required):
-            if block.name not in names:
-                names.append(block.name)
-    return names
-
-
-def _malformed_finished_tool_call_names_against_active_schema(
-    content: list[TextContent | ThinkingContent | ToolCall | ImageContent],
-    tool_arg_bufs: dict[int, str],
-    tools: Iterable[Tool] | None,
-) -> list[str]:
-    tool_by_name = {tool.name: tool for tool in tools or []}
-    if not tool_by_name:
-        return []
-
-    names: list[str] = []
-    for content_index, block in enumerate(content):
-        if not isinstance(block, ToolCall):
-            continue
-        tool = tool_by_name.get(block.name)
-        if tool is None:
-            continue
-        raw_arguments = tool_arg_bufs.get(content_index, "")
-        if not raw_arguments.strip():
-            continue
-        if block.name in _MUTATING_TOOL_REQUIRED_ARGUMENTS:
-            try:
-                complete_arguments = json.loads(raw_arguments, strict=False)
-            except (json.JSONDecodeError, TypeError, ValueError):
-                complete_arguments = None
-            if not isinstance(complete_arguments, dict):
-                if block.name not in names:
-                    names.append(block.name)
-                continue
-        parsed_arguments = _parse_streaming_json(raw_arguments)
-        try:
-            validated_arguments = validate_tool_arguments(
-                tool,
-                replace(block, arguments=parsed_arguments),
-            )
-        except ToolValidationError:
-            if block.name not in names:
-                names.append(block.name)
-            continue
-        block.arguments = validated_arguments
-        tool_arg_bufs[content_index] = json.dumps(validated_arguments)
     return names

@@ -925,7 +925,7 @@ def test_parse_sse_chunks_preserves_finished_bash_arguments_for_agent_validation
     assert tool_calls[0].arguments == {"command": "printf '%s\\n' '</parameter>'", "timeout": " ; 30 ; "}
     assert done.message.diagnostics in (None, [])
 
-def test_parse_sse_chunks_retains_invalid_bash_call_for_safe_model_recovery() -> None:
+def test_parse_sse_chunks_leaves_complete_invalid_bash_call_for_agent_validation() -> None:
     raw_arguments = json.dumps(
         {
             "command": "printf '\n",
@@ -969,19 +969,111 @@ def test_parse_sse_chunks_retains_invalid_bash_call_for_safe_model_recovery() ->
 
     done = events[-1]
     assert done.type == "done"
-    assert done.reason == "length"
-    assert done.message.stop_reason == "length"
+    assert done.reason == "toolUse"
+    assert done.message.stop_reason == "toolUse"
     tool_calls = [block for block in done.message.content if isinstance(block, ToolCall)]
     assert [(call.name, call.arguments) for call in tool_calls] == [
         ("bash", {"command": "printf '\n", "timeout": "\n' >> docs/protocol_fixture.md"})
     ]
-    assert done.message.diagnostics == [
+    assert done.message.diagnostics in (None, [])
+
+
+def test_parse_sse_chunks_leaves_complete_schema_invalid_process_call_for_agent_validation() -> None:
+    """A complete tool call is not a truncated provider stream.
+
+    The agent boundary owns schema validation and can return the precise field
+    error to the model.  Treating that error as an output-limit truncation
+    hides the correction and causes identical retries.
+    """
+    raw_arguments = json.dumps(
         {
-            "code": "malformed_streamed_tool_call_arguments",
-            "tool_names": ["bash"],
-            "finish_reason": "tool_calls",
+            "action": "write",
+            "session_id": "proc_live",
+            "content": "ping\n",
         }
-    ]
+    )
+    process_tool = Tool(
+        name="process",
+        description="Manage a background process",
+        parameters={
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "const": "write"},
+                "session_id": {"type": "string"},
+                "input": {"type": "string"},
+            },
+            "required": ["action", "session_id", "input"],
+            "additionalProperties": False,
+        },
+    )
+
+    events = list(parse_sse_chunks([
+        "data: " + json.dumps({
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_process_write",
+                                "function": {
+                                    "name": "process",
+                                    "arguments": raw_arguments,
+                                },
+                            }
+                        ]
+                    }
+                }
+            ]
+        }),
+        "data: " + json.dumps({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}),
+    ], _model(), tools=[process_tool]))
+
+    done = events[-1]
+    assert done.type == "done"
+    assert done.reason == "toolUse"
+    assert done.message.stop_reason == "toolUse"
+    tool_call = next(block for block in done.message.content if isinstance(block, ToolCall))
+    assert tool_call.arguments == {
+        "action": "write",
+        "session_id": "proc_live",
+        "content": "ping\n",
+    }
+    assert done.message.diagnostics in (None, [])
+
+
+def test_parse_sse_chunks_leaves_complete_write_missing_field_for_agent_validation() -> None:
+    raw_arguments = json.dumps({"path": "BROKEN.md"})
+
+    events = list(parse_sse_chunks([
+        "data: " + json.dumps({
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_incomplete_write",
+                                "function": {
+                                    "name": "write",
+                                    "arguments": raw_arguments,
+                                },
+                            }
+                        ]
+                    }
+                }
+            ]
+        }),
+        "data: " + json.dumps({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}),
+    ], _model()))
+
+    done = events[-1]
+    assert done.type == "done"
+    assert done.reason == "toolUse"
+    assert done.message.stop_reason == "toolUse"
+    tool_call = next(block for block in done.message.content if isinstance(block, ToolCall))
+    assert tool_call.arguments == {"path": "BROKEN.md"}
+    assert done.message.diagnostics in (None, [])
 
 def test_parse_sse_chunks_allows_complete_protocol_literals_inside_valid_write_json() -> None:
     content = "</parameter>\n<parameter=timeout>\n30\n</function>\n"

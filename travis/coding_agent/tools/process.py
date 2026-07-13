@@ -121,6 +121,14 @@ def prepare_process_arguments(raw_args):
     if action == "write_line":
         args["action"] = "write"
         action = "write"
+    if action in {"write", "write_raw"}:
+        payload_fields = [name for name in ("input", "data", "content") if name in args]
+        if len(payload_fields) > 1:
+            raise ValueError(
+                "process write received multiple stdin payload fields; use only input"
+            )
+        if payload_fields and payload_fields[0] != "input":
+            args["input"] = args.pop(payload_fields[0])
     if action == "write" and isinstance(args.get("input"), str) and any(
         character in args["input"] for character in "\r\n"
     ):
