@@ -768,7 +768,9 @@ def test_travis_env_provider_uses_transport_endpoint_path(monkeypatch) -> None:
             captured["json"] = json
             return FakeStream()
 
-    monkeypatch.setattr(travis_env, "resolve_provider_runtime", fake_runtime)
+    from travis.ai.providers import provider_request
+
+    monkeypatch.setattr(provider_request, "resolve_provider_runtime", fake_runtime)
     monkeypatch.setattr(travis_env, "get_transport", fake_get_transport)
     monkeypatch.setattr(httpx, "Client", FakeClient)
 
@@ -901,7 +903,9 @@ def test_travis_env_provider_resolves_transport_from_runtime_profile(monkeypatch
             captured["json"] = json
             return FakeStream()
 
-    monkeypatch.setattr(travis_env, "resolve_provider_runtime", fake_runtime)
+    from travis.ai.providers import provider_request
+
+    monkeypatch.setattr(provider_request, "resolve_provider_runtime", fake_runtime)
     monkeypatch.setattr(travis_env, "get_transport", fake_get_transport)
     monkeypatch.setattr(httpx, "Client", FakeClient)
 

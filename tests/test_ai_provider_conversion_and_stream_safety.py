@@ -466,28 +466,35 @@ def test_parse_sse_chunks_does_not_turn_text_xml_into_tool_call() -> None:
     assert not any(isinstance(block, ToolCall) for block in done.message.content)
 
 def test_parse_streaming_json_preserves_valid_prefix_before_unfinished_property_like_travis234() -> None:
+    from travis.ai.providers.streaming_json import _parse_streaming_json
+
     raw = '{"command": "ls -la", "timeout": 30, "background":'
 
-    assert travis_env._parse_streaming_json(raw) == {"command": "ls -la", "timeout": 30}
+    assert _parse_streaming_json(raw) == {"command": "ls -la", "timeout": 30}
 
 def test_parse_streaming_json_preserves_valid_prefix_before_hanging_property_like_travis234() -> None:
+    from travis.ai.providers.streaming_json import _parse_streaming_json
+
     raw = '{"path": "protocol_fixture.md", "content": "", "timeout": '
 
-    assert travis_env._parse_streaming_json(raw) == {"path": "protocol_fixture.md", "content": ""}
+    assert _parse_streaming_json(raw) == {"path": "protocol_fixture.md", "content": ""}
 
 def test_parse_sse_chunks_bounds_large_streamed_tool_argument_preview_parsing(monkeypatch) -> None:
     content = "\n".join(f"def test_{index}(): assert {index} == {index}" for index in range(2_000))
     raw_arguments = json.dumps({"path": "eventforge/tests/test_edge_cases.py", "content": content})
     deltas = [raw_arguments[index : index + 512] for index in range(0, len(raw_arguments), 512)]
     full_parse_lengths: list[int] = []
-    original_parse_streaming_json = travis_env._parse_streaming_json
+    from travis.ai.providers import chat_stream, streaming_json
+
+    original_parse_streaming_json = streaming_json._parse_streaming_json
 
     def recording_parse_streaming_json(raw: str | None) -> dict:
         if isinstance(raw, str) and len(raw) > 16_384:
             full_parse_lengths.append(len(raw))
         return original_parse_streaming_json(raw)
 
-    monkeypatch.setattr(travis_env, "_parse_streaming_json", recording_parse_streaming_json)
+    monkeypatch.setattr(streaming_json, "_parse_streaming_json", recording_parse_streaming_json)
+    monkeypatch.setattr(chat_stream, "_parse_streaming_json", recording_parse_streaming_json)
 
     lines = []
     for index, delta in enumerate(deltas):
@@ -529,14 +536,17 @@ def test_parse_sse_chunks_bounds_large_responses_tool_argument_preview_parsing(m
     raw_arguments = json.dumps({"path": "eventforge/tests/test_edge_cases.py", "content": content})
     deltas = [raw_arguments[index : index + 512] for index in range(0, len(raw_arguments), 512)]
     full_parse_lengths: list[int] = []
-    original_parse_streaming_json = travis_env._parse_streaming_json
+    from travis.ai.providers import responses_stream, streaming_json
+
+    original_parse_streaming_json = streaming_json._parse_streaming_json
 
     def recording_parse_streaming_json(raw: str | None) -> dict:
         if isinstance(raw, str) and len(raw) > 16_384:
             full_parse_lengths.append(len(raw))
         return original_parse_streaming_json(raw)
 
-    monkeypatch.setattr(travis_env, "_parse_streaming_json", recording_parse_streaming_json)
+    monkeypatch.setattr(streaming_json, "_parse_streaming_json", recording_parse_streaming_json)
+    monkeypatch.setattr(responses_stream, "_parse_streaming_json", recording_parse_streaming_json)
 
     lines = [
         "data: " + json.dumps({"type": "response.created", "response": {"id": "resp_1"}}),
@@ -603,14 +613,16 @@ def test_parse_sse_chunks_bounds_large_anthropic_tool_argument_preview_parsing(m
     raw_arguments = json.dumps({"path": "eventforge/tests/test_edge_cases.py", "content": content})
     deltas = [raw_arguments[index : index + 512] for index in range(0, len(raw_arguments), 512)]
     full_parse_lengths: list[int] = []
-    original_parse_streaming_json = travis_env._parse_streaming_json
+    from travis.ai.providers import streaming_json
+
+    original_parse_streaming_json = streaming_json._parse_streaming_json
 
     def recording_parse_streaming_json(raw: str | None) -> dict:
         if isinstance(raw, str) and len(raw) > 16_384:
             full_parse_lengths.append(len(raw))
         return original_parse_streaming_json(raw)
 
-    monkeypatch.setattr(travis_env, "_parse_streaming_json", recording_parse_streaming_json)
+    monkeypatch.setattr(streaming_json, "_parse_streaming_json", recording_parse_streaming_json)
 
     lines = [
         "event: message_start",

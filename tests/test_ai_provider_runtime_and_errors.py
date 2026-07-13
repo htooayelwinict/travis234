@@ -824,7 +824,9 @@ def test_travis_env_provider_trusts_travis_runtime_resolution_over_local_profile
             captured["json"] = kwargs["json"]
             return FakeStream()
 
-    monkeypatch.setattr(travis_env, "resolve_provider_runtime", fake_runtime)
+    from travis.ai.providers import provider_request
+
+    monkeypatch.setattr(provider_request, "resolve_provider_runtime", fake_runtime)
     monkeypatch.setattr(travis_env.httpx, "Client", FakeClient)
 
     stream = create_assistant_message_event_stream()
