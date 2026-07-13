@@ -351,7 +351,7 @@ class CodingApp:
         return ProcessLaunchRequest(
             command=resolved_command,
             cwd=session.cwd,
-            env=get_shell_env(),
+            env=get_shell_env(sanitize_credentials=False),
             shell_path=shell,
             launch_session_id=session.session_id or None,
         )

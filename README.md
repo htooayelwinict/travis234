@@ -64,6 +64,8 @@ TRAVIS234_SHARE_VIEWER_URL
 
 Provider credentials should be configured through `/login` or the provider's standard environment variable. Do not commit credentials or project-local auth state.
 
+Model-driven tool subprocesses do not inherit provider credential variables by default. If a trusted project command deliberately needs one, list its exact variable name in `TRAVIS234_TOOL_ENV_PASSTHROUGH` (comma-separated). Human-authored `!command` remains an operator shell and inherits the operator environment.
+
 ## Sandbox
 
 The release image runs as the unprivileged `travis` user. The npm launcher mounts only the selected workspace and isolated Travis234 state, drops Linux capabilities, enables `no-new-privileges`, and does not forward a dotenv file.

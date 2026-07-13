@@ -187,6 +187,21 @@ test("package builds install-capable docker command for npx-style use", () => {
   assert.deepEqual(command.slice(-4), ["ghcr.io/htooayelwinict/travis234:production", "--cwd", "/workspace", "hello"]);
 });
 
+test("package does not forward host provider credentials into the sandbox", () => {
+  const workspace = path.join(packageRoot, "fixtures", "workspace");
+  const config = parseArgs(["--cwd", workspace], {
+    env: {
+      OPENROUTER_API_KEY: "host-secret",
+      TRAVIS234_IMAGE: "ghcr.io/htooayelwinict/travis234:production",
+    },
+  });
+  const command = buildDockerCommand(config, { uid: 501, gid: 20, pid: 24680 });
+  const rendered = command.join(" ");
+
+  assert.doesNotMatch(rendered, /host-secret|OPENROUTER_API_KEY|--env-file/);
+  assert.doesNotMatch(rendered, /\.travis234\/agent(?:\/|\b)/);
+});
+
 test("package forwards session modes while mounting persistent app-owned state", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "travis234-session-cli-"));
   const workspace = path.join(root, "workspace");
@@ -230,6 +245,29 @@ test("package copies bundled skills into the app-owned sandbox agent directory",
     fs.readFileSync(path.join(agentHome, "agent", "skills", "subagent-delegation", "SKILL.md"), "utf8"),
     "---\nname: subagent-delegation\n---\nBundled policy\n",
   );
+});
+
+test("package skill imports exclude dotenv and auth credential files", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "travis234-cli-"));
+  const syntheticPackageRoot = path.join(root, "package");
+  const bundledSkill = path.join(syntheticPackageRoot, "skills", "credential-audit");
+  const hostHome = path.join(root, "host-home");
+  const agentHome = path.join(root, "agent-home");
+  fs.mkdirSync(bundledSkill, { recursive: true });
+  fs.mkdirSync(hostHome, { recursive: true });
+  fs.writeFileSync(path.join(bundledSkill, "SKILL.md"), "---\nname: credential-audit\n---\nAudit\n");
+  fs.writeFileSync(path.join(bundledSkill, ".env"), "OPENROUTER_API_KEY=secret\n");
+  fs.writeFileSync(path.join(bundledSkill, "auth.json"), '{"openrouter":"secret"}\n');
+
+  prepareSandboxImports(
+    { agentHome, agentsFiles: [], skillsPaths: [], importUserSkills: true },
+    { homeDir: hostHome, packageRoot: syntheticPackageRoot },
+  );
+
+  const imported = path.join(agentHome, "agent", "skills", "credential-audit");
+  assert.equal(fs.existsSync(path.join(imported, "SKILL.md")), true);
+  assert.equal(fs.existsSync(path.join(imported, ".env")), false);
+  assert.equal(fs.existsSync(path.join(imported, "auth.json")), false);
 });
 
 test("package seeds bundled AGENTS.md into the host app-owned agent directory when missing", () => {

@@ -22,6 +22,7 @@ from travis.coding_agent.config import get_bin_dir
 from travis.coding_agent.execution_backend import ExecutionBackend, TrustedLocalBackend
 from travis.coding_agent.processes.service import ProcessSessionService, ProcessTransportFactory
 from travis.coding_agent.processes.types import ProcessLaunchRequest, ProcessOwner, ProcessSnapshot, ProcessState
+from travis.coding_agent.subprocess_environment import sanitize_tool_environment
 from travis.coding_agent.tools.output_spool import OutputSnapshot, OutputSpool
 from travis.coding_agent.tools.process import format_process_wait_instruction
 from travis.coding_agent.tools.truncate import (
@@ -73,6 +74,7 @@ class BashExecOptions:
     signal: object | None = None
     timeout: float | None = None
     env: dict[str, str] | None = None
+    sanitize_credentials: bool = True
 
 
 @dataclass(frozen=True)
@@ -98,6 +100,7 @@ def _coerce_exec_options(options: BashExecOptions | dict) -> BashExecOptions:
         signal=options.get("signal"),
         timeout=options.get("timeout"),
         env=options.get("env"),
+        sanitize_credentials=options.get("sanitize_credentials", True),
     )
 
 
@@ -154,7 +157,10 @@ def create_local_bash_operations(
         process = backend.spawn(
             command,
             cwd,
-            get_shell_env(options.env),
+            get_shell_env(
+                options.env,
+                sanitize_credentials=options.sanitize_credentials,
+            ),
             {"shell_path": shell},
         )
         stdout_thread = _reader_thread(process.stdout, options.on_data) if process.stdout else None
@@ -191,8 +197,16 @@ def create_local_bash_operations(
     return BashOperations(exec=exec_command)
 
 
-def get_shell_env(env: dict[str, str] | None = None) -> dict[str, str]:
+def get_shell_env(
+    env: dict[str, str] | None = None,
+    *,
+    sanitize_credentials: bool = True,
+) -> dict[str, str]:
     shell_env = dict(env or os.environ)
+    if sanitize_credentials:
+        shell_env = sanitize_tool_environment(shell_env)
+    else:
+        shell_env.pop("TRAVIS234_TOOL_ENV_PASSTHROUGH", None)
     _strip_runtime_pythonpath(shell_env)
     path_key = next((key for key in shell_env if key.lower() == "path"), "PATH")
     current_path = shell_env.get(path_key, "")

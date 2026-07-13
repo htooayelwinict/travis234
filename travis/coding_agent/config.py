@@ -90,6 +90,3 @@ def get_sessions_dir() -> str:
 
 def get_debug_log_path() -> str:
     return str(Path(get_agent_dir()) / f"{APP_NAME}-debug.log")
-
-
-# Public compatibility aliases retained until the API cleanup is completed.

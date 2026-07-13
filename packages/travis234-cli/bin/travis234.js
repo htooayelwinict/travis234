@@ -29,6 +29,7 @@ const SKIP_IMPORT_NAMES = new Set([
   ".svn",
   ".venv",
   "__pycache__",
+  "auth.json",
   "node_modules",
   "venv",
 ]);

@@ -302,7 +302,12 @@ class InteractiveProcessCommands:
             result = operations.exec(
                 resolved_command,
                 binding.session.cwd,
-                BashExecOptions(on_data=on_data, signal=signal, env=get_shell_env()),
+                BashExecOptions(
+                    on_data=on_data,
+                    signal=signal,
+                    env=get_shell_env(sanitize_credentials=False),
+                    sanitize_credentials=False,
+                ),
             )
             exit_code = result.get("exit_code")
         except RuntimeError as error:
