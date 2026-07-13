@@ -349,6 +349,19 @@ def _convert_message(
     # assistant
     text_parts = [_sanitize_surrogates(b.text) for b in message.content if isinstance(b, TextContent)]
     thinking_parts = [b for b in message.content if isinstance(b, ThinkingContent) and b.thinking.strip()]
+    responses_reasoning_items: list[dict[str, Any]] = []
+    textual_thinking_parts: list[ThinkingContent] = []
+    for block in thinking_parts:
+        signature = block.thinking_signature
+        if signature:
+            try:
+                reasoning_item = json.loads(signature)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                reasoning_item = None
+            if isinstance(reasoning_item, dict) and reasoning_item.get("type") == "reasoning":
+                responses_reasoning_items.append(reasoning_item)
+                continue
+        textual_thinking_parts.append(block)
     tool_calls = []
     for block in message.content:
         if not isinstance(block, ToolCall):
@@ -369,12 +382,16 @@ def _convert_message(
     if not content_text and not thinking_parts and not tool_calls:
         return None
     out: dict = {"role": "assistant", "content": content_text}
-    if thinking_parts:
-        signature = thinking_parts[0].thinking_signature
+    if responses_reasoning_items:
+        out["codex_reasoning_items"] = responses_reasoning_items
+    if textual_thinking_parts:
+        signature = textual_thinking_parts[0].thinking_signature
         if model is not None and model.provider == "opencode-go" and signature == "reasoning":
             signature = "reasoning_content"
         if signature:
-            out[signature] = "\n".join(_sanitize_surrogates(block.thinking) for block in thinking_parts)
+            out[signature] = "\n".join(
+                _sanitize_surrogates(block.thinking) for block in textual_thinking_parts
+            )
     if tool_calls:
         out["tool_calls"] = tool_calls
     return out

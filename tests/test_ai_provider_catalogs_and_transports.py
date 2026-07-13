@@ -721,6 +721,56 @@ def test_travis_style_codex_responses_transport_builds_responses_payload() -> No
         {"type": "function_call_output", "call_id": "call_1", "output": "README content"},
     ]
 
+
+def test_codex_responses_replays_persisted_encrypted_reasoning_item_verbatim() -> None:
+    from travis.ai.providers.catalog import get_provider_profile
+    from travis.ai.providers.transports import get_transport
+
+    model = Model(
+        id="gpt-5.4",
+        name="GPT-5.4",
+        api="openai-responses",
+        provider="openai-api",
+        base_url="https://api.openai.com/v1",
+        reasoning=True,
+    )
+    reasoning_item = {
+        "type": "reasoning",
+        "id": "rs_1",
+        "summary": [{"type": "summary_text", "text": "inspect first"}],
+        "encrypted_content": "encrypted-replay-token",
+    }
+    assistant = AssistantMessage(
+        content=[
+            ThinkingContent(
+                thinking="inspect first",
+                thinking_signature=json.dumps(reasoning_item),
+            ),
+            TextContent(text="done"),
+        ],
+        api=model.api,
+        provider=model.provider,
+        model=model.id,
+        usage=empty_usage(),
+        stop_reason="stop",
+        timestamp=now_ms(),
+    )
+
+    translated, _tools = convert_messages(Context(messages=[assistant]), model)
+
+    assert translated[0]["codex_reasoning_items"] == [reasoning_item]
+    replay = get_transport(get_provider_profile("openai-api").api_mode).convert_messages(translated)
+    assert replay == [
+        reasoning_item,
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "done", "annotations": []}],
+            "status": "completed",
+        },
+    ]
+
+
 def test_travis_env_provider_uses_transport_endpoint_path(monkeypatch) -> None:
     from travis.ai.providers.base import ProviderProfile
     from travis.ai.providers.catalog import ResolvedProviderRuntime

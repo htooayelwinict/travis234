@@ -164,7 +164,30 @@ def _parse_codex_responses_sse_chunks(
     output_slots: dict[int, tuple[str, int]] = {}
     tool_arg_bufs: dict[int, str] = {}
     tool_arg_previews: dict[int, dict] = {}
+    reasoning_blocks_by_id: dict[str, ThinkingContent] = {}
     completed = False
+
+    def backfill_reasoning_signatures(response_output: Any) -> None:
+        if not isinstance(response_output, list):
+            return
+        for item in response_output:
+            if not isinstance(item, dict) or item.get("type") != "reasoning":
+                continue
+            item_id = item.get("id")
+            encrypted_content = item.get("encrypted_content")
+            if not isinstance(item_id, str) or not encrypted_content:
+                continue
+            block = reasoning_blocks_by_id.get(item_id)
+            if block is None or not block.thinking_signature:
+                continue
+            try:
+                stored_item = json.loads(block.thinking_signature)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+            if not isinstance(stored_item, dict) or stored_item.get("encrypted_content"):
+                continue
+            stored_item["encrypted_content"] = encrypted_content
+            block.thinking_signature = json.dumps(stored_item, separators=(",", ":"))
 
     def create_slot(output_index: int, item: dict[str, Any]) -> Iterator:
         item_type = item.get("type")
@@ -351,6 +374,9 @@ def _parse_codex_responses_sse_chunks(
                         if text:
                             message.content[content_index].thinking = text
                     message.content[content_index].thinking_signature = json.dumps(item)
+                    item_id = item.get("id")
+                    if isinstance(item_id, str) and item_id:
+                        reasoning_blocks_by_id[item_id] = message.content[content_index]
                     yield ThinkingEndEvent(
                         content_index=content_index,
                         content=message.content[content_index].thinking,
@@ -374,6 +400,7 @@ def _parse_codex_responses_sse_chunks(
                 response = event.get("response")
                 if isinstance(response, dict):
                     completed = True
+                    backfill_reasoning_signatures(response.get("output"))
                     if isinstance(response.get("id"), str):
                         message.response_id = response["id"]
                     usage = _merge_responses_usage(usage, response.get("usage"))

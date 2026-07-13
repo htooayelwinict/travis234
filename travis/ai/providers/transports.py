@@ -584,6 +584,9 @@ class CodexResponsesTransport:
                 converted.append({"role": "user", "content": _openai_content_to_responses(message.get("content"))})
                 continue
             if role == "assistant":
+                for reasoning_item in message.get("codex_reasoning_items") or []:
+                    if isinstance(reasoning_item, dict) and reasoning_item.get("type") == "reasoning":
+                        converted.append(copy.deepcopy(reasoning_item))
                 output_text = _openai_content_to_responses(message.get("content"), output=True)
                 if output_text:
                     converted.append(

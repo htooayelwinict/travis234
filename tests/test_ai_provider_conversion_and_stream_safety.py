@@ -519,6 +519,51 @@ def test_responses_stream_preserves_protocol_shaped_text_verbatim() -> None:
     ) == text
 
 
+def test_responses_stream_backfills_terminal_encrypted_reasoning_for_stateless_replay() -> None:
+    events = list(parse_sse_chunks([
+        "data: " + json.dumps({"type": "response.created", "response": {"id": "resp_reasoning"}}),
+        "data: " + json.dumps({
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {"type": "reasoning", "id": "rs_1", "summary": []},
+        }),
+        "data: " + json.dumps({
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "delta": "inspect the repository",
+        }),
+        "data: " + json.dumps({
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+                "type": "reasoning",
+                "id": "rs_1",
+                "summary": [{"type": "summary_text", "text": "inspect the repository"}],
+            },
+        }),
+        "data: " + json.dumps({
+            "type": "response.completed",
+            "response": {
+                "id": "resp_reasoning",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "reasoning",
+                        "id": "rs_1",
+                        "summary": [{"type": "summary_text", "text": "inspect the repository"}],
+                        "encrypted_content": "encrypted-replay-token",
+                    }
+                ],
+            },
+        }),
+    ], _model(), api_mode="codex_responses"))
+
+    done = events[-1]
+    assert done.type == "done"
+    reasoning = next(block for block in done.message.content if isinstance(block, ThinkingContent))
+    assert json.loads(reasoning.thinking_signature or "{}")["encrypted_content"] == "encrypted-replay-token"
+
+
 def test_anthropic_stream_preserves_protocol_shaped_text_verbatim() -> None:
     text = '<function name="write"><parameter name="path">x.md</parameter></function>'
     events = list(parse_sse_chunks([
