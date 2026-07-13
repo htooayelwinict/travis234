@@ -51,6 +51,7 @@ class FakeDriver:
 
 
 class _RunningProcess:
+    pid = 12345
     returncode = None
 
     def poll(self):
@@ -192,6 +193,23 @@ def test_driver_accepts_exact_model_query_without_waiting_for_picker(
 
     assert driver.select_model("stepfun/step-3.7-flash", 1, 60) == selected
     assert sent == ["/model stepfun/step-3.7-flash"]
+
+
+def test_driver_interrupt_sends_sigint_like_a_controlling_terminal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    read_fd, write_fd = os.pipe()
+    driver = TuiDriver(_RunningProcess(), write_fd, tmp_path / "trace.jsonl")
+    signals: list[tuple[int, int]] = []
+    monkeypatch.setattr(os, "kill", lambda pid, value: signals.append((pid, value)))
+    try:
+        driver.send_interrupt()
+    finally:
+        os.close(write_fd)
+        os.close(read_fd)
+
+    assert signals == [(_RunningProcess.pid, signal.SIGINT)]
 
 
 def test_driver_writes_ansi_free_secret_redacted_terminal_transcript(tmp_path: Path) -> None:

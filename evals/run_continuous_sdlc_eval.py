@@ -101,7 +101,7 @@ def run_continuous_scenarios(
                 turn_finished = True
             except TimeoutError:
                 failure_tail = "TimeoutError: timed out waiting for turn_end"
-                driver.send_key(b"\x03")
+                driver.send_interrupt()
                 try:
                     driver.wait_for_event("turn_end", 30)
                 except Exception:
@@ -186,11 +186,11 @@ def _exercise_ctrl_c_escalation(driver) -> None:
     driver.send_line("!python3 -c 'import signal,time; signal.signal(signal.SIGINT, signal.SIG_IGN); time.sleep(300)'")
     driver.wait_for_event("user_command_started", 30)
     time.sleep(0.25)
-    driver.send_key(b"\x03")
+    driver.send_interrupt()
     first = driver.wait_for_event("user_command_interrupt", 30)
     if int(first.get("interrupt_count") or 0) < 1:
         raise RuntimeError("first Ctrl-C was not recorded")
-    driver.send_key(b"\x03")
+    driver.send_interrupt()
     second = driver.wait_for_event("user_command_interrupt", 30)
     if int(second.get("interrupt_count") or 0) < 2:
         raise RuntimeError("second Ctrl-C did not escalate")

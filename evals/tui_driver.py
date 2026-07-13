@@ -73,6 +73,10 @@ class TuiDriver:
     def send_key(self, data: bytes) -> None:
         os.write(self.master_fd, data)
 
+    def send_interrupt(self) -> None:
+        """Deliver the SIGINT a real controlling terminal emits for Ctrl-C."""
+        os.kill(self.process.pid, signal.SIGINT)
+
     def select_model(self, query: str, index: int, timeout: float) -> dict[str, object]:
         self.send_line(f"/model {query}")
         ready = self.wait_for_events({"model_picker_ready", "model_selected"}, timeout)
