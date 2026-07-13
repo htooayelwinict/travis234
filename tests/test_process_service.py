@@ -318,6 +318,31 @@ def test_write_is_ordered_and_eof_closes_after_payload(service, owner) -> None:
     assert transport.writes == [b"first", b"second"]
 
 
+def test_write_reports_broken_pipe_and_publishes_input_failure(tmp_path: Path, owner) -> None:
+    service = ProcessSessionService(
+        directory=tmp_path / "processes",
+        termination_grace_seconds=0.01,
+    )
+    transport = FakeProcessTransport(exit_on_signals={"kill"})
+
+    def fail_write(_data: bytes) -> int:
+        transport.write_started.set()
+        raise BrokenPipeError("simulated closed child stdin")
+
+    transport.write = fail_write  # type: ignore[method-assign]
+    started = service.start(owner, request(), Factory(transport), yield_time_ms=0)
+    try:
+        with pytest.raises(ProcessStateError, match="stdin write failed.*BrokenPipeError"):
+            service.write(owner, started.session_id, "hello", wait_ms=1_000)
+
+        terminal = service.wait_terminal(owner, started.session_id, 0, wait_ms=2_000)
+        assert terminal.state is ProcessState.FAILED
+        assert terminal.failure_code == "input_failure"
+        assert set(transport.signals) & {"terminate", "kill"}
+    finally:
+        service.close()
+
+
 def test_write_rejects_input_queued_after_eof(tmp_path: Path, owner) -> None:
     service = ProcessSessionService(
         directory=tmp_path / "processes",
@@ -742,6 +767,29 @@ def test_spool_failure_stops_process_and_publishes_failed(
         assert terminal.state is ProcessState.FAILED
         assert terminal.failure_code == "output_failure"
         assert set(transport.signals) & {"terminate", "kill"}
+    finally:
+        service.close()
+
+
+def test_monitor_failure_reaps_transport_before_publishing_failed(tmp_path: Path, owner) -> None:
+    service = ProcessSessionService(
+        directory=tmp_path / "processes",
+        termination_grace_seconds=0.01,
+    )
+    transport = FakeProcessTransport(exit_on_signals={"kill"})
+
+    def fail_refresh() -> None:
+        raise RuntimeError("simulated process-tree refresh failure")
+
+    transport.refresh_tree = fail_refresh  # type: ignore[method-assign]
+    try:
+        started = service.start(owner, request("monitor-failure"), Factory(transport), yield_time_ms=0)
+        terminal = service.wait_terminal(owner, started.session_id, 0, wait_ms=2_000)
+
+        assert terminal.state is ProcessState.FAILED
+        assert terminal.failure_code == "monitor_failure"
+        assert set(transport.signals) & {"terminate", "kill"}
+        assert transport.poll() is not None
     finally:
         service.close()
 

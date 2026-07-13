@@ -47,10 +47,12 @@ ProcessOutputListener = Callable[[ProcessSnapshot], None]
 _PROCESS_ID = re.compile(r"^proc_[0-9a-f]{32}$")
 
 
-@dataclass(frozen=True)
+@dataclass
 class _InputItem:
     data: bytes
     eof: bool
+    completed: bool = False
+    error_name: str | None = None
 
 
 class _ManagedProcess:
@@ -296,6 +298,8 @@ class ProcessSessionService:
             raise ProcessInputLimitError(f"Process input accepts at most {self._max_input_bytes} bytes per call")
         with self._record_call(owner, session_id) as record:
             cursor = record.output.size
+            deadline = self._clock() + wait_ms / 1000
+            item = _InputItem(encoded, eof)
             with record.condition:
                 self._require_running(record, "write")
                 if record.input_closed:
@@ -307,9 +311,13 @@ class ProcessSessionService:
                 record.pending_input_bytes += len(encoded)
                 if eof:
                     record.input_closed = True
-                record.input_queue.put_nowait(_InputItem(encoded, eof))
+                record.input_queue.put_nowait(item)
                 record.condition.notify_all()
-            return self._wait_after_control(record, cursor, wait_ms)
+            self._wait_for_input_acknowledgement(record, item, deadline)
+            if item.error_name is not None:
+                raise ProcessStateError(f"Process stdin write failed: {item.error_name}")
+            remaining_ms = max(0, int((deadline - self._clock()) * 1000))
+            return self._wait_after_control(record, cursor, remaining_ms)
 
     def resize(self, owner: ProcessOwner, session_id: str, *, rows: int, cols: int) -> ProcessSnapshot:
         if not 2 <= rows <= 200 or not 20 <= cols <= 500:
@@ -636,13 +644,15 @@ class ProcessSessionService:
                     record.transport.close_stdin()
                     with record.condition:
                         record.input_closed = True
-            except BaseException as error:  # noqa: BLE001 - preserve process while closing unusable stdin.
+            except BaseException as error:  # noqa: BLE001 - publish asynchronous input failure.
                 with record.condition:
-                    record.input_error = str(error)
+                    item.error_name = type(error).__name__[:80]
                     record.input_closed = True
+                self._claim_input_failure(record, error)
             finally:
                 with record.condition:
                     record.pending_input_bytes = max(0, record.pending_input_bytes - len(item.data))
+                    item.completed = True
                     record.condition.notify_all()
 
     def _monitor(self, record: _ManagedProcess) -> None:
@@ -693,19 +703,45 @@ class ProcessSessionService:
                 record.state = terminal_state
                 record.condition.notify_all()
             self._emit_terminal(record)
-        except BaseException as error:  # noqa: BLE001 - publish deterministic failure instead of losing monitor.
-            with record.condition:
-                record.output_error = type(error).__name__[:80]
-                record.failure_code = record.failure_code or "output_failure"
-                record.terminal_at = self._clock()
-            try:
-                record.output.finish()
-            finally:
-                self._persist_completion(record, ProcessState.FAILED)
-                with record.condition:
-                    record.state = ProcessState.FAILED
-                    record.condition.notify_all()
-                self._emit_terminal(record)
+        except BaseException as error:  # noqa: BLE001 - reap transport before publishing failure.
+            self._finalize_monitor_failure(record, error)
+
+    def _finalize_monitor_failure(self, record: _ManagedProcess, error: BaseException) -> None:
+        with record.condition:
+            record.output_error = type(error).__name__[:80]
+            record.failure_code = record.failure_code or "monitor_failure"
+            record.state = ProcessState.STOPPING
+            record.input_closed = True
+            record.condition.notify_all()
+        record.input_queue.put_nowait(None)
+        self._reap_failed_transport(record)
+        try:
+            self._drain_readers(record)
+        except BaseException:  # noqa: BLE001 - terminal publication must still complete.
+            record.transport.close()
+        try:
+            record.output.finish()
+        except BaseException:  # noqa: BLE001 - the monitor failure remains authoritative.
+            pass
+        with record.condition:
+            record.terminal_at = self._clock()
+        self._persist_completion(record, ProcessState.FAILED)
+        with record.condition:
+            record.state = ProcessState.FAILED
+            record.condition.notify_all()
+        self._emit_terminal(record)
+
+    def _reap_failed_transport(self, record: _ManagedProcess) -> None:
+        if self._transport_exited(record):
+            return
+        self._safe_signal(record, "terminate")
+        self._wait_transports([record], self._termination_grace_seconds)
+        if not self._transport_exited(record):
+            self._safe_signal(record, "kill")
+            self._wait_transports([record], self._termination_grace_seconds)
+        if not self._transport_exited(record):
+            record.force_finalize.set()
+            record.transport.close()
 
     def _drain_readers(self, record: _ManagedProcess) -> None:
         deadline = self._clock() + self._drain_timeout_seconds
@@ -759,6 +795,30 @@ class ProcessSessionService:
                 record.condition.wait(min(remaining, 0.05))
         return self._snapshot(record, cursor, self._max_output_bytes)
 
+    def _wait_for_input_acknowledgement(
+        self,
+        record: _ManagedProcess,
+        item: _InputItem,
+        deadline: float,
+    ) -> None:
+        with record.condition:
+            while not item.completed and not record.state.terminal:
+                remaining = deadline - self._clock()
+                if remaining <= 0:
+                    return
+                record.condition.wait(min(remaining, 0.05))
+
+    def _claim_input_failure(self, record: _ManagedProcess, error: BaseException) -> None:
+        with record.condition:
+            record.input_error = type(error).__name__[:80]
+            if record.state.terminal or record.failure_code is not None:
+                return
+            record.failure_code = "input_failure"
+            record.state = ProcessState.STOPPING
+            record.wakeup.set()
+            record.condition.notify_all()
+        self._reap_failed_transport(record)
+
     def _claim_stop(self, record: _ManagedProcess, cause: StopCause) -> bool:
         with record.condition:
             if record.state.terminal or record.stop_cause is not None:
@@ -789,7 +849,7 @@ class ProcessSessionService:
     @staticmethod
     def _safe_signal(record: _ManagedProcess, signal_name: str) -> None:
         with record.condition:
-            if record.transport.poll() is not None:
+            if ProcessSessionService._transport_exited(record):
                 return
             if signal_name == "terminate":
                 if record.terminate_sent or record.kill_sent:
@@ -810,9 +870,16 @@ class ProcessSessionService:
     def _wait_transports(self, records: list[_ManagedProcess], timeout: float) -> None:
         deadline = self._clock() + timeout
         while self._clock() < deadline:
-            if all(record.transport.poll() is not None for record in records):
+            if all(self._transport_exited(record) for record in records):
                 return
             time.sleep(min(0.005, max(0, deadline - self._clock())))
+
+    @staticmethod
+    def _transport_exited(record: _ManagedProcess) -> bool:
+        try:
+            return record.transport.poll() is not None
+        except BaseException:
+            return False
 
     def _snapshot(
         self,
