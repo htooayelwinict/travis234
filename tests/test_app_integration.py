@@ -634,6 +634,39 @@ def test_coding_app_default_compaction_threshold_is_half_model_context(
     assert app.compressor.threshold_tokens == context_window // 2
 
 
+def test_coding_app_recalibrates_compaction_window_after_model_switch(tmp_path: Path) -> None:
+    initial_model = faux_model()
+    initial_model.context_window = 1_000_000
+    selected_model = faux_model()
+    selected_model.id = "selected-small-context"
+    selected_model.context_window = 256_000
+
+    app = CodingApp(cwd=str(tmp_path), model=initial_model, terminal=FakeTerminal())
+    app.session.set_model(selected_model)
+
+    assert app.compressor.context_length == 256_000
+    assert app.compressor.threshold_tokens == 128_000
+
+
+def test_coding_app_keeps_explicit_compaction_window_after_model_switch(tmp_path: Path) -> None:
+    initial_model = faux_model()
+    initial_model.context_window = 1_000_000
+    selected_model = faux_model()
+    selected_model.id = "selected-small-context"
+    selected_model.context_window = 256_000
+
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=initial_model,
+        terminal=FakeTerminal(),
+        context_length=96_000,
+    )
+    app.session.set_model(selected_model)
+
+    assert app.compressor.context_length == 96_000
+    assert app.compressor.threshold_tokens == 48_000
+
+
 def test_coding_app_forwards_initial_thinking_level_to_session(tmp_path: Path) -> None:
     model = faux_model()
     app = CodingApp(cwd=str(tmp_path), model=model, terminal=FakeTerminal(), thinking_level="high")

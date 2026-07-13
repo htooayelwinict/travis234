@@ -50,6 +50,24 @@ _CODING_VERIFICATION_GUIDANCE = (
 )
 
 
+_AUTONOMOUS_WORKFLOW_GUIDANCE = (
+    "# Bounded autonomous workflow\n"
+    "When the user asks you to change or build code, act instead of merely describing a plan. "
+    "Own the complete workflow in the current turn: "
+    "inspect the relevant state, implement the requested change, run proportionate verification, and report the "
+    "observed result. Retain successful tool results as working context; do not repeat unchanged reads or searches "
+    "unless a later operation could have changed them or an edit conflict requires current exact text. Batch "
+    "independent lookups when the runtime supports it.\n"
+    "A failed tool call, failed test, guardrail recovery, or automatic compaction is an internal recovery event, "
+    "not a reason to stop or ask the user to resume. Use the returned evidence, change strategy, and continue when "
+    "a safe in-scope path remains. Call tools through their native interface; never print tool-call markup as prose.\n"
+    "Respect explicit user scope, stop conditions, and command limits; inspection-only or explanation requests do "
+    "not authorize edits. Only give the final response after the requested code changes are applied, relevant "
+    "verification has completed, and managed processes needed for the task are terminal or intentionally detached. "
+    "If no in-scope path remains, report the exact blocker and evidence instead of inventing a result."
+)
+
+
 def build_system_prompt(options: BuildSystemPromptOptions) -> str:
     prompt_cwd = options.cwd.replace("\\", "/")
     today = _date.today().strftime("%Y-%m-%d")
@@ -106,6 +124,7 @@ def build_system_prompt(options: BuildSystemPromptOptions) -> str:
         f"{_PREAMBLE}\n\n"
         f"{_LATEST_REQUEST_GUIDANCE}\n\n"
         f"{_CODING_VERIFICATION_GUIDANCE}\n\n"
+        f"{_AUTONOMOUS_WORKFLOW_GUIDANCE}\n\n"
         f"Available tools:\n{tools_list}\n\n"
         "In addition to the tools above, you may have access to other custom tools depending on the project.\n\n"
         f"Guidelines:\n{guidelines_text}"

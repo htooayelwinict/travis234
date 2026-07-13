@@ -152,6 +152,18 @@ def test_system_prompt_preserves_test_contracts_and_runner_compatibility(tmp_pat
     assert "compatible with the project's declared test runner and dependencies" in prompt
     assert "inspect the blocking condition before adding timeout wrappers" in prompt
 
+
+def test_system_prompt_owns_the_bounded_change_workflow(tmp_path: Path) -> None:
+    prompt = build_system_prompt(BuildSystemPromptOptions(cwd=str(tmp_path)))
+
+    assert "Own the complete workflow in the current turn" in prompt
+    assert "Retain successful tool results as working context" in prompt
+    assert "do not repeat unchanged reads or searches" in prompt
+    assert "A failed tool call, failed test, guardrail recovery, or automatic compaction" in prompt
+    assert "Respect explicit user scope, stop conditions, and command limits" in prompt
+    assert "Only give the final response after the requested code changes are applied" in prompt
+    assert "managed processes needed for the task are terminal or intentionally detached" in prompt
+
 def test_system_prompt_routes_nested_file_writes_away_from_shell_setup(tmp_path: Path) -> None:
     write_definition = create_tool_definition("write", str(tmp_path))
     bash_definition = create_tool_definition("bash", str(tmp_path))

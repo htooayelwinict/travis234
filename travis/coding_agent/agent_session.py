@@ -181,6 +181,7 @@ class _SessionRuntime(
         provider_control_plane: ProviderControlPlane | None = None,
         process_service: ProcessSessionService | None = None,
         process_owner: ProcessOwner | None = None,
+        model_change_listener: Callable[[Model, Model], None] | None = None,
     ) -> None:
         self.cwd = cwd
         self.provider_control_plane = provider_control_plane or ProviderControlPlane.create_default()
@@ -223,6 +224,7 @@ class _SessionRuntime(
         self._extension_provider_original_models: dict[str, Model] = {}
         self._extension_provider_registrations: dict[str, object] = {}
         self._event_listeners: list[Callable[[object], None]] = []
+        self._model_change_listener = model_change_listener
         self._subagent_observer_errors: list[str] = []
         self._model_subagents_spawned_this_turn = 0
         self._model_subagent_spawn_signatures_this_turn: set[tuple[str, str, str]] = set()

@@ -472,6 +472,30 @@ class ContextCompressor:
             return False
         return True
 
+    def update_context_window(self, context_length: int, *, threshold_percent: float | None = None) -> None:
+        """Recalibrate model-owned limits without discarding session compaction history."""
+
+        resolved_length = int(context_length)
+        if resolved_length <= 0:
+            raise ValueError("context_length must be positive")
+        self.context_length = resolved_length
+        if threshold_percent is not None:
+            self.threshold_percent = float(threshold_percent)
+        self.max_summary_tokens = min(int(resolved_length * 0.05), _SUMMARY_TOKENS_CEILING)
+
+        # Provider usage and anti-thrash calibration describe the previous
+        # model's window. Preserve summaries and the durable ledger, but make
+        # the next request prove that it fits the newly selected model.
+        self.last_prompt_tokens = 0
+        self.last_completion_tokens = 0
+        self.last_total_tokens = 0
+        self.last_real_prompt_tokens = 0
+        self.last_compression_rough_tokens = 0
+        self.last_rough_tokens_when_real_prompt_fit = 0
+        self.awaiting_real_usage_after_compression = False
+        self._ineffective_compression_count = 0
+        self._verify_compaction_cleared_threshold = False
+
     def update_from_response(self, usage: dict) -> None:
         self.last_prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
         self.last_completion_tokens = int(usage.get("completion_tokens", 0) or 0)

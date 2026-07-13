@@ -258,11 +258,15 @@ class SessionModelController:
         return clamp_thinking_level(self.model, level) if self.model else "off"
 
     def set_model(self, model: Model) -> None:
+        previous_model = self.model
         thinking_level = self._get_thinking_level_for_model_switch()
         self.agent.state.model = model
         if self._session_store:
             self._session_store.append_model_change(model.provider, model.id)
         self.set_thinking_level(thinking_level)
+        listener = getattr(self, "_model_change_listener", None)
+        if listener is not None:
+            listener(previous_model, model)
 
     def with_model_overrides(self, *, max_tokens: int) -> Model:
         overridden = replace(self.model, max_tokens=int(max_tokens))

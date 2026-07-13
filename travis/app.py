@@ -210,6 +210,7 @@ class CodingApp:
             provider_control_plane=self.provider_control_plane,
             process_service=self.process_service,
             process_owner=self._process_owner_for(resolved_cwd),
+            model_change_listener=self._handle_session_model_changed,
         )
         if fresh_session and session._session_store is not None:
             session._session_store.append_model_change(session.model.provider, session.model.id)
@@ -263,6 +264,18 @@ class CodingApp:
         self.session = session
         self.cwd = str(Path(session.cwd).expanduser().resolve())
         self._configure_session_components()
+
+    def _handle_session_model_changed(self, _previous_model: Model, model: Model) -> None:
+        resolved_context_length, threshold_percent = _resolve_compaction_window(
+            model,
+            self.session,
+            explicit_context_length=self._context_length,
+        )
+        self.compressor.update_context_window(
+            resolved_context_length,
+            threshold_percent=threshold_percent,
+        )
+        self.compaction.deep_baseline_tokens = _estimate_static_prompt_tool_tokens(self.session)
 
     def _unbind_session(self) -> None:
         for unsubscribe in self._session_unsubscribers:
