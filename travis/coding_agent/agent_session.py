@@ -55,11 +55,13 @@ from travis.compaction.timing import CompactionManager
 from travis.coding_agent.branch_summarization import generate_branch_summary
 from travis.coding_agent.artifacts import ArtifactRegistry
 from travis.coding_agent.compaction_adapter import (
+    SessionCompactionAdapter,
     compaction_summary_with_details,
-    merge_process_compaction_details,
-    to_compressor_messages,
 )
-from travis.coding_agent.compaction_coordinator import CompactionCoordinator, CompactionDeferredError
+from travis.coding_agent.compaction_coordinator import (
+    CompactionCoordinator,
+    CompactionTransactionCoordinator,
+)
 from travis.coding_agent.capabilities import CapabilityViolation, WorkspaceCapability
 from travis.coding_agent.config import get_packaged_context_paths
 from travis.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
@@ -297,30 +299,6 @@ class QueueUpdateEvent:
     @property
     def followUp(self) -> list[str]:
         return self.follow_up
-
-
-@dataclass
-class CompactionStartEvent:
-    reason: str
-    type: str = "compaction_start"
-
-
-@dataclass
-class CompactionEndEvent:
-    reason: str
-    result: object | None
-    aborted: bool
-    will_retry: bool
-    error_message: str | None = None
-    type: str = "compaction_end"
-
-    @property
-    def willRetry(self) -> bool:
-        return self.will_retry
-
-    @property
-    def errorMessage(self) -> str | None:
-        return self.error_message
 
 
 @dataclass
@@ -1040,7 +1018,6 @@ class AgentSession:
             tuple(Path(path) for path in external_read_paths),
         )
         self._compaction_manager = compaction_manager
-        self._compaction_running = False
         self._session_name: str | None = None
         self._retry_enabled = retry_enabled
         self._max_retries = max(0, max_retries)
@@ -1143,6 +1120,15 @@ class AgentSession:
             on_iteration_limit=coding_iteration_limit_message,
         )
         self._compaction_coordinator = CompactionCoordinator(self.agent)
+        self._compaction_adapter = SessionCompactionAdapter(
+            session_store=self._session_store,
+            state=self.agent.state,
+            process_context=self._process_context,
+            emit=self._emit,
+            set_session_name=lambda value: setattr(self, "_session_name", value),
+        )
+        self._compaction_transactions: CompactionTransactionCoordinator | None = None
+        self.set_compaction_manager(self._compaction_manager)
         self._extension_runner.bind_provider_actions(
             self._register_extension_provider,
             self._unregister_extension_provider,
@@ -3260,192 +3246,42 @@ class AgentSession:
             self.agent.state.model = original
 
     def compact(self, focus: str | None = None, summarizer=None, deep: bool = False):
-        if self._compaction_manager is None:
+        if self._compaction_transactions is None:
             raise RuntimeError("No compaction manager configured")
-        if self._compaction_coordinator.prepare() == "deferred":
-            raise CompactionDeferredError("Compaction deferred until the active run completes")
-        self._begin_compaction("manual")
-        before_messages = list(self.messages)
-        compressor_messages = to_compressor_messages(before_messages)
-        before_entry_ids = self._session_context_message_entry_ids()
-        try:
-            status = self._compaction_manager.compress_manual_with_status(
-                compressor_messages,
-                summarizer=summarizer,
-                focus=focus,
-                deep=deep,
-            )
-            if self._session_store and status.compressed:
-                first_kept = self._first_kept_entry_id_for_status(status, before_entry_ids)
-                summary = status.summary or _extract_compaction_result_summary(status.messages)
-                tokens_before = status.tokens_before or estimate_tokens(compressor_messages)
-                details = merge_process_compaction_details(
-                    getattr(status, "details", None),
-                    self._process_context.resolve(before_messages) if self._process_context else (),
-                )
-                self._session_store.append_compaction(
-                    summary,
-                    first_kept,
-                    tokens_before,
-                    details=details,
-                )
-                status.first_kept_entry_id = first_kept
-                snapshot = self._session_store.build_context(default_thinking_level=self.thinking_level)
-                self.agent.state.messages = snapshot.messages
-                self.agent.state.thinking_level = snapshot.thinking_level
-                self._session_name = snapshot.session_name
-                status.messages = snapshot.messages
-            else:
-                self.agent.state.messages = status.messages
-            self._end_compaction(reason="manual", result=status, aborted=False, will_retry=False)
-            return status
-        except Exception as error:  # noqa: BLE001
-            message = str(error)
-            aborted = message == "Compaction cancelled"
-            self._end_compaction(
-                reason="manual",
-                result=None,
-                aborted=aborted,
-                will_retry=False,
-                error_message=None if aborted else f"Compaction failed: {message}",
-            )
-            raise
-
-    def apply_compaction_result(
-        self,
-        compacted_messages: list[AgentMessage],
-        result,
-        *,
-        source_messages: list[AgentMessage] | None = None,
-        retain_source_suffix: bool = True,
-    ) -> list[AgentMessage]:
-        """Persist a Travis compaction result through the Travis session boundary."""
-        if self._session_store is None or not getattr(result, "compressed", False):
-            self.agent.state.messages = compacted_messages
-            return compacted_messages
-
-        context_entry_ids = self._session_context_message_entry_ids()
-        source_messages = list(source_messages if source_messages is not None else self.messages)
-        summary = getattr(result, "summary", None) or _extract_compaction_result_summary(compacted_messages)
-        tokens_before = int(getattr(result, "tokens_before", 0) or estimate_tokens(source_messages))
-        first_kept = (
-            self._first_kept_entry_id_for_compaction_result(result, context_entry_ids)
-            if retain_source_suffix
-            else ""
-        )
-        parent_id = self._compaction_parent_entry_id(source_messages, context_entry_ids)
-        details = merge_process_compaction_details(
-            getattr(result, "details", None),
-            self._process_context.resolve(source_messages) if self._process_context else (),
-        )
-        self._session_store.append_compaction(
-            summary,
-            first_kept,
-            tokens_before,
-            details=details,
-            parent_id=parent_id,
-        )
-        snapshot = self._session_store.build_context(default_thinking_level=self.thinking_level)
-        self.agent.state.messages = snapshot.messages
-        self.agent.state.thinking_level = snapshot.thinking_level
-        self._session_name = snapshot.session_name
-        return snapshot.messages
-
-    def _first_kept_entry_id_for_status(self, status, context_entry_ids: list[str]) -> str:
-        index = status.first_kept_message_index
-        if index is not None and 0 <= index < len(context_entry_ids):
-            return context_entry_ids[index]
-        if self._session_store:
-            return self._session_store.leaf_id or ""
-        return ""
-
-    def _first_kept_entry_id_for_compaction_result(self, result, context_entry_ids: list[str]) -> str:
-        index = getattr(result, "first_kept_message_index", None)
-        if index is not None and 0 <= index < len(context_entry_ids):
-            return context_entry_ids[index]
-        return ""
-
-    def _compaction_parent_entry_id(
-        self,
-        source_messages: list[AgentMessage],
-        context_entry_ids: list[str],
-    ) -> str | None:
-        if source_messages and len(source_messages) <= len(context_entry_ids):
-            return context_entry_ids[len(source_messages) - 1]
-        if self._session_store:
-            return self._session_store.leaf_id
-        return None
-
-    def _session_context_message_entry_ids(self) -> list[str]:
-        if self._session_store is None:
-            return []
-        branch = self._session_store.get_branch()
-        compaction_entry = None
-        for entry in branch:
-            if entry.get("type") == "compaction" and entry.get("summary"):
-                compaction_entry = entry
-
-        def contributes(entry: dict) -> bool:
-            entry_type = entry.get("type")
-            if entry_type in {"message", "custom_message"}:
-                return True
-            return bool(entry_type == "branch_summary" and entry.get("summary"))
-
-        if compaction_entry is None:
-            return [entry["id"] for entry in branch if entry.get("id") and contributes(entry)]
-
-        ids = [compaction_entry["id"]]
-        compaction_index = branch.index(compaction_entry)
-        first_kept_id = compaction_entry.get("firstKeptEntryId")
-        found_first_kept = first_kept_id is None
-        for entry in branch[:compaction_index]:
-            if entry.get("id") == first_kept_id:
-                found_first_kept = True
-            if found_first_kept and entry.get("id") and contributes(entry):
-                ids.append(entry["id"])
-        for entry in branch[compaction_index + 1 :]:
-            if entry.get("id") and contributes(entry):
-                ids.append(entry["id"])
-        return ids
+        return self._compaction_transactions.manual(focus=focus, summarizer=summarizer, deep=deep)
 
     def set_compaction_manager(self, manager: CompactionManager | None) -> None:
         self._compaction_manager = manager
+        self._compaction_transactions = (
+            CompactionTransactionCoordinator(
+                manager=manager,
+                run_coordinator=self._compaction_coordinator,
+                adapter=self._compaction_adapter,
+                continue_agent=self.agent.continue_,
+            )
+            if manager is not None
+            else None
+        )
 
     setCompactionManager = set_compaction_manager
 
     @property
+    def compaction_transactions(self) -> CompactionTransactionCoordinator:
+        if self._compaction_transactions is None:
+            raise RuntimeError("No compaction manager configured")
+        return self._compaction_transactions
+
+    @property
+    def compaction_adapter(self) -> SessionCompactionAdapter:
+        return self._compaction_adapter
+
+    @property
     def is_compacting(self) -> bool:
-        return self._compaction_running
+        return self._compaction_adapter.is_running
 
     @property
     def isCompacting(self) -> bool:
         return self.is_compacting
-
-    def _begin_compaction(self, reason: str) -> None:
-        self._compaction_running = True
-        self._emit(CompactionStartEvent(reason=reason))
-
-    def _end_compaction(
-        self,
-        *,
-        reason: str,
-        result: object | None,
-        aborted: bool,
-        will_retry: bool,
-        error_message: str | None = None,
-    ) -> None:
-        try:
-            self._emit(
-                CompactionEndEvent(
-                    reason=reason,
-                    result=result,
-                    aborted=aborted,
-                    will_retry=will_retry,
-                    error_message=error_message,
-                )
-            )
-        finally:
-            self._compaction_running = False
 
     def execute_bash(self, command: str, on_chunk=None, options: dict | None = None) -> BashResult:
         options = options or {}

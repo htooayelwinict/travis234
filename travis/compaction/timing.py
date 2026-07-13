@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from travis.ai.types import Message
-from travis.compaction.compressor import ContextCompressor, Summarizer, estimate_tokens
+from travis.compaction.compressor import CompressionResult, ContextCompressor, Summarizer, estimate_tokens
 
 SUMMARY_FAILURE_COOLDOWN_SECONDS = 600.0
 DEEP_MAX_PASSES = 4
@@ -130,6 +130,10 @@ class CompactionManager:
     @property
     def compression_ledger(self) -> list[CompactionLedgerEntry]:
         return list(self._compression_ledger)
+
+    @property
+    def last_compression_result(self) -> CompressionResult | None:
+        return self._last_compression_result
 
     def clear_compression_ledger(self) -> None:
         self._compression_ledger.clear()

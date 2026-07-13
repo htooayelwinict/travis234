@@ -7877,7 +7877,7 @@ def test_agent_session_applied_compaction_merges_managed_process_ledger(tmp_path
     )
 
     try:
-        session.apply_compaction_result([], result, source_messages=source_messages)
+        session.compaction_adapter.apply_result([], result, source_messages=source_messages)
         persisted = [
             json.loads(line)
             for line in session_path.read_text(encoding="utf-8").splitlines()

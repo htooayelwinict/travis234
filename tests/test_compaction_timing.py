@@ -38,6 +38,21 @@ def test_preflight_compresses_over_threshold_then_defers() -> None:
     assert out2 is out
 
 
+def test_manager_exposes_last_compression_result_read_only() -> None:
+    manager = _manager()
+
+    manager.maybe_compress_preflight(_big_messages())
+
+    assert manager.last_compression_result is not None
+    assert manager.last_compression_result.compressed is True
+    try:
+        manager.last_compression_result = None
+    except AttributeError:
+        pass
+    else:
+        raise AssertionError("last_compression_result must be read-only")
+
+
 def test_preflight_records_compression_ledger_entry() -> None:
     manager = _manager()
     messages = _big_messages()

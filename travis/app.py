@@ -401,38 +401,7 @@ class CodingApp:
             raise first_error
 
     def _transform_context(self, messages, signal=None):
-        # Travis preflight timing-compaction phase.
-        should_emit = self._will_compact_preflight(messages)
-        before_compressions = self.compaction.compressor.compression_count
-        source_messages = list(messages)
-        compressor_messages = to_compressor_messages(source_messages)
-        if should_emit:
-            self.session._begin_compaction("threshold")
-        try:
-            compacted = self.compaction.maybe_compress_preflight(compressor_messages)
-            if compacted is not compressor_messages:
-                applied = self._apply_compaction_boundary(compacted, source_messages=source_messages)
-                messages[:] = applied
-                return messages
-            return compacted
-        except Exception as error:  # noqa: BLE001 - keep lifecycle events paired if compaction unexpectedly raises.
-            if should_emit:
-                self.session._end_compaction(
-                    reason="threshold",
-                    result=None,
-                    aborted=False,
-                    will_retry=False,
-                    error_message=f"Auto-compaction failed: {error}",
-                )
-            raise
-        finally:
-            if should_emit and self.session.is_compacting:
-                result = (
-                    self.session.messages
-                    if self.compaction.compressor.compression_count > before_compressions
-                    else None
-                )
-                self.session._end_compaction(reason="threshold", result=result, aborted=False, will_retry=False)
+        return self.session.compaction_transactions.preflight(messages).messages
 
     def run_turn(
         self,
@@ -524,36 +493,7 @@ class CodingApp:
         if message is None or message.stop_reason in {"error", "aborted"}:
             return
         prompt_tokens = _assistant_prompt_tokens(message)
-        should_emit = self._will_compact_post_response()
-        before_compressions = self.compaction.compressor.compression_count
-        source_messages = list(self.session.messages)
-        compressor_messages = to_compressor_messages(source_messages)
-        if should_emit:
-            self.session._begin_compaction("threshold")
-        try:
-            compacted = self.compaction.maybe_compress_post_response(compressor_messages, prompt_tokens)
-            if compacted is not compressor_messages:
-                self._apply_compaction_boundary(compacted, source_messages=source_messages)
-        except Exception as error:  # noqa: BLE001 - keep lifecycle events paired if compaction unexpectedly raises.
-            if should_emit:
-                self.session._end_compaction(
-                    reason="threshold",
-                    result=None,
-                    aborted=False,
-                    will_retry=False,
-                    error_message=f"Auto-compaction failed: {error}",
-                )
-            raise
-        else:
-            if should_emit:
-                result = (
-                    self.session.messages
-                    if self.compaction.compressor.compression_count > before_compressions
-                    else None
-                )
-                self.session._end_compaction(reason="threshold", result=result, aborted=False, will_retry=False)
-        finally:
-            self.compaction.reset_overflow_attempts()
+        self.session.compaction_transactions.post_response(self.session.messages, prompt_tokens)
 
     def _will_compact_post_response(self) -> bool:
         message = _last_assistant_message(self.session.messages)
@@ -562,14 +502,6 @@ class CodingApp:
         prompt_tokens = _assistant_prompt_tokens(message)
         real_tokens = 0 if prompt_tokens == -1 else prompt_tokens
         return self.compaction.compressor.should_compress(real_tokens)
-
-    def _will_compact_preflight(self, messages) -> bool:
-        if self.compaction.awaiting_real_usage_after_compression:
-            return False
-        tokens = estimate_tokens(to_compressor_messages(messages))
-        if self.compaction.compressor.should_defer_preflight_to_real_usage(tokens):
-            return False
-        return self.compaction.compressor.should_compress(tokens)
 
     def _recover_context_overflow(self, *, stream_fn=None) -> bool:
         message = _last_assistant_message(self.session.messages)
@@ -584,26 +516,9 @@ class CodingApp:
             for item in self.session.messages
             if item is not message
         ]
-        self.session._begin_compaction("overflow")
-        try:
-            compacted, recovered = self.compaction.recover_overflow(to_compressor_messages(retained))
-        except Exception as error:  # noqa: BLE001 - keep lifecycle events paired if compaction unexpectedly raises.
-            self.session._end_compaction(
-                reason="overflow",
-                result=None,
-                aborted=False,
-                will_retry=False,
-                error_message=f"Context overflow recovery failed: {error}",
-            )
-            raise
-        if not recovered:
-            self.session.agent.state.messages = retained
-            self.session._end_compaction(reason="overflow", result=None, aborted=False, will_retry=False)
-            return True
-        compacted = self._apply_compaction_boundary(compacted, source_messages=retained)
-        self.session._end_compaction(reason="overflow", result=compacted, aborted=False, will_retry=True)
-        self.session.agent.continue_(stream_fn=stream_fn)
-        self._compact_post_response()
+        outcome = self.session.compaction_transactions.recover_overflow(retained, stream_fn=stream_fn)
+        if outcome.recovered:
+            self._compact_post_response()
         return True
 
     def _compact_failed_turn_context(self, *, skip_if_just_compacted: bool = False) -> bool:
@@ -626,33 +541,12 @@ class CodingApp:
                 if item is not message
             ]
             retained = _elide_failed_turn_tool_results(retained)
-            before_compressions = self.compaction.compressor.compression_count
-            self.session._begin_compaction("threshold")
-            try:
-                compacted = self.compaction.force_compress_error_context(to_compressor_messages(retained))
-                compacted = self._apply_compaction_boundary(
-                    compacted,
-                    source_messages=retained,
-                    retain_source_suffix=False,
-                )
-            except Exception as error:  # noqa: BLE001 - keep lifecycle events paired if compaction unexpectedly raises.
-                self.session.agent.state.messages = list(retained)
-                self.session._end_compaction(
-                    reason="threshold",
-                    result=None,
-                    aborted=False,
-                    will_retry=False,
-                    error_message=f"Auto-compaction failed: {error}",
-                )
-                raise
-            else:
-                result = (
-                    self.session.messages
-                    if self.compaction.compressor.compression_count > before_compressions
-                    else retained
-                )
-                self.session._end_compaction(reason="threshold", result=result, aborted=False, will_retry=False)
-                return True
+            self.session.compaction_transactions.compact_error_context(
+                retained,
+                force=True,
+                retain_source_suffix=False,
+            )
+            return True
         if skip_if_just_compacted:
             return False
 
@@ -661,49 +555,12 @@ class CodingApp:
         ):
             return False
 
-        before_compressions = self.compaction.compressor.compression_count
         source_messages = list(self.session.messages)
-        compressor_messages = to_compressor_messages(source_messages)
-        self.session._begin_compaction("threshold")
-        try:
-            compacted = self.compaction.maybe_compress_error_context(compressor_messages)
-            if compacted is not compressor_messages:
-                self._apply_compaction_boundary(compacted, source_messages=source_messages)
-        except Exception as error:  # noqa: BLE001 - keep lifecycle events paired if compaction unexpectedly raises.
-            self.session._end_compaction(
-                reason="threshold",
-                result=None,
-                aborted=False,
-                will_retry=False,
-                error_message=f"Auto-compaction failed: {error}",
-            )
-            raise
-        else:
-            result = (
-                self.session.messages
-                if self.compaction.compressor.compression_count > before_compressions
-                else None
-            )
-            self.session._end_compaction(reason="threshold", result=result, aborted=False, will_retry=False)
-            return result is not None
-
-    def _apply_compaction_boundary(
-        self,
-        compacted,
-        *,
-        source_messages,
-        retain_source_suffix: bool = True,
-    ):
-        result = self.compaction._last_compression_result  # noqa: SLF001 - app owns the compaction manager lifecycle.
-        if result is not None and getattr(result, "compressed", False):
-            return self.session.apply_compaction_result(
-                list(compacted),
-                result,
-                source_messages=list(source_messages),
-                retain_source_suffix=retain_source_suffix,
-            )
-        self.session.agent.state.messages = list(compacted)
-        return list(compacted)
+        outcome = self.session.compaction_transactions.compact_error_context(
+            source_messages,
+            force=False,
+        )
+        return outcome.compressed
 
     def _recover_output_cap(self, *, stream_fn=None) -> bool:
         message = _last_assistant_message(self.session.messages)
