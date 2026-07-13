@@ -582,7 +582,13 @@ def test_coding_app_internal_subagent_tool_trace_records_guardrail_halt(tmp_path
         return text_response_events(m, "parent saw child guardrail")
 
     register_api_provider(create_faux_provider(script))
-    app = CodingApp(cwd=str(tmp_path), model=model, terminal=FakeTerminal(), enable_tui=False)
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=model,
+        terminal=FakeTerminal(),
+        enable_tui=False,
+        tool_loop_guardrails={"blocking_enabled": True},
+    )
 
     app.run_turn("spawn a reviewer subagent and show its status")
 
@@ -612,16 +618,20 @@ def test_coding_app_wires_compaction_transform(tmp_path: Path) -> None:
     assert any(getattr(m, "role", None) == "assistant" for m in app.messages)
 
 
-def test_coding_app_default_compaction_threshold_uses_model_context_with_static_prompt_reserve(tmp_path: Path) -> None:
+@pytest.mark.parametrize("context_window", [32_000, 128_000, 256_000, 400_000])
+def test_coding_app_default_compaction_threshold_is_half_model_context(
+    tmp_path: Path,
+    context_window: int,
+) -> None:
     model = faux_model()
-    model.context_window = 128_000
+    model.context_window = context_window
     model.max_tokens = 8_192
 
     app = CodingApp(cwd=str(tmp_path), model=model, terminal=FakeTerminal())
 
-    assert app.compressor.context_length == 128_000
-    assert app.compressor.threshold_tokens < 128_000 - 16_384
-    assert app.compressor.threshold_tokens > 100_000
+    assert app.compressor.context_length == context_window
+    assert app.compressor.threshold_percent == 0.5
+    assert app.compressor.threshold_tokens == context_window // 2
 
 
 def test_coding_app_forwards_initial_thinking_level_to_session(tmp_path: Path) -> None:

@@ -456,6 +456,7 @@ class SessionSubagentController:
             thinking_level=self.thinking_level,
             stream_fn=self._stream_fn,
             max_iterations=12,
+            tool_loop_guardrails=self._tool_guardrails.config,
         )
         child.agent.subscribe(self._subagent_tool_trace_listener(task, child, tool_trace, trace_by_call_id))
         child.agent._after_tool_call = self._subagent_after_tool_call_tracer(  # noqa: SLF001 - parent observes delegated child tools.
