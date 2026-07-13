@@ -102,12 +102,15 @@ class TuiDriver:
             self._read_trace()
             for index, event in enumerate(self._events):
                 if event.get("event") in event_types:
-                    return self._events.pop(index)
+                    del self._events[: index + 1]
+                    return event
                 if event.get("event") == "fatal":
-                    fatal = self._events.pop(index)
+                    fatal = event
+                    del self._events[: index + 1]
                     code = str(fatal.get("error_code") or "fatal")
                     expected = ", ".join(sorted(event_types))
                     raise RuntimeError(f"TUI reported fatal event before {expected}: {code}")
+            self._events.clear()
             if self.process.poll() is not None:
                 expected = ", ".join(sorted(event_types))
                 raise RuntimeError(

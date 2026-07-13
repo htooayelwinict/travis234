@@ -56,11 +56,24 @@ def test_eval_trace_accepts_sanitized_feature_audit_metadata(tmp_path: Path) -> 
     )
     writer.write("tool_end", {"tool": "process", "action": "write", "status": "ok"})
     writer.write("compaction_end", {"trigger": "threshold", "status": "ok", "compression_count": 1})
+    writer.write(
+        "turn_ready",
+        {
+            "status": "ok",
+            "context_tokens": 64_000,
+            "context_window": 256_000,
+            "context_percent": 25.0,
+            "context_estimated": False,
+            "context_confidence": "provider_real",
+            "compression_count": 1,
+        },
+    )
     writer.write("user_command_interrupt", {"interrupt_count": 2, "status": "ok"})
 
     events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
     assert events[-1]["interrupt_count"] == 2
-    assert events[-2]["trigger"] == "threshold"
+    assert events[-2]["event"] == "turn_ready"
+    assert events[-2]["context_percent"] == 25.0
 
 
 def test_interactive_trace_emits_ordered_safe_lifecycle(tmp_path: Path) -> None:
@@ -83,7 +96,16 @@ def test_interactive_trace_emits_ordered_safe_lifecycle(tmp_path: Path) -> None:
     events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
     event_types = [event["event"] for event in events]
     assert event_types.index("tui_ready") < event_types.index("turn_start")
-    assert event_types.index("turn_start") < event_types.index("turn_end") < event_types.index("shutdown")
+    assert (
+        event_types.index("turn_start")
+        < event_types.index("turn_end")
+        < event_types.index("turn_ready")
+        < event_types.index("shutdown")
+    )
+    turn_ready = next(event for event in events if event["event"] == "turn_ready")
+    assert "context_window" in turn_ready
+    assert "context_percent" in turn_ready
+    assert turn_ready["compression_count"] == 0
     ready = next(event for event in events if event["event"] == "tui_ready")
     assert ready["session_id"] == app.session.session_id
     assert ready["session_path"] == app.session.session_path
@@ -111,6 +133,22 @@ def test_conversation_log_records_semantic_turn_and_redacts_secret_shapes(tmp_pa
         "status": "ok",
     }
     assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_conversation_log_redacts_configured_provider_secret(tmp_path: Path) -> None:
+    path = tmp_path / "conversation.jsonl"
+    writer = ConversationLogWriter(path, redactor=SecretRedactor(["provider-secret-value"]))
+
+    writer.write(
+        turn_id="turn-1",
+        prompt="Do not expose credentials",
+        response="Accidental provider-secret-value output",
+        status="ok",
+    )
+
+    text = path.read_text(encoding="utf-8")
+    assert "provider-secret-value" not in text
+    assert "[REDACTED]" in text
 
 
 def test_coding_app_writes_final_assistant_text_to_conversation_log(tmp_path: Path) -> None:

@@ -24,6 +24,9 @@ class FakeDriver:
         self.lines: list[str] = []
         self.waits: list[tuple[str, float]] = []
         self.closed = False
+        self.conversation_path: Path | None = None
+        self.pending_prompt: str | None = None
+        self.turn_count = 0
 
     def wait_for_event(self, event_type: str, timeout: float):
         self.waits.append((event_type, timeout))
@@ -34,14 +37,47 @@ class FakeDriver:
                 "session_id": "session-live",
                 "session_path": "/tmp/session-live.jsonl",
             }
+        if event_type == "turn_end":
+            self.turn_count += 1
+            turn_id = f"turn-{self.turn_count}"
+            if self.conversation_path is not None and self.pending_prompt is not None:
+                with self.conversation_path.open("a", encoding="utf-8") as handle:
+                    handle.write(
+                        json.dumps(
+                            {
+                                "turn_id": turn_id,
+                                "prompt": self.pending_prompt,
+                                "response": f"completed {self.pending_prompt}",
+                                "status": "ok",
+                            }
+                        )
+                        + "\n"
+                    )
+            return {"event": event_type, "status": "ok", "turn_id": turn_id}
+        if event_type == "turn_ready":
+            return {
+                "event": event_type,
+                "status": "ok",
+                "context_tokens": self.turn_count * 1_000,
+                "context_window": 256_000,
+                "context_percent": self.turn_count / 2.56,
+                "context_estimated": False,
+                "context_confidence": "provider_real",
+                "compression_count": 0,
+            }
         return {"event": event_type, "status": "ok"}
 
     def select_model(self, query: str, index: int, timeout: float):
         self.lines.extend([f"/model {query}", f"<select:{index}>"])
-        return {"provider": "openrouter", "model": "xiaomi/mimo"}
+        return {
+            "provider": "stepfun" if query == "stepfun/step-3.7-flash" else "openrouter",
+            "model": query if "/" in query else "xiaomi/mimo",
+        }
 
     def send_line(self, text: str) -> None:
         self.lines.append(text)
+        if text.startswith("SDLC scenario "):
+            self.pending_prompt = text
 
     def send_key(self, data: bytes) -> None:
         self.lines.append(f"<key:{data.hex()}>")
@@ -152,8 +188,36 @@ def test_each_scenario_builds_its_domain_specific_seed(tmp_path: Path) -> None:
 
 def test_reports_keep_verifier_failures_primary_and_redact_secret_shapes(tmp_path: Path) -> None:
     results = [
-        ScenarioResult("ok", "passed", "p", "m", (0,), 1, 0, 10),
-        ScenarioResult("bad", "failed", "p", "m", (1,), 1, 0, 20, "Bearer token-value sk-secret123456"),
+        ScenarioResult(
+            "ok",
+            "passed",
+            "p",
+            "m",
+            (0,),
+            1,
+            0,
+            10,
+            prompt="Implement it",
+            response="Implemented and verified",
+            context_tokens=64_000,
+            context_window=256_000,
+            context_percent=25.0,
+            context_confidence="provider_real",
+        ),
+        ScenarioResult(
+            "bad",
+            "failed",
+            "p",
+            "m",
+            (1,),
+            1,
+            0,
+            20,
+            "Bearer token-value sk-secret123456",
+            prompt="Repair it",
+            response="Bearer response-token sk-response123456",
+            fault_domain="model_task_failure",
+        ),
     ]
 
     assert aggregate_score(results) == {"total": 2, "passed": 1, "failed": 1, "all_passed": False}
@@ -163,6 +227,13 @@ def test_reports_keep_verifier_failures_primary_and_redact_secret_shapes(tmp_pat
     assert "sk-secret123456" not in text
     assert "[REDACTED]" in text
     assert sanitized_tail("x" * 3000, limit=10) == "x" * 10
+    markdown = (tmp_path / "aggregate.md").read_text(encoding="utf-8")
+    assert "Prompt" in markdown
+    assert "Assistant output" in markdown
+    assert "25.00% (64,000 / 256,000 tokens; provider_real)" in markdown
+    assert "sk-response123456" not in markdown
+    assert (tmp_path / "aggregate.json").stat().st_mode & 0o777 == 0o600
+    assert (tmp_path / "aggregate.md").stat().st_mode & 0o777 == 0o600
 
 
 def test_driver_fails_immediately_on_fatal_trace_event(tmp_path: Path) -> None:
@@ -173,6 +244,23 @@ def test_driver_fails_immediately_on_fatal_trace_event(tmp_path: Path) -> None:
     try:
         with pytest.raises(RuntimeError, match="provider_error"):
             driver.wait_for_event("turn_end", 1)
+    finally:
+        os.close(write_fd)
+        os.close(read_fd)
+
+
+def test_driver_discards_unrelated_past_events_after_reaching_checkpoint(tmp_path: Path) -> None:
+    trace = tmp_path / "trace.jsonl"
+    trace.write_text(
+        '{"event":"tool_end","tool":"read","status":"ok"}\n'
+        '{"event":"turn_end","turn_id":"turn-1","status":"ok"}\n',
+        encoding="utf-8",
+    )
+    read_fd, write_fd = os.pipe()
+    driver = TuiDriver(_RunningProcess(), read_fd, trace)
+    try:
+        assert driver.wait_for_event("turn_end", 1)["turn_id"] == "turn-1"
+        assert driver._events == []
     finally:
         os.close(write_fd)
         os.close(read_fd)
@@ -351,6 +439,8 @@ def test_continuous_eval_uses_one_tui_session_for_all_prompts(tmp_path: Path) ->
 
     def start(command, cwd, trace):
         starts.append((command, cwd, trace))
+        command_parts = list(command)
+        driver.conversation_path = Path(command_parts[command_parts.index("--conversation-log") + 1])
         return driver
 
     results = run_continuous_scenarios(
@@ -363,7 +453,7 @@ def test_continuous_eval_uses_one_tui_session_for_all_prompts(tmp_path: Path) ->
 
     assert len(starts) == 1
     assert driver.lines == [
-        "/model mimo",
+        "/model stepfun/step-3.7-flash",
         "<select:1>",
         "/agents",
         "SDLC scenario 01-first. Work only in scenarios/01-first. implement verify",
@@ -377,9 +467,74 @@ def test_continuous_eval_uses_one_tui_session_for_all_prompts(tmp_path: Path) ->
     assert {result.session_path for result in results} == {"/tmp/session-live.jsonl"}
     assert driver.closed is True
     assert all(timeout >= 900 for event, timeout in driver.waits if event == "turn_end")
+    assert sum(event == "turn_ready" for event, _timeout in driver.waits) == 2
     assert ("capability_granted", 60) in driver.waits
     command = list(starts[0][0])
     assert "--conversation-log" in command
+    assert [result.turn_id for result in results] == ["turn-1", "turn-2"]
+    assert [result.context_percent for result in results] == pytest.approx([0.390625, 0.78125])
+    assert results[0].prompt == driver.lines[3]
+    assert results[0].response == f"completed {driver.lines[3]}"
+    assert {result.model_provider for result in results} == {"stepfun"}
+    assert {result.model_id for result in results} == {"stepfun/step-3.7-flash"}
+    result_paths = sorted((tmp_path / "eval/runs").glob("*/result.json"))
+    assert result_paths and all(path.stat().st_mode & 0o777 == 0o600 for path in result_paths)
+
+
+def test_continuous_eval_preflights_verifiers_before_starting_tui(tmp_path: Path) -> None:
+    from evals.run_continuous_sdlc_eval import run_continuous_scenarios
+
+    scenario = Scenario(
+        "01-missing-verifier",
+        "first",
+        ("implement",),
+        (),
+        (("definitely-missing-travis234-verifier", "--version"),),
+    )
+    started = False
+
+    def start(*_args):
+        nonlocal started
+        started = True
+        return FakeDriver()
+
+    with pytest.raises(RuntimeError, match="verifier preflight failed"):
+        run_continuous_scenarios(
+            [scenario],
+            root=tmp_path / "eval",
+            dotenv=tmp_path / ".env",
+            driver_factory=start,
+        )
+
+    assert started is False
+
+
+def test_continuous_eval_rejects_wrong_selected_model_before_first_prompt(tmp_path: Path) -> None:
+    from evals.run_continuous_sdlc_eval import run_continuous_scenarios
+
+    scenario = Scenario(
+        "01-wrong-model",
+        "first",
+        ("implement",),
+        (),
+        ((sys.executable, "-c", ""),),
+    )
+    driver = FakeDriver()
+    driver.select_model = lambda query, index, timeout: {  # type: ignore[method-assign]
+        "provider": "openrouter",
+        "model": "another/model",
+    }
+
+    with pytest.raises(RuntimeError, match="model selection mismatch"):
+        run_continuous_scenarios(
+            [scenario],
+            root=tmp_path / "eval",
+            dotenv=tmp_path / ".env",
+            driver_factory=lambda *_args: driver,
+        )
+
+    assert not any(line.startswith("SDLC scenario") for line in driver.lines)
+    assert driver.closed is True
 
 
 def test_feature_audit_requires_every_live_capability(tmp_path: Path) -> None:
@@ -405,12 +560,25 @@ def test_feature_audit_requires_every_live_capability(tmp_path: Path) -> None:
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text("acceptance-audit skill applied\n", encoding="utf-8")
     events = [
-        {"event": "model_selected", "provider": "openrouter", "model": "stepfun/step-3.7-flash"},
+        {"event": "model_selected", "provider": "stepfun", "model": "stepfun/step-3.7-flash"},
         {"event": "extension_command", "status": "ok"},
         {"event": "capability_granted", "status": "ok"},
         {"event": "user_command_interrupt", "status": "ok", "interrupt_count": 2},
         {"event": "process_event", "process_id": "p1", "process_state": "terminated", "status": "terminated"},
         {"event": "compaction_end", "status": "ok", "trigger": "threshold", "compression_count": 1},
+        *(
+            {
+                "event": "turn_ready",
+                "status": "ok",
+                "context_tokens": index * 1_000,
+                "context_window": 256_000,
+                "context_percent": index / 2.56,
+                "context_estimated": False,
+                "context_confidence": "provider_real",
+                "compression_count": 1 if index >= 20 else 0,
+            }
+            for index in range(1, 22)
+        ),
         {"event": "shutdown", "status": "ok"},
         {"event": "tool_end", "tool": "read", "status": "ok"},
         {"event": "tool_end", "tool": "write", "status": "ok"},
@@ -433,6 +601,28 @@ def test_feature_audit_requires_every_live_capability(tmp_path: Path) -> None:
     assert audit.passed is True
     assert audit.missing_features == ()
     assert set(audit.observed_features) == REQUIRED_FEATURES
+
+
+def test_feature_audit_uses_latest_process_state_instead_of_flagging_normal_lifecycle(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "audit"
+    (root / "trace.jsonl").parent.mkdir(parents=True, exist_ok=True)
+    (root / "trace.jsonl").write_text(
+        "".join(
+            json.dumps(event) + "\n"
+            for event in (
+                {"event": "process_event", "process_id": "done", "process_state": "running"},
+                {"event": "process_event", "process_id": "live", "process_state": "running"},
+                {"event": "process_event", "process_id": "done", "process_state": "terminated"},
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    audit = FeatureAudit.from_artifacts(root)
+
+    assert audit.nonterminal_processes == ("live",)
 
 
 def _tree_hash(root: Path) -> str:

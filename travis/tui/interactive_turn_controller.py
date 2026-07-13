@@ -174,6 +174,26 @@ class InteractiveTurnController:
         self.status.set_message("Idle")
         self._refresh_footer()
         self.tui.request_render()
+        self._trace_turn_ready()
+
+    def _trace_turn_ready(self) -> None:
+        """Record the same finalized context state shown by the idle footer."""
+        if self.app.event_trace is None:
+            return
+        usage = self.app.session.get_context_usage()
+        confidence = usage.get("confidence") if isinstance(usage, dict) else None
+        self.app.event_trace.write(
+            "turn_ready",
+            {
+                "status": "ok",
+                "context_tokens": self.footer.context_tokens,
+                "context_window": self.footer.context_window,
+                "context_percent": self.footer.context_percent,
+                "context_estimated": self.footer.context_estimate_rough,
+                "context_confidence": str(confidence) if confidence else "unknown",
+                "compression_count": self.footer.compression_count,
+            },
+        )
 
     def _handle_active_turn_prompt(self, prompt: str) -> bool:
         if not self._is_turn_active():

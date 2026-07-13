@@ -29,6 +29,16 @@ class ScenarioResult:
     failure_tail: str | None = None
     session_id: str | None = None
     session_path: str | None = None
+    turn_id: str | None = None
+    prompt: str | None = None
+    response: str | None = None
+    context_tokens: int | None = None
+    context_window: int | None = None
+    context_percent: float | None = None
+    context_estimated: bool | None = None
+    context_confidence: str | None = None
+    fault_domain: str | None = None
+    failure_evidence: str | None = None
 
 
 def load_scenarios(path: str | Path | None = None) -> list[Scenario]:

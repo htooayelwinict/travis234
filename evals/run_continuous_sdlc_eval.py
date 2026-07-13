@@ -13,12 +13,14 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from evals.fixtures import build_fixture
-from evals.report import write_reports
+from evals.report import sanitized_text, write_reports
 from evals.schema import Scenario, ScenarioResult, load_scenarios
 from evals.tui_driver import TuiDriver
+from evals.verify_run import verify_run, write_verification
 
 DEFAULT_COMPACT_AFTER = frozenset()
 MIN_TURN_TIMEOUT_SECONDS = 900
+DEFAULT_MODEL = "stepfun/step-3.7-flash"
 
 
 def _prompt_for(scenario: Scenario) -> str:
@@ -35,7 +37,7 @@ def run_continuous_scenarios(
     *,
     root: str | Path,
     dotenv: str | Path,
-    model_query: str = "mimo",
+    model_query: str = DEFAULT_MODEL,
     model_index: int = 1,
     thinking: str = "medium",
     temperature: float = 0.2,
@@ -43,6 +45,7 @@ def run_continuous_scenarios(
     driver_factory: Callable[..., object] = TuiDriver.start,
 ) -> list[ScenarioResult]:
     scenario_list = list(scenarios)
+    _preflight_verifiers(scenario_list)
     output = Path(root).expanduser().resolve()
     workspace = output / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
@@ -75,6 +78,7 @@ def run_continuous_scenarios(
     ]
     driver = driver_factory(command, workspace, trace_path)
     results: list[ScenarioResult] = []
+    previous_compression_count = 0
     try:
         ready = driver.wait_for_event("tui_ready", 60)
         session_id = str(ready.get("session_id") or "") or None
@@ -82,6 +86,10 @@ def run_continuous_scenarios(
         selected = driver.select_model(model_query, model_index, 60)
         provider = str(selected.get("provider") or "") or None
         model = str(selected.get("model") or "") or None
+        if "/" in model_query and model != model_query:
+            raise RuntimeError(
+                f"model selection mismatch: requested {model_query!r}, selected {model!r}"
+            )
         driver.send_line("/agents")
         driver.wait_for_event("extension_command", 60)
         for index, scenario in enumerate(scenario_list, start=1):
@@ -89,25 +97,67 @@ def run_continuous_scenarios(
             turn_timeout = max(MIN_TURN_TIMEOUT_SECONDS, scenario.timeout_seconds)
             verifier_codes: list[int] = []
             failure_tail: str | None = None
+            failure_evidence: str | None = None
+            fault_domain: str | None = None
             turn_finished = False
+            compacted = 0
+            turn_id: str | None = None
+            response: str | None = None
+            context_tokens: int | None = None
+            context_window: int | None = None
+            context_percent: float | None = None
+            context_estimated: bool | None = None
+            context_confidence: str | None = None
+            prompt = _prompt_for(scenario)
             if scenario.allow_package_install:
                 driver.send_line("/allow package-install")
                 granted = driver.wait_for_event("capability_granted", 60)
                 if granted.get("status") != "ok":
                     raise RuntimeError("package-install capability grant failed")
-            driver.send_line(_prompt_for(scenario))
+            driver.send_line(prompt)
             try:
-                driver.wait_for_event("turn_end", turn_timeout)
+                turn_end = driver.wait_for_event("turn_end", turn_timeout)
+                turn_id = str(turn_end.get("turn_id") or "") or None
+                turn_ready = driver.wait_for_event("turn_ready", 60)
                 turn_finished = True
+                context_tokens = _optional_int(turn_ready.get("context_tokens"))
+                context_window = _optional_int(turn_ready.get("context_window"))
+                context_percent = _optional_float(turn_ready.get("context_percent"))
+                context_estimated = bool(turn_ready.get("context_estimated"))
+                context_confidence = str(turn_ready.get("context_confidence") or "unknown")
+                current_compressions = _optional_int(turn_ready.get("compression_count"))
+                if current_compressions is not None:
+                    compacted = max(0, current_compressions - previous_compression_count)
+                    previous_compression_count = current_compressions
+                else:
+                    compacted = 0
+                if context_window is None or "context_percent" not in turn_ready:
+                    failure_tail = "turn_ready did not include finalized footer context telemetry"
+                    failure_evidence = failure_tail
+                    fault_domain = "agent_runtime_failure"
+                conversation = _conversation_record(conversation_path, turn_id)
+                if conversation is None:
+                    failure_tail = failure_tail or "conversation record missing for completed turn"
+                    failure_evidence = failure_evidence or failure_tail
+                    fault_domain = fault_domain or "harness_failure"
+                else:
+                    response = str(conversation.get("response") or "")
             except TimeoutError:
                 failure_tail = "TimeoutError: timed out waiting for turn_end"
+                failure_evidence = failure_tail
+                fault_domain = "runtime_timeout_unresolved"
                 driver.send_interrupt()
                 try:
                     driver.wait_for_event("turn_end", 30)
+                    driver.wait_for_event("turn_ready", 30)
                 except Exception:
                     failure_tail = "TimeoutError: turn did not abort cleanly"
+                    failure_evidence = failure_tail
+                    fault_domain = "agent_runtime_failure"
             except Exception as error:  # noqa: BLE001 - converted to bounded matrix metadata.
                 failure_tail = f"{type(error).__name__}: {str(error).split('; tail=', 1)[0]}"[:500]
+                failure_evidence = failure_tail
+                fault_domain = _fault_domain_for_error(error)
 
             if turn_finished:
                 verifier_codes, verifier_failure = _run_verifiers(
@@ -115,15 +165,25 @@ def run_continuous_scenarios(
                     scenario_workspaces[scenario.id],
                 )
                 failure_tail = failure_tail or verifier_failure
+                if verifier_failure and fault_domain is None:
+                    fault_domain = "model_task_failure"
+                    failure_evidence = verifier_failure
 
-            compacted = 0
             if index in compact_after:
                 driver.send_line("/compact")
                 try:
-                    driver.wait_for_event("compaction_end", turn_timeout)
-                    compacted = 1
+                    compaction = driver.wait_for_event("compaction_end", turn_timeout)
+                    manual_count = _optional_int(compaction.get("compression_count"))
+                    if manual_count is not None:
+                        compacted += max(0, manual_count - previous_compression_count)
+                        previous_compression_count = manual_count
+                    else:
+                        compacted += 1
+                        previous_compression_count += 1
                 except Exception as error:  # noqa: BLE001
                     failure_tail = failure_tail or f"compaction failed: {type(error).__name__}"
+                    failure_evidence = failure_evidence or failure_tail
+                    fault_domain = fault_domain or "agent_runtime_failure"
 
             status = (
                 "passed"
@@ -142,10 +202,24 @@ def run_continuous_scenarios(
                 failure_tail=failure_tail,
                 session_id=session_id,
                 session_path=session_path,
+                turn_id=turn_id,
+                prompt=prompt,
+                response=response,
+                context_tokens=context_tokens,
+                context_window=context_window,
+                context_percent=context_percent,
+                context_estimated=context_estimated,
+                context_confidence=context_confidence,
+                fault_domain=fault_domain,
+                failure_evidence=failure_evidence,
             )
             result_path = output / "runs" / scenario.id / "result.json"
             result_path.parent.mkdir(parents=True, exist_ok=True)
-            result_path.write_text(json.dumps(asdict(result), indent=2) + "\n", encoding="utf-8")
+            result_path.write_text(
+                json.dumps(_safe_result_payload(result), indent=2) + "\n",
+                encoding="utf-8",
+            )
+            os.chmod(result_path, 0o600)
             results.append(result)
 
             if index == 11:
@@ -218,10 +292,79 @@ def _run_verifiers(scenario: Scenario, cwd: Path) -> tuple[list[int], str | None
     return codes, failure
 
 
+def _preflight_verifiers(scenarios: Iterable[Scenario]) -> None:
+    missing: set[str] = set()
+    for scenario in scenarios:
+        for verifier in scenario.verifiers:
+            if not verifier:
+                missing.add(f"{scenario.id}:<empty>")
+                continue
+            executable = sys.executable if verifier[0] == "python" else verifier[0]
+            if Path(executable).is_absolute():
+                available = Path(executable).is_file()
+            else:
+                available = shutil.which(executable) is not None
+            if not available:
+                missing.add(f"{scenario.id}:{verifier[0]}")
+    if missing:
+        raise RuntimeError(f"verifier preflight failed: {', '.join(sorted(missing))}")
+
+
+def _conversation_record(path: Path, turn_id: str | None) -> dict[str, object] | None:
+    if not turn_id or not path.is_file():
+        return None
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict) and value.get("turn_id") == turn_id:
+            return value
+    return None
+
+
+def _optional_int(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return int(value)
+
+
+def _optional_float(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _fault_domain_for_error(error: BaseException) -> str:
+    lowered = f"{type(error).__name__}: {error}".lower()
+    if any(
+        marker in lowered
+        for marker in (
+            "connectionerror",
+            "connection reset",
+            "connection refused",
+            "network",
+            "dns",
+            "temporary failure",
+            "service unavailable",
+            "gateway timeout",
+        )
+    ):
+        return "provider_network_failure"
+    return "agent_runtime_failure"
+
+
+def _safe_result_payload(result: ScenarioResult) -> dict[str, object]:
+    payload = asdict(result)
+    for field in ("failure_tail", "prompt", "response", "failure_evidence"):
+        payload[field] = sanitized_text(payload.get(field))  # type: ignore[arg-type]
+    return payload
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run 21 SDLC prompts in one travis TUI session")
     parser.add_argument("--dotenv", required=True)
-    parser.add_argument("--model-query", default="mimo")
+    parser.add_argument("--model-query", default=DEFAULT_MODEL)
     parser.add_argument("--model-index", type=int, default=1)
     parser.add_argument("--thinking", default="medium")
     parser.add_argument("--temperature", type=float, default=0.2)
@@ -250,12 +393,15 @@ def main(argv: list[str] | None = None) -> int:
                 "mode": "continuous-session",
                 "prompt_count": len(scenarios),
                 "model_query": args.model_query,
+                "expected_model": args.model_query,
                 "model_index": args.model_index,
                 "thinking": args.thinking,
                 "temperature": args.temperature,
             },
         )
-        return 0 if results and all(result.status == "passed" for result in results) else 1
+        verification = verify_run(output, expected_model=args.model_query)
+        write_verification(verification, output)
+        return 0 if verification.passed else 1
     finally:
         signal.signal(signal.SIGTERM, previous_sigterm)
 

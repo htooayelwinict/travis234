@@ -34,6 +34,7 @@ REQUIRED_FEATURES = frozenset(
         "package_build",
         "skills",
         "extensions",
+        "context_telemetry",
         "shutdown",
     }
 )
@@ -64,7 +65,12 @@ class FeatureAudit:
         )
 
     @classmethod
-    def from_artifacts(cls, root: str | Path) -> "FeatureAudit":
+    def from_artifacts(
+        cls,
+        root: str | Path,
+        *,
+        expected_model: str = "stepfun/step-3.7-flash",
+    ) -> "FeatureAudit":
         base = Path(root).expanduser().resolve()
         results = _load_results(base)
         events = _load_jsonl(base / "trace.jsonl")
@@ -109,11 +115,17 @@ class FeatureAudit:
             observed.add("capability_grant")
         if any(
             event.get("event") == "model_selected"
-            and event.get("provider") == "openrouter"
-            and event.get("model") == "stepfun/step-3.7-flash"
+            and bool(event.get("provider"))
+            and event.get("model") == expected_model
             for event in events
         ):
             observed.add("provider_model")
+        turn_ready = [event for event in events if event.get("event") == "turn_ready"]
+        if len(turn_ready) == 21 and all(
+            event.get("context_window") and "context_percent" in event
+            for event in turn_ready
+        ):
+            observed.add("context_telemetry")
         if any(event.get("event") == "extension_command" and event.get("status") == "ok" for event in events):
             observed.add("extensions")
         if max(
@@ -142,11 +154,17 @@ class FeatureAudit:
             observed.add("session_persistence")
 
         terminal_states = {"exited", "timed_out", "terminated", "failed"}
+        latest_process_states: dict[str, str] = {}
+        for event in events:
+            if event.get("event") != "process_event":
+                continue
+            process_id = str(event.get("process_id") or "unknown")
+            latest_process_states[process_id] = str(event.get("process_state") or "unknown")
         nonterminal = tuple(
             sorted(
-                str(event.get("process_id") or "unknown")
-                for event in events
-                if event.get("event") == "process_event" and event.get("process_state") not in terminal_states
+                process_id
+                for process_id, state in latest_process_states.items()
+                if state not in terminal_states
             )
         )
         leaks = _secret_leaks(base)
@@ -188,10 +206,22 @@ def _load_jsonl(path: Path) -> list[dict[str, object]]:
 
 def _secret_leaks(root: Path) -> tuple[str, ...]:
     leaks: list[str] = []
-    for relative in ("trace.jsonl", "conversation.jsonl", "terminal.log", "aggregate.json", "aggregate.md"):
-        path = root / relative
+    paths = [
+        root / relative
+        for relative in (
+            "trace.jsonl",
+            "conversation.jsonl",
+            "terminal.log",
+            "aggregate.json",
+            "aggregate.md",
+            "verification.json",
+            "verification.md",
+        )
+    ]
+    paths.extend(sorted((root / "runs").glob("*/result.json")))
+    for path in paths:
         if path.is_file() and _SECRET.search(path.read_text(encoding="utf-8", errors="replace")):
-            leaks.append(relative)
+            leaks.append(path.relative_to(root).as_posix())
     return tuple(leaks)
 
 

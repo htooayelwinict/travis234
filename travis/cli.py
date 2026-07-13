@@ -24,7 +24,7 @@ from travis.ai.types import Model
 from travis.app import CodingApp
 from travis.coding_agent.config import get_agent_dir, get_auth_path
 from travis.coding_agent.export_html import export_from_file
-from travis.coding_agent.eval_trace import ConversationLogWriter, EvalTraceWriter
+from travis.coding_agent.eval_trace import ConversationLogWriter, EvalTraceWriter, SecretRedactor
 from travis.coding_agent.provider_control_plane import ProviderControlPlane
 from travis.coding_agent.session_catalog import SessionCatalog, SessionCatalogError
 from travis.tui.interactive_mode import InteractiveMode
@@ -507,6 +507,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(str(error))
     if config.api_key:
         provider_control_plane.auth.set_runtime_api_key(startup.model.provider, config.api_key)
+    evaluation_redactor = SecretRedactor([config.api_key] if config.api_key else ())
     generation_warnings = _generation_param_warnings_for_model(startup.model, config.generation_params)
     _print_generation_param_warnings(generation_warnings)
     runtime_options: dict[str, object] = {}
@@ -524,8 +525,16 @@ def main(argv: list[str] | None = None) -> int:
         session_id=startup_session.session_id,
         agent_dir=agent_dir,
         provider_control_plane=provider_control_plane,
-        event_trace=EvalTraceWriter(args.event_trace) if args.event_trace else None,
-        conversation_log=ConversationLogWriter(args.conversation_log) if args.conversation_log else None,
+        event_trace=(
+            EvalTraceWriter(args.event_trace, redactor=evaluation_redactor)
+            if args.event_trace
+            else None
+        ),
+        conversation_log=(
+            ConversationLogWriter(args.conversation_log, redactor=evaluation_redactor)
+            if args.conversation_log
+            else None
+        ),
         **runtime_options,
     )
     try:
