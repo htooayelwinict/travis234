@@ -30,3 +30,6 @@ include = ["travis*"]
 [tool.setuptools.package-data]
 "travis.coding_agent" = ["export_html_assets/vendor/*.js"]
 "travis" = ["resources/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

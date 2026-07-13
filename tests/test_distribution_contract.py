@@ -28,3 +28,9 @@ def test_repository_has_one_sandbox_launcher_implementation() -> None:
     assert workspace["scripts"]["tui:sandbox"] == "node packages/travis234-cli/bin/travis234.js"
     assert not (ROOT / "travis/sandbox_launcher.py").exists()
     assert not (ROOT / "scripts/travis234_sandbox.py").exists()
+
+
+def test_pytest_only_discovers_the_product_test_tree() -> None:
+    config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert config["tool"]["pytest"]["ini_options"]["testpaths"] == ["tests"]
