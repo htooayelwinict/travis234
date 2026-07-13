@@ -9,7 +9,7 @@ from typing import Any
 
 from travis.agent.types import AgentToolResult
 from travis.ai.types import ImageContent, TextContent, ThinkingContent, ToolCall
-from travis.tui.component import Box, Component, Container, Markdown, Spacer, Text
+from travis.tui.components import Box, Component, Container, Markdown, Spacer, Text
 from travis.tui.tui import TUI
 from travis.tui.utils import truncate_to_width, visible_width
 

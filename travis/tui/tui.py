@@ -9,7 +9,8 @@ import os
 import re
 import threading
 
-from travis.tui.component import CURSOR_MARKER, Container
+from travis.tui.components.base import Container
+from travis.tui.components.editor import CURSOR_MARKER
 from travis.tui.dispatcher import UiDispatcher
 from travis.tui.keys import is_key_release
 from travis.tui.terminal import Terminal

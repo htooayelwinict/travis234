@@ -1274,7 +1274,7 @@ def test_markdown_render_reuses_cached_lines_until_text_changes() -> None:
     assert changed == ["changed"]
 
 def test_input_render_avoids_full_width_scan_for_long_ascii_tail(monkeypatch) -> None:
-    import travis.tui.component as component_module
+    import travis.tui.components.editor as component_module
 
     real_visible_width = component_module.visible_width
     checked_lengths: list[int] = []

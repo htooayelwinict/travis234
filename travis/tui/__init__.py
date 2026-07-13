@@ -1,6 +1,6 @@
 """Terminal rendering, components, input, and interactive interfaces."""
 
-from travis.tui.component import (
+from travis.tui.components import (
     Box,
     CancellableLoader,
     CombinedAutocompleteProvider,

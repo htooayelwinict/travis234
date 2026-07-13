@@ -25,7 +25,7 @@ from travis.coding_agent.session_commands import SessionCommandExecutor
 from travis.coding_agent.processes.types import ProcessEvent, ProcessSnapshot, ProcessState
 from travis.coding_agent.tools.bash import BashExecOptions, get_shell_env
 from travis.coding_agent.tools.output_spool import OutputSpool
-from travis.tui.component import (
+from travis.tui.components import (
     CombinedAutocompleteProvider,
     Component,
     Container,
@@ -34,9 +34,8 @@ from travis.tui.component import (
     Spacer,
     StatusLine,
     Text,
-    _call_autocomplete_method,
-    _settle_autocomplete_result,
 )
+from travis.tui.components.autocomplete import _call_autocomplete_method, _settle_autocomplete_result
 from travis.tui.interactive import (
     AssistantMessageComponent,
     BashExecutionComponent,
