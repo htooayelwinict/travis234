@@ -91,8 +91,18 @@ class ApiProviderRegistry:
         with self._lock:
             self._stacks.clear()
 
+    def clone(self) -> "ApiProviderRegistry":
+        clone = ApiProviderRegistry()
+        for provider in self.all():
+            clone.register(provider, source_id="registry-snapshot")
+        return clone
+
 
 _DEFAULT_API_PROVIDER_REGISTRY = ApiProviderRegistry()
+
+
+def clone_default_api_provider_registry() -> ApiProviderRegistry:
+    return _DEFAULT_API_PROVIDER_REGISTRY.clone()
 
 
 def register_api_provider(provider: ApiProvider, source_id: str | None = None) -> ProviderRegistration:

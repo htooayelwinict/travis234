@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from travis.ai.models import get_provider_auth_status
 from travis.ai.providers.faux import faux_model
 from travis.ai.stream import ApiProvider, get_api_provider
+from travis.ai.types import Model
 from travis.app import CodingApp
 from travis.coding_agent import create_agent_session_services
 from travis.coding_agent.provider_control_plane import ProviderControlPlane
@@ -13,6 +16,18 @@ def _provider(api: str) -> ApiProvider:
         raise RuntimeError("not invoked")
 
     return ApiProvider(api=api, stream=unavailable, stream_simple=unavailable)
+
+
+def _model(provider: str, model_id: str, *, name: str | None = None) -> Model:
+    return Model(
+        id=model_id,
+        name=name or model_id,
+        api="openai-completions",
+        provider=provider,
+        base_url="https://example.invalid",
+        context_window=1_000,
+        max_tokens=100,
+    )
 
 
 def test_app_and_session_share_one_control_plane(tmp_path) -> None:
@@ -47,6 +62,36 @@ def test_two_in_memory_control_planes_do_not_leak_registrations() -> None:
 
     assert left.api_providers.get("private") is not None
     assert right.api_providers.get("private") is None
+
+
+def test_default_control_planes_do_not_share_models_or_api_providers(tmp_path) -> None:
+    left = ProviderControlPlane.create_default(
+        {"auth": tmp_path / "left-auth.json", "models": tmp_path / "left-models.json"}
+    )
+    right = ProviderControlPlane.create_default(
+        {"auth": tmp_path / "right-auth.json", "models": tmp_path / "right-models.json"}
+    )
+    private = _model("isolated", "private")
+
+    left.ensure_model(private)
+
+    assert left.models.find("isolated", "private") is private
+    assert right.models.find("isolated", "private") is None
+    assert left.api_providers is not right.api_providers
+
+
+def test_discovered_model_replacement_is_local_to_plane() -> None:
+    left = ProviderControlPlane.in_memory()
+    right = ProviderControlPlane.in_memory()
+    original = _model("isolated", "model", name="Original")
+    replacement = replace(original, name="Replacement")
+    left.ensure_model(original)
+    right.ensure_model(original)
+
+    left.merge_discovered_models([replacement])
+
+    assert left.models.find("isolated", "model").name == "Replacement"
+    assert right.models.find("isolated", "model").name == "Original"
 
 
 def test_api_provider_registration_close_restores_previous_entry() -> None:

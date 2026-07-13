@@ -11,7 +11,7 @@ from travis.ai.event_stream import AssistantMessageEventStream
 from travis.ai.stream import (
     ApiProviderRegistry,
     ProviderRegistration,
-    _DEFAULT_API_PROVIDER_REGISTRY,
+    clone_default_api_provider_registry,
 )
 from travis.ai.types import Context, Model, SimpleStreamOptions
 from travis.coding_agent.auth_storage import AuthStorage
@@ -51,25 +51,24 @@ class ProviderControlPlane:
     def create_default(
         cls,
         paths: Mapping[str, str | Path] | None = None,
-        environment: Mapping[str, str] | None = None,
     ) -> "ProviderControlPlane":
-        del environment
         paths = paths or {}
+        api_providers = clone_default_api_provider_registry()
         auth = AuthStorage.create(paths.get("auth") or get_auth_path())
         models = ModelRegistry(
             auth,
             paths.get("models") or get_models_path(),
-            _DEFAULT_API_PROVIDER_REGISTRY,
+            api_providers,
         )
         return cls(
             auth=auth,
             models=models,
-            api_providers=_DEFAULT_API_PROVIDER_REGISTRY,
+            api_providers=api_providers,
         )
 
     def _fallback_resolver(self, provider: str) -> str | None:
         self._fallback_counts[provider] = self._fallback_counts.get(provider, 0) + 1
-        return self.models._fallback_api_key(provider)  # noqa: SLF001
+        return self.models.resolve_fallback_api_key(provider)
 
     def fallback_resolution_count(self, provider: str) -> int:
         return self._fallback_counts.get(provider, 0)
@@ -79,19 +78,11 @@ class ProviderControlPlane:
         self.models.refresh()
 
     def ensure_model(self, model: Model) -> None:
-        if self.models.find(model.provider, model.id) is None:
-            self.models._models.append(model)  # noqa: SLF001 - composition root supplies active model.
+        self.models.register_model(model)
 
     def merge_discovered_models(self, models: list[Model]) -> None:
         for model in models:
-            existing = self.models.find(model.provider, model.id)
-            if existing is None:
-                self.models._models.append(model)  # noqa: SLF001 - discovery updates this plane only.
-                continue
-            if existing is model:
-                continue
-            index = self.models._models.index(existing)  # noqa: SLF001
-            self.models._models[index] = model  # noqa: SLF001
+            self.models.replace_model(model)
 
     def register_extension(
         self,
@@ -118,7 +109,7 @@ class ProviderControlPlane:
         return ProviderRegistration(close)
 
     def _apply_extension_top(self, provider: str) -> None:
-        if provider in self.models._registered_providers:  # noqa: SLF001
+        if self.models.has_registered_provider(provider):
             self.models.unregister_provider(provider)
         self.auth.unregister_oauth_provider(provider)
         stack = self._extension_stacks.get(provider)

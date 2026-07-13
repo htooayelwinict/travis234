@@ -6,7 +6,8 @@ import json
 import os
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Callable
+import threading
+from typing import Any, Callable, Iterable
 
 import travis.ai.models as ai_models
 from travis.ai.stream import ApiProvider, ApiProviderRegistry, _DEFAULT_API_PROVIDER_REGISTRY
@@ -29,6 +30,7 @@ class ModelRegistry:
         self.auth_storage = auth_storage
         self._models_json_path = Path(models_json_path).expanduser().resolve() if models_json_path else None
         self.api_providers = api_providers or _DEFAULT_API_PROVIDER_REGISTRY
+        self._lock = threading.RLock()
         self._models: list[Model] = []
         self._provider_request_configs: dict[str, dict[str, object]] = {}
         self._model_request_headers: dict[str, dict[str, str]] = {}
@@ -43,6 +45,10 @@ class ModelRegistry:
             return None
         return ai_models._resolve_config_value(value)  # noqa: SLF001
 
+    def resolve_fallback_api_key(self, provider: str) -> str | None:
+        with self._lock:
+            return self._fallback_api_key(provider)
+
     @staticmethod
     def create(authStorage: AuthStorage, modelsJsonPath: str | os.PathLike[str] | None = None) -> "ModelRegistry":
         return ModelRegistry(authStorage, modelsJsonPath or _agent_models_path())
@@ -54,14 +60,15 @@ class ModelRegistry:
     in_memory = inMemory
 
     def refresh(self) -> None:
-        for provider_name in list(self._registered_providers):
-            self.api_providers.unregister_source(f"provider:{provider_name}")
-        self._provider_request_configs.clear()
-        self._model_request_headers.clear()
-        self._load_error = None
-        self.loadModels()
-        for provider_name, config in list(self._registered_providers.items()):
-            self._apply_provider_config(provider_name, config)
+        with self._lock:
+            for provider_name in list(self._registered_providers):
+                self.api_providers.unregister_source(f"provider:{provider_name}")
+            self._provider_request_configs.clear()
+            self._model_request_headers.clear()
+            self._load_error = None
+            self.loadModels()
+            for provider_name, config in list(self._registered_providers.items()):
+                self._apply_provider_config(provider_name, config)
 
     def getError(self) -> str | None:
         return self._load_error
@@ -69,14 +76,15 @@ class ModelRegistry:
     get_error = getError
 
     def loadModels(self) -> None:
-        custom_models: list[Model] = []
-        overrides: dict[str, dict[str, object]] = {}
-        model_overrides: dict[str, dict[str, dict[str, object]]] = {}
-        if self._models_json_path is not None:
-            custom_models, overrides, model_overrides, self._load_error = self._load_custom_models(self._models_json_path)
+        with self._lock:
+            custom_models: list[Model] = []
+            overrides: dict[str, dict[str, object]] = {}
+            model_overrides: dict[str, dict[str, dict[str, object]]] = {}
+            if self._models_json_path is not None:
+                custom_models, overrides, model_overrides, self._load_error = self._load_custom_models(self._models_json_path)
 
-        builtins = self._load_builtin_models(overrides, model_overrides)
-        self._models = self._merge_custom_models(builtins, custom_models)
+            builtins = self._load_builtin_models(overrides, model_overrides)
+            self._models = self._merge_custom_models(builtins, custom_models)
 
     load_models = loadModels
 
@@ -241,16 +249,54 @@ class ModelRegistry:
         return next_model
 
     def getAll(self) -> list[Model]:
-        return list(self._models)
+        return list(self.snapshot())
+
+    def snapshot(self) -> tuple[Model, ...]:
+        with self._lock:
+            return tuple(self._models)
+
+    def register_model(self, model: Model) -> bool:
+        with self._lock:
+            if self.find(model.provider, model.id) is not None:
+                return False
+            self._models.append(model)
+            return True
+
+    def replace_model(self, model: Model) -> Model | None:
+        with self._lock:
+            for index, existing in enumerate(self._models):
+                if (existing.provider, existing.id) == (model.provider, model.id):
+                    self._models[index] = model
+                    return existing
+            self._models.append(model)
+            return None
+
+    def remove_model(self, provider: str, model_id: str) -> Model | None:
+        with self._lock:
+            for index, existing in enumerate(self._models):
+                if (existing.provider, existing.id) == (provider, model_id):
+                    return self._models.pop(index)
+        return None
+
+    def remove_provider_models(self, provider: str) -> tuple[Model, ...]:
+        with self._lock:
+            removed = tuple(model for model in self._models if model.provider == provider)
+            self._models[:] = [model for model in self._models if model.provider != provider]
+            return removed
+
+    def replace_all(self, models: Iterable[Model]) -> None:
+        with self._lock:
+            self._models[:] = list(models)
 
     def getProviders(self) -> list[str]:
-        return list(
-            dict.fromkeys(
-                [model.provider for model in self._models]
-                + list(self._registered_providers)
-                + self.authStorage.list()
+        with self._lock:
+            return list(
+                dict.fromkeys(
+                    [model.provider for model in self._models]
+                    + list(self._registered_providers)
+                    + self.authStorage.list()
+                )
             )
-        )
 
     def getApiKeyProviders(self) -> list[str]:
         from travis.ai.providers.catalog import get_provider_profile
@@ -266,9 +312,6 @@ class ModelRegistry:
             ):
                 providers.append(provider)
         return providers
-
-    def replace_models(self, models: list[Model]) -> None:
-        self._models = list(models)
 
     def getAvailable(self) -> list[Model]:
         return self.getSelectable()
@@ -287,7 +330,7 @@ class ModelRegistry:
         return auth_free or local or self.hasConfiguredAuth(model)
 
     def getSelectable(self, active: Model | None = None) -> list[Model]:
-        selectable = [model for model in self._models if self.isSelectable(model)]
+        selectable = [model for model in self.snapshot() if self.isSelectable(model)]
         if active is not None and not any(
             model.provider == active.provider and model.id == active.id for model in selectable
         ):
@@ -295,9 +338,10 @@ class ModelRegistry:
         return selectable
 
     def find(self, provider: str, model_id: str) -> Model | None:
-        for model in self._models:
-            if model.provider == provider and model.id == model_id:
-                return model
+        with self._lock:
+            for model in self._models:
+                if model.provider == provider and model.id == model_id:
+                    return model
         return None
 
     def hasConfiguredAuth(self, model: Model) -> bool:
@@ -453,22 +497,29 @@ class ModelRegistry:
     get_oauth_providers = getOAuthProviders
 
     def registerProvider(self, provider: str, config: dict[str, Any]) -> None:
-        self._validate_provider_config(provider, config)
-        self._apply_provider_config(provider, config)
-        existing = self._registered_providers.get(provider)
-        if existing is None:
-            self._registered_providers[provider] = dict(config)
-        else:
-            existing.update({key: value for key, value in config.items() if value is not None})
+        with self._lock:
+            self._validate_provider_config(provider, config)
+            self._apply_provider_config(provider, config)
+            existing = self._registered_providers.get(provider)
+            if existing is None:
+                self._registered_providers[provider] = dict(config)
+            else:
+                existing.update({key: value for key, value in config.items() if value is not None})
 
     register_provider = registerProvider
 
-    def unregisterProvider(self, provider: str) -> None:
-        if provider not in self._registered_providers:
-            return
-        self.api_providers.unregister_source(f"provider:{provider}")
-        self._registered_providers.pop(provider, None)
-        self.refresh()
+    def has_registered_provider(self, provider: str) -> bool:
+        with self._lock:
+            return provider in self._registered_providers
+
+    def unregisterProvider(self, provider: str) -> bool:
+        with self._lock:
+            if provider not in self._registered_providers:
+                return False
+            self.api_providers.unregister_source(f"provider:{provider}")
+            self._registered_providers.pop(provider, None)
+            self.refresh()
+            return True
 
     unregister_provider = unregisterProvider
 

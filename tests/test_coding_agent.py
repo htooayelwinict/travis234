@@ -5953,7 +5953,7 @@ def test_agent_session_refreshes_extension_registered_tools_with_source_metadata
             return tool_call_response_events(m, "extension_tool", {"value": "from model"})
         return text_response_events(m, "done")
 
-    register_api_provider(create_faux_provider(script))
+    session.provider_control_plane.api_providers.register(create_faux_provider(script), source_id="test")
     session.prompt("use extension")
 
     assert ran == {"args": {"value": "from model"}, "cwd": str(tmp_path)}

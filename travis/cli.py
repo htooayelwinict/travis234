@@ -188,7 +188,7 @@ def _startup_model_from_env(
     )
     if model_registry is None:
         model_registry = ProviderControlPlane.in_memory().models
-    model_registry.replace_models(_dedupe_startup_models([*registered_models, *live_models]))
+    model_registry.replace_all(_dedupe_startup_models([*registered_models, *live_models]))
     registry = model_registry
     scoped_models = resolve_model_scope(cli_models or [], registry) if cli_models else []
     if not cli_model:

@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 from travis.agent.types import AgentMessage
 from travis.ai.model_resolver import find_initial_model
-from travis.ai.stream import _DEFAULT_API_PROVIDER_REGISTRY
+from travis.ai.stream import clone_default_api_provider_registry
 from travis.ai.types import Context, ImageContent, Message, Model, SimpleStreamOptions, TextContent
 from travis.coding_agent.agent_session import AgentSession, default_convert_to_llm
 from travis.coding_agent.auth_storage import AuthStorage
@@ -76,10 +76,11 @@ def create_agent_session_services(options: dict[str, Any]) -> dict[str, Any]:
         auth_storage = options.get("authStorage") or options.get("auth_storage") or AuthStorage.create(
             str(Path(agent_dir) / "auth.json")
         )
+        api_providers = clone_default_api_provider_registry()
         model_registry = options.get("modelRegistry") or options.get("model_registry") or ModelRegistry(
             auth_storage,
             str(Path(agent_dir) / "models.json"),
-            _DEFAULT_API_PROVIDER_REGISTRY,
+            api_providers,
         )
         if model_registry.auth_storage is not auth_storage:
             raise ValueError("modelRegistry and authStorage must share the same AuthStorage")

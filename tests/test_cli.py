@@ -549,7 +549,7 @@ def test_cli_model_registry_find_prefers_live_override_over_global_registered_mo
 
     register_model(registered_model)
     registry = ProviderControlPlane.in_memory().models
-    registry.replace_models([live_model])
+    registry.replace_all([live_model])
 
     assert registry.find("openrouter", "openai/gpt-5.4-mini") is live_model
 
