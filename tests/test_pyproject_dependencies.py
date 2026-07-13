@@ -4,6 +4,20 @@ import tomllib
 import json
 from pathlib import Path
 
+from packaging.requirements import Requirement
+
+
+def test_direct_runtime_dependencies_match_imported_owners() -> None:
+    metadata = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    runtime = {Requirement(item).name for item in metadata["project"]["dependencies"]}
+    browser = {
+        Requirement(item).name
+        for item in metadata["project"]["optional-dependencies"]["browser"]
+    }
+
+    assert runtime == {"httpx", "jsonschema", "psutil"}
+    assert browser == {"playwright"}
+
 
 def test_base_install_keeps_playwright_optional() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text())

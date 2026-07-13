@@ -12,6 +12,12 @@ python3.13 -m venv .venv
 .venv/bin/travis234 --cwd .
 ```
 
+Browser-development support is optional and is not required by the core runtime or test suite:
+
+```bash
+.venv/bin/pip install -e '.[browser]'
+```
+
 The published npm launcher is `@htooayelwinict/travis234` and exposes only the `travis234` command:
 
 ```bash
