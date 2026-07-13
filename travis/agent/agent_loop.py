@@ -660,8 +660,6 @@ async def _execute_parallel(
     ordered: list[dict] = []
     for entry in entries:
         finalized = await entry if isinstance(entry, asyncio.Task) else entry
-        if isinstance(entry, asyncio.Task):
-            await _emit_tool_end(finalized, emit)
         ordered.append(finalized)
 
     messages: list[ToolResultMessage] = []
@@ -680,9 +678,11 @@ async def _execute_and_finalize(
     current_context, assistant_message, preparation, config, signal, emit, coordinator
 ) -> dict:
     executed = await _execute_prepared(preparation, signal, emit, coordinator)
-    return await _finalize(
+    finalized = await _finalize(
         current_context, assistant_message, preparation, executed, config, signal
     )
+    await _emit_tool_end(finalized, emit)
+    return finalized
 
 
 async def _prepare_tool_call(

@@ -962,6 +962,68 @@ def test_parallel_tool_execution_end_events_emit_from_loop_thread() -> None:
     assert [message.tool_call_id for message in tool_results] == ["call_1", "call_2"]
 
 
+def test_parallel_tool_end_events_follow_completion_order_while_results_keep_source_order() -> None:
+    model = faux_model()
+    provider_calls = {"n": 0}
+    fast_finished = threading.Event()
+    tool_end_ids: list[str] = []
+
+    def script(m, c):
+        provider_calls["n"] += 1
+        if provider_calls["n"] == 1:
+            return _multi_tool_call_response_events(
+                m,
+                [
+                    ("call_slow", "slow", {}),
+                    ("call_fast", "fast", {}),
+                ],
+            )
+        return text_response_events(m, "done")
+
+    register_api_provider(create_faux_provider(script))
+
+    def slow_execute(tool_call_id, args, signal=None, on_update=None):
+        assert fast_finished.wait(timeout=2)
+        time.sleep(0.05)
+        return AgentToolResult(content=[TextContent(text="slow done")], details={})
+
+    def fast_execute(tool_call_id, args, signal=None, on_update=None):
+        fast_finished.set()
+        return AgentToolResult(content=[TextContent(text="fast done")], details={})
+
+    tools = [
+        AgentTool(
+            name="slow",
+            description="slow",
+            parameters={"type": "object", "properties": {}},
+            label="Slow",
+            execute=slow_execute,
+        ),
+        AgentTool(
+            name="fast",
+            description="fast",
+            parameters={"type": "object", "properties": {}},
+            label="Fast",
+            execute=fast_execute,
+        ),
+    ]
+    cfg = _config(model)
+    cfg.tool_execution = "parallel"
+
+    messages = run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(tools=tools),
+        cfg,
+        lambda event: tool_end_ids.append(event.tool_call_id)
+        if event.type == "tool_execution_end"
+        else None,
+    )
+
+    assert tool_end_ids == ["call_fast", "call_slow"]
+    tool_results = [message for message in messages if getattr(message, "role", None) == "toolResult"]
+    assert [message.tool_call_id for message in tool_results] == ["call_slow", "call_fast"]
+
+
 def test_parallel_tools_are_bounded_and_callbacks_stay_on_coordinator_thread() -> None:
     model = faux_model()
     provider_calls = {"n": 0}
