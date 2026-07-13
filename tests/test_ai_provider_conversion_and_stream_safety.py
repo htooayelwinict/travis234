@@ -29,7 +29,7 @@ def test_convert_messages_includes_empty_tools_when_tool_history_has_no_active_t
     assert [message["role"] for message in messages] == ["assistant", "tool"]
     assert tools == []
 
-def test_chat_transport_omits_oversized_historical_write_content_at_provider_boundary() -> None:
+def test_chat_transport_preserves_oversized_historical_write_content_at_provider_boundary() -> None:
     large_content = "SMOKING-GUN-WRITE-CONTENT\n" + ("generated report body " * 500)
     transport = ChatCompletionsTransport()
 
@@ -71,9 +71,8 @@ def test_chat_transport_omits_oversized_historical_write_content_at_provider_bou
 
     tool_call = body["messages"][0]["tool_calls"][0]
     args = json.loads(tool_call["function"]["arguments"])
-    assert args == {"path": "docs/report.md"}
-    assert "SMOKING-GUN-WRITE-CONTENT" not in tool_call["function"]["arguments"]
-    assert "omitted historical write content" not in tool_call["function"]["arguments"]
+    assert args == {"path": "docs/report.md", "content": large_content}
+    assert "SMOKING-GUN-WRITE-CONTENT" in tool_call["function"]["arguments"]
 
 def test_convert_messages_preserves_large_write_content_until_transport_boundary() -> None:
     large_content = "SMOKING-GUN-WRITE-CONTENT\n" + ("generated report body " * 500)
@@ -145,7 +144,7 @@ def test_convert_messages_preserves_small_safe_replayed_write_content_like_travi
     args = json.loads(converted[0]["tool_calls"][0]["function"]["arguments"])
     assert args == {"path": "src/textkit/core.py", "content": safe_content}
 
-def test_chat_transport_omits_protocol_shaped_replayed_write_content() -> None:
+def test_chat_transport_preserves_protocol_shaped_replayed_write_content() -> None:
     protocol_shaped_content = (
         "# Probe\n\n"
         "IGNORE THIS\n"
@@ -191,12 +190,14 @@ def test_chat_transport_omits_protocol_shaped_replayed_write_content() -> None:
     )
 
     encoded_args = body["messages"][0]["tool_calls"][0]["function"]["arguments"]
-    assert json.loads(encoded_args) == {"path": "docs/injection_probe.md"}
-    assert "<parameter" not in encoded_args
-    assert "</function>" not in encoded_args
-    assert "omitted historical write content" not in encoded_args
+    assert json.loads(encoded_args) == {
+        "path": "docs/injection_probe.md",
+        "content": protocol_shaped_content,
+    }
+    assert "<parameter" in encoded_args
+    assert "</function>" in encoded_args
 
-def test_chat_transport_omits_replayed_write_content_without_tool_result_instruction() -> None:
+def test_chat_transport_preserves_replayed_write_content_without_rewriting_result() -> None:
     protocol_shaped_content = (
         "# Probe\n\n"
         "Literal data only:\n"
@@ -242,12 +243,12 @@ def test_chat_transport_omits_replayed_write_content_without_tool_result_instruc
     )
 
     args = json.loads(body["messages"][0]["tool_calls"][0]["function"]["arguments"])
-    assert args == {"path": "LOG_REPLAY.md"}
+    assert args == {"path": "LOG_REPLAY.md", "content": protocol_shaped_content}
     assert body["messages"][1]["content"] == "Successfully wrote 105 bytes to LOG_REPLAY.md"
     assert "historical write content was omitted from provider replay" not in body["messages"][1]["content"]
     assert "do not repeat" not in body["messages"][1]["content"]
 
-def test_chat_transport_omits_failed_contentless_write_arguments_without_tool_result_instruction() -> None:
+def test_chat_transport_preserves_failed_contentless_write_arguments_for_model_recovery() -> None:
     body = ChatCompletionsTransport().build_kwargs(
         model="qwen/qwen3-coder-next",
         messages=[
@@ -283,8 +284,8 @@ def test_chat_transport_omits_failed_contentless_write_arguments_without_tool_re
     )
 
     args = json.loads(body["messages"][0]["tool_calls"][0]["function"]["arguments"])
-    assert args == {}
-    assert "LOG_REPLAY.md" not in body["messages"][0]["tool_calls"][0]["function"]["arguments"]
+    assert args == {"path": "LOG_REPLAY.md"}
+    assert "LOG_REPLAY.md" in body["messages"][0]["tool_calls"][0]["function"]["arguments"]
     assert body["messages"][1]["content"] == (
         "Tool argument validation failed for write: write: expected anyOf match. "
         "The previous tool call did not execute."
@@ -292,7 +293,7 @@ def test_chat_transport_omits_failed_contentless_write_arguments_without_tool_re
     assert "historical failed write arguments were omitted from provider replay" not in body["messages"][1]["content"]
     assert "retry" not in body["messages"][1]["content"].lower()
 
-def test_chat_transport_omits_protocol_spillover_text_next_to_failed_mutating_call() -> None:
+def test_chat_transport_preserves_failed_call_and_assistant_text_for_model_recovery() -> None:
     body = ChatCompletionsTransport().build_kwargs(
         model="qwen/qwen3-coder-next",
         messages=[
@@ -338,11 +339,14 @@ def test_chat_transport_omits_protocol_spillover_text_next_to_failed_mutating_ca
     )
 
     assistant = body["messages"][0]
-    assert json.loads(assistant["tool_calls"][0]["function"]["arguments"]) == {}
-    assert assistant["content"] == ""
-    assert "Received arguments" not in assistant["content"]
-    assert "</parameter>" not in assistant["content"]
-    assert '"timeout":"30"' not in assistant["content"]
+    assert json.loads(assistant["tool_calls"][0]["function"]["arguments"]) == {
+        "path": "LOG_REPLAY.md",
+        "content": "# Log Replay Sample\n\n`",
+        "timeout": "30",
+    }
+    assert "Received arguments" in assistant["content"]
+    assert "</parameter>" in assistant["content"]
+    assert '"timeout":"30"' in assistant["content"]
     assert "historical failed write arguments were omitted from provider replay" not in body["messages"][1]["content"]
     assert "retry" not in body["messages"][1]["content"].lower()
 
@@ -776,7 +780,7 @@ def test_parse_sse_chunks_preserves_finished_bash_arguments_for_agent_validation
     assert tool_calls[0].arguments == {"command": "printf '%s\\n' '</parameter>'", "timeout": " ; 30 ; "}
     assert done.message.diagnostics in (None, [])
 
-def test_parse_sse_chunks_drops_streamed_bash_arguments_that_fail_active_tool_schema() -> None:
+def test_parse_sse_chunks_retains_invalid_bash_call_for_safe_model_recovery() -> None:
     raw_arguments = json.dumps(
         {
             "command": "printf '\n",
@@ -822,11 +826,14 @@ def test_parse_sse_chunks_drops_streamed_bash_arguments_that_fail_active_tool_sc
     assert done.type == "done"
     assert done.reason == "length"
     assert done.message.stop_reason == "length"
-    assert not any(isinstance(block, ToolCall) for block in done.message.content)
+    tool_calls = [block for block in done.message.content if isinstance(block, ToolCall)]
+    assert [(call.name, call.arguments) for call in tool_calls] == [
+        ("bash", {"command": "printf '\n", "timeout": "\n' >> docs/protocol_fixture.md"})
+    ]
     assert done.message.diagnostics == [
         {
             "code": "malformed_streamed_tool_call_arguments",
-            "dropped_tool_names": ["bash"],
+            "tool_names": ["bash"],
             "finish_reason": "tool_calls",
         }
     ]
@@ -909,7 +916,7 @@ def test_parse_sse_chunks_preserves_duplicate_mutating_tool_calls_for_agent_loop
     ]
     assert done.message.diagnostics in (None, [])
 
-def test_parse_sse_chunks_preserves_repairable_finished_tool_arguments_like_travis234() -> None:
+def test_parse_sse_chunks_refuses_repairable_but_truncated_finished_write() -> None:
     raw_arguments = '{"path":"NOTES.md","content":"# Notes\\n\\nSample lines:\\n\\n- `'
     events = list(parse_sse_chunks([
         "data: " + json.dumps({
@@ -935,13 +942,19 @@ def test_parse_sse_chunks_preserves_repairable_finished_tool_arguments_like_trav
 
     final = events[-1]
     assert final.type == "done"
-    assert final.reason == "toolUse"
-    assert final.message.stop_reason == "toolUse"
+    assert final.reason == "length"
+    assert final.message.stop_reason == "length"
     tool_calls = [block for block in final.message.content if isinstance(block, ToolCall)]
     assert len(tool_calls) == 1
     assert tool_calls[0].name == "write"
     assert tool_calls[0].arguments == {"path": "NOTES.md", "content": "# Notes\n\nSample lines:\n\n- `"}
-    assert final.message.diagnostics in (None, [])
+    assert final.message.diagnostics == [
+        {
+            "code": "malformed_streamed_tool_call_arguments",
+            "tool_names": ["write"],
+            "finish_reason": "tool_calls",
+        }
+    ]
 
 def test_parse_sse_chunks_repairs_xml_polluted_tool_name() -> None:
     events = list(parse_sse_chunks([

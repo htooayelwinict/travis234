@@ -132,6 +132,7 @@ def parse_sse_chunks(
     include_reasoning: bool = True,
     api_mode: str = "chat_completions",
     tools: Iterable[Tool] | None = None,
+    wait_for_usage_after_finish: bool = False,
 ) -> Iterator:
     """Pure transform: decoded SSE lines -> AssistantMessageEvent stream."""
     if api_mode == "codex_responses":
@@ -201,51 +202,38 @@ def parse_sse_chunks(
                 if tools is not None
                 else _malformed_finished_mutating_tool_call_names(message.content, tool_arg_bufs)
             )
-        should_drop_tool_calls = not has_finish_reason or bool(malformed_mutating_tool_names)
-        dropped_tool_names: list[str] = []
-        dropped_tool_finish_reason = finish_reason if has_finish_reason else None
-        if should_drop_tool_calls:
-            if malformed_mutating_tool_names:
-                dropped_tool_names = malformed_mutating_tool_names
-            else:
-                dropped_tool_names = [
-                    block.name or "?"
-                    for block in message.content
-                    if isinstance(block, ToolCall)
-                ]
-            message.content = [
-                block for block in message.content if not isinstance(block, ToolCall)
-            ]
-            tool_arg_bufs.clear()
-        has_remaining_tool_calls = any(isinstance(block, ToolCall) for block in message.content)
+        streamed_tool_names = [
+            block.name or "?"
+            for block in message.content
+            if isinstance(block, ToolCall)
+        ]
+        has_remaining_tool_calls = bool(streamed_tool_names)
         if leaked_tool_protocol_text and not has_remaining_tool_calls:
             for block in message.content:
                 if isinstance(block, TextContent):
                     block.text = ""
         yield from end_content_events()
-        if dropped_tool_names and malformed_mutating_tool_names:
+        if malformed_mutating_tool_names:
             message.stop_reason = "length"
-            message.response_id = PARTIAL_STREAM_STUB_ID
             diagnostics = list(message.diagnostics or [])
             diagnostics.append(
                 {
                     "code": MALFORMED_STREAMED_TOOL_CALL_ARGUMENTS_CODE,
-                    "dropped_tool_names": dropped_tool_names,
-                    "finish_reason": dropped_tool_finish_reason,
+                    "tool_names": malformed_mutating_tool_names,
+                    "finish_reason": finish_reason if has_finish_reason else None,
                 }
             )
             message.diagnostics = diagnostics
             yield DoneEvent(reason="length", message=message)
             return
-        if dropped_tool_names and not has_finish_reason:
+        if streamed_tool_names and not has_finish_reason:
             message.stop_reason = "length"
-            message.response_id = PARTIAL_STREAM_STUB_ID
             diagnostics = list(message.diagnostics or [])
             diagnostics.append(
                 {
-                    "code": PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE,
-                    "dropped_tool_names": dropped_tool_names,
-                    "finish_reason": dropped_tool_finish_reason,
+                    "code": "partial_stream_tool_calls",
+                    "tool_names": streamed_tool_names,
+                    "finish_reason": None,
                 }
             )
             message.diagnostics = diagnostics
@@ -308,8 +296,9 @@ def parse_sse_chunks(
             if state.get("finish_reason"):
                 finish_reason = state["finish_reason"]
                 has_finish_reason = True
-                yield from final_events()
-                return
+                if not wait_for_usage_after_finish:
+                    yield from final_events()
+                    return
     except TimeoutError as error:
         yield from end_content_events()
         message.stop_reason = "error"

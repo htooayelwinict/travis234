@@ -346,6 +346,28 @@ def test_travis_style_openrouter_transport_does_not_force_parameter_support_for_
     )
 
     assert "provider" not in body
+    assert body["stream_options"] == {"include_usage": True}
+
+
+def test_travis_style_native_gemini_omits_openai_stream_usage_option() -> None:
+    from travis.ai.providers.catalog import get_provider_profile
+    from travis.ai.providers.transports import get_transport
+
+    profile = get_provider_profile("gemini")
+    transport = get_transport(profile.api_mode)
+
+    body = transport.build_kwargs(
+        model="gemini-3-flash-preview",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=None,
+        profile=profile,
+        stream=True,
+        temperature=0,
+        max_tokens=None,
+        base_url="https://generativelanguage.googleapis.com/v1beta",
+    )
+
+    assert "stream_options" not in body
 
 def test_travis_style_openrouter_mandatory_anthropic_uses_verbosity_not_reasoning() -> None:
     from travis.ai.providers.catalog import get_provider_profile
@@ -944,6 +966,7 @@ def test_travis_env_provider_delegates_payload_construction_to_transport(monkeyp
             max_tokens,
             provider_preferences,
             request_overrides,
+            base_url,
         ):
             captured["transport_model"] = model
             captured["transport_messages"] = messages
@@ -954,6 +977,7 @@ def test_travis_env_provider_delegates_payload_construction_to_transport(monkeyp
             captured["transport_max_tokens"] = max_tokens
             captured["transport_provider_preferences"] = provider_preferences
             captured["transport_request_overrides"] = request_overrides
+            captured["transport_base_url"] = base_url
             return {"model": model, "messages": messages, "stream": stream, "metadata": {"from_transport": True}}
 
     class FakeStream:
@@ -1007,6 +1031,7 @@ def test_travis_env_provider_delegates_payload_construction_to_transport(monkeyp
     assert captured["transport_max_tokens"] == 99
     assert captured["transport_provider_preferences"] is None
     assert captured["transport_request_overrides"] == {}
+    assert captured["transport_base_url"] == "https://openrouter.ai/api/v1"
     assert captured["json"]["metadata"] == {"from_transport": True}
 
 def test_convert_messages_sanitizes_unpaired_surrogates_for_provider_payload() -> None:

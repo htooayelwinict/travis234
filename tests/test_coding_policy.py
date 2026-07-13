@@ -165,6 +165,10 @@ def test_prompt_text_never_grants_package_mutation() -> None:
     assert isinstance(PackageMutationPolicy().evaluate(_bash("npm install x"), context), RequireConsent)
 
 
+def test_tool_loop_hard_stops_are_opt_in() -> None:
+    assert ToolCallGuardrailConfig().blocking_enabled is False
+
+
 def test_blocking_disabled_disables_loop_halts_but_keeps_guidance() -> None:
     controller = ToolCallGuardrailController(
         ToolCallGuardrailConfig(blocking_enabled=False, guidance_enabled=True)
@@ -210,6 +214,7 @@ def test_process_cooperative_same_cursor_polls_do_not_trigger_no_progress() -> N
 def test_process_zero_wait_same_cursor_busy_poll_warns_then_halts() -> None:
     controller = ToolCallGuardrailController(
         ToolCallGuardrailConfig(
+            blocking_enabled=True,
             no_progress_warn_after=2,
             no_progress_block_after=3,
             consecutive_no_progress_warn_after=99,

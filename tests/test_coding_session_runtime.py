@@ -129,9 +129,9 @@ def test_agent_session_missing_read_named_as_output_gets_write_recovery_guidance
     assert after.terminate is not True
 
 def test_tool_loop_guardrail_does_not_escalate_read_source_error_tokens_as_exact_failures() -> None:
-    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailController
+    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailConfig, ToolCallGuardrailController
 
-    controller = ToolCallGuardrailController()
+    controller = ToolCallGuardrailController(ToolCallGuardrailConfig(blocking_enabled=True))
     source = 'import type { DraftAnalysis } from "../types";\nconst status = "error";\nconst failed = false;'
 
     decisions = [
@@ -146,9 +146,9 @@ def test_tool_loop_guardrail_does_not_escalate_read_source_error_tokens_as_exact
     assert all("repeated_exact_failure" not in decision.code for decision in decisions)
 
 def test_tool_loop_guardrail_treats_bash_file_preview_variants_as_no_progress() -> None:
-    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailController
+    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailConfig, ToolCallGuardrailController
 
-    controller = ToolCallGuardrailController()
+    controller = ToolCallGuardrailController(ToolCallGuardrailConfig(blocking_enabled=True))
     commands = [
         "head -400 src/agents/facebook_surfer.py | tail -100",
         "head -360 src/agents/facebook_surfer.py | tail -50",
@@ -167,9 +167,12 @@ def test_tool_loop_guardrail_treats_bash_file_preview_variants_as_no_progress() 
     assert "read with path/offset/limit" in decisions[2].message
 
 def test_tool_loop_guardrail_keeps_bash_file_preview_memory_across_shell_mutations() -> None:
-    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailController
+    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailConfig, ToolCallGuardrailController
 
-    controller = ToolCallGuardrailController(cwd="/workspace")
+    controller = ToolCallGuardrailController(
+        ToolCallGuardrailConfig(blocking_enabled=True),
+        cwd="/workspace",
+    )
 
     first = controller.after_call(
         "bash",
@@ -210,9 +213,9 @@ def test_tool_loop_guardrail_keeps_bash_file_preview_memory_across_shell_mutatio
     assert third.code == "idempotent_no_progress_block"
 
 def test_tool_loop_guardrail_treats_bash_inventory_variants_as_no_progress() -> None:
-    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailController
+    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailConfig, ToolCallGuardrailController
 
-    controller = ToolCallGuardrailController()
+    controller = ToolCallGuardrailController(ToolCallGuardrailConfig(blocking_enabled=True))
     commands = [
         "ls -la src/metrics",
         "find src/metrics -maxdepth 1 -type f",
@@ -231,9 +234,9 @@ def test_tool_loop_guardrail_treats_bash_inventory_variants_as_no_progress() -> 
     assert "read with path/offset/limit" in decisions[2].message
 
 def test_tool_loop_guardrail_treats_broad_python_repo_scan_variants_as_no_progress() -> None:
-    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailController
+    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailConfig, ToolCallGuardrailController
 
-    controller = ToolCallGuardrailController()
+    controller = ToolCallGuardrailController(ToolCallGuardrailConfig(blocking_enabled=True))
     commands = [
         "find . -type f -name '*.py'",
         "rg --files -g '*.py' .",
@@ -283,11 +286,14 @@ def test_tool_loop_guardrail_allows_useful_followup_reads_but_warns_on_repeated_
     assert "Use a different query/path only if the existing result is insufficient" in repeated.message
 
 def test_tool_loop_guardrail_normalizes_bash_inventory_paths_against_cwd(tmp_path: Path) -> None:
-    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailController
+    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailConfig, ToolCallGuardrailController
 
     project = tmp_path / "bot"
     project.mkdir()
-    controller = ToolCallGuardrailController(cwd=str(project))
+    controller = ToolCallGuardrailController(
+        ToolCallGuardrailConfig(blocking_enabled=True),
+        cwd=str(project),
+    )
     commands = [
         f"cd {project} && ls -la src/metrics/ 2>&1",
         f"find {project}/src/metrics -maxdepth 1 -type f",
@@ -306,9 +312,9 @@ def test_tool_loop_guardrail_normalizes_bash_inventory_paths_against_cwd(tmp_pat
     assert "read with path/offset/limit" in decisions[2].message
 
 def test_tool_loop_guardrail_ignores_unknown_bash_args_for_no_progress() -> None:
-    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailController
+    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailConfig, ToolCallGuardrailController
 
-    controller = ToolCallGuardrailController()
+    controller = ToolCallGuardrailController(ToolCallGuardrailConfig(blocking_enabled=True))
     calls = [
         {"command": "printf ok", "note": "first"},
         {"command": "printf ok", "note": "second"},
@@ -356,18 +362,91 @@ def test_agent_session_appends_tool_loop_warning_to_repeated_bash_result(tmp_pat
     session.prompt("inspect metrics")
 
     tool_results = [m for m in session.messages if getattr(m, "role", None) == "toolResult"]
-    user_message_text = "\n".join(
+    user_messages = [
         _content_text(message.content)
         for message in session.messages
         if getattr(message, "role", None) == "user"
-    )
+    ]
     assert executions == [{"command": "ls -la src/metrics"}, {"command": "ls -la src/metrics"}]
     assert len(tool_results) == 2
     assert "total 120" in tool_results[1].content[0].text
-    assert "idempotent_no_progress_warning" not in tool_results[1].content[0].text
+    assert "idempotent_no_progress_warning" in tool_results[1].content[0].text
+    assert "Use the result already provided" in tool_results[1].content[0].text
     assert tool_results[1].details["toolGuardrailWarnings"][0]["code"] == "idempotent_no_progress_warning"
-    assert "idempotent_no_progress_warning" in user_message_text
-    assert "Use the result already provided" in user_message_text
+    assert user_messages == ["inspect metrics"]
+
+
+def test_agent_session_path_scoped_no_retry_does_not_stop_same_turn_recovery(tmp_path: Path) -> None:
+    model = faux_model()
+    provider_calls = {"n": 0}
+    bash_executions: list[dict] = []
+    write_executions: list[dict] = []
+
+    def execute_bash(tool_call_id, args, signal=None, on_update=None, ctx=None):
+        bash_executions.append(dict(args))
+        return AgentToolResult(
+            content=[TextContent(text="preferred endpoint unavailable\nCommand exited with code 1")],
+            details={},
+        )
+
+    def execute_write(tool_call_id, args, signal=None, on_update=None, ctx=None):
+        write_executions.append(dict(args))
+        return AgentToolResult(content=[TextContent(text="Successfully wrote fallback.txt")], details={})
+
+    bash_definition = ToolDefinition(
+        name="bash",
+        label="bash",
+        description="Execute a bash command",
+        parameters={
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"],
+        },
+        execute=execute_bash,
+    )
+    write_definition = ToolDefinition(
+        name="write",
+        label="write",
+        description="Write a file",
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+            "required": ["path", "content"],
+        },
+        execute=execute_write,
+    )
+
+    def script(m, c):
+        provider_calls["n"] += 1
+        if provider_calls["n"] == 1:
+            return tool_call_response_events(
+                m,
+                "bash",
+                {"command": "curl https://preferred.invalid/data"},
+                call_id="preferred_path",
+            )
+        if provider_calls["n"] == 2:
+            return tool_call_response_events(
+                m,
+                "write",
+                {"path": "fallback.txt", "content": "recovered"},
+                call_id="fallback_path",
+            )
+        return text_response_events(m, "Recovered through the alternate path in the same turn.")
+
+    register_api_provider(create_faux_provider(script))
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=model,
+        tool_definitions=[bash_definition, write_definition],
+    )
+
+    session.prompt("Try the preferred endpoint; if it fails, do not retry that path. Use a fallback.")
+
+    assert bash_executions == [{"command": "curl https://preferred.invalid/data"}]
+    assert write_executions == [{"path": "fallback.txt", "content": "recovered"}]
+    assert provider_calls["n"] == 3
+    assert session.messages[-1].content[0].text == "Recovered through the alternate path in the same turn."
 
 def test_agent_session_deduplicates_duplicate_bash_calls_in_same_turn(tmp_path: Path) -> None:
     model = faux_model()
@@ -479,13 +558,8 @@ def test_agent_session_appends_recovery_guidance_to_bash_no_progress_tool_result
             for message in c.messages
             if getattr(message, "role", None) == "toolResult"
         ]
-        user_messages = [
-            _content_text(message.content)
-            for message in c.messages
-            if getattr(message, "role", None) == "user"
-        ]
         seen_tool_results.append(tool_results)
-        if user_messages and "tool_guardrail_warning" in user_messages[-1]:
+        if tool_results and "idempotent_no_progress_warning" in tool_results[-1]:
             return text_response_events(m, "I will use the first listing and read the relevant files.")
         if provider_calls["n"] % 2 == 0:
             return tool_call_response_events(m, "bash", repeated_args, call_id=f"call_{provider_calls['n']}")
@@ -506,8 +580,8 @@ def test_agent_session_appends_recovery_guidance_to_bash_no_progress_tool_result
     assistants = [m for m in session.messages if getattr(m, "role", None) == "assistant"]
     assert provider_calls["n"] == 5
     assert len(repeated_executions) == 2
-    assert "idempotent_no_progress_warning" not in tool_results[-1].content[0].text
-    assert all("Tool loop warning" not in results[-1] for results in seen_tool_results if results)
+    assert "idempotent_no_progress_warning" in tool_results[-1].content[0].text
+    assert any("Tool loop warning" in results[-1] for results in seen_tool_results if results)
     assert assistants[-1].content[0].text == "I will use the first listing and read the relevant files."
 
 def test_agent_session_failed_bash_respects_explicit_single_run_limit(tmp_path: Path) -> None:
@@ -1293,13 +1367,8 @@ def test_agent_session_broad_scan_recovery_guidance_prefers_inventory_over_repea
             for message in c.messages
             if getattr(message, "role", None) == "toolResult"
         ]
-        user_messages = [
-            _content_text(message.content)
-            for message in c.messages
-            if getattr(message, "role", None) == "user"
-        ]
-        if user_messages and "tool_guardrail_warning" in user_messages[-1]:
-            recovery_messages.append(user_messages[-1])
+        if tool_results and "idempotent_no_progress_warning" in tool_results[-1]:
+            recovery_messages.append(tool_results[-1])
             return text_response_events(m, "I will treat the listing as inventory and inspect only relevant files.")
         return tool_call_response_events(
             m,
@@ -1317,7 +1386,7 @@ def test_agent_session_broad_scan_recovery_guidance_prefers_inventory_over_repea
     assert provider_calls["n"] == 3
     assert len(recovery_messages) == 1
     recovery = recovery_messages[0]
-    assert "tool_guardrail_warning" in recovery
+    assert "idempotent_no_progress_warning" in recovery
     assert "Do not call the same bash command" in recovery
     assert "For codebase scans, treat listings/search output as inventory" in recovery
     assert "read with path/offset/limit" in recovery
@@ -1356,19 +1425,19 @@ def test_agent_session_reissues_tool_result_guidance_for_escalating_tool_loop_wa
             for message in c.messages
             if getattr(message, "role", None) == "toolResult"
         ]
-        user_messages = [
-            _content_text(message.content)
-            for message in c.messages
-            if getattr(message, "role", None) == "user"
-        ]
-        recoveries = [text for text in user_messages if "tool_guardrail_warning" in text]
+        recoveries = [text for text in tool_results if "Tool loop warning" in text]
         recovery_lengths.append(len(recoveries))
         if len(recoveries) >= 2:
             return text_response_events(m, "I will stop retrying bash and use the existing failure.")
         return tool_call_response_events(m, "bash", repeated_args, call_id=f"call_{provider_calls['n']}")
 
     register_api_provider(create_faux_provider(script))
-    session = AgentSession(cwd=str(tmp_path), model=model, tool_definitions=[bash_definition])
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=model,
+        tool_definitions=[bash_definition],
+        tool_loop_guardrails={"blocking_enabled": True},
+    )
 
     session.prompt("scan metrics")
 
@@ -1410,7 +1479,12 @@ def test_agent_session_blocks_consecutive_repeated_bash_loop_and_stops(tmp_path:
         return tool_call_response_events(m, "bash", repeated_args, call_id=f"call_{provider_calls['n']}")
 
     register_api_provider(create_faux_provider(script))
-    session = AgentSession(cwd=str(tmp_path), model=model, tool_definitions=[bash_definition])
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=model,
+        tool_definitions=[bash_definition],
+        tool_loop_guardrails={"blocking_enabled": True},
+    )
 
     session.prompt("find jsonpatch")
 
@@ -1422,7 +1496,7 @@ def test_agent_session_blocks_consecutive_repeated_bash_loop_and_stops(tmp_path:
     assert "idempotent_no_progress_block" in tool_results[-1].content[0].text
     assert "STOP repeating" in tool_results[-1].content[0].text
 
-def test_agent_session_blocks_interleaved_repeated_bash_no_progress_by_default(tmp_path: Path) -> None:
+def test_agent_session_blocks_interleaved_repeated_bash_no_progress_when_enabled(tmp_path: Path) -> None:
     model = faux_model()
     provider_calls = {"n": 0}
     repeated_args = {"command": "ls -la src/metrics"}
@@ -1460,7 +1534,12 @@ def test_agent_session_blocks_interleaved_repeated_bash_no_progress_by_default(t
         )
 
     register_api_provider(create_faux_provider(script))
-    session = AgentSession(cwd=str(tmp_path), model=model, tool_definitions=[bash_definition])
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=model,
+        tool_definitions=[bash_definition],
+        tool_loop_guardrails={"blocking_enabled": True},
+    )
 
     session.prompt("inspect metrics without looping")
 
@@ -1475,7 +1554,7 @@ def test_agent_session_blocks_interleaved_repeated_bash_no_progress_by_default(t
     assert "I stopped retrying bash" in session.messages[-1].content[0].text
     assert "idempotent_no_progress_block" in session.messages[-1].content[0].text
 
-def test_agent_session_blocks_semantic_bash_file_preview_loop_by_default(tmp_path: Path) -> None:
+def test_agent_session_blocks_semantic_bash_file_preview_loop_when_enabled(tmp_path: Path) -> None:
     model = faux_model()
     provider_calls = {"n": 0}
     executions: list[dict] = []
@@ -1517,7 +1596,12 @@ def test_agent_session_blocks_semantic_bash_file_preview_loop_by_default(tmp_pat
         )
 
     register_api_provider(create_faux_provider(script))
-    session = AgentSession(cwd=str(tmp_path), model=model, tool_definitions=[bash_definition])
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=model,
+        tool_definitions=[bash_definition],
+        tool_loop_guardrails={"blocking_enabled": True},
+    )
 
     session.prompt("read every important part of facebook_surfer.py")
 
@@ -1530,7 +1614,7 @@ def test_agent_session_blocks_semantic_bash_file_preview_loop_by_default(tmp_pat
     assert session.messages[-1].role == "assistant"
     assert "I stopped retrying bash" in session.messages[-1].content[0].text
 
-def test_agent_session_blocks_semantic_bash_inventory_loop_by_default(tmp_path: Path) -> None:
+def test_agent_session_blocks_semantic_bash_inventory_loop_when_enabled(tmp_path: Path) -> None:
     model = faux_model()
     provider_calls = {"n": 0}
     executions: list[dict] = []
@@ -1571,7 +1655,12 @@ def test_agent_session_blocks_semantic_bash_inventory_loop_by_default(tmp_path: 
         )
 
     register_api_provider(create_faux_provider(script))
-    session = AgentSession(cwd=str(tmp_path), model=model, tool_definitions=[bash_definition])
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=model,
+        tool_definitions=[bash_definition],
+        tool_loop_guardrails={"blocking_enabled": True},
+    )
 
     session.prompt("scan src/metrics and explain the files")
 
@@ -1584,7 +1673,7 @@ def test_agent_session_blocks_semantic_bash_inventory_loop_by_default(tmp_path: 
     assert session.messages[-1].role == "assistant"
     assert "I stopped retrying bash" in session.messages[-1].content[0].text
 
-def test_agent_session_blocks_cwd_normalized_bash_inventory_loop_by_default(tmp_path: Path) -> None:
+def test_agent_session_blocks_cwd_normalized_bash_inventory_loop_when_enabled(tmp_path: Path) -> None:
     model = faux_model()
     provider_calls = {"n": 0}
     executions: list[dict] = []
@@ -1627,7 +1716,12 @@ def test_agent_session_blocks_cwd_normalized_bash_inventory_loop_by_default(tmp_
         )
 
     register_api_provider(create_faux_provider(script))
-    session = AgentSession(cwd=str(project), model=model, tool_definitions=[bash_definition])
+    session = AgentSession(
+        cwd=str(project),
+        model=model,
+        tool_definitions=[bash_definition],
+        tool_loop_guardrails={"blocking_enabled": True},
+    )
 
     session.prompt("scan src/metrics and explain the files")
 
@@ -1683,7 +1777,12 @@ def test_agent_session_blocks_bash_loop_when_only_unknown_args_change(tmp_path: 
         )
 
     register_api_provider(create_faux_provider(script))
-    session = AgentSession(cwd=str(tmp_path), model=model, tool_definitions=[bash_definition])
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=model,
+        tool_definitions=[bash_definition],
+        tool_loop_guardrails={"blocking_enabled": True},
+    )
 
     session.prompt("run the diagnostic")
 

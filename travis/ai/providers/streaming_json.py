@@ -424,6 +424,14 @@ def _malformed_finished_mutating_tool_call_names(
         raw_arguments = tool_arg_bufs.get(content_index, "")
         if not raw_arguments.strip():
             continue
+        try:
+            complete_arguments = json.loads(raw_arguments, strict=False)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            complete_arguments = None
+        if not isinstance(complete_arguments, dict):
+            if block.name not in names:
+                names.append(block.name)
+            continue
         parsed = _parse_streaming_json(raw_arguments)
         if not isinstance(parsed, dict) or any(key not in parsed for key in required):
             if block.name not in names:
@@ -450,6 +458,15 @@ def _malformed_finished_tool_call_names_against_active_schema(
         raw_arguments = tool_arg_bufs.get(content_index, "")
         if not raw_arguments.strip():
             continue
+        if block.name in _MUTATING_TOOL_REQUIRED_ARGUMENTS:
+            try:
+                complete_arguments = json.loads(raw_arguments, strict=False)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                complete_arguments = None
+            if not isinstance(complete_arguments, dict):
+                if block.name not in names:
+                    names.append(block.name)
+                continue
         parsed_arguments = _parse_streaming_json(raw_arguments)
         try:
             validated_arguments = validate_tool_arguments(

@@ -110,34 +110,14 @@ from travis.coding_agent.tools.types import (
 
 from travis.coding_agent.session_types import _MALFORMED_STREAM_RECOVERY_PREFIX, _append_toolguard_content, _tool_result_text, _with_toolguard_details
 
-def _toolguard_steering_message(decision: ToolGuardrailDecision) -> str:
-    tool = decision.tool_name or "tool"
-    return (
-        f"[tool_guardrail_warning code={decision.code} tool={tool} count={decision.count}] "
-        f"{decision.message}"
-    )
-
-
-_PROCESS_LIMIT_EXACT_MARKERS = (
-    "do not retry",
-    "don't retry",
-    "dont retry",
-    "no retry",
-    "no retries",
-    "do not rerun",
-    "don't rerun",
-    "dont rerun",
+_PROCESS_LIMIT_BASH_TURN_MARKERS = (
     "do not run any other command",
     "don't run any other command",
     "dont run any other command",
+    "run any other command",
     "run no other command",
-    "single command",
-    "single run",
-    "single attempt",
-    "one command",
-    "one run",
-    "one attempt",
-    "once only",
+    "one command only",
+    "single command only",
 )
 _PROCESS_LIMIT_GLOBAL_MARKERS = (
     "do not call any more tools",
@@ -166,7 +146,7 @@ def _user_message_has_process_limit(text: str | None) -> bool:
     prompt = (text or "").strip().lower()
     if not prompt:
         return False
-    return any(marker in prompt for marker in _PROCESS_LIMIT_EXACT_MARKERS)
+    return any(marker in prompt for marker in _PROCESS_LIMIT_BASH_TURN_MARKERS)
 
 
 def _user_process_limit_applies_to_tool(text: str | None, tool_name: str | None) -> bool:
@@ -367,8 +347,6 @@ class SessionPolicyController:
 
         workspace_violation = self._workspace_scope_violation(context)
         if workspace_violation is not None:
-            if workspace_violation.action in {"warn", "halt"}:
-                self._steer_tool_loop_recovery(workspace_violation)
             if workspace_violation.should_halt:
                 self._tool_guardrail_halt_decision = workspace_violation
             return BeforeToolCallResult(block=True, reason=toolguard_synthetic_result(workspace_violation))
@@ -492,11 +470,11 @@ class SessionPolicyController:
         if decision.action == "halt":
             content = _append_toolguard_content(content, decision)
             content_changed = True
-            self._steer_tool_loop_recovery(decision)
         elif decision.action == "warn":
+            content = _append_toolguard_content(content, decision)
+            content_changed = True
             details = _with_toolguard_details(details, decision)
             details_changed = True
-            self._steer_tool_loop_recovery(decision)
         if decision.should_halt:
             self._tool_guardrail_halt_decision = decision
             if not is_error:
@@ -603,7 +581,7 @@ __all__ = (
     'SessionPolicyController',
     '_MISSING_READ_ERROR_MARKERS',
     '_OUTPUT_ARTIFACT_REQUEST_MARKERS',
-    '_PROCESS_LIMIT_EXACT_MARKERS',
+    '_PROCESS_LIMIT_BASH_TURN_MARKERS',
     '_PROCESS_LIMIT_GLOBAL_MARKERS',
     '_WORKSPACE_PATH_ARG_TOOLS',
     '_append_text_to_content',
@@ -612,7 +590,6 @@ __all__ = (
     '_missing_read_output_artifact_note',
     '_path_mentioned_in_text',
     '_tool_call_workspace_path_candidates',
-    '_toolguard_steering_message',
     '_user_message_has_process_limit',
     '_user_process_limit_applies_to_tool',
     '_user_process_limit_steering_message',

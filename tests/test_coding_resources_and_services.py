@@ -1714,9 +1714,9 @@ def test_bash_mutation_classifier_detects_attached_redirects_and_absolute_mutato
         assert classify_bash_mutation(command).classification is BashMutationClass.MUTATING
 
 def test_workspace_scope_violation_guardrail_counts_across_state_changes() -> None:
-    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailController
+    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailConfig, ToolCallGuardrailController
 
-    controller = ToolCallGuardrailController()
+    controller = ToolCallGuardrailController(ToolCallGuardrailConfig(blocking_enabled=True))
     message = (
         "Refusing bash outside the current working directory: /Users/example/.ledgerlite.json. "
         "Current working directory is /tmp/work. Ask the user to name this exact absolute path if it is intentional."
@@ -1777,7 +1777,7 @@ def test_tool_loop_guardrail_resets_exact_failure_after_successful_state_change(
     assert retry.action == "allow"
     assert retry.code != "repeated_exact_failure_warning"
 
-def test_agent_session_keeps_non_halting_guardrail_warnings_out_of_tool_result_text(tmp_path: Path) -> None:
+def test_agent_session_appends_non_halting_guardrail_warnings_to_tool_result_text(tmp_path: Path) -> None:
     from travis.coding_agent.agent_session import AgentSession
 
     model = faux_model()
@@ -1820,8 +1820,9 @@ def test_agent_session_keeps_non_halting_guardrail_warnings_out_of_tool_result_t
         if getattr(message, "role", None) == "toolResult"
     )
     assert provider_calls["n"] == 3
-    assert "Tool loop warning" not in tool_result_text
-    assert "idempotent_no_progress_warning" not in tool_result_text
+    assert "Tool loop warning" in tool_result_text
+    assert "idempotent_no_progress_warning" in tool_result_text
+    assert "Use the result already provided" in tool_result_text
 
 def test_agent_session_allows_repeated_same_path_write_batch_then_recovers_with_read_edit(tmp_path: Path) -> None:
     model = faux_model()

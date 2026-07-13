@@ -25,7 +25,6 @@ from travis.agent.types import MessageEndEvent, MessageStartEvent
 from travis.coding_agent.policies.tool_guardrails import (
     ToolCallGuardrailConfig,
     ToolCallGuardrailController,
-    ToolGuardrailDecision,
     ToolLoopPolicy,
     append_toolguard_guidance,
     classify_tool_failure,
@@ -109,7 +108,7 @@ from travis.coding_agent.tools.types import (
 )
 
 from travis.coding_agent.session_persistence import _user_message
-from travis.coding_agent.session_policy_controller import _is_internal_steering_user_message, _toolguard_steering_message
+from travis.coding_agent.session_policy_controller import _is_internal_steering_user_message
 from travis.coding_agent.session_types import AutoRetryEndEvent, AutoRetryStartEvent, _MALFORMED_STREAMED_TOOL_ARGS_MARKER, _MALFORMED_STREAMED_TOOL_CALL_ARGUMENTS_CODE, _MALFORMED_STREAM_RECOVERY_PREFIX, _MAX_PARTIAL_STREAM_CONTINUATIONS, _NON_RETRYABLE_PROVIDER_LIMIT_MARKERS, _PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE, _PARTIAL_STREAM_STUB_ID, _RETRYABLE_ERROR_MARKERS, _SUBAGENT_TOOL_NAMES, _prompt_requests_subagent_tools
 from travis.coding_agent.subagent_trace import _message_content_text
 
@@ -373,11 +372,6 @@ class SessionTurnController:
             if getattr(message, "_coding_queue_id", None) not in restored_ids
         ]
         self._emit_queue_update()
-
-    def _steer_tool_loop_recovery(self, decision: ToolGuardrailDecision) -> None:
-        if decision.action != "warn" or not decision.message:
-            return
-        self.agent.steer(_user_message(_toolguard_steering_message(decision)))
 
     def send_custom_message(self, message: dict, options: dict | None = None, stream_fn=None) -> list[AgentMessage]:
         options = options or {}

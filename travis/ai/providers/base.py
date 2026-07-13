@@ -100,6 +100,7 @@ class ProviderProfile:
     supports_health_check: bool = True
     supports_vision: bool = False
     supports_vision_tool_messages: bool = True
+    supports_usage_in_streaming: bool = True
     fallback_models: tuple[str, ...] = ()
     hostname: str = ""
     default_headers: dict[str, str] = field(default_factory=dict)
@@ -129,6 +130,9 @@ class ProviderProfile:
 
     def prepare_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return messages
+
+    def supports_stream_usage(self, *, base_url: str | None = None) -> bool:
+        return self.supports_usage_in_streaming
 
     def build_extra_body(
         self,
@@ -206,6 +210,8 @@ class ProviderTransport(Protocol):
         provider_preferences: dict[str, Any] | None = None,
         session_id: str | None = None,
         reasoning_config: dict[str, Any] | None = None,
+        request_overrides: dict[str, Any] | None = None,
+        base_url: str | None = None,
     ) -> dict[str, Any]:
         ...
 

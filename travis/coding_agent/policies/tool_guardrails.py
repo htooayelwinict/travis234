@@ -110,7 +110,9 @@ class ToolCallGuardrailConfig:
     """Thresholds for per-turn tool-call loop detection."""
 
     guidance_enabled: bool = True
-    blocking_enabled: bool = True
+    # Warnings help the model recover inside the current turn. Hard stops are
+    # an administrative circuit breaker and must be explicitly enabled.
+    blocking_enabled: bool = False
     exact_failure_warn_after: int = 2
     exact_failure_block_after: int = 5
     same_tool_failure_warn_after: int = 3

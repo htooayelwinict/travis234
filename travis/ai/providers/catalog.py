@@ -602,6 +602,9 @@ class CustomProfile(ProviderProfile):
 
 
 class GeminiProfile(ProviderProfile):
+    def supports_stream_usage(self, *, base_url: str | None = None) -> bool:
+        return _is_gemini_openai_compat_base_url(base_url or self.base_url)
+
     def build_extra_body(self, *, session_id: str | None = None, **context: Any) -> dict[str, Any]:
         raw_config = _build_gemini_thinking_config(context.get("model") or "", context.get("reasoning_config"))
         if not raw_config:

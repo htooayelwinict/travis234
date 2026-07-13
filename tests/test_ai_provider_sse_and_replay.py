@@ -32,6 +32,32 @@ def test_parse_sse_finalizes_on_terminal_finish_reason_without_waiting_for_eof()
     assert final.content[0].text == "Done"
     assert final.stop_reason == "stop"
 
+
+def test_parse_sse_waits_for_requested_usage_chunk_after_finish_reason() -> None:
+    lines = [
+        _sse({"choices": [{"delta": {"content": "Done"}}]}),
+        _sse({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
+        _sse(
+            {
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 17,
+                    "completion_tokens": 4,
+                    "total_tokens": 21,
+                },
+            }
+        ),
+        "data: [DONE]",
+    ]
+
+    events = list(parse_sse_chunks(lines, _model(), wait_for_usage_after_finish=True))
+
+    assert events[-1].type == "done"
+    assert events[-1].message.content[0].text == "Done"
+    assert events[-1].message.usage.input == 17
+    assert events[-1].message.usage.output == 4
+    assert events[-1].message.usage.total_tokens == 21
+
 def test_parse_sse_errors_after_non_data_keepalive_idle_timeout() -> None:
     fake_time = {"now": 100.0}
 
@@ -391,7 +417,7 @@ def test_convert_messages_repairs_corrupted_historical_tool_call_args_and_marks_
         "content": "previous tool result",
     }
 
-def test_convert_messages_compacts_historical_tool_validation_recovery_result() -> None:
+def test_convert_messages_preserves_historical_tool_validation_recovery_result() -> None:
     verbose_validation_error = (
         'Validation failed for tool "write":\n'
         "  - write: missing required property 'content'\n\n"
@@ -411,18 +437,12 @@ def test_convert_messages_compacts_historical_tool_validation_recovery_result() 
 
     messages, _tools = convert_messages(Context(messages=[tool_result]), _model())
 
-    assert messages == [
-        {
-            "role": "tool",
-            "tool_call_id": "write-empty",
-            "name": "write",
-            "content": (
-                "Tool argument validation failed for write: "
-                "write: missing required property 'content'. "
-                "The previous tool call did not execute."
-            ),
-        }
-    ]
+    assert messages == [{
+        "role": "tool",
+        "tool_call_id": "write-empty",
+        "name": "write",
+        "content": verbose_validation_error,
+    }]
 
 def test_convert_messages_inserts_marker_result_for_corrupted_historical_tool_call_without_result() -> None:
     assistant = AssistantMessage(
@@ -472,7 +492,7 @@ def test_parse_sse_chunks_preserves_unrepairable_finished_tool_call_arguments_fo
     assert tool_calls[0].arguments == {}
     assert events[-1].message.diagnostics in (None, [])
 
-def test_parse_sse_chunks_drops_malformed_finished_mutating_tool_call_arguments_before_dispatch() -> None:
+def test_parse_sse_chunks_retains_malformed_finished_mutating_call_for_safe_recovery() -> None:
     lines = [
         _sse({"choices": [{"delta": {"tool_calls": [
             {"index": 0, "id": "call_bad_write", "function": {"name": "write", "arguments": ""}}]}}]}),
@@ -487,17 +507,20 @@ def test_parse_sse_chunks_drops_malformed_finished_mutating_tool_call_arguments_
     assert events[-1].type == "done"
     assert events[-1].reason == "length"
     assert events[-1].message.stop_reason == "length"
-    assert events[-1].message.response_id == travis_env.PARTIAL_STREAM_STUB_ID
+    assert events[-1].message.response_id is None
     assert events[-1].message.diagnostics == [
         {
             "code": "malformed_streamed_tool_call_arguments",
-            "dropped_tool_names": ["write"],
+            "tool_names": ["write"],
             "finish_reason": "tool_calls",
         }
     ]
-    assert not any(isinstance(block, ToolCall) for block in events[-1].message.content)
+    tool_calls = [block for block in events[-1].message.content if isinstance(block, ToolCall)]
+    assert [(call.name, call.arguments) for call in tool_calls] == [
+        ("write", {"path": "BROKEN.md"})
+    ]
 
-def test_parse_sse_chunks_maps_incomplete_tool_call_without_finish_reason_to_partial_stub() -> None:
+def test_parse_sse_chunks_retains_incomplete_tool_call_without_finish_reason_for_safe_recovery() -> None:
     lines = [
         _sse({"choices": [{"delta": {"tool_calls": [
             {"index": 0, "id": "call_partial", "function": {"name": "write", "arguments": ""}}]}}]}),
@@ -511,12 +534,15 @@ def test_parse_sse_chunks_maps_incomplete_tool_call_without_finish_reason_to_par
     assert events[-1].type == "done"
     assert events[-1].reason == "length"
     assert events[-1].message.stop_reason == "length"
-    assert events[-1].message.response_id == travis_env.PARTIAL_STREAM_STUB_ID
+    assert events[-1].message.response_id is None
     assert events[-1].message.diagnostics == [
         {
-            "code": "partial_stream_dropped_tool_calls",
-            "dropped_tool_names": ["write"],
+            "code": "partial_stream_tool_calls",
+            "tool_names": ["write"],
             "finish_reason": None,
         }
     ]
-    assert not any(isinstance(block, ToolCall) for block in events[-1].message.content)
+    tool_calls = [block for block in events[-1].message.content if isinstance(block, ToolCall)]
+    assert [(call.name, call.arguments) for call in tool_calls] == [
+        ("write", {"path": "x.md"})
+    ]

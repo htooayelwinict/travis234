@@ -20,6 +20,7 @@ def test_agent_session_blocks_repeated_missing_bash_tool_loop(tmp_path: Path) ->
         model=model,
         tool_definitions=[],
         max_iterations=8,
+        tool_loop_guardrails={"blocking_enabled": True},
     )
 
     session.prompt("scan metrics")
@@ -71,6 +72,7 @@ def test_agent_session_blocks_repeated_extension_blocked_bash_loop(tmp_path: Pat
         tool_definitions=[bash_definition],
         extension_runner=runner,
         max_iterations=8,
+        tool_loop_guardrails={"blocking_enabled": True},
     )
 
     session.prompt("scan metrics")
@@ -156,7 +158,7 @@ def test_agent_session_does_not_claim_bash_token_scanning_is_containment(tmp_pat
     assert session.messages[-1].role == "assistant"
     assert session.messages[-1].content[0].text == "loop escaped"
 
-def test_agent_session_blocks_repeated_invalid_read_schema_loop_by_default(tmp_path: Path) -> None:
+def test_agent_session_blocks_repeated_invalid_read_schema_loop_when_enabled(tmp_path: Path) -> None:
     model = faux_model()
     provider_calls = {"n": 0}
 
@@ -167,7 +169,11 @@ def test_agent_session_blocks_repeated_invalid_read_schema_loop_by_default(tmp_p
         return tool_call_response_events(m, "read", {}, call_id=f"call_{provider_calls['n']}")
 
     register_api_provider(create_faux_provider(script))
-    session = AgentSession(cwd=str(tmp_path), model=model)
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=model,
+        tool_loop_guardrails={"blocking_enabled": True},
+    )
 
     session.prompt("explain each source file")
 
@@ -181,7 +187,7 @@ def test_agent_session_blocks_repeated_invalid_read_schema_loop_by_default(tmp_p
     assert "I stopped retrying read" in session.messages[-1].content[0].text
     assert "repeated_exact_failure_block" in session.messages[-1].content[0].text
 
-def test_agent_session_blocks_repeated_invalid_append_schema_loop_by_default(tmp_path: Path) -> None:
+def test_agent_session_blocks_repeated_invalid_append_schema_loop_when_enabled(tmp_path: Path) -> None:
     model = faux_model()
     provider_calls = {"n": 0}
     args = {"path": "docs/probe.md", "content": ""}
@@ -193,7 +199,12 @@ def test_agent_session_blocks_repeated_invalid_append_schema_loop_by_default(tmp
         return tool_call_response_events(m, "append", args, call_id=f"call_{provider_calls['n']}")
 
     register_api_provider(create_faux_provider(script))
-    session = AgentSession(cwd=str(tmp_path), model=model, max_iterations=8)
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=model,
+        max_iterations=8,
+        tool_loop_guardrails={"blocking_enabled": True},
+    )
 
     session.prompt("append empty chunks forever")
 
@@ -236,13 +247,8 @@ def test_agent_session_appends_recovery_guidance_before_consecutive_bash_block(t
             for message in c.messages
             if getattr(message, "role", None) == "toolResult"
         ]
-        user_messages = [
-            _content_text(message.content)
-            for message in c.messages
-            if getattr(message, "role", None) == "user"
-        ]
         seen_tool_results.append(tool_results)
-        if user_messages and "tool_guardrail_warning" in user_messages[-1]:
+        if tool_results and "idempotent_no_progress_warning" in tool_results[-1]:
             return text_response_events(m, "I will use the existing result instead.")
         return tool_call_response_events(m, "bash", repeated_args, call_id=f"call_{provider_calls['n']}")
 
@@ -256,8 +262,8 @@ def test_agent_session_appends_recovery_guidance_before_consecutive_bash_block(t
     assert provider_calls["n"] == 3
     assert executions == [repeated_args, repeated_args]
     assert len(tool_results) == 2
-    assert "idempotent_no_progress_warning" not in tool_results[-1].content[0].text
-    assert all("Tool loop warning" not in results[-1] for results in seen_tool_results if results)
+    assert "idempotent_no_progress_warning" in tool_results[-1].content[0].text
+    assert any("Tool loop warning" in results[-1] for results in seen_tool_results if results)
     assert assistants[-1].content[0].text == "I will use the existing result instead."
 
 def test_agent_session_max_iterations_forces_toolless_summary(tmp_path: Path) -> None:

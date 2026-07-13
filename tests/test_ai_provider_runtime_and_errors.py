@@ -903,7 +903,7 @@ def test_travis_env_provider_invokes_runtime_payload_hook(monkeypatch) -> None:
     class Options:
         api_key = "runtime-key"
         on_response = None
-        reasoning = None
+        reasoning = "medium"
 
         def __init__(self):
             self.seen_payloads: list[dict] = []
@@ -923,3 +923,5 @@ def test_travis_env_provider_invokes_runtime_payload_hook(monkeypatch) -> None:
     assert events[-1].type == "done"
     assert options.seen_payloads
     assert captured["json"]["metadata"] == {"hooked": True}
+    assert captured["json"]["reasoning"] == {"enabled": True, "effort": "medium"}
+    assert captured["json"]["stream_options"] == {"include_usage": True}

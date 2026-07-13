@@ -380,28 +380,12 @@ def _convert_message(
     return out
 
 
-def _compact_validation_error_for_provider(tool_name: str, content: str) -> str:
-    if not isinstance(content, str) or not content.startswith('Validation failed for tool "'):
-        return content
-    match = re.match(r'^Validation failed for tool "([^"]+)":\n\s+- ([^\n]+)', content)
-    if not match:
-        return content
-    name = match.group(1) or tool_name or "tool"
-    error = match.group(2).strip()
-    return (
-        f"Tool argument validation failed for {name}: {error}. "
-        "The previous tool call did not execute."
-    )
-
-
 def _convert_single_tool_result(
     message: ToolResultMessage,
 ) -> dict:
     content = _text_of(message.content)
     if not content and any(isinstance(block, ImageContent) for block in message.content):
         content = "(see attached image)"
-    if message.is_error:
-        content = _compact_validation_error_for_provider(message.tool_name, content)
     return {
         "role": "tool",
         "tool_call_id": message.tool_call_id,

@@ -17,18 +17,6 @@ from travis.ai.providers.base import (
 from travis.ai.providers.message_sanitization import repair_tool_call_arguments
 
 DEVELOPER_ROLE_MODELS = ("gpt-5", "codex")
-_MUTATING_REPLAY_TOOL_NAMES = {"write"}
-_PROTOCOL_SHAPED_CONTENT_PATTERNS = (
-    "<function",
-    "</function",
-    "<tool_call",
-    "</tool_call",
-    "<function_call",
-    "</function_call",
-    "<parameter",
-    "</parameter",
-)
-_MAX_HISTORICAL_WRITE_CONTENT_REPLAY_CHARS = 8192
 
 
 def _merge_body(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
@@ -83,67 +71,6 @@ def _tool_arguments(arguments: Any, tool_name: str = "?") -> dict[str, Any]:
                 return {}
         return parsed if isinstance(parsed, dict) else {}
     return {}
-
-
-def _sanitize_historical_mutating_tool_arguments(
-    tool_name: str,
-    arguments: dict[str, Any],
-) -> dict[str, Any]:
-    if tool_name not in _MUTATING_REPLAY_TOOL_NAMES:
-        return arguments
-    sanitized: dict[str, Any] = {}
-    path = arguments.get("path")
-    if isinstance(path, str) and path:
-        sanitized["path"] = path
-    content = arguments.get("content")
-    if isinstance(content, str) and not _should_omit_historical_write_content(content):
-        sanitized["content"] = content
-    return sanitized
-
-
-def _should_omit_historical_write_content(content: str) -> bool:
-    if len(content) > _MAX_HISTORICAL_WRITE_CONTENT_REPLAY_CHARS:
-        return True
-    lowered = content.lower()
-    return any(pattern in lowered for pattern in _PROTOCOL_SHAPED_CONTENT_PATTERNS)
-
-
-def _is_mutating_argument_failure(tool_name: str, content: Any) -> bool:
-    if tool_name not in _MUTATING_REPLAY_TOOL_NAMES:
-        return False
-    text = _content_to_text(content).lower()
-    if not text:
-        return False
-    name = tool_name.lower()
-    return (
-        f"tool argument validation failed for {name}:" in text
-        or f'validation failed for tool "{name}"' in text
-    )
-
-
-def _failed_mutating_tool_call_ids(messages: list[dict[str, Any]]) -> set[str]:
-    failed_ids: set[str] = set()
-    for message in messages:
-        if not isinstance(message, dict) or message.get("role") != "tool":
-            continue
-        tool_name = str(message.get("name") or "")
-        tool_call_id = message.get("tool_call_id")
-        if isinstance(tool_call_id, str) and _is_mutating_argument_failure(tool_name, message.get("content")):
-            failed_ids.add(tool_call_id)
-    return failed_ids
-
-
-def _looks_like_failed_tool_call_spillover(content: Any) -> bool:
-    text = _content_to_text(content)
-    if not text:
-        return False
-    lowered = text.lower()
-    return (
-        "received arguments:" in lowered
-        or "being interpreted as tool arguments" in lowered
-        or "being parsed as tool arguments" in lowered
-        or any(pattern in lowered for pattern in _PROTOCOL_SHAPED_CONTENT_PATTERNS)
-    )
 
 
 def _split_responses_tool_call_id(tool_call_id: str) -> tuple[str, str | None]:
@@ -238,7 +165,6 @@ class ChatCompletionsTransport:
         compatible providers must only receive schema-valid chat messages.
         """
         strip_extra_content = not _model_consumes_thought_signature(model)
-        failed_mutating_tool_call_ids = _failed_mutating_tool_call_ids(messages)
         needs_sanitize = False
         for message in messages:
             if not isinstance(message, dict):
@@ -261,12 +187,7 @@ class ChatCompletionsTransport:
                         "call_id" in tool_call
                         or "response_item_id" in tool_call
                         or (strip_extra_content and "extra_content" in tool_call)
-                        or (
-                            isinstance(tool_call.get("id"), str)
-                            and tool_call["id"] in failed_mutating_tool_call_ids
-                        )
                         or self._tool_call_arguments_need_repair(tool_call)
-                        or self._tool_call_arguments_need_replay_sanitize(tool_call)
                     ):
                         needs_sanitize = True
                         break
@@ -288,15 +209,6 @@ class ChatCompletionsTransport:
                 message.pop(key, None)
             tool_calls = message.get("tool_calls")
             if isinstance(tool_calls, list):
-                failed_tool_names = [
-                    str(_tool_function(tool_call).get("name") or "")
-                    for tool_call in tool_calls
-                    if isinstance(tool_call, dict)
-                    and isinstance(tool_call.get("id"), str)
-                    and tool_call["id"] in failed_mutating_tool_call_ids
-                ]
-                if failed_tool_names and _looks_like_failed_tool_call_spillover(message.get("content")):
-                    message["content"] = ""
                 for tool_call in tool_calls:
                     if not isinstance(tool_call, dict):
                         continue
@@ -304,12 +216,6 @@ class ChatCompletionsTransport:
                     tool_call.pop("response_item_id", None)
                     if strip_extra_content:
                         tool_call.pop("extra_content", None)
-                    call_id = tool_call.get("id")
-                    function = _tool_function(tool_call)
-                    name = str(function.get("name") or "")
-                    if isinstance(call_id, str) and call_id in failed_mutating_tool_call_ids:
-                        function["arguments"] = "{}"
-                        continue
                     self._repair_tool_call_arguments_in_place(tool_call)
         return sanitized
 
@@ -328,17 +234,6 @@ class ChatCompletionsTransport:
         return False
 
     @staticmethod
-    def _tool_call_arguments_need_replay_sanitize(tool_call: dict[str, Any]) -> bool:
-        function = tool_call.get("function")
-        if not isinstance(function, dict):
-            return False
-        name = str(function.get("name") or "")
-        if name not in _MUTATING_REPLAY_TOOL_NAMES:
-            return False
-        arguments = _tool_arguments(function.get("arguments"), name)
-        return _sanitize_historical_mutating_tool_arguments(name, arguments) != arguments
-
-    @staticmethod
     def _repair_tool_call_arguments_in_place(tool_call: dict[str, Any]) -> bool:
         function = tool_call.get("function")
         if not isinstance(function, dict):
@@ -352,9 +247,8 @@ class ChatCompletionsTransport:
         else:
             repaired = repair_tool_call_arguments(str(arguments), name)
         parsed = _tool_arguments(repaired, name)
-        sanitized = _sanitize_historical_mutating_tool_arguments(name, parsed)
-        function["arguments"] = json.dumps(sanitized, separators=(",", ":"))
-        return name in _MUTATING_REPLAY_TOOL_NAMES and sanitized != parsed
+        function["arguments"] = json.dumps(parsed, separators=(",", ":"))
+        return repaired != arguments
 
     def convert_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Chat Completions tools are already in OpenAI-compatible format."""
@@ -397,6 +291,8 @@ class ChatCompletionsTransport:
             "messages": prepared_messages,
             "stream": stream,
         }
+        if stream and profile.supports_stream_usage(base_url=base_url):
+            body["stream_options"] = {"include_usage": True}
         if timeout is not None:
             body["timeout"] = timeout
         if profile.fixed_temperature is OMIT_TEMPERATURE:
@@ -582,10 +478,7 @@ class AnthropicMessagesTransport:
                             "type": "tool_use",
                             "id": str(tool_call.get("id") or ""),
                             "name": name,
-                            "input": _sanitize_historical_mutating_tool_arguments(
-                                name,
-                                _tool_arguments(function.get("arguments"), name),
-                            ),
+                            "input": _tool_arguments(function.get("arguments"), name),
                         }
                     )
                 if blocks:
@@ -712,12 +605,9 @@ class CodexResponsesTransport:
                         "call_id": call_id,
                         "name": name,
                         "arguments": json.dumps(
-                            _sanitize_historical_mutating_tool_arguments(
+                            _tool_arguments(
+                                repair_tool_call_arguments(str(function.get("arguments") or "{}"), name),
                                 name,
-                                _tool_arguments(
-                                    repair_tool_call_arguments(str(function.get("arguments") or "{}"), name),
-                                    name,
-                                ),
                             ),
                             separators=(",", ":"),
                         ),

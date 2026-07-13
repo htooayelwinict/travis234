@@ -201,10 +201,9 @@ class SessionEventController:
         )
         if decision.action == "halt":
             event.result.content = _append_toolguard_content(event.result.content, decision)
-            self._steer_tool_loop_recovery(decision)
         elif decision.action == "warn":
+            event.result.content = _append_toolguard_content(event.result.content, decision)
             event.result.details = _with_toolguard_details(event.result.details, decision)
-            self._steer_tool_loop_recovery(decision)
         if decision.should_halt:
             self._tool_guardrail_halt_decision = decision
             event.is_error = True

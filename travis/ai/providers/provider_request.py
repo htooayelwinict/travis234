@@ -78,13 +78,23 @@ def prepare_provider_request(
         "max_tokens": generation_payload.max_tokens,
         "provider_preferences": generation_payload.provider_preferences,
         "request_overrides": generation_payload.request_overrides,
+        "base_url": base_url,
     }
     session_id = getattr(options, "session_id", None) if options is not None else None
     if isinstance(session_id, str) and session_id.strip():
         transport_kwargs["session_id"] = session_id
     reasoning_config = getattr(options, "reasoning_config", None) if options is not None else None
     if isinstance(reasoning_config, dict):
-        transport_kwargs["reasoning_config"] = reasoning_config
+        transport_kwargs["reasoning_config"] = dict(reasoning_config)
+    else:
+        reasoning = getattr(options, "reasoning", None) if options is not None else None
+        if isinstance(reasoning, str) and reasoning.strip():
+            effort = reasoning.strip().lower()
+            transport_kwargs["reasoning_config"] = (
+                {"enabled": False, "effort": "none"}
+                if effort == "off"
+                else {"enabled": True, "effort": effort}
+            )
     body = transport.build_kwargs(**transport_kwargs)
     on_payload = getattr(options, "on_payload", None) if options is not None else None
     if callable(on_payload):
@@ -104,6 +114,12 @@ def prepare_provider_request(
         headers.update(profile.auth_headers(api_key))
     headers.setdefault("Content-Type", "application/json")
     include_reasoning = bool(getattr(options, "reasoning", None))
+    wait_for_usage_after_finish = (
+        api_mode == "chat_completions"
+        and profile.supports_stream_usage(base_url=base_url)
+        and isinstance(body.get("stream_options"), dict)
+        and body["stream_options"].get("include_usage") is True
+    )
 
     def decode(lines: Iterable[str]) -> Iterator[object]:
         return parse_sse_chunks(
@@ -113,6 +129,7 @@ def prepare_provider_request(
             include_reasoning=include_reasoning,
             api_mode=api_mode,
             tools=context.tools,
+            wait_for_usage_after_finish=wait_for_usage_after_finish,
         )
 
     return PreparedProviderRequest(
