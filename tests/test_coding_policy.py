@@ -169,7 +169,7 @@ def test_tool_loop_hard_stops_are_opt_in() -> None:
     assert ToolCallGuardrailConfig().blocking_enabled is False
 
 
-def test_blocking_disabled_disables_loop_halts_but_keeps_guidance() -> None:
+def test_blocking_disabled_disables_loop_halts_but_keeps_recoverable_deduplication() -> None:
     controller = ToolCallGuardrailController(
         ToolCallGuardrailConfig(blocking_enabled=False, guidance_enabled=True)
     )
@@ -180,7 +180,10 @@ def test_blocking_disabled_disables_loop_halts_but_keeps_guidance() -> None:
 
     assert any(decision.action == "warn" for decision in decisions)
     assert all(decision.action not in {"block", "halt"} for decision in decisions)
-    assert controller.before_call("read", {"path": "missing"}).action == "allow"
+    repeated = controller.before_call("read", {"path": "missing"})
+    assert repeated.action == "block"
+    assert repeated.code == "repeated_exact_failure_recovery_block"
+    assert repeated.should_halt is False
 
 
 def test_process_poll_and_list_are_observations_but_controls_are_mutations() -> None:

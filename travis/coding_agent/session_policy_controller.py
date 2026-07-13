@@ -25,6 +25,8 @@ from travis.agent.types import MessageEndEvent, MessageStartEvent
 from travis.coding_agent.policies.tool_guardrails import (
     DEFAULT_NO_PROGRESS_BLOCK_TOOL_NAMES,
     IDEMPOTENT_NO_PROGRESS_RECOVERY_BLOCK_CODE,
+    REPEATED_EXACT_FAILURE_RECOVERY_BLOCK_CODE,
+    REPEATED_EXACT_SUCCESS_RECOVERY_BLOCK_CODE,
     ToolCallGuardrailConfig,
     ToolCallGuardrailController,
     ToolGuardrailDecision,
@@ -160,7 +162,15 @@ def _deduplicated_tool_result(decision: ToolGuardrailDecision) -> list[TextConte
 
 
 def _adaptive_recovery_blocked_result(text: str) -> bool:
-    return text.lstrip().startswith(f"[{IDEMPOTENT_NO_PROGRESS_RECOVERY_BLOCK_CODE}]")
+    stripped = text.lstrip()
+    return any(
+        stripped.startswith(f"[{code}]")
+        for code in (
+            IDEMPOTENT_NO_PROGRESS_RECOVERY_BLOCK_CODE,
+            REPEATED_EXACT_FAILURE_RECOVERY_BLOCK_CODE,
+            REPEATED_EXACT_SUCCESS_RECOVERY_BLOCK_CODE,
+        )
+    )
 
 
 def _user_message_has_process_limit(text: str | None) -> bool:
@@ -392,7 +402,12 @@ class SessionPolicyController:
                 self._tool_guardrail_halt_decision = self._tool_guardrails.halt_decision
             if (
                 isinstance(policy_decision, Block)
-                and policy_decision.code == IDEMPOTENT_NO_PROGRESS_RECOVERY_BLOCK_CODE
+                and policy_decision.code
+                in {
+                    IDEMPOTENT_NO_PROGRESS_RECOVERY_BLOCK_CODE,
+                    REPEATED_EXACT_FAILURE_RECOVERY_BLOCK_CODE,
+                    REPEATED_EXACT_SUCCESS_RECOVERY_BLOCK_CODE,
+                }
             ):
                 self._queue_tool_loop_recovery(policy_decision)
             self._emit(

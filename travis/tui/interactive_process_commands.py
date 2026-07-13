@@ -328,6 +328,7 @@ class InteractiveProcessCommands:
             self.tui.request_render()
 
     def _finish_user_command(self, handle: UserCommandHandle, result: BashResult) -> None:
+        self._backfill_user_command_process_event(handle)
         component = self._user_command_components.pop(handle.command_id, None)
         if component is not None:
             component.set_complete(
@@ -342,6 +343,30 @@ class InteractiveProcessCommands:
         self.status.set_message("Running bash" if has_user_commands else "Running" if self._is_turn_active() else "Idle")
         self._refresh_footer()
         self.tui.request_render()
+
+    def _backfill_user_command_process_event(self, handle: UserCommandHandle) -> None:
+        if self._user_commands is None:
+            return
+        try:
+            inspection = self._user_commands.inspect(handle.command_id)
+        except KeyError:
+            return
+        if inspection.process_id is None or inspection.process_id in self._notified_processes:
+            return
+        service = getattr(self.app, "process_service", None)
+        if service is None:
+            return
+        snapshot = service.inspect(inspection.owner, inspection.process_id)
+        if snapshot is None or not snapshot.state.terminal:
+            return
+        self._handle_process_event(
+            ProcessEvent(
+                snapshot.session_id,
+                snapshot.state,
+                snapshot.exit_code,
+                inspection.owner,
+            )
+        )
 
     def _fail_user_command(self, command_id: str, message: str) -> None:
         component = self._user_command_components.pop(command_id, None)

@@ -1692,6 +1692,7 @@ def test_tool_failure_recovery_guidance_respects_user_process_limits() -> None:
     assert second.action == "warn"
     assert "unless the user explicitly limited attempts, retries, or commands" in second.message
 
+
 def test_tool_loop_guardrail_allows_repeated_successful_same_path_mutations_without_warning() -> None:
     from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailController
 

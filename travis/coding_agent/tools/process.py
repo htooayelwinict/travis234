@@ -242,7 +242,7 @@ def _execute_process(
     if action != "wait" and signal is not None and getattr(signal, "aborted", False):
         raise RuntimeError("Operation aborted")
     if action == "list":
-        return _list_result(service.list(owner))
+        return _list_result(tuple(snapshot for snapshot in service.list(owner) if not snapshot.state.terminal))
     session_id = args["session_id"]
     if action == "poll":
         try:
@@ -478,7 +478,7 @@ def _list_result(snapshots: tuple[ProcessSnapshot, ...]) -> AgentToolResult:
         )
         lines.append(f"{snapshot.session_id}  {snapshot.state.value}  {command}")
     return AgentToolResult(
-        content=[TextContent(text="\n".join(lines) if lines else "No managed processes for this workspace.")],
+        content=[TextContent(text="\n".join(lines) if lines else "No active managed processes for this workspace.")],
         details={"processes": processes},
     )
 

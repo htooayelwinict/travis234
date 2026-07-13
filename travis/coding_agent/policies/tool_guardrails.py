@@ -78,10 +78,14 @@ WORKSPACE_SCOPE_VIOLATION_CODE = "workspace_scope_violation"
 WORKSPACE_SCOPE_REPEATED_WARNING_CODE = "workspace_scope_repeated_warning"
 WORKSPACE_SCOPE_REPEATED_BLOCK_CODE = "workspace_scope_repeated_block"
 IDEMPOTENT_NO_PROGRESS_RECOVERY_BLOCK_CODE = "idempotent_no_progress_recovery_block"
+REPEATED_EXACT_FAILURE_RECOVERY_BLOCK_CODE = "repeated_exact_failure_recovery_block"
+REPEATED_EXACT_SUCCESS_RECOVERY_BLOCK_CODE = "repeated_exact_success_recovery_block"
 RECOVERABLE_BLOCK_CODES = frozenset(
     {
         WORKSPACE_SCOPE_VIOLATION_CODE,
         IDEMPOTENT_NO_PROGRESS_RECOVERY_BLOCK_CODE,
+        REPEATED_EXACT_FAILURE_RECOVERY_BLOCK_CODE,
+        REPEATED_EXACT_SUCCESS_RECOVERY_BLOCK_CODE,
     }
 )
 
@@ -107,6 +111,7 @@ DEFAULT_NO_PROGRESS_BLOCK_TOOL_NAMES = frozenset(
 DEFAULT_READ_STYLE_NO_PROGRESS_BLOCK_AFTER = 3
 DEFAULT_READ_STYLE_EXACT_FAILURE_BLOCK_AFTER = 4
 DEFAULT_ADAPTIVE_NO_PROGRESS_BLOCK_AFTER = 2
+DEFAULT_ADAPTIVE_EXACT_REPEAT_BLOCK_AFTER = 2
 DEFAULT_MUTATING_NO_PROGRESS_WARN_AFTER = 3
 DEFAULT_MUTATING_NO_PROGRESS_HALT_AFTER = 6
 _BASH_FILE_PREVIEW_COMMANDS = frozenset({"awk", "cat", "head", "sed", "tail"})
@@ -299,6 +304,9 @@ class ToolCallGuardrailController:
         self._workspace_scope_violation_counts: dict[ToolCallSignature, int] = {}
         self._mutating_no_progress: dict[str, tuple[str, int]] = {}
         self._adaptive_block_counts: dict[ToolCallSignature, int] = {}
+        self._adaptive_failure_block_counts: dict[ToolCallSignature, int] = {}
+        self._exact_successes: dict[ToolCallSignature, tuple[str, int]] = {}
+        self._adaptive_success_block_counts: dict[ToolCallSignature, int] = {}
         self._halt_decision: ToolGuardrailDecision | None = None
 
     @property
@@ -354,6 +362,49 @@ class ToolCallGuardrailController:
                 )
 
         if not self.config.blocking_enabled:
+            exact_failure_count = self._exact_failure_counts.get(signature, 0)
+            if exact_failure_count >= DEFAULT_ADAPTIVE_EXACT_REPEAT_BLOCK_AFTER:
+                blocked_count = self._adaptive_failure_block_counts.get(signature, 0) + 1
+                self._adaptive_failure_block_counts[signature] = blocked_count
+                count = exact_failure_count + blocked_count
+                return ToolGuardrailDecision(
+                    action="block",
+                    code=REPEATED_EXACT_FAILURE_RECOVERY_BLOCK_CODE,
+                    message=(
+                        f"BLOCKED: {tool_name} already failed with these exact arguments "
+                        f"{exact_failure_count} times, so the duplicate call was not executed. "
+                        "Use the earlier failure already in context, inspect its cause, and make a "
+                        "materially different tool call while continuing this same task."
+                    ),
+                    tool_name=tool_name,
+                    count=count,
+                    signature=signature,
+                )
+
+            if tool_name == "bash" and _tool_call_may_change_state(tool_name, args):
+                success_record = self._exact_successes.get(signature)
+                if (
+                    success_record is not None
+                    and success_record[1] >= DEFAULT_ADAPTIVE_EXACT_REPEAT_BLOCK_AFTER
+                ):
+                    blocked_count = self._adaptive_success_block_counts.get(signature, 0) + 1
+                    self._adaptive_success_block_counts[signature] = blocked_count
+                    count = success_record[1] + blocked_count
+                    return ToolGuardrailDecision(
+                        action="block",
+                        code=REPEATED_EXACT_SUCCESS_RECOVERY_BLOCK_CODE,
+                        message=(
+                            f"BLOCKED: bash already completed with these exact arguments and the same "
+                            f"result {success_record[1]} times, so the duplicate call was not executed. "
+                            "Reuse the successful result. If work remains, edit or inspect something "
+                            "materially different; otherwise provide the final response now."
+                        ),
+                        tool_name=tool_name,
+                        count=count,
+                        signature=signature,
+                    )
+
+        if not self.config.blocking_enabled:
             return ToolGuardrailDecision(tool_name=tool_name, signature=signature)
 
         exact_count = self._exact_failure_counts.get(signature, 0)
@@ -407,6 +458,8 @@ class ToolCallGuardrailController:
 
         if failed:
             self._reset_consecutive()
+            self._exact_successes.pop(signature, None)
+            self._adaptive_success_block_counts.pop(signature, None)
             exact_count = self._exact_failure_counts.get(signature, 0) + 1
             self._exact_failure_counts[signature] = exact_count
             self._forget_no_progress(tool_name, args, signature)
@@ -477,10 +530,23 @@ class ToolCallGuardrailController:
 
             return ToolGuardrailDecision(tool_name=tool_name, count=exact_count, signature=signature)
 
+        exact_success_decision: ToolGuardrailDecision | None = None
+        track_exact_bash_success = tool_name == "bash" and _tool_call_may_change_state(tool_name, args)
+        success_result_hash = _result_hash(result)
+        previous_success = self._exact_successes.get(signature) if track_exact_bash_success else None
+        success_repeat_count = (
+            previous_success[1] + 1
+            if previous_success is not None and previous_success[0] == success_result_hash
+            else 1
+        )
+
         if _tool_call_may_change_state(tool_name, args):
             self._exact_failure_counts.clear()
+            self._adaptive_failure_block_counts.clear()
             self._same_tool_failure_counts.clear()
             self._reset_consecutive()
+            self._exact_successes.clear()
+            self._adaptive_success_block_counts.clear()
             if not self.config.blocking_enabled:
                 # Adaptive dedup is freshness-sensitive. Any successful mutation
                 # may invalidate an earlier observation, so let the model read
@@ -490,7 +556,27 @@ class ToolCallGuardrailController:
                 self._adaptive_block_counts.clear()
         else:
             self._exact_failure_counts.pop(signature, None)
+            self._adaptive_failure_block_counts.pop(signature, None)
             self._same_tool_failure_counts.pop(tool_name, None)
+
+        if track_exact_bash_success:
+            self._exact_successes[signature] = (success_result_hash, success_repeat_count)
+            if (
+                self.config.guidance_enabled
+                and success_repeat_count >= DEFAULT_ADAPTIVE_EXACT_REPEAT_BLOCK_AFTER
+            ):
+                exact_success_decision = ToolGuardrailDecision(
+                    action="warn",
+                    code="repeated_exact_success_warning",
+                    message=(
+                        f"bash completed with the same exact arguments and result "
+                        f"{success_repeat_count} times. Reuse that successful result and move to the "
+                        "next unfinished task instead of validating it again."
+                    ),
+                    tool_name=tool_name,
+                    count=success_repeat_count,
+                    signature=signature,
+                )
 
         observed_path = _file_observation_path_key(tool_name, args, self.cwd)
         if observed_path is not None:
@@ -541,10 +627,16 @@ class ToolCallGuardrailController:
                     signature=signature,
                 )
 
+        if exact_success_decision is not None:
+            return exact_success_decision
+
         if not self._is_idempotent(tool_name, args):
             self._forget_no_progress(tool_name, args, signature)
             self._reset_consecutive()
-            return mutating_no_progress_decision or ToolGuardrailDecision(tool_name=tool_name, signature=signature)
+            return (
+                mutating_no_progress_decision
+                or ToolGuardrailDecision(tool_name=tool_name, signature=signature)
+            )
 
         result_hash = _result_hash(result)
         if self._consecutive_signature == signature and self._consecutive_result_hash == result_hash:

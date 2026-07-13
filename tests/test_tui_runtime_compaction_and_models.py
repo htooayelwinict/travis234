@@ -269,6 +269,60 @@ def test_bang_runs_while_agent_executor_is_occupied(tmp_path) -> None:
         mode.footer_data_provider.dispose()
         app.close()
 
+
+def test_user_command_completion_backfills_terminal_trace_when_listener_misses_event(tmp_path) -> None:
+    import json
+    import shlex
+    import sys
+
+    from travis.coding_agent.eval_trace import EvalTraceWriter
+
+    trace_path = tmp_path / "trace.jsonl"
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=120),
+        enable_tui=True,
+        event_trace=EvalTraceWriter(trace_path),
+    )
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+    command = (
+        f"{shlex.quote(sys.executable)} -c "
+        f"{shlex.quote('import signal,time; signal.signal(signal.SIGINT, signal.SIG_IGN); time.sleep(30)')}"
+    )
+    try:
+        mode._run_bash_command(command, exclude_from_context=False)
+        assert _wait_until(
+            lambda: mode._user_commands is not None
+            and bool(mode._user_commands.list())
+            and mode._user_commands.list()[0].process_id is not None
+        )
+        assert mode._unsubscribe_process_events is None
+
+        assert mode._user_commands is not None
+        assert mode._user_commands.interrupt_focused() is True
+        assert mode._user_commands.interrupt_focused() is True
+        assert _wait_until(
+            lambda: (mode.tui.drain_dispatcher() or True)
+            and mode._user_commands is not None
+            and not mode._user_commands.list()
+        )
+        mode.tui.drain_dispatcher()
+
+        events = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+        terminal = [event for event in events if event["event"] == "process_event"]
+        assert len(terminal) == 1
+        assert terminal[0]["origin"] == "user"
+        assert terminal[0]["process_state"] in {"terminated", "exited"}
+    finally:
+        if mode._user_commands is not None:
+            mode._user_commands.close()
+        mode.tui.drain_dispatcher()
+        if mode._session_commands is not None:
+            mode._session_commands.close()
+        mode.footer_data_provider.dispose()
+        app.close()
+
 def test_slow_user_bash_extension_resolution_does_not_block_input(tmp_path) -> None:
     terminal = FakeTerminal(columns=120)
     app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)

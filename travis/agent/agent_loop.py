@@ -337,9 +337,45 @@ async def _handle_iteration_limit(
         on_iteration_limit=None,
     )
     message = await _stream_assistant_response(summary_context, summary_config, signal, emit, stream_fn)
+    message = _validate_iteration_limit_response(message, api_call_count, max_iterations)
     new_messages.append(message)
     await _emit_event(emit, TurnEndEvent(message=message, tool_results=[]))
     await _emit_event(emit, AgentEndEvent(messages=new_messages))
+
+
+def _validate_iteration_limit_response(
+    message: AssistantMessage,
+    api_call_count: int,
+    max_iterations: int,
+) -> AssistantMessage:
+    if message.stop_reason in ("error", "aborted"):
+        return message
+    has_typed_tool_call = any(getattr(block, "type", None) == "toolCall" for block in message.content)
+    text = "\n".join(
+        block.text for block in message.content if isinstance(block, TextContent)
+    )
+    lowered = text.lower()
+    has_literal_tool_markup = (
+        "<tool_call" in lowered
+        or ("<function=" in lowered and "<parameter=" in lowered)
+        or '"tool_calls"' in lowered
+    )
+    if not has_typed_tool_call and not has_literal_tool_markup:
+        return message
+    return replace(
+        message,
+        content=[
+            TextContent(
+                text=(
+                    f"I stopped at the tool-call iteration limit ({api_call_count}/{max_iterations}) "
+                    "and could not produce a reliable final response. The attempted final response "
+                    "contained another tool call, so it was not executed or presented as completed work."
+                )
+            )
+        ],
+        stop_reason="stop",
+        error_message=None,
+    )
 
 
 async def _stream_assistant_response(

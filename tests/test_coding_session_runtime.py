@@ -720,6 +720,7 @@ def test_agent_session_appends_recovery_guidance_to_bash_no_progress_tool_result
     assert any("Tool loop warning" in results[-1] for results in seen_tool_results if results)
     assert assistants[-1].content[0].text == "I will use the first listing and read the relevant files."
 
+
 def test_agent_session_failed_bash_respects_explicit_single_run_limit(tmp_path: Path) -> None:
     model = faux_model()
     provider_calls = {"n": 0}

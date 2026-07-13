@@ -467,6 +467,22 @@ def test_process_list_is_scoped_and_bounds_displayed_command(managed_tools) -> N
     assert "pid" not in str(result.details).lower()
 
 
+def test_process_list_only_returns_active_jobs(managed_tools) -> None:
+    _service, _owner, bash, process = managed_tools
+    completed = bash.execute("done", {"command": python_command("print('done')")})
+    running = bash.execute(
+        "running",
+        {"command": python_command("import time; time.sleep(.5)"), "yield_time_ms": 0},
+    )
+
+    result = process.execute("list", {"action": "list"})
+    listed_ids = {item["sessionId"] for item in result.details["processes"]}
+
+    assert completed.details["sessionId"] not in listed_ids
+    assert running.details["sessionId"] in listed_ids
+    assert all(item["status"] == "running" for item in result.details["processes"])
+
+
 def test_custom_bash_operations_remain_synchronous_with_managed_options(tmp_path: Path) -> None:
     calls = []
 
