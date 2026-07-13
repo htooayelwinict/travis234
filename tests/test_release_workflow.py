@@ -36,6 +36,12 @@ def test_release_smoke_build_is_no_cache_and_never_pushes() -> None:
     assert smoke_build["with"]["no-cache"] is True
 
 
+def test_release_image_includes_python_test_runner() -> None:
+    dockerfile = (Path(__file__).parents[1] / "Dockerfile.release").read_text(encoding="utf-8")
+
+    assert '"pytest>=8,<10"' in dockerfile
+
+
 def test_registry_login_exists_only_in_gated_push_job() -> None:
     workflow = _workflow()
     login_jobs = {
@@ -52,7 +58,9 @@ def test_registry_login_exists_only_in_gated_push_job() -> None:
 
 
 def test_container_smoke_prepares_linux_writable_workspace(tmp_path) -> None:
-    from evals.container_smoke import prepare_npm_workspace
+    from evals.container_smoke import CONSOLE_ENTRYPOINT, prepare_npm_workspace
+
+    assert CONSOLE_ENTRYPOINT == "travis234"
 
     prepare_npm_workspace(tmp_path)
 

@@ -31,7 +31,7 @@ COPY pyproject.toml README.md LICENSE NOTICE.md ./
 COPY travis ./travis
 
 RUN python -m pip install --no-cache-dir --upgrade pip \
-    && python -m pip install --no-cache-dir .
+    && python -m pip install --no-cache-dir . "pytest>=8,<10"
 
 USER travis
 WORKDIR /workspace

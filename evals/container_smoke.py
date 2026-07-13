@@ -7,9 +7,12 @@ import tempfile
 from pathlib import Path
 
 
+CONSOLE_ENTRYPOINT = "travis234"
+
+
 def run_container_smoke(image: str) -> None:
     _run(["docker", "run", "--rm", "--entrypoint", "id", image, "-un"], expected="travis")
-    _run(["docker", "run", "--rm", "--entrypoint", "travis", image, "--help"])
+    _run(["docker", "run", "--rm", "--entrypoint", CONSOLE_ENTRYPOINT, image, "--help"])
     _run(["docker", "run", "--rm", "--entrypoint", "node", image, "--version"])
     _run(["docker", "run", "--rm", "--entrypoint", "npm", image, "--version"])
     shell_env_script = (
