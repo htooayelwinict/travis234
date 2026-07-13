@@ -64,7 +64,9 @@ def test_chat_transport_failed_write_replay_stays_neutral_without_retry_instruct
 
     converted = ChatCompletionsTransport().convert_messages(messages, model="qwen/qwen3-coder-next")
 
-    assert converted[0]["tool_calls"][0]["function"]["arguments"] == "{}"
+    assert json.loads(converted[0]["tool_calls"][0]["function"]["arguments"]) == {
+        "path": "test_calc.py",
+    }
     assert converted[1]["content"] == "Tool argument validation failed for write: missing required field content."
     assert "do not repeat" not in converted[1]["content"]
     assert "retry" not in converted[1]["content"].lower()
