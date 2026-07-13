@@ -9,6 +9,7 @@ import shlex
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
+from travis.coding_agent.policies.bash_classification import BashMutationClass, classify_bash_mutation
 from travis.coding_agent.policies.types import Allow, Block, CodingTurnContext, PolicyDecision, ToolCallView
 
 # Keep this aligned with ProcessSnapshot without importing the process package into policy initialization.
@@ -104,31 +105,6 @@ DEFAULT_MUTATING_NO_PROGRESS_HALT_AFTER = 6
 _BASH_FILE_PREVIEW_COMMANDS = frozenset({"awk", "cat", "head", "sed", "tail"})
 _BASH_INVENTORY_COMMANDS = frozenset({"find", "ls", "rg"})
 _BASH_READ_ONLY_COMMANDS = _BASH_FILE_PREVIEW_COMMANDS | _BASH_INVENTORY_COMMANDS | frozenset({"grep"})
-_BASH_MUTATION_MARKERS = (
-    " rm ",
-    " mv ",
-    " cp ",
-    " mkdir ",
-    " rmdir ",
-    " touch ",
-    " chmod ",
-    " chown ",
-    " tee ",
-)
-_BASH_MUTATING_COMMANDS = frozenset({"rm", "mv", "cp", "mkdir", "rmdir", "touch", "chmod", "chown", "tee"})
-_BASH_PACKAGE_MANAGER_STATE_COMMANDS = frozenset(
-    {
-        "ci",
-        "i",
-        "install",
-        "uninstall",
-        "add",
-        "remove",
-        "sync",
-        "update",
-        "upgrade",
-    }
-)
 @dataclass(frozen=True)
 class ToolCallGuardrailConfig:
     """Thresholds for per-turn tool-call loop detection."""
@@ -684,43 +660,9 @@ def _tool_call_may_change_state(tool_name: str, args: Mapping[str, Any]) -> bool
     if tool_name != "bash":
         return False
     command = args.get("command")
-    return isinstance(command, str) and _bash_command_may_change_state(command)
-
-
-def _bash_command_may_change_state(command: str) -> bool:
-    stripped = command.strip()
-    if not stripped:
-        return False
-    lowered = f" {stripped.lower()} "
-    if any(marker in lowered for marker in _BASH_MUTATION_MARKERS):
+    if not isinstance(command, str):
         return True
-    if any(marker in lowered for marker in (" > ", " >> ", " 2> ", " 2>> ")):
-        return True
-    try:
-        tokens = shlex.split(stripped)
-    except ValueError:
-        return False
-    lower_tokens = [token.lower() for token in tokens]
-    for index, token in enumerate(lower_tokens):
-        next_token = lower_tokens[index + 1] if index + 1 < len(lower_tokens) else ""
-        second_next = lower_tokens[index + 2] if index + 2 < len(lower_tokens) else ""
-        third_next = lower_tokens[index + 3] if index + 3 < len(lower_tokens) else ""
-        if _is_redirection_token(token):
-            return True
-        if _basename(token) in _BASH_MUTATING_COMMANDS:
-            return True
-        if token in {"pip", "pip3"} and next_token in _BASH_PACKAGE_MANAGER_STATE_COMMANDS:
-            return True
-        if token in {"python", "python3"} and next_token == "-m" and second_next in {"pip", "pip3"}:
-            return third_next in _BASH_PACKAGE_MANAGER_STATE_COMMANDS
-        if token in {"npm", "pnpm", "yarn", "bun", "poetry"} and next_token in _BASH_PACKAGE_MANAGER_STATE_COMMANDS:
-            return True
-        if token == "uv" and (
-            next_token in {"sync", "add", "remove"}
-            or (next_token == "pip" and second_next in _BASH_PACKAGE_MANAGER_STATE_COMMANDS)
-        ):
-            return True
-    return False
+    return classify_bash_mutation(command).classification is not BashMutationClass.READ_ONLY
 
 
 def _file_observation_path_key(tool_name: str, args: Mapping[str, Any], cwd: str | None = None) -> str | None:
@@ -859,8 +801,7 @@ def _semantic_bash_read_key(command: str, cwd: str | None = None) -> str | None:
     stripped = command.strip()
     if not stripped:
         return None
-    lowered = f" {stripped.lower()} "
-    if any(marker in lowered for marker in _BASH_MUTATION_MARKERS):
+    if classify_bash_mutation(stripped).classification is not BashMutationClass.READ_ONLY:
         return None
     try:
         tokens = shlex.split(stripped)

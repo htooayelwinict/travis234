@@ -3359,13 +3359,16 @@ def test_tool_loop_guardrail_allows_repeated_successful_same_path_mutations_with
 
 
 def test_bash_mutation_classifier_detects_attached_redirects_and_absolute_mutators() -> None:
-    from travis.coding_agent.policies.tool_guardrails import _bash_command_may_change_state
+    from travis.coding_agent.policies.bash_classification import BashMutationClass, classify_bash_mutation
 
-    assert _bash_command_may_change_state("echo hi > file") is True
-    assert _bash_command_may_change_state("echo hi >file") is True
-    assert _bash_command_may_change_state("cat <<EOF >out.txt\nx\nEOF") is True
-    assert _bash_command_may_change_state("/bin/rm file") is True
-    assert _bash_command_may_change_state("/usr/bin/touch file") is True
+    for command in (
+        "echo hi > file",
+        "echo hi >file",
+        "cat <<EOF >out.txt\nx\nEOF",
+        "/bin/rm file",
+        "/usr/bin/touch file",
+    ):
+        assert classify_bash_mutation(command).classification is BashMutationClass.MUTATING
 
 
 def test_workspace_scope_violation_guardrail_counts_across_state_changes() -> None:
