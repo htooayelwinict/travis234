@@ -969,7 +969,7 @@ def test_agent_session_execute_bash_uses_travis234_shell_path_option(tmp_path: P
         return BashOperations(exec=lambda command, cwd, options: {"exit_code": 0})
 
     monkeypatch.setattr(
-        "travis.coding_agent.agent_session.create_local_bash_operations",
+        "travis.coding_agent.session_bash.create_local_bash_operations",
         fake_create_local_bash_operations,
     )
 
