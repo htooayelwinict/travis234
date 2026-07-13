@@ -1,0 +1,10 @@
+{
+  "name": "appv22-pi-tui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "tui": "python3 scripts/appv22_tui.py"
+  },
+  "dependencies": {}
+}

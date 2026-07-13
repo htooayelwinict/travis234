@@ -1,0 +1,1334 @@
+from __future__ import annotations
+
+from concurrent.futures import Future
+import threading
+
+import pytest
+
+from appv23.agent import (
+    AbortSignal,
+    Agent,
+    AgentContext,
+    AgentLoopTurnUpdate,
+    AgentTool,
+    AgentToolResult,
+    AfterToolCallResult,
+    BeforeToolCallResult,
+    ShouldStopAfterTurnContext,
+    run_agent_loop,
+)
+from appv23.ai.event_stream import create_assistant_message_event_stream
+from appv23.ai.providers.faux import (
+    create_faux_provider,
+    faux_model,
+    text_response_events,
+    tool_call_response_events,
+)
+from appv23.ai.stream import register_api_provider, reset_api_providers
+from appv23.ai.types import (
+    AssistantMessage,
+    DoneEvent,
+    ImageContent,
+    Message,
+    StartEvent,
+    TextContent,
+    ToolCall,
+    ToolcallEndEvent,
+    ToolcallStartEvent,
+    UserMessage,
+    empty_usage,
+    now_ms,
+)
+def _convert(messages):
+    out: list[Message] = []
+    for m in messages:
+        if getattr(m, "role", None) in ("user", "assistant", "toolResult"):
+            out.append(m)
+    return out
+
+
+def _ctx(tools=None) -> AgentContext:
+    return AgentContext(system_prompt="sys", messages=[], tools=tools)
+
+
+def setup_function() -> None:
+    reset_api_providers()
+
+
+def test_single_text_turn_event_sequence() -> None:
+    model = faux_model()
+    register_api_provider(create_faux_provider(lambda m, c: text_response_events(m, "hello")))
+    events: list[str] = []
+    msgs = run_agent_loop(
+        [UserMessage(content="hi", timestamp=now_ms())],
+        _ctx(),
+        _config(model),
+        lambda e: events.append(e.type),
+    )
+    assert events[0] == "agent_start"
+    assert events[1] == "turn_start"
+    assert "message_update" in events
+    assert events[-1] == "agent_end"
+    assert any(getattr(m, "role", None) == "assistant" for m in msgs)
+
+
+def _config(model):
+    from appv23.agent.types import AgentLoopConfig
+
+    return AgentLoopConfig(model=model, convert_to_llm=_convert)
+
+
+def _multi_tool_call_response_events(model, calls: list[tuple[str, str, dict]]) -> list:
+    partial = AssistantMessage(
+        content=[ToolCall(id=call_id, name=name, arguments=args) for call_id, name, args in calls],
+        api=model.api,
+        provider=model.provider,
+        model=model.id,
+        usage=empty_usage(),
+        stop_reason="toolUse",
+        timestamp=now_ms(),
+    )
+    events: list = [StartEvent(partial=partial)]
+    for index, tool_call in enumerate(partial.content):
+        events.append(ToolcallStartEvent(content_index=index, partial=partial))
+        events.append(ToolcallEndEvent(content_index=index, tool_call=tool_call, partial=partial))
+    final = AssistantMessage(
+        content=[ToolCall(id=call_id, name=name, arguments=args) for call_id, name, args in calls],
+        api=model.api,
+        provider=model.provider,
+        model=model.id,
+        usage=empty_usage(),
+        stop_reason="toolUse",
+        timestamp=now_ms(),
+    )
+    events.append(DoneEvent(reason="toolUse", message=final))
+    return events
+
+
+def test_tool_call_turn_executes_and_continues() -> None:
+    model = faux_model()
+    calls = {"n": 0}
+
+    def script(m, c):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return tool_call_response_events(m, "echo", {"text": "hi"})
+        return text_response_events(m, "done")
+
+    register_api_provider(create_faux_provider(script))
+
+    def echo_execute(tool_call_id, args, signal=None, on_update=None):
+        return AgentToolResult(content=[TextContent(text=f"echo:{args['text']}")], details={})
+
+    echo = AgentTool(
+        name="echo",
+        description="echo",
+        parameters={"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+        label="Echo",
+        execute=echo_execute,
+    )
+    events: list[str] = []
+    msgs = run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(tools=[echo]),
+        _config(model),
+        lambda e: events.append(e.type),
+    )
+    assert "tool_execution_start" in events
+    assert "tool_execution_end" in events
+    assert any(getattr(m, "role", None) == "toolResult" for m in msgs)
+    assert calls["n"] == 2
+
+
+def test_tool_call_history_keeps_raw_arguments_after_execution_before_next_model_call() -> None:
+    model = faux_model()
+    large_content = "SMOKING-GUN-WRITE-CONTENT\n" + ("generated report body " * 500)
+    calls = {"n": 0}
+    second_context = {}
+    tool_saw_raw_content = {"value": False}
+
+    def script(m, c):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return tool_call_response_events(m, "write", {"path": "docs/report.md", "content": large_content})
+        second_context["messages"] = list(c.messages)
+        return text_response_events(m, "done")
+
+    register_api_provider(create_faux_provider(script))
+
+    def write_execute(tool_call_id, args, signal=None, on_update=None):
+        tool_saw_raw_content["value"] = args["content"] == large_content
+        return AgentToolResult(content=[TextContent(text="wrote")], details={})
+
+    write = AgentTool(
+        name="write",
+        description="write",
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+            "required": ["path", "content"],
+        },
+        label="Write",
+        execute=write_execute,
+    )
+    config = _config(model)
+
+    run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(tools=[write]),
+        config,
+        lambda e: None,
+    )
+
+    assert tool_saw_raw_content["value"] is True
+    assistant = next(m for m in second_context["messages"] if getattr(m, "role", None) == "assistant")
+    tool_call = next(block for block in assistant.content if isinstance(block, ToolCall))
+    assert tool_call.arguments["path"] == "docs/report.md"
+    assert tool_call.arguments["content"] == large_content
+    assert "[appv23 redacted tool argument" not in tool_call.arguments["content"]
+
+
+def test_agent_loop_stops_after_signal_aborted_during_tool_execution() -> None:
+    model = faux_model()
+    calls = {"n": 0}
+    signal = AbortSignal()
+
+    def script(m, c):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return tool_call_response_events(m, "aborter", {})
+        return text_response_events(m, "should not run after abort")
+
+    register_api_provider(create_faux_provider(script))
+
+    def aborter_execute(tool_call_id, args, signal=None, on_update=None):
+        assert signal is not None
+        signal.abort()
+        raise RuntimeError("Operation aborted")
+
+    aborter = AgentTool(
+        name="aborter",
+        description="aborter",
+        parameters={"type": "object", "properties": {}},
+        label="Aborter",
+        execute=aborter_execute,
+    )
+    events: list[str] = []
+
+    msgs = run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(tools=[aborter]),
+        _config(model),
+        lambda e: events.append(e.type),
+        signal,
+    )
+
+    assert calls["n"] == 1
+    assert events[-1] == "agent_end"
+    assert any(
+        getattr(message, "role", None) == "toolResult"
+        and any(getattr(block, "text", "") == "Operation aborted" for block in message.content)
+        for message in msgs
+    )
+
+
+def test_duplicate_tool_calls_in_same_assistant_turn_execute_once() -> None:
+    model = faux_model()
+    provider_calls = {"n": 0}
+    executions: list[tuple[str, dict]] = []
+
+    def script(m, c):
+        provider_calls["n"] += 1
+        if provider_calls["n"] == 1:
+            return _multi_tool_call_response_events(
+                m,
+                [
+                    ("call_1", "echo", {"text": "same"}),
+                    ("call_2", "echo", {"text": "same"}),
+                    ("call_3", "echo", {"text": "different"}),
+                ],
+            )
+        return text_response_events(m, "done")
+
+    register_api_provider(create_faux_provider(script))
+
+    def echo_execute(tool_call_id, args, signal=None, on_update=None):
+        executions.append((tool_call_id, dict(args)))
+        return AgentToolResult(content=[TextContent(text=f"echo:{args['text']}")], details={})
+
+    echo = AgentTool(
+        name="echo",
+        description="echo",
+        parameters={"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+        label="Echo",
+        execute=echo_execute,
+    )
+
+    msgs = run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(tools=[echo]),
+        _config(model),
+        lambda e: None,
+    )
+
+    tool_results = [msg for msg in msgs if getattr(msg, "role", None) == "toolResult"]
+    assistant = next(msg for msg in msgs if getattr(msg, "role", None) == "assistant")
+    assert executions == [
+        ("call_1", {"text": "same"}),
+        ("call_3", {"text": "different"}),
+    ]
+    assert [result.tool_call_id for result in tool_results] == ["call_1", "call_3"]
+    assert [call.id for call in assistant.content if getattr(call, "type", None) == "toolCall"] == [
+        "call_1",
+        "call_3",
+    ]
+
+
+def test_repeated_same_path_write_batch_does_not_block_second_landed_mutation() -> None:
+    from appv23.agent.tool_guardrails import ToolCallGuardrailController, toolguard_synthetic_result
+
+    model = faux_model()
+    provider_calls = {"n": 0}
+    executions: list[str] = []
+    controller = ToolCallGuardrailController()
+
+    def script(m, c):
+        provider_calls["n"] += 1
+        if provider_calls["n"] == 1:
+            return _multi_tool_call_response_events(
+                m,
+                [
+                    ("call_1", "write", {"path": "LOCAL_REVIEW.md", "content": "first"}),
+                    ("call_2", "write", {"path": "./LOCAL_REVIEW.md", "content": "second"}),
+                ],
+            )
+        return text_response_events(m, "done")
+
+    register_api_provider(create_faux_provider(script))
+
+    def write_execute(tool_call_id, args, signal=None, on_update=None):
+        executions.append(args["content"])
+        return AgentToolResult(content=[TextContent(text=f"wrote:{args['content']}")], details={})
+
+    write = AgentTool(
+        name="write",
+        description="write",
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+            "required": ["path", "content"],
+        },
+        label="Write",
+        execute=write_execute,
+    )
+    config = _config(model)
+
+    def text_blocks(content) -> str:
+        return "".join(block.text for block in content if isinstance(block, TextContent))
+
+    def before_tool_call(context, signal=None):
+        decision = controller.before_call(context.tool_call.name, context.args)
+        if not decision.allows_execution:
+            return BeforeToolCallResult(block=True, reason=toolguard_synthetic_result(decision))
+        return None
+
+    def after_tool_call(context, signal=None):
+        controller.after_call(
+            context.tool_call.name,
+            context.args,
+            text_blocks(context.result.content),
+            failed=context.is_error,
+        )
+        return None
+
+    config.before_tool_call = before_tool_call
+    config.after_tool_call = after_tool_call
+
+    messages = run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(tools=[write]),
+        config,
+        lambda e: None,
+    )
+
+    tool_result_text = "\n".join(
+        text_blocks(message.content)
+        for message in messages
+        if getattr(message, "role", None) == "toolResult"
+    )
+    assert executions == ["first", "second"]
+    assert "repeated_file_mutation_block" not in tool_result_text
+
+
+def test_after_tool_call_terminate_uses_pi_batch_semantics() -> None:
+    model = faux_model()
+    provider_calls = {"n": 0}
+    executions: list[str] = []
+
+    def script(m, c):
+        provider_calls["n"] += 1
+        if provider_calls["n"] == 1:
+            return _multi_tool_call_response_events(
+                m,
+                [
+                    ("call_1", "write", {"path": "LOCAL_REVIEW.md", "content": "first"}),
+                    ("call_2", "write", {"path": "LOCAL_REVIEW.md", "content": "second"}),
+                    ("call_3", "write", {"path": "LOCAL_REVIEW.md", "content": "third"}),
+                ],
+            )
+        return text_response_events(m, "recovered")
+
+    register_api_provider(create_faux_provider(script))
+
+    def write_execute(tool_call_id, args, signal=None, on_update=None):
+        executions.append(args["content"])
+        return AgentToolResult(content=[TextContent(text=f"wrote:{args['content']}")], details={})
+
+    write = AgentTool(
+        name="write",
+        description="write",
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+            "required": ["path", "content"],
+        },
+        label="Write",
+        execute=write_execute,
+    )
+    config = _config(model)
+    config.tool_execution = "sequential"
+
+    def after_tool_call(context, signal=None):
+        if context.args["content"] == "second":
+            return AfterToolCallResult(terminate=True)
+        return None
+
+    config.after_tool_call = after_tool_call
+
+    messages = run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(tools=[write]),
+        config,
+        lambda e: None,
+    )
+
+    assert executions == ["first", "second", "third"]
+    assert provider_calls["n"] == 2
+    assert len([message for message in messages if getattr(message, "role", None) == "toolResult"]) == 3
+    assert any(
+        getattr(message, "role", None) == "assistant"
+        and message.content
+        and getattr(message.content[0], "type", None) == "text"
+        and message.content[0].text == "recovered"
+        for message in messages
+    )
+
+
+def test_prepare_next_turn_snapshot_updates_loop_without_mutating_config() -> None:
+    initial_model = faux_model()
+    snapshot_model = faux_model()
+    snapshot_model.id = "snapshot-model"
+    seen_model_ids: list[str] = []
+    calls = {"n": 0}
+
+    def script(m, c):
+        calls["n"] += 1
+        seen_model_ids.append(m.id)
+        if calls["n"] == 1:
+            return tool_call_response_events(m, "echo", {})
+        return text_response_events(m, "done")
+
+    register_api_provider(create_faux_provider(script))
+
+    def echo_execute(tool_call_id, args, signal=None, on_update=None):
+        return AgentToolResult(content=[TextContent(text="echo ok")], details={})
+
+    echo = AgentTool(
+        name="echo",
+        description="echo",
+        parameters={"type": "object", "properties": {}},
+        label="Echo",
+        execute=echo_execute,
+    )
+    cfg = _config(initial_model)
+    cfg.reasoning = "medium"
+
+    def prepare_next_turn(ctx):
+        if ctx.tool_results:
+            return AgentLoopTurnUpdate(model=snapshot_model, thinking_level="off")
+        return None
+
+    cfg.prepare_next_turn = prepare_next_turn
+
+    run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(tools=[echo]),
+        cfg,
+        lambda e: None,
+    )
+
+    assert seen_model_ids == ["faux-model", "snapshot-model"]
+    assert cfg.model is initial_model
+    assert cfg.reasoning == "medium"
+
+
+def test_should_stop_after_turn_receives_prepare_next_turn_context_snapshot() -> None:
+    model = faux_model()
+    register_api_provider(create_faux_provider(lambda m, c: text_response_events(m, "done")))
+    cfg = _config(model)
+    seen_context_prompts: list[str] = []
+
+    def prepare_next_turn(ctx):
+        return AgentLoopTurnUpdate(
+            context=AgentContext(system_prompt="snapshot-sys", messages=ctx.context.messages, tools=ctx.context.tools)
+        )
+
+    def should_stop_after_turn(ctx):
+        seen_context_prompts.append(ctx.context.system_prompt)
+        return True
+
+    cfg.prepare_next_turn = prepare_next_turn
+    cfg.should_stop_after_turn = should_stop_after_turn
+
+    run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(),
+        cfg,
+        lambda e: None,
+    )
+
+    assert seen_context_prompts == ["snapshot-sys"]
+
+
+def test_max_iterations_requests_toolless_summary_after_unique_tool_loop() -> None:
+    model = faux_model()
+    provider_calls = {"n": 0}
+    tool_iterations = {"n": 0}
+    tool_visibility: list[bool] = []
+
+    def script(m, c):
+        provider_calls["n"] += 1
+        tool_visibility.append(bool(c.tools))
+        if c.tools:
+            tool_iterations["n"] += 1
+            return tool_call_response_events(
+                m,
+                "echo",
+                {"text": f"unique-{tool_iterations['n']}"},
+                call_id=f"call_{tool_iterations['n']}",
+            )
+        return text_response_events(m, "summary without tools")
+
+    register_api_provider(create_faux_provider(script))
+
+    def echo_execute(tool_call_id, args, signal=None, on_update=None):
+        return AgentToolResult(content=[TextContent(text=f"echo:{args['text']}")], details={})
+
+    echo = AgentTool(
+        name="echo",
+        description="echo",
+        parameters={"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+        label="Echo",
+        execute=echo_execute,
+    )
+    cfg = _config(model)
+    cfg.max_iterations = 3
+
+    messages = run_agent_loop(
+        [UserMessage(content="loop with unique args", timestamp=now_ms())],
+        _ctx(tools=[echo]),
+        cfg,
+        lambda e: None,
+    )
+
+    assert provider_calls["n"] == 4
+    assert tool_iterations["n"] == 3
+    assert tool_visibility == [True, True, True, False]
+    assert getattr(messages[-2], "role", None) == "user"
+    assert "maximum number of tool-calling iterations" in messages[-2].content
+    assert messages[-1].role == "assistant"
+    assert messages[-1].content[0].text == "summary without tools"
+
+
+def test_tool_execution_update_emit_settles_before_tool_execution_end() -> None:
+    model = faux_model()
+    calls = {"n": 0}
+
+    def script(m, c):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return tool_call_response_events(m, "echo", {"text": "hi"})
+        return text_response_events(m, "done")
+
+    register_api_provider(create_faux_provider(script))
+    update_settlement: Future[None] = Future()
+    update_seen = threading.Event()
+    end_seen = threading.Event()
+    events: list[str] = []
+
+    def echo_execute(tool_call_id, args, signal=None, on_update=None):
+        on_update(AgentToolResult(content=[TextContent(text="partial")], details={}))
+        return AgentToolResult(content=[TextContent(text="final")], details={})
+
+    echo = AgentTool(
+        name="echo",
+        description="echo",
+        parameters={"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+        label="Echo",
+        execute=echo_execute,
+    )
+
+    def emit(event):
+        events.append(event.type)
+        if event.type == "tool_execution_update":
+            update_seen.set()
+            return update_settlement
+        if event.type == "tool_execution_end":
+            end_seen.set()
+        return None
+
+    run_error: list[BaseException] = []
+
+    def run_loop() -> None:
+        try:
+            run_agent_loop([UserMessage(content="go", timestamp=now_ms())], _ctx(tools=[echo]), _config(model), emit)
+        except BaseException as error:  # noqa: BLE001
+            run_error.append(error)
+
+    thread = threading.Thread(target=run_loop)
+    thread.start()
+    assert update_seen.wait(timeout=2)
+    assert end_seen.wait(timeout=0.05) is False
+
+    update_settlement.set_result(None)
+    thread.join(timeout=2)
+
+    assert run_error == []
+    assert thread.is_alive() is False
+    assert events.index("tool_execution_update") < events.index("tool_execution_end")
+
+
+@pytest.mark.parametrize("mode", ["sequential", "parallel"])
+def test_tool_execution_start_emit_settles_before_tool_runs(mode: str) -> None:
+    model = faux_model()
+    provider_calls = {"n": 0}
+
+    def script(m, c):
+        provider_calls["n"] += 1
+        if provider_calls["n"] == 1:
+            return _multi_tool_call_response_events(
+                m,
+                [
+                    ("call_first", "first", {}),
+                    ("call_second", "second", {}),
+                ],
+            )
+        return text_response_events(m, "done")
+
+    register_api_provider(create_faux_provider(script))
+    start_settlement: Future[None] = Future()
+    first_start_seen = threading.Event()
+    first_tool_ran = threading.Event()
+    executions: list[str] = []
+
+    def first_execute(tool_call_id, args, signal=None, on_update=None):
+        executions.append("first")
+        first_tool_ran.set()
+        return AgentToolResult(content=[TextContent(text="first ok")], details={})
+
+    def second_execute(tool_call_id, args, signal=None, on_update=None):
+        executions.append("second")
+        return AgentToolResult(content=[TextContent(text="second ok")], details={})
+
+    tools = [
+        AgentTool(
+            name="first",
+            description="first",
+            parameters={"type": "object", "properties": {}},
+            label="First",
+            execute=first_execute,
+        ),
+        AgentTool(
+            name="second",
+            description="second",
+            parameters={"type": "object", "properties": {}},
+            label="Second",
+            execute=second_execute,
+        ),
+    ]
+    cfg = _config(model)
+    cfg.tool_execution = mode
+
+    def emit(event):
+        if event.type == "tool_execution_start" and event.tool_name == "first":
+            first_start_seen.set()
+            return start_settlement
+        return None
+
+    run_error: list[BaseException] = []
+
+    def run_loop() -> None:
+        try:
+            run_agent_loop([UserMessage(content=f"go {mode}", timestamp=now_ms())], _ctx(tools=tools), cfg, emit)
+        except BaseException as error:  # noqa: BLE001
+            run_error.append(error)
+
+    thread = threading.Thread(target=run_loop)
+    thread.start()
+    assert first_start_seen.wait(timeout=2)
+    assert first_tool_ran.wait(timeout=0.05) is False
+
+    start_settlement.set_result(None)
+    thread.join(timeout=2)
+
+    assert run_error == []
+    assert thread.is_alive() is False
+    assert executions == ["first", "second"]
+
+
+def test_all_terminating_parallel_tool_results_stop_without_next_assistant_turn() -> None:
+    model = faux_model()
+    provider_calls = {"n": 0}
+
+    def script(m, c):
+        provider_calls["n"] += 1
+        if provider_calls["n"] == 1:
+            return _multi_tool_call_response_events(
+                m,
+                [
+                    ("call_first", "first", {}),
+                    ("call_second", "second", {}),
+                ],
+            )
+        return text_response_events(m, "should not run")
+
+    register_api_provider(create_faux_provider(script))
+
+    def terminating_execute(tool_call_id, args, signal=None, on_update=None):
+        return AgentToolResult(content=[TextContent(text=f"{tool_call_id} done")], details={}, terminate=True)
+
+    tools = [
+        AgentTool(
+            name="first",
+            description="first",
+            parameters={"type": "object", "properties": {}},
+            label="First",
+            execute=terminating_execute,
+        ),
+        AgentTool(
+            name="second",
+            description="second",
+            parameters={"type": "object", "properties": {}},
+            label="Second",
+            execute=terminating_execute,
+        ),
+    ]
+    cfg = _config(model)
+    cfg.tool_execution = "parallel"
+
+    messages = run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(tools=tools),
+        cfg,
+        lambda e: None,
+    )
+
+    assert provider_calls["n"] == 1
+    assert [getattr(message, "role", None) for message in messages] == [
+        "user",
+        "assistant",
+        "toolResult",
+        "toolResult",
+    ]
+
+
+def test_should_stop_after_turn_halts_loop() -> None:
+    model = faux_model()
+    register_api_provider(create_faux_provider(lambda m, c: text_response_events(m, "x")))
+    cfg = _config(model)
+    cfg.should_stop_after_turn = lambda ctx: True
+    turn_starts = 0
+    events: list[str] = []
+    run_agent_loop([UserMessage(content="hi", timestamp=now_ms())], _ctx(), cfg, lambda e: events.append(e.type))
+    assert events.count("turn_start") == 1
+
+
+def test_before_tool_call_block_yields_error_result() -> None:
+    model = faux_model()
+
+    def script(m, c):
+        return tool_call_response_events(m, "danger", {})
+
+    register_api_provider(create_faux_provider(script))
+    danger = AgentTool(
+        name="danger", description="d", parameters={"type": "object"}, label="D",
+        execute=lambda *a, **k: AgentToolResult(content=[TextContent(text="ran")], details={}),
+    )
+    cfg = _config(model)
+    cfg.before_tool_call = lambda ctx, signal: BeforeToolCallResult(block=True, reason="nope")
+    # avoid infinite loop: after the blocked tool, model would be called again; make 2nd call finalize
+    calls = {"n": 0}
+
+    def script2(m, c):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return tool_call_response_events(m, "danger", {})
+        return text_response_events(m, "stopped")
+
+    reset_api_providers()
+    register_api_provider(create_faux_provider(script2))
+    ends: list = []
+    run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())], _ctx(tools=[danger]), cfg,
+        lambda e: ends.append(e) if e.type == "tool_execution_end" else None,
+    )
+    end = ends[0]
+    assert end.is_error is True
+    assert "nope" in end.result.content[0].text
+
+
+def test_unknown_tool_returns_error_result() -> None:
+    model = faux_model()
+    calls = {"n": 0}
+
+    def script(m, c):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return tool_call_response_events(m, "missing", {})
+        return text_response_events(m, "ok")
+
+    register_api_provider(create_faux_provider(script))
+    ends: list = []
+    run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())], _ctx(tools=[]), _config(model),
+        lambda e: ends.append(e) if e.type == "tool_execution_end" else None,
+    )
+    assert ends[0].is_error is True
+    assert "not found" in ends[0].result.content[0].text
+
+
+def test_unknown_tool_error_reports_active_tool_catalog_for_recovery() -> None:
+    model = faux_model()
+    calls = {"n": 0}
+
+    def script(m, c):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return tool_call_response_events(m, "glob", {"pattern": "**/*.py"})
+        return text_response_events(m, "ok")
+
+    register_api_provider(create_faux_provider(script))
+    read = AgentTool(
+        name="read",
+        description="read",
+        parameters={"type": "object"},
+        label="Read",
+        execute=lambda *a, **k: AgentToolResult(content=[TextContent(text="read")], details={}),
+    )
+    grep = AgentTool(
+        name="grep",
+        description="grep",
+        parameters={"type": "object"},
+        label="Grep",
+        execute=lambda *a, **k: AgentToolResult(content=[TextContent(text="grep")], details={}),
+    )
+    find = AgentTool(
+        name="find",
+        description="find",
+        parameters={"type": "object"},
+        label="Find",
+        execute=lambda *a, **k: AgentToolResult(content=[TextContent(text="find")], details={}),
+    )
+    ls = AgentTool(
+        name="ls",
+        description="ls",
+        parameters={"type": "object"},
+        label="List",
+        execute=lambda *a, **k: AgentToolResult(content=[TextContent(text="ls")], details={}),
+    )
+    ends: list = []
+
+    run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(tools=[read, grep, find, ls]),
+        _config(model),
+        lambda e: ends.append(e) if e.type == "tool_execution_end" else None,
+    )
+
+    assert ends[0].is_error is True
+    text = ends[0].result.content[0].text
+    assert "Tool glob not found" in text
+    assert "Available tools: read, grep, find, ls" in text
+    assert "Use find or ls for file discovery" in text
+
+
+def test_agent_class_reduces_state() -> None:
+    model = faux_model()
+    register_api_provider(create_faux_provider(lambda m, c: text_response_events(m, "reply")))
+    agent = Agent(system_prompt="sys", model=model, convert_to_llm=_convert)
+    seen: list[str] = []
+    agent.subscribe(lambda e: seen.append(e.type))
+    agent.prompt("hello")
+    assert "agent_end" in seen
+    roles = [getattr(m, "role", None) for m in agent.state.messages]
+    assert "user" in roles and "assistant" in roles
+    assert agent.state.is_streaming is False
+
+
+def test_agent_prompt_normalizes_string_input_to_pi_content_blocks() -> None:
+    model = faux_model()
+    register_api_provider(create_faux_provider(lambda m, c: text_response_events(m, "reply")))
+    agent = Agent(system_prompt="sys", model=model, convert_to_llm=_convert)
+
+    agent.prompt("plain")
+
+    user = next(message for message in agent.state.messages if getattr(message, "role", None) == "user")
+    assert user.content == [TextContent(text="plain")]
+
+
+def test_agent_prompt_normalizes_string_input_to_pi_content_blocks_with_images() -> None:
+    model = faux_model()
+    register_api_provider(create_faux_provider(lambda m, c: text_response_events(m, "reply")))
+    agent = Agent(system_prompt="sys", model=model, convert_to_llm=_convert)
+    image = ImageContent(data="aW1n", mime_type="image/png")
+
+    agent.prompt("hello", images=[image])
+
+    user = next(message for message in agent.state.messages if getattr(message, "role", None) == "user")
+    assert user.content == [TextContent(text="hello"), image]
+
+
+def test_agent_reset_clears_streaming_state_like_pi() -> None:
+    model = faux_model()
+    agent = Agent(system_prompt="sys", model=model, convert_to_llm=_convert)
+    agent.state.is_streaming = True
+
+    agent.reset()
+
+    assert agent.state.is_streaming is False
+
+
+def test_agent_rejects_prompt_while_streaming() -> None:
+    model = faux_model()
+    agent = Agent(system_prompt="sys", model=model, convert_to_llm=_convert)
+    first_stream_started = threading.Event()
+    release_first_stream = threading.Event()
+    calls = {"n": 0}
+
+    def stream_fn(model, context, options):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            stream = create_assistant_message_event_stream()
+            start_message = text_response_events(model, "")[0].partial
+            stream.push(type(text_response_events(model, "")[0])(partial=start_message))
+            first_stream_started.set()
+
+            def finish() -> None:
+                release_first_stream.wait(timeout=2)
+                for event in text_response_events(model, "first done")[1:]:
+                    stream.push(event)
+
+            threading.Thread(target=finish, daemon=True).start()
+            return stream
+        return create_faux_provider(lambda m, c: text_response_events(m, "second")).stream_simple(
+            model, context, options
+        )
+
+    first_error: list[BaseException] = []
+
+    def run_first() -> None:
+        try:
+            agent.prompt("first", stream_fn=stream_fn)
+        except BaseException as error:  # noqa: BLE001
+            first_error.append(error)
+
+    first_thread = threading.Thread(target=run_first)
+    first_thread.start()
+    assert first_stream_started.wait(timeout=2)
+    assert agent.state.is_streaming is True
+
+    try:
+        try:
+            agent.prompt("second", stream_fn=stream_fn)
+            assert False, "expected concurrent prompt rejection"
+        except RuntimeError as error:
+            assert "already processing" in str(error)
+    finally:
+        release_first_stream.set()
+        first_thread.join(timeout=2)
+
+    assert first_error == []
+    assert calls["n"] == 1
+    assert agent.state.is_streaming is False
+
+
+def test_agent_abort_signal_is_fresh_for_next_prompt() -> None:
+    model = faux_model()
+    agent = Agent(system_prompt="sys", model=model, convert_to_llm=_convert)
+    first_stream_started = threading.Event()
+    release_first_stream = threading.Event()
+    stream_calls = {"n": 0}
+    tool_signals: list[bool] = []
+
+    def stream_fn(model, context, options):
+        stream_calls["n"] += 1
+        stream = create_assistant_message_event_stream()
+        if stream_calls["n"] == 1:
+            events = text_response_events(model, "first done")
+            stream.push(type(events[0])(partial=events[0].partial))
+            first_stream_started.set()
+
+            def finish() -> None:
+                release_first_stream.wait(timeout=2)
+                for event in events[1:]:
+                    stream.push(event)
+
+            threading.Thread(target=finish, daemon=True).start()
+            return stream
+        if stream_calls["n"] == 2:
+            for event in tool_call_response_events(model, "probe", {}):
+                stream.push(event)
+            return stream
+        for event in text_response_events(model, "second done"):
+            stream.push(event)
+        return stream
+
+    def probe_execute(tool_call_id, args, signal=None, on_update=None):
+        tool_signals.append(bool(signal and signal.aborted))
+        return AgentToolResult(content=[TextContent(text="probe ok")], details={})
+
+    probe = AgentTool(
+        name="probe",
+        description="probe",
+        parameters={"type": "object", "properties": {}},
+        label="Probe",
+        execute=probe_execute,
+    )
+    agent.state.tools = [probe]
+    first_error: list[BaseException] = []
+
+    def run_first() -> None:
+        try:
+            agent.prompt("first", stream_fn=stream_fn)
+        except BaseException as error:  # noqa: BLE001
+            first_error.append(error)
+
+    first_thread = threading.Thread(target=run_first)
+    first_thread.start()
+    assert first_stream_started.wait(timeout=2)
+    agent.abort()
+    release_first_stream.set()
+    first_thread.join(timeout=2)
+
+    assert first_error == []
+    assert agent.state.is_streaming is False
+
+    agent.prompt("second", stream_fn=stream_fn)
+
+    assert tool_signals == [False]
+
+
+def test_agent_stream_options_include_active_signal() -> None:
+    model = faux_model()
+    agent = Agent(system_prompt="sys", model=model, convert_to_llm=_convert, thinking_level="medium")
+    stream_started = threading.Event()
+    release_stream = threading.Event()
+    seen_options: list[object] = []
+
+    def stream_fn(model, context, options):
+        seen_options.append(options)
+        stream = create_assistant_message_event_stream()
+        events = text_response_events(model, "done")
+        stream.push(type(events[0])(partial=events[0].partial))
+        stream_started.set()
+
+        def finish() -> None:
+            release_stream.wait(timeout=2)
+            for event in events[1:]:
+                stream.push(event)
+
+        threading.Thread(target=finish, daemon=True).start()
+        return stream
+
+    run_error: list[BaseException] = []
+
+    def run_prompt() -> None:
+        try:
+            agent.prompt("hello", stream_fn=stream_fn)
+        except BaseException as error:  # noqa: BLE001
+            run_error.append(error)
+
+    thread = threading.Thread(target=run_prompt)
+    thread.start()
+    assert stream_started.wait(timeout=2)
+    assert len(seen_options) == 1
+    options = seen_options[0]
+    assert options is not None
+    assert getattr(options, "signal") is agent.signal
+    assert getattr(options, "reasoning") == "medium"
+    assert agent.signal.aborted is False
+
+    agent.abort()
+    assert getattr(options, "signal").aborted is True
+    release_stream.set()
+    thread.join(timeout=2)
+
+    assert run_error == []
+
+
+def test_continue_processes_queued_follow_up_after_assistant_turn() -> None:
+    model = faux_model()
+    agent = Agent(system_prompt="sys", model=model, convert_to_llm=_convert)
+    response_count = {"n": 0}
+
+    def stream_fn(model, context, options):
+        response_count["n"] += 1
+        return create_faux_provider(
+            lambda m, c: text_response_events(m, f"processed {response_count['n']}")
+        ).stream_simple(model, context, options)
+
+    agent.prompt("initial", stream_fn=stream_fn)
+    agent.follow_up(UserMessage(content="queued follow-up", timestamp=now_ms()))
+
+    agent.continue_(stream_fn=stream_fn)
+
+    user_messages = [message for message in agent.state.messages if getattr(message, "role", None) == "user"]
+    assert any(getattr(message, "content", None) == "queued follow-up" for message in user_messages)
+    assert getattr(agent.state.messages[-1], "role", None) == "assistant"
+    assert response_count["n"] == 2
+
+
+def test_continue_keeps_one_at_a_time_steering_from_assistant_tail() -> None:
+    model = faux_model()
+    agent = Agent(system_prompt="sys", model=model, convert_to_llm=_convert)
+    response_count = {"n": 0}
+
+    def stream_fn(model, context, options):
+        response_count["n"] += 1
+        return create_faux_provider(
+            lambda m, c: text_response_events(m, f"processed {response_count['n']}")
+        ).stream_simple(model, context, options)
+
+    agent.prompt("initial", stream_fn=stream_fn)
+    agent.steer(UserMessage(content="steering 1", timestamp=now_ms()))
+    agent.steer(UserMessage(content="steering 2", timestamp=now_ms()))
+
+    agent.continue_(stream_fn=stream_fn)
+
+    assert [getattr(message, "role", None) for message in agent.state.messages[-4:]] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+    ]
+    assert [getattr(message, "content", None) for message in agent.state.messages[-4::2]] == [
+        "steering 1",
+        "steering 2",
+    ]
+    assert response_count["n"] == 3
+
+
+def test_wait_for_idle_waits_for_agent_end_listeners() -> None:
+    model = faux_model()
+    agent = Agent(system_prompt="sys", model=model, convert_to_llm=_convert)
+    listener_entered = threading.Event()
+    release_listener = threading.Event()
+
+    def listener(event):
+        if event.type == "agent_end":
+            listener_entered.set()
+            release_listener.wait(timeout=2)
+
+    agent.subscribe(listener)
+    run_error: list[BaseException] = []
+
+    def run_prompt() -> None:
+        try:
+            agent.prompt(
+                "hello",
+                stream_fn=lambda model, context, options: create_faux_provider(
+                    lambda m, c: text_response_events(m, "done")
+                ).stream_simple(model, context, options),
+            )
+        except BaseException as error:  # noqa: BLE001
+            run_error.append(error)
+
+    thread = threading.Thread(target=run_prompt)
+    thread.start()
+    assert listener_entered.wait(timeout=2)
+    assert agent.state.is_streaming is True
+    assert agent.wait_for_idle(timeout=0.01) is False
+
+    release_listener.set()
+    thread.join(timeout=2)
+
+    assert run_error == []
+    assert agent.wait_for_idle(timeout=0.01) is True
+    assert agent.state.is_streaming is False
+
+
+def test_listener_receives_active_abort_signal() -> None:
+    model = faux_model()
+    agent = Agent(system_prompt="sys", model=model, convert_to_llm=_convert)
+    stream_started = threading.Event()
+    assistant_started = threading.Event()
+    release_stream = threading.Event()
+    seen_signals: list[object] = []
+
+    def listener(event, signal):
+        if event.type == "message_start" and getattr(event.message, "role", None) == "assistant":
+            seen_signals.append(signal)
+            assistant_started.set()
+
+    def stream_fn(model, context, options):
+        stream = create_assistant_message_event_stream()
+        events = text_response_events(model, "done")
+        stream.push(type(events[0])(partial=events[0].partial))
+        stream_started.set()
+
+        def finish() -> None:
+            release_stream.wait(timeout=2)
+            for event in events[1:]:
+                stream.push(event)
+
+        threading.Thread(target=finish, daemon=True).start()
+        return stream
+
+    agent.subscribe(listener)
+    run_error: list[BaseException] = []
+
+    def run_prompt() -> None:
+        try:
+            agent.prompt("hello", stream_fn=stream_fn)
+        except BaseException as error:  # noqa: BLE001
+            run_error.append(error)
+
+    thread = threading.Thread(target=run_prompt)
+    thread.start()
+    assert stream_started.wait(timeout=2)
+    assert assistant_started.wait(timeout=2)
+    assert seen_signals == [agent.signal]
+    assert getattr(seen_signals[0], "aborted") is False
+
+    agent.abort()
+    assert getattr(seen_signals[0], "aborted") is True
+    release_stream.set()
+    thread.join(timeout=2)
+
+    assert run_error == []
+
+
+def test_agent_prepare_next_turn_receives_active_abort_signal() -> None:
+    model = faux_model()
+    seen_signals: list[object] = []
+
+    def prepare_next_turn(signal):
+        seen_signals.append(signal)
+        return None
+
+    agent = Agent(
+        system_prompt="sys",
+        model=model,
+        convert_to_llm=_convert,
+        prepare_next_turn=prepare_next_turn,
+    )
+
+    agent.prompt(
+        "hello",
+        stream_fn=lambda model, context, options: create_faux_provider(
+            lambda m, c: text_response_events(m, "done")
+        ).stream_simple(model, context, options),
+    )
+
+    assert seen_signals == [agent.signal]
+    assert getattr(seen_signals[0], "aborted") is False
+
+
+def test_prompt_failure_emits_assistant_error_lifecycle() -> None:
+    model = faux_model()
+    agent = Agent(system_prompt="sys", model=model, convert_to_llm=_convert)
+    events: list[str] = []
+    agent.subscribe(lambda event: events.append(event.type))
+
+    def stream_fn(model, context, options):
+        raise RuntimeError("provider exploded")
+
+    new_messages = agent.prompt("hello", stream_fn=stream_fn)
+
+    assert "message_start" in events
+    assert "message_end" in events
+    assert "turn_end" in events
+    assert events[-1] == "agent_end"
+    assert len(new_messages) == 1
+    failure = new_messages[0]
+    assert getattr(failure, "role", None) == "assistant"
+    assert getattr(failure, "stop_reason", None) == "error"
+    assert getattr(failure, "error_message", None) == "provider exploded"
+    assert getattr(agent.state.messages[-1], "error_message", None) == "provider exploded"
+    assert agent.state.is_streaming is False
+
+
+def test_agent_forwards_provider_runtime_stream_options() -> None:
+    model = faux_model()
+    on_payload = object()
+    on_response = object()
+    agent = Agent(
+        system_prompt="sys",
+        model=model,
+        convert_to_llm=_convert,
+        thinking_level="high",
+        session_id="session-abc",
+        transport="websocket",
+        thinking_budgets={"high": 2048},
+        max_retry_delay_ms=1234,
+        on_payload=on_payload,
+        on_response=on_response,
+    )
+    seen_options: list[object] = []
+
+    def stream_fn(model, context, options):
+        seen_options.append(options)
+        return create_faux_provider(lambda m, c: text_response_events(m, "done")).stream_simple(
+            model, context, options
+        )
+
+    agent.prompt("hello", stream_fn=stream_fn)
+
+    assert len(seen_options) == 1
+    options = seen_options[0]
+    assert getattr(options, "session_id") == "session-abc"
+    assert getattr(options, "transport") == "websocket"
+    assert getattr(options, "thinking_budgets") == {"high": 2048}
+    assert getattr(options, "max_retry_delay_ms") == 1234
+    assert getattr(options, "on_payload") is on_payload
+    assert getattr(options, "on_response") is on_response
+
+
+def test_agent_queue_status_clear_and_modes() -> None:
+    model = faux_model()
+    agent = Agent(system_prompt="sys", model=model, convert_to_llm=_convert)
+
+    assert agent.steering_mode == "one-at-a-time"
+    assert agent.follow_up_mode == "one-at-a-time"
+    assert agent.has_queued_messages() is False
+
+    agent.steering_mode = "all"
+    agent.follow_up_mode = "all"
+    assert agent.steering_mode == "all"
+    assert agent.follow_up_mode == "all"
+
+    agent.steer(UserMessage(content="steer", timestamp=now_ms()))
+    assert agent.has_queued_messages() is True
+    agent.clear_steering_queue()
+    assert agent.has_queued_messages() is False
+
+    agent.follow_up(UserMessage(content="follow", timestamp=now_ms()))
+    assert agent.has_queued_messages() is True
+    agent.clear_follow_up_queue()
+    assert agent.has_queued_messages() is False
+
+    agent.steer(UserMessage(content="steer", timestamp=now_ms()))
+    agent.follow_up(UserMessage(content="follow", timestamp=now_ms()))
+    assert agent.has_queued_messages() is True
+    agent.clear_all_queues()
+    assert agent.has_queued_messages() is False

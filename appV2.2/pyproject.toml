@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "appv22"
+version = "0.1.0"
+description = "Pi-style coding agent with Hermes-style compaction."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.13,<3.14"
+dependencies = [
+  "httpx>=0.27",
+  "langgraph>=0.6.0",
+  "openrouter>=0.9.1",
+  "playwright>=1.59",
+  "pydantic>=2.0",
+]
+
+[project.scripts]
+appv22 = "appv22.cli:main"
+v22 = "appv22.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["appv22*"]
+
+[tool.setuptools.package-data]
+"appv22.coding_agent" = ["export_html_assets/vendor/*.js"]
