@@ -21,6 +21,7 @@ from types import SimpleNamespace
 import pytest
 
 import travis.tui.interactive_mode as interactive_mode
+import travis.tui.interactive_model_auth as interactive_model_auth
 
 from travis.ai.providers import model_catalog
 

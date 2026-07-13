@@ -109,6 +109,7 @@ from travis.coding_agent.tools.types import (
 )
 
 from travis.coding_agent.session_types import *  # noqa: F403
+from travis.runtime_facade import RuntimeFacade
 
 from travis.coding_agent.session_events import SessionEventController
 from travis.coding_agent.session_tooling import SessionToolController
@@ -404,27 +405,13 @@ class _SessionRuntime(
             self._emit_session_start_event()
 
 
-class AgentSession:
+class AgentSession(RuntimeFacade):
     """Stable public facade over the composed coding-session runtime."""
 
     def __init__(self, *args, **kwargs) -> None:
         runtime = _SessionRuntime(*args, **kwargs)
         runtime._session_factory = type(self)
         object.__setattr__(self, "_runtime", runtime)
-
-    def __getattr__(self, name: str):
-        return getattr(self._runtime, name)
-
-    def __setattr__(self, name: str, value) -> None:
-        runtime = self.__dict__.get("_runtime")
-        if runtime is None or name == "_runtime":
-            object.__setattr__(self, name, value)
-            return
-        setattr(runtime, name, value)
-
-    def __dir__(self) -> list[str]:
-        return sorted(set(object.__dir__(self)) | set(dir(self._runtime)))
-
 
 def create_agent_session(
     *,

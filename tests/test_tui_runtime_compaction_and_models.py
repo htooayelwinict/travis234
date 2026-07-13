@@ -779,7 +779,7 @@ def test_interactive_mode_model_command_switches_openrouter_without_model_turn(t
 def test_interactive_mode_model_command_selects_registered_alternate_without_model_turn(tmp_path, monkeypatch) -> None:
     register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    monkeypatch.setattr(interactive_mode, "get_live_openrouter_models", lambda **kwargs: [])
+    monkeypatch.setattr(interactive_model_auth, "get_live_openrouter_models", lambda **kwargs: [])
     terminal = FakeTerminal(columns=140)
     active = Model(
         id="qwen/qwen3.6-flash",
@@ -848,7 +848,7 @@ def test_interactive_mode_model_command_fetches_openrouter_catalog_for_picker(tm
         ]
         return [model for item in items if (model := openrouter_live_catalog_item_to_model(item, base_model)) is not None]
 
-    monkeypatch.setattr(interactive_mode, "get_live_openrouter_models", fake_live_models)
+    monkeypatch.setattr(interactive_model_auth, "get_live_openrouter_models", fake_live_models)
     app = CodingApp(cwd=str(tmp_path), model=active, terminal=terminal, enable_tui=True)
     inputs = iter(["/model", "1", "/exit"])
     mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
@@ -892,7 +892,7 @@ def test_interactive_mode_model_command_caps_openrouter_full_context_output_limi
         ]
         return [model for item in items if (model := openrouter_live_catalog_item_to_model(item, base_model)) is not None]
 
-    monkeypatch.setattr(interactive_mode, "get_live_openrouter_models", fake_live_models)
+    monkeypatch.setattr(interactive_model_auth, "get_live_openrouter_models", fake_live_models)
     app = CodingApp(cwd=str(tmp_path), model=active, terminal=terminal, enable_tui=True)
     inputs = iter(["/model", "1", "/exit"])
     mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
@@ -930,7 +930,7 @@ def test_interactive_mode_openrouter_catalog_uses_shared_model_metadata_converte
         ]
         return [model for item in items if (model := openrouter_live_catalog_item_to_model(item, base_model)) is not None]
 
-    monkeypatch.setattr(interactive_mode, "get_live_openrouter_models", fake_live_models)
+    monkeypatch.setattr(interactive_model_auth, "get_live_openrouter_models", fake_live_models)
     app = CodingApp(cwd=str(tmp_path), model=active, terminal=terminal, enable_tui=True)
     inputs = iter(["/model", "1", "/exit"])
     mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
@@ -973,7 +973,7 @@ def test_interactive_mode_model_command_uses_shared_openrouter_live_cache(tmp_pa
         assert force_refresh is False
         return [cached_model]
 
-    monkeypatch.setattr(interactive_mode, "get_live_openrouter_models", fake_live_models)
+    monkeypatch.setattr(interactive_model_auth, "get_live_openrouter_models", fake_live_models)
     app = CodingApp(cwd=str(tmp_path), model=active, terminal=terminal, enable_tui=True)
     inputs = iter(["/model", "1", "/exit"])
     mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
@@ -1007,7 +1007,7 @@ def test_interactive_mode_model_command_filters_openrouter_catalog_without_huge_
         ]
         return [model for item in items if (model := openrouter_live_catalog_item_to_model(item, base_model)) is not None]
 
-    monkeypatch.setattr(interactive_mode, "get_live_openrouter_models", fake_live_models)
+    monkeypatch.setattr(interactive_model_auth, "get_live_openrouter_models", fake_live_models)
     app = CodingApp(cwd=str(tmp_path), model=active, terminal=terminal, enable_tui=True)
     inputs = iter(["/model kimi", "2", "/exit"])
     mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
@@ -1044,7 +1044,7 @@ def test_interactive_mode_model_list_does_not_block_on_remote_catalog(tmp_path, 
         release.wait(timeout=2)
         return [remote]
 
-    monkeypatch.setattr(interactive_mode, "get_live_openrouter_models", blocking_catalog)
+    monkeypatch.setattr(interactive_model_auth, "get_live_openrouter_models", blocking_catalog)
     app = CodingApp(cwd=str(tmp_path), model=active, terminal=FakeTerminal(columns=140), enable_tui=True)
     mode = InteractiveMode(app)
     mode.init()
@@ -1085,7 +1085,7 @@ def test_interactive_mode_model_command_warns_and_falls_back_when_openrouter_fet
     def fail_fetch(*, base_model, force_refresh=False):
         raise RuntimeError("network down")
 
-    monkeypatch.setattr(interactive_mode, "get_live_openrouter_models", fail_fetch)
+    monkeypatch.setattr(interactive_model_auth, "get_live_openrouter_models", fail_fetch)
     app = CodingApp(cwd=str(tmp_path), model=active, terminal=terminal, enable_tui=True)
     inputs = iter(["/model", "1", "/exit"])
     mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
