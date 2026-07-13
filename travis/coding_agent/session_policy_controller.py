@@ -23,6 +23,9 @@ from travis.agent.types import AgentMessage
 from travis.agent.types import BeforeToolCallResult
 from travis.agent.types import MessageEndEvent, MessageStartEvent
 from travis.coding_agent.policies.tool_guardrails import (
+    DEFAULT_ADAPTIVE_FORCE_FINALIZE_AFTER,
+    DEFAULT_NO_PROGRESS_BLOCK_TOOL_NAMES,
+    IDEMPOTENT_NO_PROGRESS_RECOVERY_BLOCK_CODE,
     ToolCallGuardrailConfig,
     ToolCallGuardrailController,
     ToolGuardrailDecision,
@@ -110,6 +113,13 @@ from travis.coding_agent.tools.types import (
 
 from travis.coding_agent.session_types import _MALFORMED_STREAM_RECOVERY_PREFIX, _append_toolguard_content, _tool_result_text, _with_toolguard_details
 
+_TOOL_LOOP_FORCE_FINALIZE_SYSTEM_SUFFIX = (
+    "\n\nThe runtime detected a repeated unchanged-tool loop and has disabled tools for this "
+    "single recovery response. Finish the original user task now using the evidence already "
+    "in the conversation. State what was completed and any genuine remaining blocker. Do not "
+    "ask the user to repeat the task or call another tool."
+)
+
 _PROCESS_LIMIT_BASH_TURN_MARKERS = (
     "do not run any other command",
     "don't run any other command",
@@ -135,11 +145,28 @@ def _is_internal_steering_user_message(text: str | None) -> bool:
     return prompt.startswith(
         (
             "[tool_guardrail_warning",
+            "[tool_guardrail_recovery",
             "[user_process_limit]",
             "[System: Your previous tool call ",
             _MALFORMED_STREAM_RECOVERY_PREFIX,
         )
     )
+
+
+def _deduplicated_tool_result(decision: ToolGuardrailDecision) -> list[TextContent]:
+    payload = {
+        "status": "unchanged",
+        "message": (
+            f"{decision.tool_name or 'tool'} returned the same unchanged result again; "
+            "duplicate content omitted. Use the earlier result already in this conversation."
+        ),
+        "guardrail": decision.to_metadata(),
+    }
+    return [TextContent(text=json.dumps(payload, ensure_ascii=False))]
+
+
+def _adaptive_recovery_blocked_result(text: str) -> bool:
+    return text.lstrip().startswith(f"[{IDEMPOTENT_NO_PROGRESS_RECOVERY_BLOCK_CODE}]")
 
 
 def _user_message_has_process_limit(text: str | None) -> bool:
@@ -369,6 +396,11 @@ class SessionPolicyController:
         if not isinstance(policy_decision, Allow):
             if isinstance(policy_decision, Block) and self._tool_guardrails.halt_decision is not None:
                 self._tool_guardrail_halt_decision = self._tool_guardrails.halt_decision
+            if (
+                isinstance(policy_decision, Block)
+                and policy_decision.code == IDEMPOTENT_NO_PROGRESS_RECOVERY_BLOCK_CODE
+            ):
+                self._queue_tool_loop_recovery(policy_decision)
             self._emit(
                 CodingPolicyEvent(
                     decision=policy_decision,
@@ -388,6 +420,29 @@ class SessionPolicyController:
             return duplicate_bash_result
 
         return None
+
+    def _queue_tool_loop_recovery(self, decision: Block) -> None:
+        metadata = dict(decision.metadata)
+        count = int(metadata.get("count") or 0)
+        force_finalize = count >= DEFAULT_ADAPTIVE_FORCE_FINALIZE_AFTER
+        stage = 2 if force_finalize else 1
+        key = (decision.code, "turn", stage)
+        if key in self._tool_loop_recovery_steered_keys:
+            return
+        self._tool_loop_recovery_steered_keys.add(key)
+        if force_finalize:
+            self._tool_loop_force_finalize = True
+        instruction = (
+            f"[tool_guardrail_recovery code={decision.code} count={count} stage={stage}] "
+            "The exact unchanged call was blocked and its earlier output remains in context. "
+            "Do not request that call again. If the original task is already implemented and "
+            "verified, provide the final answer now. Otherwise use one materially different or "
+            "state-changing action and continue inside this same turn; do not ask the user to "
+            "repeat or resume the task."
+        )
+        if force_finalize:
+            instruction += " Tools are disabled for the next response, so finalize now from existing evidence."
+        self.agent.steer(UserMessage(content=[TextContent(text=instruction)], timestamp=now_ms()))
 
     def _duplicate_bash_call_in_current_turn(self, tool_name: str, args) -> BeforeToolCallResult | None:
         if tool_name != "bash" or not isinstance(args, Mapping):
@@ -471,6 +526,12 @@ class SessionPolicyController:
             content = _append_toolguard_content(content, decision)
             content_changed = True
         elif decision.action == "warn":
+            if (
+                decision.code == "idempotent_no_progress_warning"
+                and context.tool_call.name in DEFAULT_NO_PROGRESS_BLOCK_TOOL_NAMES
+            ):
+                content = _deduplicated_tool_result(decision)
+                content_changed = True
             content = _append_toolguard_content(content, decision)
             content_changed = True
             details = _with_toolguard_details(details, decision)

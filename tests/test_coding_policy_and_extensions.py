@@ -411,7 +411,10 @@ def test_tool_loop_guardrail_resets_consecutive_idempotent_count_on_different_to
     from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailConfig, ToolCallGuardrailController
 
     controller = ToolCallGuardrailController(
-        ToolCallGuardrailConfig(consecutive_no_progress_block_after=4)
+        ToolCallGuardrailConfig(
+            blocking_enabled=True,
+            consecutive_no_progress_block_after=4,
+        )
     )
     repeated = {"command": "find . -name jsonpatch.py"}
 

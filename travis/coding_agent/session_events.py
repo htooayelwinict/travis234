@@ -110,6 +110,7 @@ from travis.coding_agent.tools.types import (
 
 from travis.coding_agent.session_extensions import _replace_message_in_place
 from travis.coding_agent.session_types import QueueUpdateEvent, _append_toolguard_content, _tool_result_text, _with_toolguard_details
+from travis.coding_agent.session_policy_controller import _adaptive_recovery_blocked_result
 
 def _canonicalize_process_tool_calls(message: AssistantMessage) -> None:
     for block in message.content:
@@ -193,6 +194,11 @@ class SessionEventController:
         if self._tool_guardrail_halt_decision is not None:
             return
         result_text = _tool_result_text(event.result.content)
+        if _adaptive_recovery_blocked_result(result_text):
+            # before_call already recorded and steered this recoverable block.
+            # Treating the synthetic result as a fresh tool failure would erase
+            # the unchanged-result evidence and let the next identical call run.
+            return
         decision = self._tool_guardrails.after_call(
             event.tool_name,
             event.args if isinstance(event.args, Mapping) else {},

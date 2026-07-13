@@ -285,6 +285,44 @@ def test_tool_loop_guardrail_allows_useful_followup_reads_but_warns_on_repeated_
     assert repeated.code == "idempotent_no_progress_warning"
     assert "Use a different query/path only if the existing result is insufficient" in repeated.message
 
+
+def test_default_tool_loop_guardrail_blocks_third_unchanged_read_without_halting_turn() -> None:
+    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailController
+
+    controller = ToolCallGuardrailController()
+    args = {"path": "src/client.py", "offset": 1, "limit": 200}
+
+    first = controller.after_call("read", args, "same body", failed=False)
+    second = controller.after_call("read", args, "same body", failed=False)
+    third = controller.before_call("read", args)
+
+    assert first.action == "allow"
+    assert second.code == "idempotent_no_progress_warning"
+    assert third.action == "block"
+    assert third.code == "idempotent_no_progress_recovery_block"
+    assert third.count == 3
+    assert third.should_halt is False
+
+
+def test_default_tool_loop_guardrail_reopens_reads_after_successful_mutation() -> None:
+    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailController
+
+    controller = ToolCallGuardrailController()
+    read_args = {"path": "src/client.py", "offset": 1, "limit": 200}
+    controller.after_call("read", read_args, "old body", failed=False)
+    controller.after_call("read", read_args, "old body", failed=False)
+    assert controller.before_call("read", read_args).action == "block"
+
+    mutation = controller.after_call(
+        "write",
+        {"path": "src/client.py", "content": "new body"},
+        "Successfully wrote src/client.py",
+        failed=False,
+    )
+
+    assert mutation.action == "allow"
+    assert controller.before_call("read", read_args).action == "allow"
+
 def test_tool_loop_guardrail_normalizes_bash_inventory_paths_against_cwd(tmp_path: Path) -> None:
     from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailConfig, ToolCallGuardrailController
 
@@ -369,11 +407,68 @@ def test_agent_session_appends_tool_loop_warning_to_repeated_bash_result(tmp_pat
     ]
     assert executions == [{"command": "ls -la src/metrics"}, {"command": "ls -la src/metrics"}]
     assert len(tool_results) == 2
-    assert "total 120" in tool_results[1].content[0].text
+    assert "total 120" not in tool_results[1].content[0].text
+    assert "unchanged" in tool_results[1].content[0].text
+    assert "content omitted" in tool_results[1].content[0].text
     assert "idempotent_no_progress_warning" in tool_results[1].content[0].text
     assert "Use the result already provided" in tool_results[1].content[0].text
     assert tool_results[1].details["toolGuardrailWarnings"][0]["code"] == "idempotent_no_progress_warning"
     assert user_messages == ["inspect metrics"]
+
+
+def test_agent_session_recovers_repeated_reads_and_forces_same_turn_finalization(tmp_path: Path) -> None:
+    model = faux_model()
+    provider_calls = {"n": 0}
+    executions: list[dict] = []
+
+    def execute(tool_call_id, args, signal=None, on_update=None, ctx=None):
+        executions.append(dict(args))
+        return AgentToolResult(content=[TextContent(text="stable file body")], details={})
+
+    read_definition = ToolDefinition(
+        name="read",
+        label="read",
+        description="Read a file",
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+        execute=execute,
+    )
+
+    def script(m, c):
+        provider_calls["n"] += 1
+        if not c.tools:
+            return text_response_events(m, "Recovered and finalized in the original turn.")
+        return tool_call_response_events(
+            m,
+            "read",
+            {"path": "src/client.py"},
+            call_id=f"read_{provider_calls['n']}",
+        )
+
+    register_api_provider(create_faux_provider(script))
+    session = AgentSession(cwd=str(tmp_path), model=model, tool_definitions=[read_definition])
+
+    session.prompt("finish the client task without asking me to retry")
+
+    tool_results = [message for message in session.messages if getattr(message, "role", None) == "toolResult"]
+    internal_recovery = [
+        _content_text(message.content)
+        for message in session.messages
+        if getattr(message, "role", None) == "user"
+        and _content_text(message.content).startswith("[tool_guardrail_recovery")
+    ]
+    assert executions == [{"path": "src/client.py"}, {"path": "src/client.py"}]
+    assert provider_calls["n"] == 6
+    assert len(tool_results) == 5
+    assert tool_results[0].content[0].text == "stable file body"
+    assert "content omitted" in tool_results[1].content[0].text
+    assert all("idempotent_no_progress_recovery_block" in result.content[0].text for result in tool_results[2:])
+    assert len(internal_recovery) == 2
+    assert session.messages[-1].content[0].text == "Recovered and finalized in the original turn."
+    assert [tool.name for tool in session.agent.state.tools] == ["read"]
 
 
 def test_agent_session_path_scoped_no_retry_does_not_stop_same_turn_recovery(tmp_path: Path) -> None:

@@ -77,7 +77,13 @@ FILE_OBSERVING_TOOL_NAMES = frozenset(
 WORKSPACE_SCOPE_VIOLATION_CODE = "workspace_scope_violation"
 WORKSPACE_SCOPE_REPEATED_WARNING_CODE = "workspace_scope_repeated_warning"
 WORKSPACE_SCOPE_REPEATED_BLOCK_CODE = "workspace_scope_repeated_block"
-RECOVERABLE_BLOCK_CODES = frozenset({WORKSPACE_SCOPE_VIOLATION_CODE})
+IDEMPOTENT_NO_PROGRESS_RECOVERY_BLOCK_CODE = "idempotent_no_progress_recovery_block"
+RECOVERABLE_BLOCK_CODES = frozenset(
+    {
+        WORKSPACE_SCOPE_VIOLATION_CODE,
+        IDEMPOTENT_NO_PROGRESS_RECOVERY_BLOCK_CODE,
+    }
+)
 
 DEFAULT_NO_PROGRESS_BLOCK_TOOL_NAMES = frozenset(
     {
@@ -100,6 +106,8 @@ DEFAULT_NO_PROGRESS_BLOCK_TOOL_NAMES = frozenset(
 )
 DEFAULT_READ_STYLE_NO_PROGRESS_BLOCK_AFTER = 3
 DEFAULT_READ_STYLE_EXACT_FAILURE_BLOCK_AFTER = 4
+DEFAULT_ADAPTIVE_NO_PROGRESS_BLOCK_AFTER = 2
+DEFAULT_ADAPTIVE_FORCE_FINALIZE_AFTER = 5
 DEFAULT_MUTATING_NO_PROGRESS_WARN_AFTER = 3
 DEFAULT_MUTATING_NO_PROGRESS_HALT_AFTER = 6
 _BASH_FILE_PREVIEW_COMMANDS = frozenset({"awk", "cat", "head", "sed", "tail"})
@@ -291,6 +299,7 @@ class ToolCallGuardrailController:
         self._landed_file_mutation_counts: dict[str, int] = {}
         self._workspace_scope_violation_counts: dict[ToolCallSignature, int] = {}
         self._mutating_no_progress: dict[str, tuple[str, int]] = {}
+        self._adaptive_block_counts: dict[ToolCallSignature, int] = {}
         self._halt_decision: ToolGuardrailDecision | None = None
 
     @property
@@ -323,6 +332,27 @@ class ToolCallGuardrailController:
             )
             self._halt_decision = decision
             return decision
+
+        if not self.config.blocking_enabled and tool_name in DEFAULT_NO_PROGRESS_BLOCK_TOOL_NAMES:
+            progress_signature = _no_progress_signature(tool_name, args, self.cwd) or signature
+            record = self._no_progress.get(progress_signature)
+            if record is not None and record[1] >= DEFAULT_ADAPTIVE_NO_PROGRESS_BLOCK_AFTER:
+                blocked_count = self._adaptive_block_counts.get(progress_signature, 0) + 1
+                self._adaptive_block_counts[progress_signature] = blocked_count
+                count = record[1] + blocked_count
+                return ToolGuardrailDecision(
+                    action="block",
+                    code=IDEMPOTENT_NO_PROGRESS_RECOVERY_BLOCK_CODE,
+                    message=(
+                        f"BLOCKED: {tool_name} already returned this unchanged result {record[1]} times, "
+                        "so the duplicate call was not executed and its content was not added again. "
+                        "Use the earlier result. Make a materially different or state-changing tool call "
+                        "if work remains; otherwise finish the task now without asking the user to repeat it."
+                    ),
+                    tool_name=tool_name,
+                    count=count,
+                    signature=progress_signature,
+                )
 
         if not self.config.blocking_enabled:
             return ToolGuardrailDecision(tool_name=tool_name, signature=signature)
@@ -452,6 +482,13 @@ class ToolCallGuardrailController:
             self._exact_failure_counts.clear()
             self._same_tool_failure_counts.clear()
             self._reset_consecutive()
+            if not self.config.blocking_enabled:
+                # Adaptive dedup is freshness-sensitive. Any successful mutation
+                # may invalidate an earlier observation, so let the model read
+                # again. Strict administrative hard-stop mode intentionally keeps
+                # its turn-wide evidence instead.
+                self._no_progress.clear()
+                self._adaptive_block_counts.clear()
         else:
             self._exact_failure_counts.pop(signature, None)
             self._same_tool_failure_counts.pop(tool_name, None)

@@ -248,6 +248,7 @@ class _SessionRuntime(
         self._tool_guardrail_halt_decision: ToolGuardrailDecision | None = None
         self._tool_guardrail_halt_response_emitted = False
         self._tool_loop_recovery_steered_keys: set[tuple[str, str, int]] = set()
+        self._tool_loop_force_finalize = False
         self._bash_signatures_this_assistant_turn: set[str] = set()
         self._process_limit_recovery_steered = False
         self._process_limit_halt_message: str | None = None
