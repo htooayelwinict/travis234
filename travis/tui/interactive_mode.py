@@ -10,7 +10,7 @@ import signal as signal_module
 import subprocess
 import threading
 import time
-from concurrent.futures import Future
+from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
@@ -57,6 +57,8 @@ OPENROUTER_MODEL_CACHE_TTL_SECONDS = 300
 OPENROUTER_MODEL_PICKER_LIMIT = 50
 LATE_ABORT_GRACE_SECONDS = 1.0
 IDLE_CTRL_C_EXIT_WINDOW_SECONDS = 1.5
+ACTIVE_TURN_SHUTDOWN_TIMEOUT_SECONDS = 2.0
+SESSION_COMMAND_SHUTDOWN_TIMEOUT_SECONDS = 1.0
 _SIGINT_HANDLER_UNCHANGED = object()
 
 
@@ -392,7 +394,6 @@ class InteractiveMode:
                     self.status.set_message("Exiting")
                     self._refresh_footer()
                     self.tui.request_render()
-                    self._wait_for_active_turn()
                     return 0
                 if not prompt:
                     continue
@@ -460,11 +461,13 @@ class InteractiveMode:
             if self._user_commands is not None:
                 self._user_commands.close()
             self.tui.drain_dispatcher()
-            self._wait_for_active_turn()
+            if not self._wait_for_active_turn():
+                self._abort_active_turn_for_shutdown()
+                self._wait_for_active_turn()
             self.tui.drain_dispatcher()
             self._run_loop_active = False
             if self._session_commands is not None:
-                self._session_commands.close()
+                self._session_commands.close(timeout=SESSION_COMMAND_SHUTDOWN_TIMEOUT_SECONDS)
                 self._session_commands = None
             if self._model_loader is not None:
                 self._model_loader.close()
@@ -750,27 +753,59 @@ class InteractiveMode:
             self.tui.drain_dispatcher()
         return active
 
-    def _wait_for_active_turn(self) -> None:
+    def _wait_for_active_turn(
+        self,
+        *,
+        timeout_seconds: float = ACTIVE_TURN_SHUTDOWN_TIMEOUT_SECONDS,
+    ) -> bool:
+        if timeout_seconds < 0:
+            raise ValueError("timeout_seconds must be nonnegative")
+        deadline = time.monotonic() + timeout_seconds
         while True:
             with self._turn_lock:
                 future = self._turn_future
                 thread = self._turn_thread
             if future is not None and not future.done():
-                future.result()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                try:
+                    future.result(timeout=remaining)
+                except FutureTimeoutError:
+                    return False
+                except BaseException:
+                    pass
                 continue
             if thread is not None and thread is not threading.current_thread() and thread.is_alive():
-                thread.join()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                thread.join(timeout=remaining)
+                if thread.is_alive():
+                    return False
                 continue
             break
         if not self._run_loop_active and self._session_commands is not None:
-            self._session_commands.close()
+            self._session_commands.close(timeout=SESSION_COMMAND_SHUTDOWN_TIMEOUT_SECONDS)
             self._session_commands = None
         if self.tui.dispatcher.is_owner_thread():
             self.tui.drain_dispatcher()
+        return True
+
+    def _abort_active_turn_for_shutdown(self) -> None:
+        if not (self._is_turn_active() or self.app.session.is_streaming):
+            return
+        if self._agent_abort_requested:
+            return
+        self._agent_abort_requested = True
+        try:
+            self.app.session.agent.abort()
+        except BaseException:
+            pass
 
     def _command_executor(self) -> SessionCommandExecutor:
         if self._session_commands is None:
-            self._session_commands = SessionCommandExecutor(daemon=not self._run_loop_active)
+            self._session_commands = SessionCommandExecutor(daemon=True)
         return self._session_commands
 
     def _run_session_command(self, name: str, callback: Callable[[], object]):

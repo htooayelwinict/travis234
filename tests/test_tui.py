@@ -1722,6 +1722,31 @@ def test_ctrl_c_aborts_agent_only_once_without_focused_user_command(tmp_path, mo
     app.close()
 
 
+def test_wait_for_active_turn_has_a_shutdown_deadline(tmp_path) -> None:
+    from concurrent.futures import Future
+
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=120),
+        enable_tui=True,
+    )
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+    never_finishes: Future[object] = Future()
+    mode._turn_future = never_finishes
+
+    started_at = time.monotonic()
+    stopped = mode._wait_for_active_turn(timeout_seconds=0.05)
+
+    assert stopped is False
+    assert time.monotonic() - started_at < 0.5
+    mode._turn_future = None
+    if mode._user_commands is not None:
+        mode._user_commands.close()
+    mode.footer_data_provider.dispose()
+    app.close()
+
+
 def test_interactive_mode_escape_aborted_tool_turn_returns_to_idle(tmp_path) -> None:
     started = threading.Event()
     finished = threading.Event()

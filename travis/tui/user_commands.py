@@ -77,6 +77,7 @@ class UserCommandInspection:
     process_id: str | None
     done: bool
     interrupt_requested: bool
+    interrupt_count: int
 
 
 @dataclass
@@ -86,6 +87,7 @@ class _UserCommandState:
     signal: AbortSignal
     process_id: str | None = None
     interrupt_requested: bool = False
+    interrupt_count: int = 0
     done: bool = False
     thread: threading.Thread | None = None
 
@@ -163,14 +165,19 @@ class UserCommandController:
     def interrupt(self, command_id: str) -> bool:
         with self._lock:
             state = self._states.get(command_id)
-            if state is None or state.done or state.interrupt_requested:
+            if state is None or state.done:
                 return False
             state.interrupt_requested = True
+            state.interrupt_count += 1
+            interrupt_count = state.interrupt_count
             process_id = state.process_id
         state.signal.abort()
         if process_id is not None:
             try:
-                self._service.interrupt(state.owner, process_id, wait_ms=0)
+                if interrupt_count == 1:
+                    self._service.interrupt(state.owner, process_id, wait_ms=0)
+                else:
+                    self._service.kill(state.owner, process_id)
             except Exception:
                 pass
         return True
@@ -181,6 +188,7 @@ class UserCommandController:
             if state is None or state.done:
                 return False
             state.interrupt_requested = True
+            state.interrupt_count = max(2, state.interrupt_count)
             process_id = state.process_id
         state.signal.abort()
         if process_id is not None:
@@ -263,16 +271,14 @@ class UserCommandController:
                     on_update=lambda update: self._emit_output(state, update.output),
                 )
             except ProcessWaitCancelledError:
-                try:
-                    self._service.interrupt(state.owner, snapshot.session_id, wait_ms=0)
-                except Exception:
-                    pass
-                snapshot = self._service.wait_terminal(
-                    state.owner,
-                    snapshot.session_id,
-                    cursor,
-                    wait_ms=60_000,
-                )
+                while not snapshot.state.terminal:
+                    snapshot = self._service.wait_terminal(
+                        state.owner,
+                        snapshot.session_id,
+                        cursor,
+                        wait_ms=250,
+                    )
+                    cursor = snapshot.next_cursor
             cursor = snapshot.next_cursor
         tail = self._service.tail_snapshot(state.owner, snapshot.session_id)
         cancelled = state.signal.aborted or snapshot.state is ProcessState.TERMINATED
@@ -333,6 +339,7 @@ class UserCommandController:
             process_id=state.process_id,
             done=state.done,
             interrupt_requested=state.interrupt_requested,
+            interrupt_count=state.interrupt_count,
         )
 
 
