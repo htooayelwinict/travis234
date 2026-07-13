@@ -8,7 +8,7 @@ Runtime tree verified through commit `9198bc9`. Evidence-only documentation chan
 
 - The active product is `Travis234`; distribution and command are `travis234`; the Python package is `travis`.
 - App-owned state, AGENTS, skills, sessions, sandbox home, image, and environment paths use the Travis234 contract.
-- The local `pi/` and `hermes-agent/` directories are intentionally retained as ignored design references and are not distributed runtime trees.
+- The local upstream reference checkouts are intentionally retained as ignored design references and are not distributed runtime trees.
 - Focused brand, distribution, metadata, release, and architecture contracts passed.
 
 ## Process ownership
@@ -42,11 +42,11 @@ Session index, catalog, and performance tests passed. Warm listing uses indexed 
 
 Compaction adapter, coordinator, timing, persistence, model-switch recalibration, real-usage anti-thrash, overflow recovery, and boundary tests passed.
 
-Pi and Hermes were used as design references:
+The two local upstream implementations were used as design references:
 
-- Pi keeps tool-result messages in assistant source order while tool completion events may reflect completion order; Travis234 preserves both invariants.
-- Pi triggers compaction close to the context ceiling. Travis234 deliberately retains the earlier Hermes-derived 50% threshold so mixed providers have recovery headroom.
-- Hermes verifies effectiveness using the next real provider prompt count and clears stale model-bound calibration on model switches; Travis234 implements those safeguards without copying Hermes provider ownership.
+- The loop reference keeps tool-result messages in assistant source order while tool completion events may reflect completion order; Travis234 preserves both invariants.
+- The loop reference triggers compaction close to the context ceiling. Travis234 deliberately retains the earlier compression-derived 50% threshold so mixed providers have recovery headroom.
+- The compression reference verifies effectiveness using the next real provider prompt count and clears stale model-bound calibration on model switches; Travis234 implements those safeguards without copying its provider ownership.
 
 ## Policy
 
