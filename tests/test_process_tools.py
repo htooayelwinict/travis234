@@ -249,6 +249,20 @@ def test_managed_bash_default_yield_is_independent_from_timeout(tmp_path: Path) 
     assert service.yield_time_ms == 10_000
     assert service.request.timeout_seconds == 600
     assert service.request.launch_session_id == "session-abc"
+    assert service.request.stdin_open is False
+
+
+def test_managed_bash_closes_stdin_by_default_so_searches_do_not_wait_for_input(managed_tools) -> None:
+    _service, _owner, bash, _process = managed_tools
+    command = python_command(
+        "import sys; data=sys.stdin.read(); print('EOF' if data == '' else 'UNEXPECTED_INPUT')"
+    )
+
+    result = bash.execute("bash", {"command": command, "yield_time_ms": 1_000})
+
+    assert result.details["status"] == "exited"
+    assert result.details["exitCode"] == 0
+    assert "EOF" in text(result)
 
 
 @pytest.mark.parametrize(
@@ -745,6 +759,7 @@ def test_process_write_submits_one_line(managed_tools) -> None:
             "command": python_command(
                 "import sys; print('READY', flush=True); line=sys.stdin.readline(); print('RECEIVED:'+line.rstrip('\\n'))"
             ),
+            "stdin": "open",
             "yield_time_ms": 0,
         },
     )
@@ -779,6 +794,7 @@ def test_process_write_raw_preserves_exact_input(managed_tools) -> None:
         "bash",
         {
             "command": python_command("import sys; print(repr(sys.stdin.read(5)))"),
+            "stdin": "open",
             "yield_time_ms": 0,
         },
     )

@@ -30,6 +30,7 @@ def request(
     command: str,
     cwd: Path,
     *,
+    stdin_open: bool = False,
     tty: bool = False,
     rows: int = 24,
     cols: int = 80,
@@ -40,6 +41,7 @@ def request(
         cwd=str(cwd),
         env=dict(os.environ),
         shell_path="/bin/bash",
+        stdin_open=stdin_open,
         tty=tty,
         rows=rows,
         cols=cols,
@@ -150,6 +152,7 @@ def test_pipe_transport_accepts_ordered_input_and_eof(service, owner, tmp_path: 
     launch = request(
         python_command("import sys; data=sys.stdin.read(); print('got=' + data.replace('\\n', '|'))"),
         tmp_path,
+        stdin_open=True,
     )
     started = service.start(owner, launch, local_factory(), yield_time_ms=0)
 

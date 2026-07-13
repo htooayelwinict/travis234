@@ -65,7 +65,12 @@ def test_settings_manager_create_persists_global_project_and_project_trust(tmp_p
 
 def test_builtin_tool_definitions_match_travis234_prompt_metadata(tmp_path: Path) -> None:
     prompt_metadata = {
-        "bash": ("Execute bash commands (ls, grep, find, etc.)", []),
+            "bash": (
+                "Execute bash commands (ls, grep, find, etc.)",
+                [
+                    "Leave stdin closed for normal commands, searches, tests, and servers. Set stdin=open only before using process write or write_raw on that command.",
+                ],
+            ),
         "grep": ("Search file contents for patterns (respects .gitignore)", []),
         "find": ("Find files by glob pattern (respects .gitignore)", []),
         "ls": ("List directory contents", []),

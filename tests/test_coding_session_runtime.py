@@ -416,14 +416,21 @@ def test_agent_session_appends_tool_loop_warning_to_repeated_bash_result(tmp_pat
     assert user_messages == ["inspect metrics"]
 
 
-def test_agent_session_recovers_repeated_reads_and_forces_same_turn_finalization(tmp_path: Path) -> None:
+def test_agent_session_recovers_repeated_reads_without_removing_action_tools(tmp_path: Path) -> None:
     model = faux_model()
     provider_calls = {"n": 0}
-    executions: list[dict] = []
+    read_executions: list[dict] = []
+    write_executions: list[dict] = []
+    tool_catalogs: list[tuple[str, ...]] = []
 
-    def execute(tool_call_id, args, signal=None, on_update=None, ctx=None):
-        executions.append(dict(args))
+    def execute_read(tool_call_id, args, signal=None, on_update=None, ctx=None):
+        read_executions.append(dict(args))
         return AgentToolResult(content=[TextContent(text="stable file body")], details={})
+
+    def execute_write(tool_call_id, args, signal=None, on_update=None, ctx=None):
+        write_executions.append(dict(args))
+        (tmp_path / args["path"]).write_text(args["content"], encoding="utf-8")
+        return AgentToolResult(content=[TextContent(text="Successfully wrote the fix")], details={})
 
     read_definition = ToolDefinition(
         name="read",
@@ -434,22 +441,53 @@ def test_agent_session_recovers_repeated_reads_and_forces_same_turn_finalization
             "properties": {"path": {"type": "string"}},
             "required": ["path"],
         },
-        execute=execute,
+        execute=execute_read,
+    )
+    write_definition = ToolDefinition(
+        name="write",
+        label="write",
+        description="Write a file",
+        parameters={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "content": {"type": "string"},
+            },
+            "required": ["path", "content"],
+        },
+        execute=execute_write,
     )
 
     def script(m, c):
         provider_calls["n"] += 1
+        tool_catalogs.append(tuple(tool.name for tool in c.tools))
+        if provider_calls["n"] <= 5:
+            return tool_call_response_events(
+                m,
+                "read",
+                {"path": "src/client.py"},
+                call_id=f"read_{provider_calls['n']}",
+            )
         if not c.tools:
-            return text_response_events(m, "Recovered and finalized in the original turn.")
-        return tool_call_response_events(
-            m,
-            "read",
-            {"path": "src/client.py"},
-            call_id=f"read_{provider_calls['n']}",
-        )
+            return text_response_events(
+                m,
+                '<tool_call><function=write><parameter=path>fixed.txt</parameter></function></tool_call>',
+            )
+        if provider_calls["n"] == 6:
+            return tool_call_response_events(
+                m,
+                "write",
+                {"path": "fixed.txt", "content": "fixed\n"},
+                call_id="write_fix",
+            )
+        return text_response_events(m, "Implemented and verified in the original turn.")
 
     register_api_provider(create_faux_provider(script))
-    session = AgentSession(cwd=str(tmp_path), model=model, tool_definitions=[read_definition])
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=model,
+        tool_definitions=[read_definition, write_definition],
+    )
 
     session.prompt("finish the client task without asking me to retry")
 
@@ -460,15 +498,18 @@ def test_agent_session_recovers_repeated_reads_and_forces_same_turn_finalization
         if getattr(message, "role", None) == "user"
         and _content_text(message.content).startswith("[tool_guardrail_recovery")
     ]
-    assert executions == [{"path": "src/client.py"}, {"path": "src/client.py"}]
-    assert provider_calls["n"] == 6
-    assert len(tool_results) == 5
+    assert read_executions == [{"path": "src/client.py"}, {"path": "src/client.py"}]
+    assert write_executions == [{"path": "fixed.txt", "content": "fixed\n"}]
+    assert provider_calls["n"] == 7
+    assert len(tool_results) == 6
     assert tool_results[0].content[0].text == "stable file body"
     assert "content omitted" in tool_results[1].content[0].text
-    assert all("idempotent_no_progress_recovery_block" in result.content[0].text for result in tool_results[2:])
+    assert all("idempotent_no_progress_recovery_block" in result.content[0].text for result in tool_results[2:5])
     assert len(internal_recovery) == 2
-    assert session.messages[-1].content[0].text == "Recovered and finalized in the original turn."
-    assert [tool.name for tool in session.agent.state.tools] == ["read"]
+    assert all("Tools are disabled" not in message for message in internal_recovery)
+    assert tool_catalogs == [("read", "write")] * 7
+    assert session.messages[-1].content[0].text == "Implemented and verified in the original turn."
+    assert (tmp_path / "fixed.txt").read_text(encoding="utf-8") == "fixed\n"
 
 
 def test_agent_session_path_scoped_no_retry_does_not_stop_same_turn_recovery(tmp_path: Path) -> None:

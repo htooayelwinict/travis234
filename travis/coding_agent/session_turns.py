@@ -109,7 +109,6 @@ from travis.coding_agent.tools.types import (
 
 from travis.coding_agent.session_persistence import _user_message
 from travis.coding_agent.session_policy_controller import (
-    _TOOL_LOOP_FORCE_FINALIZE_SYSTEM_SUFFIX,
     _is_internal_steering_user_message,
 )
 from travis.coding_agent.session_types import AutoRetryEndEvent, AutoRetryStartEvent, _MALFORMED_STREAMED_TOOL_ARGS_MARKER, _MALFORMED_STREAMED_TOOL_CALL_ARGUMENTS_CODE, _MALFORMED_STREAM_RECOVERY_PREFIX, _MAX_PARTIAL_STREAM_CONTINUATIONS, _NON_RETRYABLE_PROVIDER_LIMIT_MARKERS, _PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE, _PARTIAL_STREAM_STUB_ID, _RETRYABLE_ERROR_MARKERS, _SUBAGENT_TOOL_NAMES, _prompt_requests_subagent_tools
@@ -480,18 +479,15 @@ class SessionTurnController:
             signal = context
             context = None
         self._flush_turn_mailbox()
-        force_finalize = self._tool_loop_force_finalize
-        active_tool_names = [] if force_finalize else self.get_active_tool_names()
+        active_tool_names = self.get_active_tool_names()
         self.system_prompt = self._build_system_prompt(active_tool_names)
-        if force_finalize:
-            self.system_prompt += _TOOL_LOOP_FORCE_FINALIZE_SYSTEM_SUFFIX
         self.agent.state.system_prompt = self.system_prompt
         self._queue_partial_stream_continuation_if_needed()
         return AgentLoopTurnUpdate(
             context=AgentContext(
                 system_prompt=self.agent.state.system_prompt,
                 messages=list(self.agent.state.messages),
-                tools=[] if force_finalize else list(self.agent.state.tools),
+                tools=list(self.agent.state.tools),
             ),
             model=self.agent.state.model,
             thinking_level=self.agent.state.thinking_level,
@@ -547,7 +543,6 @@ class SessionTurnController:
         self._tool_guardrail_halt_decision = None
         self._tool_guardrail_halt_response_emitted = False
         self._tool_loop_recovery_steered_keys = set()
-        self._tool_loop_force_finalize = False
         self._process_limit_recovery_steered = False
         self._process_limit_halt_message = None
         self._process_limit_halt_response_emitted = False
@@ -578,10 +573,6 @@ class SessionTurnController:
         finally:
             self._flush_pending_bash_messages()
             self._turn_capabilities.clear()
-            if self._tool_loop_force_finalize:
-                self._tool_loop_force_finalize = False
-                self.system_prompt = self._build_system_prompt(self.get_active_tool_names())
-                self.agent.state.system_prompt = self.system_prompt
 
     def _prepare_retry(self, message: AssistantMessage | None) -> bool:
         if not self._retry_enabled or message is None or message.stop_reason != "error":

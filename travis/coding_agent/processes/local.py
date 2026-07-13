@@ -199,7 +199,7 @@ def create_local_process_transport(
         request.env,
         {
             "shell_path": request.shell_path,
-            "stdin": subprocess.PIPE,
+            "stdin": subprocess.PIPE if request.stdin_open else subprocess.DEVNULL,
             "stdout": subprocess.PIPE,
             "stderr": subprocess.PIPE,
             "start_new_session": os.name == "posix",

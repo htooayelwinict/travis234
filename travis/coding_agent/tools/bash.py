@@ -49,6 +49,14 @@ BASH_SCHEMA = {
             "maximum": 30000,
             "description": "Initial wait before returning a running process handle; this is not a timeout",
         },
+        "stdin": {
+            "type": "string",
+            "enum": ["closed", "open"],
+            "description": (
+                "Keep command stdin open for later process write actions. Defaults to closed so ordinary "
+                "commands receive EOF; use open only when later input is planned"
+            ),
+        },
         "tty": {"type": "boolean", "description": "Allocate a POSIX PTY for interactive commands"},
         "rows": {"type": "integer", "minimum": 2, "maximum": 200},
         "cols": {"type": "integer", "minimum": 20, "maximum": 500},
@@ -426,6 +434,7 @@ def _execute_managed_bash(
 ) -> AgentToolResult:
     yield_time_ms = args.get("yield_time_ms", 10_000)
     timeout = args.get("timeout")
+    stdin_mode = args.get("stdin", "closed")
     tty = args.get("tty", False)
     rows = args.get("rows", 24)
     cols = args.get("cols", 80)
@@ -433,6 +442,8 @@ def _execute_managed_bash(
         raise ValueError("yield_time_ms must be an integer between 0 and 30000")
     if timeout is not None and (not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0):
         raise ValueError("timeout must be a positive number")
+    if stdin_mode not in {"closed", "open"}:
+        raise ValueError("stdin must be either 'closed' or 'open'")
     if not isinstance(tty, bool):
         raise ValueError("tty must be a boolean")
     if not tty and ("rows" in args or "cols" in args):
@@ -470,6 +481,7 @@ def _execute_managed_bash(
             cwd=spawn_context.cwd,
             env=spawn_context.env,
             shell_path=shell_path or os.environ.get("SHELL") or "/bin/bash",
+            stdin_open=tty or stdin_mode == "open",
             tty=tty,
             rows=rows,
             cols=cols,
@@ -576,11 +588,14 @@ def create_bash_tool_definition(
             f"truncated to last {DEFAULT_MAX_LINES} lines or {DEFAULT_MAX_BYTES // 1024}KB (whichever is hit first). "
             "If truncated, full output is saved to a temp file. timeout is an optional hard execution deadline; "
             "Never infer a timeout from expected command duration. "
-            "Managed sessions return a process handle after yield_time_ms (default 10000); this yield does not kill the command."
+            "Managed sessions return a process handle after yield_time_ms (default 10000); this yield does not kill the command. "
+            "stdin defaults to closed so normal commands receive EOF; set stdin=open only when a later process write is planned."
         ),
         parameters=BASH_SCHEMA,
         prompt_snippet="Execute bash commands (ls, grep, find, etc.)",
-        prompt_guidelines=[],
+        prompt_guidelines=[
+            "Leave stdin closed for normal commands, searches, tests, and servers. Set stdin=open only before using process write or write_raw on that command.",
+        ],
         execute=lambda tid, args, signal=None, on_update=None, ctx=None: _execute_bash(
             cwd,
             ops,

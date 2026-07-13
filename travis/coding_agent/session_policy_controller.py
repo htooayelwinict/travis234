@@ -23,7 +23,6 @@ from travis.agent.types import AgentMessage
 from travis.agent.types import BeforeToolCallResult
 from travis.agent.types import MessageEndEvent, MessageStartEvent
 from travis.coding_agent.policies.tool_guardrails import (
-    DEFAULT_ADAPTIVE_FORCE_FINALIZE_AFTER,
     DEFAULT_NO_PROGRESS_BLOCK_TOOL_NAMES,
     IDEMPOTENT_NO_PROGRESS_RECOVERY_BLOCK_CODE,
     ToolCallGuardrailConfig,
@@ -113,12 +112,7 @@ from travis.coding_agent.tools.types import (
 
 from travis.coding_agent.session_types import _MALFORMED_STREAM_RECOVERY_PREFIX, _append_toolguard_content, _tool_result_text, _with_toolguard_details
 
-_TOOL_LOOP_FORCE_FINALIZE_SYSTEM_SUFFIX = (
-    "\n\nThe runtime detected a repeated unchanged-tool loop and has disabled tools for this "
-    "single recovery response. Finish the original user task now using the evidence already "
-    "in the conversation. State what was completed and any genuine remaining blocker. Do not "
-    "ask the user to repeat the task or call another tool."
-)
+_TOOL_LOOP_RECOVERY_STAGE_THRESHOLDS = (3, 5, 10, 20, 40)
 
 _PROCESS_LIMIT_BASH_TURN_MARKERS = (
     "do not run any other command",
@@ -424,14 +418,14 @@ class SessionPolicyController:
     def _queue_tool_loop_recovery(self, decision: Block) -> None:
         metadata = dict(decision.metadata)
         count = int(metadata.get("count") or 0)
-        force_finalize = count >= DEFAULT_ADAPTIVE_FORCE_FINALIZE_AFTER
-        stage = 2 if force_finalize else 1
+        stage = max(
+            1,
+            sum(count >= threshold for threshold in _TOOL_LOOP_RECOVERY_STAGE_THRESHOLDS),
+        )
         key = (decision.code, "turn", stage)
         if key in self._tool_loop_recovery_steered_keys:
             return
         self._tool_loop_recovery_steered_keys.add(key)
-        if force_finalize:
-            self._tool_loop_force_finalize = True
         instruction = (
             f"[tool_guardrail_recovery code={decision.code} count={count} stage={stage}] "
             "The exact unchanged call was blocked and its earlier output remains in context. "
@@ -440,8 +434,18 @@ class SessionPolicyController:
             "state-changing action and continue inside this same turn; do not ask the user to "
             "repeat or resume the task."
         )
-        if force_finalize:
-            instruction += " Tools are disabled for the next response, so finalize now from existing evidence."
+        if stage >= 2:
+            instruction += (
+                " Break the repeated pattern now while keeping the available tools: choose a "
+                "write, edit, patch, bash, test, or other materially different action when work "
+                "remains. Never print XML, JSON, or other tool-call markup as prose."
+            )
+        if stage >= 3:
+            instruction += (
+                " Re-read the original user request from the conversation, identify the next "
+                "unfinished deliverable, and act on that deliverable instead of inspecting this "
+                "unchanged input again."
+            )
         self.agent.steer(UserMessage(content=[TextContent(text=instruction)], timestamp=now_ms()))
 
     def _duplicate_bash_call_in_current_turn(self, tool_name: str, args) -> BeforeToolCallResult | None:
