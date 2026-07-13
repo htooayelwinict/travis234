@@ -76,7 +76,7 @@ The combined process, cancellation, provider, session, and policy owner suites p
 
 ## Green zone
 
-- Full source suite: 1,500 passed in 45.82 seconds.
+- Full source suite: 1,501 passed in 43.12 seconds.
 - npm launcher: 20 passed.
 - npm pack dry-run: exactly six declared files.
 - Python compileall: passed.
