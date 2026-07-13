@@ -156,8 +156,8 @@ def test_model_registry_register_provider_registers_and_unregisters_travis234_st
         seen["provider"] = model.provider
         return _provider("dynamic-api").stream_simple(model, context, options)
 
-    registry = ModelRegistry.inMemory(AuthStorage.inMemory())
-    registry.registerProvider("dynamic", {"api": "dynamic-api", "streamSimple": dynamic_stream})
+    registry = ModelRegistry.in_memory(AuthStorage.in_memory())
+    registry.register_provider("dynamic", {"api": "dynamic-api", "streamSimple": dynamic_stream})
 
     assert get_api_provider("dynamic-api").api == "dynamic-api"
 
@@ -168,7 +168,7 @@ def test_model_registry_register_provider_registers_and_unregisters_travis234_st
 
     assert seen == {"api": "dynamic-api", "provider": "dynamic"}
 
-    registry.unregisterProvider("dynamic")
+    registry.unregister_provider("dynamic")
 
     with pytest.raises(KeyError):
         get_api_provider("dynamic-api")

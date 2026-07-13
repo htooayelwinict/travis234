@@ -51,4 +51,8 @@ def _is_within(path: Path, root: Path) -> bool:
     return path == root or root in path.parents
 
 
-__all__ = ["AccessMode", "CapabilityViolation", "WorkspaceCapability"]
+__all__ = [
+    "AccessMode",
+    "CapabilityViolation",
+    "WorkspaceCapability",
+]

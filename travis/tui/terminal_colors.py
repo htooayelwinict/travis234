@@ -55,7 +55,3 @@ def parse_osc11_background_color(data: str) -> dict[str, int] | None:
     g = _parse_osc_hex_channel(parts[1])
     b = _parse_osc_hex_channel(parts[2])
     return {"r": r, "g": g, "b": b} if r is not None and g is not None and b is not None else None
-
-
-isOsc11BackgroundColorResponse = is_osc11_background_color_response
-parseOsc11BackgroundColor = parse_osc11_background_color

@@ -122,6 +122,14 @@ class _CamelSymbolVisitor(ast.NodeVisitor):
         self.generic_visit(node)
         self.scope.pop()
 
+    def visit_Import(self, node: ast.Import) -> None:  # noqa: N802 - ast visitor contract
+        for alias in node.names:
+            if alias.asname:
+                self._record(alias.asname, node.lineno)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # noqa: N802 - ast visitor contract
+        self.visit_Import(node)
+
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802 - ast visitor contract
         self._record(node.name, node.lineno)
         self.scope.append(node.name)
@@ -132,6 +140,8 @@ class _CamelSymbolVisitor(ast.NodeVisitor):
         self.visit_FunctionDef(node)
 
     def visit_Assign(self, node: ast.Assign) -> None:  # noqa: N802 - ast visitor contract
+        if any(isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets):
+            self._record_exported_names(node.value)
         for target in node.targets:
             self._record_target(target)
         self.generic_visit(node.value)
@@ -165,6 +175,13 @@ class _CamelSymbolVisitor(ast.NodeVisitor):
         relative = self.path.relative_to(self.root).as_posix()
         qualified = ".".join((*self.scope, name)) if self.scope else name
         self.results.add(f"{relative}:{line}:{qualified}")
+
+    def _record_exported_names(self, value: ast.expr) -> None:
+        if not isinstance(value, (ast.List, ast.Tuple, ast.Set)):
+            return
+        for element in value.elts:
+            if isinstance(element, ast.Constant) and isinstance(element.value, str):
+                self._record(element.value, element.lineno)
 
 
 def _camel_symbols(root: Path, parsed_runtime: Sequence[tuple[Path, ast.Module]]) -> tuple[str, ...]:

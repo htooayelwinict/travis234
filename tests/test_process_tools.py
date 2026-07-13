@@ -83,7 +83,7 @@ def test_process_schema_matches_action_specific_runtime_contracts() -> None:
     assert all(schema.errors(arguments) for arguments in invalid)
 
 
-def test_process_argument_preparation_recovers_common_model_aliases_without_inventing_cursor() -> None:
+def test_process_argument_preparation_normalizes_wait_modes_without_inventing_cursor() -> None:
     wait_with_yield = {
         "action": "wait",
         "session_id": "proc_x",
@@ -117,21 +117,7 @@ def test_process_argument_preparation_recovers_common_model_aliases_without_inve
         "cursor": 4,
         "wait_time_ms": 60_000,
     }
-    assert process_tool_module.prepare_process_arguments(
-        {"action": "wait", "sessionId": "proc_x", "nextCursor": "9", "waitTimeMs": "60000"}
-    ) == {"action": "wait", "session_id": "proc_x", "cursor": 9, "wait_time_ms": 60_000}
-
-
-def test_process_argument_preparation_rejects_ambiguous_aliases_and_wait_timing() -> None:
-    with pytest.raises(ValueError, match="conflicting process arguments: session_id and sessionId"):
-        process_tool_module.prepare_process_arguments(
-            {
-                "action": "kill",
-                "session_id": "proc_a",
-                "sessionId": "proc_b",
-            }
-        )
-
+def test_process_argument_preparation_rejects_ambiguous_wait_timing() -> None:
     with pytest.raises(ValueError, match="wait action received both wait_time_ms and yield_time_ms"):
         process_tool_module.prepare_process_arguments(
             {
@@ -142,6 +128,14 @@ def test_process_argument_preparation_rejects_ambiguous_aliases_and_wait_timing(
                 "yield_time_ms": 1_000,
             }
         )
+
+
+@pytest.mark.parametrize("alias", ["sessionId", "nextCursor", "yieldTimeMs", "waitTimeMs", "maxBytes"])
+def test_process_tool_rejects_compatibility_arguments(alias: str) -> None:
+    arguments = {"action": "poll", "session_id": "proc_x", "cursor": 0, alias: "legacy"}
+
+    with pytest.raises(ValueError, match=rf"poll does not accept {alias}"):
+        process_tool_module._validate_args(arguments)
 
 
 def test_process_argument_preparation_explains_required_wait_shape() -> None:

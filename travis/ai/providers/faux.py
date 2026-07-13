@@ -6,6 +6,7 @@ import json
 from typing import Callable
 
 from travis.ai.event_stream import AssistantMessageEventStream, create_assistant_message_event_stream
+from travis.ai.providers._shared import blank_assistant_message as _blank_message
 from travis.ai.stream import ApiProvider
 from travis.ai.types import (
     AssistantMessage,
@@ -32,18 +33,6 @@ FauxScript = Callable[[Model, Context], "list[AssistantMessageEvent]"]
 
 def faux_model(api: str = "faux") -> Model:
     return Model(id="faux-model", name="Faux", api=api, provider="faux", base_url="")
-
-
-def _blank_message(model: Model) -> AssistantMessage:
-    return AssistantMessage(
-        content=[],
-        api=model.api,
-        provider=model.provider,
-        model=model.id,
-        usage=empty_usage(),
-        stop_reason="stop",
-        timestamp=now_ms(),
-    )
 
 
 def text_response_events(model: Model, text: str) -> list[AssistantMessageEvent]:

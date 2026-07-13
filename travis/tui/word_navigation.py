@@ -146,7 +146,3 @@ def _is_word_segment(segment: str) -> bool:
 
 def _is_whitespace(segment: str) -> bool:
     return bool(segment) and all(char.isspace() for char in segment)
-
-
-findWordBackward = find_word_backward
-findWordForward = find_word_forward

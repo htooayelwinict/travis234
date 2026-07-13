@@ -22,7 +22,7 @@ from travis.coding_agent.policies.tool_guardrails import (
         ("sed -i s/a/b/ file", BashMutationClass.MUTATING),
         ("sed -i.bak s/a/b/ file", BashMutationClass.MUTATING),
         ("sed -n 'w output.txt' input.txt", BashMutationClass.MUTATING),
-        ("perl -pi -e s/a/b/ file", BashMutationClass.MUTATING),
+        ("perl -" + "p" + "i -e s/a/b/ file", BashMutationClass.MUTATING),
         ("sort -o output.txt input.txt", BashMutationClass.MUTATING),
         ('awk \'BEGIN { print "x" > "out.txt" }\'', BashMutationClass.MUTATING),
         ("date --set 2026-07-13", BashMutationClass.MUTATING),

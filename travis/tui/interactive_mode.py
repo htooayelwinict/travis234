@@ -340,7 +340,7 @@ class InteractiveMode:
                 prompt_component = Input(value=self.editor_text, prompt=self.prompt_label, on_submit=on_submit)
                 prompt_component.set_history(self.prompt_history)
                 prompt_component.on_escape = self._handle_editor_escape
-                prompt_component.onEscape = self._handle_editor_escape
+                prompt_component.on_escape = self._handle_editor_escape
                 prompt_component.set_autocomplete_provider(self.autocomplete_provider)
                 self.active_editor = prompt_component
                 self.editor_container.add(prompt_component)
@@ -2268,27 +2268,22 @@ class _ExtensionShortcutUI:
     def show_error(self, message: str) -> None:
         self._mode.history.add(Text(f"error: {message}"))
 
-    showError = show_error
 
     def set_status(self, key: str, text: str | None) -> None:
         self._mode.set_extension_status(key, text)
 
-    setStatus = set_status
 
     def set_working_message(self, message: str | None = None) -> None:
         self._mode.set_working_message(message)
 
-    setWorkingMessage = set_working_message
 
     def set_working_visible(self, visible: bool) -> None:
         self._mode.set_working_visible(visible)
 
-    setWorkingVisible = set_working_visible
 
     def set_working_indicator(self, options: dict | None = None) -> None:
         self._mode.set_working_indicator(options)
 
-    setWorkingIndicator = set_working_indicator
 
     def input(
         self,
@@ -2317,47 +2312,38 @@ class _ExtensionShortcutUI:
     def on_terminal_input(self, handler: Callable[[str], object]):
         return self._mode.add_terminal_input_listener(handler)
 
-    onTerminalInput = on_terminal_input
 
     def set_hidden_thinking_label(self, label: str | None = None) -> None:
         self._mode.set_hidden_thinking_label(label)
 
-    setHiddenThinkingLabel = set_hidden_thinking_label
 
     def set_title(self, title: str) -> None:
         self._mode.set_terminal_title(title)
 
-    setTitle = set_title
 
     def set_widget(self, key: str, content: object = None, options: dict | None = None) -> None:
         self._mode.set_extension_widget(key, content, options)
 
-    setWidget = set_widget
 
     def set_footer(self, factory: Callable | None = None) -> None:
         self._mode.set_extension_footer(factory)
 
-    setFooter = set_footer
 
     def set_header(self, factory: Callable | None = None) -> None:
         self._mode.set_extension_header(factory)
 
-    setHeader = set_header
 
     def set_editor_text(self, text: str) -> None:
         self._mode.set_editor_text(text)
 
-    setEditorText = set_editor_text
 
     def get_editor_text(self) -> str:
         return self._mode.get_editor_text()
 
-    getEditorText = get_editor_text
 
     def paste_to_editor(self, text: str) -> None:
         self._mode.paste_to_editor(str(text))
 
-    pasteToEditor = paste_to_editor
 
     def editor(self, title: str, prefill: str | None = None) -> str | None:
         return self._mode.prompt_extension_editor(title, prefill)
@@ -2368,7 +2354,6 @@ class _ExtensionShortcutUI:
     def add_autocomplete_provider(self, factory: Callable[[object], object]) -> None:
         self._mode.add_autocomplete_provider(factory)
 
-    addAutocompleteProvider = add_autocomplete_provider
 
 
 def _is_manual_compression_command(prompt: str) -> bool:
@@ -2699,12 +2684,10 @@ class _ExtensionFooterDataProvider:
                 return self._cached_branch
         return None
 
-    getGitBranch = get_git_branch
 
     def get_extension_statuses(self) -> dict[str, str]:
         return dict(self._mode.extension_statuses)
 
-    getExtensionStatuses = get_extension_statuses
 
     def set_extension_status(self, key: str, text: str | None) -> None:
         if text is None:
@@ -2712,22 +2695,18 @@ class _ExtensionFooterDataProvider:
         else:
             self._mode.extension_statuses[str(key)] = str(text)
 
-    setExtensionStatus = set_extension_status
 
     def clear_extension_statuses(self) -> None:
         self._mode.extension_statuses.clear()
 
-    clearExtensionStatuses = clear_extension_statuses
 
     def get_available_provider_count(self) -> int:
         return self._available_provider_count
 
-    getAvailableProviderCount = get_available_provider_count
 
     def set_available_provider_count(self, count: int) -> None:
         self._available_provider_count = max(0, int(count))
 
-    setAvailableProviderCount = set_available_provider_count
 
     def set_cwd(self, cwd: str) -> None:
         with self._lock:
@@ -2741,7 +2720,6 @@ class _ExtensionFooterDataProvider:
             self._setup_git_watcher()
         self._notify_branch_change()
 
-    setCwd = set_cwd
 
     def refresh_git_branch(self) -> None:
         with self._lock:
@@ -2751,7 +2729,6 @@ class _ExtensionFooterDataProvider:
         if previous_branch != next_branch:
             self._notify_branch_change()
 
-    refreshGitBranch = refresh_git_branch
 
     def on_branch_change(self, handler: Callable[[], object]) -> Callable[[], None]:
         with self._lock:
@@ -2766,7 +2743,6 @@ class _ExtensionFooterDataProvider:
 
         return unsubscribe
 
-    onBranchChange = on_branch_change
 
     def dispose(self) -> None:
         with self._lock:

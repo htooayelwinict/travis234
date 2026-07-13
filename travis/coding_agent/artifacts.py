@@ -90,4 +90,7 @@ class ArtifactRegistry:
                     pass
 
 
-__all__ = ["ArtifactRef", "ArtifactRegistry"]
+__all__ = [
+    "ArtifactRef",
+    "ArtifactRegistry",
+]

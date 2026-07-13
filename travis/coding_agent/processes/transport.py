@@ -32,4 +32,7 @@ class ProcessTransport(Protocol):
     def close(self) -> None: ...
 
 
-__all__ = ["ProcessTransport", "SignalName"]
+__all__ = [
+    "ProcessTransport",
+    "SignalName",
+]

@@ -23,6 +23,8 @@ from travis.ai.types import (
     now_ms,
 )
 from travis.compaction.compressor import estimate_tokens
+from travis.coding_agent.message_utils import bash_execution_text as _bash_execution_to_text
+from travis.coding_agent.message_utils import user_message_text as _message_text_content
 from travis.coding_agent.session_store import BranchSummaryMessage, CustomMessage, deserialize_message
 
 BRANCH_SUMMARY_PREAMBLE = """The user explored a different conversation branch before returning here.
@@ -74,13 +76,7 @@ class BranchSummaryResult:
     aborted: bool = False
     error: str | None = None
 
-    @property
-    def readFiles(self) -> list[str]:
-        return self.read_files
 
-    @property
-    def modifiedFiles(self) -> list[str]:
-        return self.modified_files
 
 
 @dataclass
@@ -235,7 +231,7 @@ def _get_message_from_entry(entry: dict[str, Any]) -> AgentMessage | None:
         return SimpleNamespace(
             role="compactionSummary",
             summary=entry["summary"],
-            tokensBefore=entry.get("tokensBefore", 0),
+            tokens_before=entry.get("tokensBefore", 0),
             timestamp=_timestamp_to_ms(entry.get("timestamp")),
         )
     return None
@@ -246,7 +242,7 @@ def _convert_to_llm(messages: list[AgentMessage]) -> list[Message]:
     for message in messages:
         role = getattr(message, "role", None)
         if role == "bashExecution":
-            if getattr(message, "excludeFromContext", False):
+            if getattr(message, "exclude_from_context", False):
                 continue
             converted.append(
                 UserMessage(
@@ -295,24 +291,6 @@ def _convert_to_llm(messages: list[AgentMessage]) -> list[Message]:
     return converted
 
 
-def _bash_execution_to_text(message) -> str:
-    text = f"Ran `{getattr(message, 'command', '')}`\n"
-    output = getattr(message, "output", "")
-    if output:
-        text += f"```\n{output}\n```"
-    else:
-        text += "(no output)"
-    if getattr(message, "cancelled", False):
-        text += "\n\n(command cancelled)"
-    else:
-        exit_code = getattr(message, "exitCode", None)
-        if exit_code not in (None, 0):
-            text += f"\n\nCommand exited with code {exit_code}"
-    if getattr(message, "truncated", False) and getattr(message, "fullOutputPath", None):
-        text += f"\n\n[Output truncated. Full output: {message.fullOutputPath}]"
-    return text
-
-
 def _extract_file_ops_from_message(message: AgentMessage, file_ops: FileOperations) -> None:
     if not isinstance(message, AssistantMessage):
         return
@@ -343,12 +321,6 @@ def _format_file_operations(read_files: list[str], modified_files: list[str]) ->
     if modified_files:
         sections.append("<modified-files>\n" + "\n".join(modified_files) + "\n</modified-files>")
     return "" if not sections else "\n\n" + "\n\n".join(sections)
-
-
-def _message_text_content(content) -> str:
-    if isinstance(content, str):
-        return content
-    return "".join(block.text for block in content if isinstance(block, TextContent))
 
 
 def _deserialize_custom_content(content) -> str | list[TextContent]:

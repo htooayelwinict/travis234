@@ -216,33 +216,33 @@ def test_get_provider_display_name_resolves_registered_oauth_built_in_and_fallba
     assert get_provider_display_name("oauth-provider") == "OAuth Provider"
 
 
-def test_ai_package_exports_travis234_model_helper_aliases() -> None:
+def test_ai_package_exports_travis234_canonical_model_helpers() -> None:
     from travis.ai import (
-        calculateCost,
-        clampThinkingLevel,
-        getModel,
-        getModels,
-        getProviders,
-        getSupportedThinkingLevels,
-        modelsAreEqual,
-        registerModel,
-        resetModels,
+        calculate_cost,
+        clamp_thinking_level,
+        get_model,
+        get_models,
+        get_providers,
+        get_supported_thinking_levels,
+        models_are_equal,
+        register_model,
+        reset_models,
     )
 
-    resetModels()
+    reset_models()
     model = _model()
     other_same = _model()
     other_provider = _model()
     other_provider.provider = "other"
 
-    registerModel(model)
+    register_model(model)
 
-    assert getModel("openrouter", "m1") is model
-    assert getModels("openrouter") == [model]
-    assert getProviders() == ["openrouter"]
-    assert getSupportedThinkingLevels(model) == ["off"]
-    assert clampThinkingLevel(model, "high") == "off"
-    assert modelsAreEqual(model, other_same) is True
-    assert modelsAreEqual(model, other_provider) is False
-    assert modelsAreEqual(model, None) is False
-    assert calculateCost(model, {"input": 1_000_000, "output": 0, "cache_read": 0, "cache_write": 0}).input == 1.0
+    assert get_model("openrouter", "m1") is model
+    assert get_models("openrouter") == [model]
+    assert get_providers() == ["openrouter"]
+    assert get_supported_thinking_levels(model) == ["off"]
+    assert clamp_thinking_level(model, "high") == "off"
+    assert models_are_equal(model, other_same) is True
+    assert models_are_equal(model, other_provider) is False
+    assert models_are_equal(model, None) is False
+    assert calculate_cost(model, {"input": 1_000_000, "output": 0, "cache_read": 0, "cache_write": 0}).input == 1.0

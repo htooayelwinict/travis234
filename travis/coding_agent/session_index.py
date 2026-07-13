@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
+from travis.coding_agent.sqlite_utils import close_sqlite_index
+
 
 _HEAD_LIMIT = 8 * 1024
 _TAIL_LIMIT = 64 * 1024
@@ -224,11 +226,7 @@ class SessionIndex:
                     self._connection.execute("DELETE FROM sessions WHERE path = ?", (stored_path,))
 
     def close(self) -> None:
-        with self._lock:
-            if self._closed:
-                return
-            self._closed = True
-            self._connection.close()
+        close_sqlite_index(self)
 
     def _get(self, path: Path) -> SessionIndexRecord | None:
         with self._lock:
@@ -392,4 +390,8 @@ def _message_preview(content: object) -> str:
     return f"{normalized[:_PREVIEW_LIMIT]}..."
 
 
-__all__ = ["SessionIndex", "SessionIndexRecord", "SessionScanStats"]
+__all__ = [
+    "SessionIndex",
+    "SessionIndexRecord",
+    "SessionScanStats",
+]

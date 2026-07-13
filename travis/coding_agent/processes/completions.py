@@ -23,7 +23,9 @@ from travis.coding_agent.processes.types import (
     ProcessSnapshot,
     ProcessState,
 )
+from travis.coding_agent.output_utils import line_count as _line_count
 from travis.coding_agent.session_lock import SessionFileLock
+from travis.coding_agent.sqlite_utils import close_sqlite_index
 from travis.coding_agent.tools.truncate import (
     DEFAULT_MAX_BYTES,
     DEFAULT_MAX_LINES,
@@ -293,11 +295,7 @@ class ProcessCompletionStore:
         self._unlink_paths(stale_paths)
 
     def close(self) -> None:
-        with self._lock:
-            if self._closed:
-                return
-            self._closed = True
-            self._connection.close()
+        close_sqlite_index(self)
 
     def _open_index(self) -> sqlite3.Connection:
         try:
@@ -676,12 +674,6 @@ def _read_bounded_tail(path: Path, *, max_lines: int, max_bytes: int) -> tuple[s
         return raw.decode("utf-8"), starts_partial
 
 
-def _line_count(content: str) -> int:
-    if not content:
-        return 0
-    return content.count("\n") + int(not content.endswith("\n"))
-
-
 def _valid_utf8_prefix(data: bytes) -> bytes:
     if not data:
         return b""
@@ -696,4 +688,6 @@ def _valid_utf8_prefix(data: bytes) -> bytes:
         return prefix
 
 
-__all__ = ["ProcessCompletionStore"]
+__all__ = [
+    "ProcessCompletionStore",
+]

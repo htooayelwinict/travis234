@@ -8,9 +8,9 @@ import os
 import re
 import shlex
 import subprocess
-import time
 
 from travis.ai.env_config import find_env_keys, get_env_api_key
+from travis.ai.oauth import oauth_credential_is_expired as _oauth_is_expired
 from travis.ai.types import Cost, Model
 
 _MODELS: dict[str, dict[str, Model]] = {}
@@ -342,16 +342,6 @@ def _get_oauth_api_key(provider: str, credential: dict[str, object]) -> str | No
     return str(access) if access is not None else None
 
 
-def _oauth_is_expired(credential: dict[str, object]) -> bool:
-    expires = credential.get("expires")
-    if expires is None:
-        return False
-    try:
-        return int(expires) <= int(time.time() * 1000)
-    except (TypeError, ValueError):
-        return False
-
-
 def _oauth_callable(config: dict[str, object], camel_name: str, snake_name: str):
     callback = config.get(camel_name)
     if not callable(callback):
@@ -419,36 +409,6 @@ def models_are_equal(left: Model | None, right: Model | None) -> bool:
     return bool(left and right and left.id == right.id and left.provider == right.provider)
 
 
-registerModel = register_model
-unregisterProviderModels = unregister_provider_models
-setProviderModels = set_provider_models
-getModel = get_model
-getModels = get_models
-getProviders = get_providers
-resetModels = reset_models
-registerProviderAuthConfig = register_provider_auth_config
-unregisterProviderAuthConfig = unregister_provider_auth_config
-registerModelRequestHeaders = register_model_request_headers
-setRuntimeApiKey = set_runtime_api_key
-removeRuntimeApiKey = remove_runtime_api_key
-setAuthCredential = set_auth_credential
-removeAuthCredential = remove_auth_credential
-getAuthCredential = get_auth_credential
-listAuthProviders = list_auth_providers
-loginOAuthProvider = login_oauth_provider
-logoutProvider = logout_provider
-drainAuthErrors = drain_auth_errors
-hasAuth = has_auth
-hasConfiguredAuth = has_configured_auth
-getProviderAuthStatus = get_provider_auth_status
-getProviderDisplayName = get_provider_display_name
-getApiKeyForProvider = get_api_key_for_provider
-getApiKeyAndHeaders = get_api_key_and_headers
-getOAuthProviders = get_oauth_providers
-calculateCost = calculate_cost
-getSupportedThinkingLevels = get_supported_thinking_levels
-clampThinkingLevel = clamp_thinking_level
-modelsAreEqual = models_are_equal
 
 
 def _env_api_key(provider: str) -> str | None:

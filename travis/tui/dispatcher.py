@@ -105,4 +105,6 @@ class UiDispatcher:
         return min(fallback, max(0.0, due_at - self._clock()))
 
 
-__all__ = ["UiDispatcher"]
+__all__ = [
+    "UiDispatcher",
+]

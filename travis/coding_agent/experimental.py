@@ -7,6 +7,3 @@ import os
 
 def are_experimental_features_enabled() -> bool:
     return os.environ.get("TRAVIS234_EXPERIMENTAL") == "1"
-
-
-areExperimentalFeaturesEnabled = are_experimental_features_enabled

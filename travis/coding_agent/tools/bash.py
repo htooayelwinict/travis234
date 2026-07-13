@@ -198,7 +198,6 @@ def get_shell_env(env: dict[str, str] | None = None) -> dict[str, str]:
     return shell_env
 
 
-getShellEnv = get_shell_env
 
 
 def _strip_runtime_pythonpath(env: dict[str, str]) -> None:

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from travis.coding_agent.processes.types import InvalidCursorError, OutputSlice
 from travis.coding_agent.processes.types import ProcessOutputLimitError
+from travis.coding_agent.output_utils import line_count as _line_count
 from travis.coding_agent.tools.truncate import (
     DEFAULT_MAX_BYTES,
     DEFAULT_MAX_LINES,
@@ -227,7 +228,7 @@ class SanitizedOutputSpool:
             raise ValueError("Managed process tail uses the coding-agent output limits")
         with self._lock:
             total_lines = self._newline_count + int(self._saw_text and not self._ends_with_newline)
-            output_lines = self._line_count(self._tail)
+            output_lines = _line_count(self._tail)
             output_bytes = len(self._tail.encode("utf-8"))
             return TruncationResult(
                 content=self._tail,
@@ -334,13 +335,6 @@ class SanitizedOutputSpool:
                 prefix.decode("utf-8")
                 return prefix
             raise
-
-    @staticmethod
-    def _line_count(content: str) -> int:
-        if not content:
-            return 0
-        return content.count("\n") + int(not content.endswith("\n"))
-
 
 __all__ = [
     "DEFAULT_MAX_LIVE_SPOOL_BYTES",

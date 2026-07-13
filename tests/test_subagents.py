@@ -1652,7 +1652,7 @@ def test_agent_session_extension_context_get_signal_refreshes_idle_abort_signal(
     session = AgentSession(cwd=str(tmp_path), model=faux_model())
     session.agent.abort()
 
-    signal = session.create_replaced_session_context().getSignal()
+    signal = session.create_replaced_session_context().get_signal()
 
     assert signal is session.agent.signal
     assert signal.aborted is False
@@ -1661,8 +1661,8 @@ def test_agent_session_extension_context_get_signal_refreshes_idle_abort_signal(
 def test_agent_session_extension_context_get_signal_preserves_fresh_idle_signal(tmp_path):
     session = AgentSession(cwd=str(tmp_path), model=faux_model())
 
-    first = session.create_replaced_session_context().getSignal()
-    second = session.create_replaced_session_context().getSignal()
+    first = session.create_replaced_session_context().get_signal()
+    second = session.create_replaced_session_context().get_signal()
 
     assert first is second
     assert second is session.agent.signal
@@ -1673,7 +1673,7 @@ def test_agent_session_extension_context_get_signal_preserves_active_command_sig
     session = AgentSession(cwd=str(tmp_path), model=faux_model())
 
     def inspect_signal(active_signal):
-        context_signal = session.create_replaced_session_context().getSignal()
+        context_signal = session.create_replaced_session_context().get_signal()
         return active_signal, context_signal, session.agent.signal
 
     active_signal, context_signal, agent_signal = session._with_command_abort_signal(inspect_signal)
@@ -1688,8 +1688,8 @@ def test_agent_session_extension_command_get_signal_is_stable_while_command_runs
     seen_signals: list[object] = []
 
     def handler(_args, ctx):
-        seen_signals.append(ctx.getSignal())
-        seen_signals.append(ctx.getSignal())
+        seen_signals.append(ctx.get_signal())
+        seen_signals.append(ctx.get_signal())
         seen_signals.append(session.agent.signal)
         return []
 
@@ -1716,7 +1716,7 @@ def test_agent_session_extension_context_can_cancel_subagent(tmp_path):
     task_id = session.subagents.spawn(SubagentTask(role="reviewer", goal="review", cwd=str(tmp_path)))
     assert started.wait(1)
 
-    result = session.create_replaced_session_context().cancelSubagent(task_id, "not needed")
+    result = session.create_replaced_session_context().cancel_subagent(task_id, "not needed")
     release.set()
 
     assert result["status"] == "cancelled"

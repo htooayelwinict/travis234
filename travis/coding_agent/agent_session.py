@@ -67,6 +67,12 @@ from travis.coding_agent.config import get_packaged_context_paths
 from travis.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
 from travis.coding_agent.execution_backend import select_execution_backend
 from travis.coding_agent.mailbox import CodingTurnMailbox, MailboxKind
+from travis.coding_agent.message_utils import (
+    bash_execution_text as _bash_execution_to_text,
+    last_assistant_message as _last_assistant_message,
+    user_message_text as _text_from_user_message_content,
+)
+from travis.coding_agent.object_utils import settings_value as _settings_value
 from travis.coding_agent.process_context import ProcessContextResolver
 from travis.coding_agent.processes.local import create_local_process_transport
 from travis.coding_agent.processes.service import ProcessSessionService
@@ -92,7 +98,7 @@ from travis.coding_agent.subagents import (
     SubagentTask,
 )
 from travis.coding_agent.tools import create_all_tool_definitions
-from travis.coding_agent.tools.bash import BASH_SCHEMA, BashExecOptions, BashOperations, create_local_bash_operations, get_shell_env
+from travis.coding_agent.tools.bash import BashExecOptions, BashOperations, create_local_bash_operations, get_shell_env
 from travis.coding_agent.tools.output_spool import OutputSpool
 from travis.coding_agent.tools.process import PROCESS_ACTIONS, create_process_tool_definition, prepare_process_arguments
 from travis.coding_agent.tools.types import (
@@ -296,9 +302,6 @@ class QueueUpdateEvent:
     follow_up: list[str]
     type: str = "queue_update"
 
-    @property
-    def followUp(self) -> list[str]:
-        return self.follow_up
 
 
 @dataclass
@@ -309,17 +312,8 @@ class AutoRetryStartEvent:
     error_message: str
     type: str = "auto_retry_start"
 
-    @property
-    def maxAttempts(self) -> int:
-        return self.max_attempts
 
-    @property
-    def delayMs(self) -> int:
-        return self.delay_ms
 
-    @property
-    def errorMessage(self) -> str:
-        return self.error_message
 
 
 @dataclass
@@ -329,9 +323,6 @@ class AutoRetryEndEvent:
     final_error: str | None = None
     type: str = "auto_retry_end"
 
-    @property
-    def finalError(self) -> str | None:
-        return self.final_error
 
 
 @dataclass
@@ -342,13 +333,7 @@ class BashResult:
     truncated: bool
     full_output_path: str | None = None
 
-    @property
-    def exitCode(self) -> int | None:
-        return self.exit_code
 
-    @property
-    def fullOutputPath(self) -> str | None:
-        return self.full_output_path
 
 
 @dataclass
@@ -369,13 +354,7 @@ class ModelCycleResult:
     thinking_level: str
     is_scoped: bool
 
-    @property
-    def thinkingLevel(self) -> str:
-        return self.thinking_level
 
-    @property
-    def isScoped(self) -> bool:
-        return self.is_scoped
 
 
 @dataclass
@@ -385,13 +364,7 @@ class ExtensionCompactionResult:
     tokens_before: int
     details: object | None = None
 
-    @property
-    def firstKeptEntryId(self) -> str:
-        return self.first_kept_entry_id
 
-    @property
-    def tokensBefore(self) -> int:
-        return self.tokens_before
 
 
 CompactionResult = ExtensionCompactionResult
@@ -427,17 +400,14 @@ class ExtensionCommandContext:
     def get_system_prompt(self) -> str:
         return self._get_system_prompt()
 
-    getSystemPrompt = get_system_prompt
 
     def get_system_prompt_options(self) -> BuildSystemPromptOptions:
         return self._get_system_prompt_options()
 
-    getSystemPromptOptions = get_system_prompt_options
 
     def send_message(self, message: dict, options: dict | None = None) -> list[AgentMessage]:
         return self._send_message(message, options)
 
-    sendMessage = send_message
 
     def send_user_message(
         self,
@@ -446,62 +416,50 @@ class ExtensionCommandContext:
     ) -> list[AgentMessage] | None:
         return self._send_user_message(content, options)
 
-    sendUserMessage = send_user_message
 
     def append_entry(self, custom_type: str, data=None) -> str:
         return self._append_entry(custom_type, data)
 
-    appendEntry = append_entry
 
     def set_session_name(self, name: str | None) -> None:
         self._set_session_name(name)
 
-    setSessionName = set_session_name
 
     def get_session_name(self) -> str | None:
         return self._get_session_name()
 
-    getSessionName = get_session_name
 
     def get_active_tools(self) -> list[str]:
         return self._get_active_tools()
 
-    getActiveTools = get_active_tools
 
     def get_all_tools(self) -> list[dict]:
         return self._get_all_tools()
 
-    getAllTools = get_all_tools
 
     def set_active_tools(self, tool_names: list[str]) -> None:
         self._set_active_tools(tool_names)
 
-    setActiveTools = set_active_tools
 
     def get_commands(self) -> list[dict]:
         return self._get_commands()
 
-    getCommands = get_commands
 
     def get_thinking_level(self) -> str:
         return self._get_thinking_level()
 
-    getThinkingLevel = get_thinking_level
 
     def set_thinking_level(self, level: str) -> None:
         self._set_thinking_level(level)
 
-    setThinkingLevel = set_thinking_level
 
     def set_model(self, model: Model) -> bool:
         return self._set_model(model)
 
-    setModel = set_model
 
     def set_label(self, entry_id: str, label: str | None) -> None:
         self._set_label(entry_id, label)
 
-    setLabel = set_label
 
     def exec(self, command: str, args: list[str], options: dict | None = None) -> dict:
         return self._exec(command, args, options)
@@ -509,12 +467,10 @@ class ExtensionCommandContext:
     def wait_for_idle(self) -> None:
         self._wait_for_idle()
 
-    waitForIdle = wait_for_idle
 
     def get_signal(self) -> AbortSignal:
         return self._get_signal()
 
-    getSignal = get_signal
 
     def compact(self, options: dict | None = None) -> ExtensionCompactionResult | None:
         return self._compact(options)
@@ -522,22 +478,18 @@ class ExtensionCommandContext:
     def spawn_subagent(self, role: str, goal: str, options: dict | None = None) -> dict:
         return self._spawn_subagent(role, goal, options)
 
-    spawnSubagent = spawn_subagent
 
     def list_subagents(self) -> list[dict]:
         return self._list_subagents()
 
-    listSubagents = list_subagents
 
     def get_subagent_result(self, task_id: str) -> dict | None:
         return self._get_subagent_result(task_id)
 
-    getSubagentResult = get_subagent_result
 
     def cancel_subagent(self, task_id: str, reason: str | None = None) -> dict:
         return self._cancel_subagent(task_id, reason)
 
-    cancelSubagent = cancel_subagent
 
 
 def default_convert_to_llm(messages: list[AgentMessage]) -> list[Message]:
@@ -546,7 +498,7 @@ def default_convert_to_llm(messages: list[AgentMessage]) -> list[Message]:
     for message in _exclude_aborted_turns_from_context(messages):
         role = getattr(message, "role", None)
         if role == "bashExecution":
-            if getattr(message, "excludeFromContext", False):
+            if getattr(message, "exclude_from_context", False):
                 continue
             out.append(
                 UserMessage(
@@ -621,24 +573,6 @@ def _is_aborted_turn_boundary(message: AgentMessage) -> bool:
     if role in {"bashExecution", "branchSummary", "compactionSummary", "custom"}:
         return True
     return isinstance(message, AssistantMessage) and message.stop_reason not in {"aborted", "toolUse"}
-
-
-def _bash_execution_to_text(message) -> str:
-    text = f"Ran `{getattr(message, 'command', '')}`\n"
-    output = getattr(message, "output", "")
-    if output:
-        text += f"```\n{output}\n```"
-    else:
-        text += "(no output)"
-    if getattr(message, "cancelled", False):
-        text += "\n\n(command cancelled)"
-    else:
-        exit_code = getattr(message, "exitCode", None)
-        if exit_code not in (None, 0):
-            text += f"\n\nCommand exited with code {exit_code}"
-    if getattr(message, "truncated", False) and getattr(message, "fullOutputPath", None):
-        text += f"\n\n[Output truncated. Full output: {message.fullOutputPath}]"
-    return text
 
 
 def _tool_result_text(content) -> str:
@@ -862,18 +796,6 @@ def _coerce_tool_guardrail_config(
     return ToolCallGuardrailConfig()
 
 
-def _settings_value(settings_manager: object, *names: str):
-    for name in names:
-        value = getattr(settings_manager, name, None)
-        if callable(value):
-            result = value()
-            if result is not None:
-                return result
-        elif value is not None:
-            return value
-    return None
-
-
 class AgentSession:
     """Wires an agent.Agent with coding tools + a built system prompt."""
 
@@ -937,7 +859,7 @@ class AgentSession:
             if process_service is not None and process_owner is not None
             else None
         )
-        self.settings_manager = settings_manager or SettingsManager.inMemory()
+        self.settings_manager = settings_manager or SettingsManager.in_memory()
         self._stream_fn = stream_fn or self.provider_control_plane.stream_simple
         self._allowed_tool_names = set(allowed_tool_names) if allowed_tool_names is not None else None
         self._excluded_tool_names = set(excluded_tool_names or [])
@@ -1281,7 +1203,6 @@ class AgentSession:
                     next_active.append(name)
         self.set_active_tools_by_name(next_active)
 
-    refreshTools = refresh_tools
 
     def _build_system_prompt(self, selected_tool_names: list[str]) -> str:
         selected_definitions = [
@@ -1335,7 +1256,6 @@ class AgentSession:
         self._extend_resources_from_extensions(reason)
         self.set_active_tools_by_name(self.get_active_tool_names())
 
-    reloadResources = reload_resources
 
     def bind_extensions(self, bindings: dict[str, object] | None = None) -> None:
         bindings = bindings or {}
@@ -1366,7 +1286,6 @@ class AgentSession:
         if self._extend_resources_from_extensions(reason):
             self.set_active_tools_by_name(self.get_active_tool_names())
 
-    bindExtensions = bind_extensions
 
     def _apply_extension_bindings(self) -> None:
         self._extension_runner.set_ui_context(self._extension_ui_context, self._extension_mode)
@@ -1563,7 +1482,6 @@ class AgentSession:
     def create_replaced_session_context(self) -> ExtensionCommandContext:
         return self._extension_command_context()
 
-    createReplacedSessionContext = create_replaced_session_context
 
     def _extension_command_infos(self) -> list[dict]:
         return [
@@ -2072,91 +1990,6 @@ class AgentSession:
     def _subagent_tool_result(self, content: str, details: dict[str, object]) -> AgentToolResult:
         return AgentToolResult(content=[TextContent(text=content)], details=details)
 
-    def _install_subagent_tool_aliases(self, child: "AgentSession", allowed_tools: tuple[str, ...]) -> list[str]:
-        active_tools = list(allowed_tools)
-        if "run" in active_tools:
-            return active_tools
-        bash_definition = child.get_tool_definition("bash")
-        bash_tool = child._tool_by_name.get("bash")  # noqa: SLF001 - same class scoped child setup.
-
-        if "bash" in allowed_tools and bash_definition is not None and bash_tool is not None:
-            run_execute = bash_definition.execute
-            run_prepare_arguments = bash_definition.prepare_arguments
-            run_execution_mode = bash_definition.execution_mode
-            run_render_shell = bash_definition.render_shell
-            run_render_call = bash_definition.render_call
-            run_render_result = bash_definition.render_result
-            description = "Compatibility alias for bash in delegated coding-agent sessions."
-            prompt_snippet = "Run shell commands. This is a compatibility alias for bash."
-            prompt_guidelines = [
-                "The run tool is an alias for bash and is only available when bash is already allowed.",
-            ]
-            agent_execute = bash_tool.execute
-        else:
-            def run_execute(_tool_call_id, args, signal=None, on_update=None, ctx=None):
-                command = args.get("command", "") if isinstance(args, Mapping) else ""
-                return AgentToolResult(
-                    content=[
-                        TextContent(
-                            text=(
-                                "Blocked: this subagent is read-only and cannot run shell commands. "
-                                "Use read, grep, find, or ls, or report that the goal requires a bash-enabled skill role."
-                            )
-                        )
-                    ],
-                    details={
-                        "blocked": True,
-                        "reason": "subagent_run_requires_bash",
-                        "command": command,
-                        "allowedTools": list(allowed_tools),
-                    },
-                )
-
-            run_prepare_arguments = None
-            run_execution_mode = "default"
-            run_render_shell = None
-            run_render_call = lambda args, ctx=None: f"run {args.get('command', '')}" if isinstance(args, Mapping) else "run"
-            run_render_result = None
-            description = "Blocked compatibility shim for shell commands in read-only subagents."
-            prompt_snippet = "Shell commands are blocked for this read-only subagent."
-            prompt_guidelines = [
-                "Do not use run unless bash is listed as an allowed tool.",
-                "If a goal requires shell access and bash is not allowed, report the blocker instead of retrying.",
-            ]
-            agent_execute = run_execute
-
-        run_definition = ToolDefinition(
-            name="run",
-            label="run",
-            description=description,
-            parameters=bash_definition.parameters if bash_definition is not None else BASH_SCHEMA,
-            execute=run_execute,
-            prompt_snippet=prompt_snippet,
-            prompt_guidelines=prompt_guidelines,
-            render_shell=run_render_shell,
-            render_call=run_render_call,
-            render_result=run_render_result,
-            execution_mode=run_execution_mode,
-            prepare_arguments=run_prepare_arguments,
-            source_info=bash_definition.source_info if bash_definition is not None else None,
-        )
-        child._tool_definition_by_name["run"] = run_definition  # noqa: SLF001 - same class scoped child setup.
-        child._tool_source_info_by_name["run"] = child._tool_source_info_by_name.get(  # noqa: SLF001
-            "bash",
-            create_synthetic_source_info("<builtin:run>", source="builtin"),
-        )
-        child._tool_by_name["run"] = AgentTool(  # noqa: SLF001 - same class scoped child setup.
-            name="run",
-            description=run_definition.description,
-            parameters=run_definition.parameters,
-            label="run",
-            execute=agent_execute,
-            prepare_arguments=run_prepare_arguments,
-            execution_mode=run_execution_mode,
-        )
-        active_tools.append("run")
-        return active_tools
-
     def _run_internal_subagent(self, task: SubagentTask) -> SubagentResult:
         started = int(time.time() * 1000)
         tool_trace: list[dict[str, object]] = []
@@ -2170,9 +2003,6 @@ class AgentSession:
             stream_fn=self._stream_fn,
             max_iterations=12,
         )
-        child_active_tools = self._install_subagent_tool_aliases(child, task.allowed_tools)
-        if child_active_tools != list(task.allowed_tools):
-            child.set_active_tools_by_name(child_active_tools)
         child.agent.subscribe(self._subagent_tool_trace_listener(task, child, tool_trace, trace_by_call_id))
         child.agent._after_tool_call = self._subagent_after_tool_call_tracer(  # noqa: SLF001 - parent observes delegated child tools.
             task,
@@ -2554,7 +2384,6 @@ class AgentSession:
             return
         self._session_store.append_label_change(entry_id, label)
 
-    setLabel = set_label
 
     def _extension_wait_for_idle(self) -> None:
         self.agent.wait_for_idle()
@@ -2686,7 +2515,6 @@ class AgentSession:
         self._emit_queue_update()
         return queued.id
 
-    followUp = follow_up
 
     def _flush_turn_mailbox(self) -> None:
         self._flush_turn_mailbox_kind("steering")
@@ -2755,7 +2583,7 @@ class AgentSession:
         self.agent.state.messages.append(app_message)
         if self._session_store:
             self._session_store.append_custom_message_entry(
-                app_message.customType,
+                app_message.custom_type,
                 app_message.content,
                 app_message.display,
                 app_message.details,
@@ -2764,7 +2592,6 @@ class AgentSession:
         self._emit(MessageEndEvent(message=app_message))
         return [app_message]
 
-    sendCustomMessage = send_custom_message
 
     def _apply_before_agent_start(self, text: str, images, prompt_message):
         if not self._extension_runner.has_handlers("before_agent_start"):
@@ -2900,17 +2727,11 @@ class AgentSession:
     def has_pending_bash_messages(self) -> bool:
         return bool(self._pending_bash_messages)
 
-    @property
-    def hasPendingBashMessages(self) -> bool:
-        return self.has_pending_bash_messages
 
     @property
     def is_bash_running(self) -> bool:
         return self._bash_signal is not None
 
-    @property
-    def isBashRunning(self) -> bool:
-        return self.is_bash_running
 
     def get_steering_messages(self) -> list[str]:
         return [item.text for item in self._turn_mailbox.snapshot("steering")]
@@ -2934,89 +2755,59 @@ class AgentSession:
     def thinking_level(self) -> str:
         return self.agent.state.thinking_level
 
-    @property
-    def thinkingLevel(self) -> str:
-        return self.thinking_level
 
     @property
     def scoped_models(self) -> list[ScopedModel]:
         return list(self._scoped_models)
 
-    @property
-    def scopedModels(self) -> list[ScopedModel]:
-        return self.scoped_models
 
     @property
     def retry_attempt(self) -> int:
         return self._retry_attempt
 
-    @property
-    def retryAttempt(self) -> int:
-        return self._retry_attempt
 
     @property
     def is_retrying(self) -> bool:
         return self._retry_signal is not None
 
-    @property
-    def isRetrying(self) -> bool:
-        return self.is_retrying
 
     @property
     def auto_retry_enabled(self) -> bool:
         return self._retry_enabled
 
-    @property
-    def autoRetryEnabled(self) -> bool:
-        return self.auto_retry_enabled
 
     def set_auto_retry_enabled(self, enabled: bool) -> None:
         self._retry_enabled = bool(enabled)
 
-    setAutoRetryEnabled = set_auto_retry_enabled
 
     def abort_retry(self) -> None:
         if self._retry_signal is not None:
             self._retry_signal.abort()
 
-    abortRetry = abort_retry
 
     @property
     def session_name(self) -> str | None:
         return self._session_name
 
-    @property
-    def sessionName(self) -> str | None:
-        return self._session_name
 
     @property
     def extension_runner(self) -> ExtensionRunner:
         return self._extension_runner
 
-    @property
-    def extensionRunner(self) -> ExtensionRunner:
-        return self._extension_runner
 
     @property
     def resource_loader(self) -> DefaultResourceLoader:
         return self._resource_loader
 
-    @property
-    def resourceLoader(self) -> DefaultResourceLoader:
-        return self._resource_loader
 
     @property
     def prompt_templates(self) -> list[object]:
         return self._resource_loader.get_prompts()["prompts"]
 
-    @property
-    def promptTemplates(self) -> list[object]:
-        return self.prompt_templates
 
     def has_extension_handlers(self, event_type: str) -> bool:
         return self._extension_runner.has_handlers(event_type)
 
-    hasExtensionHandlers = has_extension_handlers
 
     @property
     def messages(self) -> list[AgentMessage]:
@@ -3026,32 +2817,23 @@ class AgentSession:
     def steering_mode(self) -> str:
         return self.agent.steering_mode
 
-    @property
-    def steeringMode(self) -> str:
-        return self.steering_mode
 
     @property
     def follow_up_mode(self) -> str:
         return self.agent.follow_up_mode
 
-    @property
-    def followUpMode(self) -> str:
-        return self.follow_up_mode
 
     def set_steering_mode(self, mode: str) -> None:
         self.agent.steering_mode = mode
 
-    setSteeringMode = set_steering_mode
 
     def set_follow_up_mode(self, mode: str) -> None:
         self.agent.follow_up_mode = mode
 
-    setFollowUpMode = set_follow_up_mode
 
     def get_active_tool_names(self) -> list[str]:
         return [tool.name for tool in self.agent.state.tools]
 
-    getActiveToolNames = get_active_tool_names
 
     def get_all_tools(self) -> list[dict]:
         return [
@@ -3059,12 +2841,10 @@ class AgentSession:
             for definition in self._tool_definition_by_name.values()
         ]
 
-    getAllTools = get_all_tools
 
     def get_tool_definition(self, name: str) -> ToolDefinition | None:
         return self._tool_definition_by_name.get(name)
 
-    getToolDefinition = get_tool_definition
 
     def set_active_tools_by_name(self, tool_names: list[str]) -> None:
         tools: list[AgentTool] = []
@@ -3079,7 +2859,6 @@ class AgentSession:
         self.system_prompt = self._build_system_prompt(valid_tool_names)
         self.agent.state.system_prompt = self.system_prompt
 
-    setActiveToolsByName = set_active_tools_by_name
 
     def set_session_name(self, name: str | None) -> None:
         self._session_name = name
@@ -3087,7 +2866,6 @@ class AgentSession:
             self._session_store.append_session_info(name)
         self._emit(SessionInfoChangedEvent(name=name))
 
-    setSessionName = set_session_name
 
     def set_thinking_level(self, level: str) -> None:
         available_levels = self.get_available_thinking_levels()
@@ -3099,7 +2877,6 @@ class AgentSession:
                 self._session_store.append_thinking_level_change(effective_level)
             self._emit(ThinkingLevelChangedEvent(level=effective_level))
 
-    setThinkingLevel = set_thinking_level
 
     def cycle_thinking_level(self) -> str | None:
         if not self.supports_thinking():
@@ -3115,19 +2892,16 @@ class AgentSession:
         self.set_thinking_level(next_level)
         return next_level
 
-    cycleThinkingLevel = cycle_thinking_level
 
     def get_available_thinking_levels(self) -> list[str]:
         if not self.model:
             return list(_THINKING_LEVELS)
         return get_supported_thinking_levels(self.model)
 
-    getAvailableThinkingLevels = get_available_thinking_levels
 
     def supports_thinking(self) -> bool:
         return bool(self.model and self.model.reasoning)
 
-    supportsThinking = supports_thinking
 
     def _get_thinking_level_for_model_switch(self, explicit_level: str | None = None) -> str:
         if explicit_level is not None:
@@ -3146,26 +2920,22 @@ class AgentSession:
             self._session_store.append_model_change(model.provider, model.id)
         self.set_thinking_level(thinking_level)
 
-    setModel = set_model
 
     def with_model_overrides(self, *, max_tokens: int) -> Model:
         overridden = replace(self.model, max_tokens=int(max_tokens))
         self.agent.state.model = overridden
         return overridden
 
-    withModelOverrides = with_model_overrides
 
     def set_scoped_models(self, scoped_models: list[ScopedModel]) -> None:
         self._scoped_models = list(scoped_models)
 
-    setScopedModels = set_scoped_models
 
     def cycle_model(self, direction: str = "forward") -> ModelCycleResult | None:
         if self._scoped_models:
             return self._cycle_scoped_model(direction)
         return self._cycle_available_model(direction)
 
-    cycleModel = cycle_model
 
     def _cycle_scoped_model(self, direction: str) -> ModelCycleResult | None:
         scoped_models = [
@@ -3263,7 +3033,6 @@ class AgentSession:
             else None
         )
 
-    setCompactionManager = set_compaction_manager
 
     @property
     def compaction_transactions(self) -> CompactionTransactionCoordinator:
@@ -3279,9 +3048,6 @@ class AgentSession:
     def is_compacting(self) -> bool:
         return self._compaction_adapter.is_running
 
-    @property
-    def isCompacting(self) -> bool:
-        return self.is_compacting
 
     def execute_bash(self, command: str, on_chunk=None, options: dict | None = None) -> BashResult:
         options = options or {}
@@ -3337,13 +3103,11 @@ class AgentSession:
         self.record_bash_result(command, bash_result, options)
         return bash_result
 
-    executeBash = execute_bash
 
     def abort_bash(self) -> None:
         if self._bash_signal is not None:
             self._bash_signal.abort()
 
-    abortBash = abort_bash
 
     def record_bash_result(self, command: str, result: BashResult, options: dict | None = None) -> None:
         options = options or {}
@@ -3367,7 +3131,6 @@ class AgentSession:
         if self._session_store:
             self._session_store.append_message(message)
 
-    recordBashResult = record_bash_result
 
     def _flush_pending_bash_messages(self) -> None:
         if not self._pending_bash_messages:
@@ -3802,7 +3565,7 @@ class AgentSession:
             message_role = getattr(event.message, "role", None)
             if message_role == "custom":
                 self._session_store.append_custom_message_entry(
-                    event.message.customType,
+                    event.message.custom_type,
                     event.message.content,
                     event.message.display,
                     event.message.details,
@@ -3858,21 +3621,18 @@ class AgentSession:
     def get_session_entry(self, entry_id: str) -> dict | None:
         return self._session_store.get_entry(entry_id) if self._session_store else None
 
-    getSessionEntry = get_session_entry
 
     def create_branched_session(self, leaf_id: str, path: str | None = None) -> str:
         if self._session_store is None:
             raise RuntimeError("No session store configured")
         return self._session_store.create_branched_session(leaf_id, path=path)
 
-    createBranchedSession = create_branched_session
 
     def export_to_jsonl(self, output_path: str | None = None) -> str:
         if self._session_store is None:
             raise RuntimeError("No session store configured")
         return self._session_store.export_to_jsonl(output_path)
 
-    exportToJsonl = export_to_jsonl
 
     def export_to_html(self, output_path: str | dict | None = None) -> str:
         if self._session_store is None:
@@ -3881,14 +3641,12 @@ class AgentSession:
 
         return export_session_to_html(self._session_store, self.agent.state, output_path)
 
-    exportToHtml = export_to_html
 
     def append_custom_entry(self, custom_type: str, data=None) -> str:
         if self._session_store is None:
             raise RuntimeError("No session store configured")
         return self._session_store.append_custom_entry(custom_type, data)
 
-    appendCustomEntry = append_custom_entry
 
     @property
     def session_path(self) -> str | None:
@@ -3898,17 +3656,11 @@ class AgentSession:
     def session_file(self) -> str | None:
         return self.session_path
 
-    @property
-    def sessionFile(self) -> str | None:
-        return self.session_path
 
     @property
     def session_id(self) -> str:
         return str(self._session_store.header.get("id", "")) if self._session_store else ""
 
-    @property
-    def sessionId(self) -> str:
-        return self.session_id
 
     def branch(self, entry_id: str) -> None:
         if self._session_store is None:
@@ -4046,7 +3798,6 @@ class AgentSession:
             result["summaryEntry"] = summary_entry
         return result
 
-    navigateTree = navigate_tree
 
     def get_user_messages_for_forking(self) -> list[dict[str, str]]:
         if self._session_store is None:
@@ -4064,7 +3815,6 @@ class AgentSession:
                 result.append({"entryId": str(entry["id"]), "text": text})
         return result
 
-    getUserMessagesForForking = get_user_messages_for_forking
 
     def get_last_assistant_text(self) -> str | None:
         for message in reversed(self.messages):
@@ -4078,7 +3828,6 @@ class AgentSession:
             return text or None
         return None
 
-    getLastAssistantText = get_last_assistant_text
 
     def get_session_stats(self) -> dict[str, object]:
         messages = self.agent.state.messages
@@ -4122,7 +3871,6 @@ class AgentSession:
             "contextUsage": self.get_context_usage(),
         }
 
-    getSessionStats = get_session_stats
 
     def get_context_usage(self) -> dict[str, object] | None:
         context_window = self.model.context_window or 0
@@ -4167,7 +3915,6 @@ class AgentSession:
             usage["estimated"] = True
         return usage
 
-    getContextUsage = get_context_usage
 
 
 def _wait_for_retry_abort(signal: AbortSignal, delay_ms: int) -> bool:
@@ -4658,12 +4405,6 @@ def _format_subagent_tool_trace_entry(entry: Mapping[str, object]) -> str:
     return " ".join(parts)
 
 
-def _text_from_user_message_content(content: str | list[TextContent | ImageContent]) -> str:
-    if isinstance(content, str):
-        return content
-    return "".join(block.text for block in content if isinstance(block, TextContent))
-
-
 def _message_content_text(content: object) -> str:
     if isinstance(content, str):
         return content
@@ -4767,13 +4508,6 @@ def _cost_from_provider_model_config(cost: object) -> Cost:
         cache_read=float(cost.get("cacheRead", cost.get("cache_read", 0.0))),
         cache_write=float(cost.get("cacheWrite", cost.get("cache_write", 0.0))),
     )
-
-
-def _last_assistant_message(messages: list[AgentMessage]) -> AssistantMessage | None:
-    for message in reversed(messages):
-        if isinstance(message, AssistantMessage):
-            return message
-    return None
 
 
 def _replace_message_in_place(target: AgentMessage, replacement: AgentMessage) -> None:

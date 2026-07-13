@@ -55,9 +55,6 @@ class BranchSummaryMessage:
     timestamp: int
     role: str = "branchSummary"
 
-    @property
-    def fromId(self) -> str:
-        return self.from_id
 
 
 @dataclass
@@ -68,9 +65,6 @@ class CompactionSummaryMessage:
     details: Any | None = None
     role: str = "compactionSummary"
 
-    @property
-    def tokensBefore(self) -> int:
-        return self.tokens_before
 
 
 @dataclass
@@ -85,17 +79,8 @@ class BashExecutionMessage:
     exclude_from_context: bool | None = None
     role: str = "bashExecution"
 
-    @property
-    def exitCode(self) -> int | None:
-        return self.exit_code
 
-    @property
-    def fullOutputPath(self) -> str | None:
-        return self.full_output_path
 
-    @property
-    def excludeFromContext(self) -> bool | None:
-        return self.exclude_from_context
 
 
 @dataclass
@@ -107,9 +92,6 @@ class CustomMessage:
     timestamp: int
     role: str = "custom"
 
-    @property
-    def customType(self) -> str:
-        return self.custom_type
 
 
 class SessionStore:
@@ -279,12 +261,10 @@ class SessionStore:
     def get_leaf_id(self) -> str | None:
         return self.leaf_id
 
-    getLeafId = get_leaf_id
 
     def get_children(self, parent_id: str) -> list[dict[str, Any]]:
         return [entry for entry in self.by_id.values() if entry.get("parentId") == parent_id]
 
-    getChildren = get_children
 
     def get_label(self, entry_id: str) -> str | None:
         label: str | None = None
@@ -294,7 +274,6 @@ class SessionStore:
                 label = value if value else None
         return label
 
-    getLabel = get_label
 
     def append_message(self, message: AgentMessage) -> str:
         return self._append_entry({"type": "message", "message": serialize_message(message)}, durable=True)
@@ -345,7 +324,6 @@ class SessionStore:
             entry["data"] = data
         return self._append_entry(entry, durable=True)
 
-    appendCustomEntry = append_custom_entry
 
     def append_custom_message_entry(
         self,
@@ -364,14 +342,12 @@ class SessionStore:
             entry["details"] = details
         return self._append_entry(entry, durable=True)
 
-    appendCustomMessageEntry = append_custom_message_entry
 
     def append_label_change(self, target_id: str, label: str | None) -> str:
         if target_id not in self.by_id:
             raise ValueError(f"Entry {target_id} not found")
         return self._append_entry({"type": "label", "targetId": target_id, "label": label or None}, durable=True)
 
-    appendLabelChange = append_label_change
 
     def branch(self, entry_id: str) -> None:
         if entry_id not in self.by_id:
@@ -383,7 +359,6 @@ class SessionStore:
         self.leaf_id = None
         self._explicit_parent_selection = True
 
-    resetLeaf = reset_leaf
 
     def branch_with_summary(
         self,
@@ -407,7 +382,6 @@ class SessionStore:
             entry["fromHook"] = from_hook
         return self._append_entry(entry, durable=True)
 
-    branchWithSummary = branch_with_summary
 
     def create_branched_session(self, leaf_id: str, path: str | None = None) -> str:
         branch_entries = self.get_branch(leaf_id)
@@ -469,7 +443,6 @@ class SessionStore:
         _atomic_write(target_path, ("\n".join(lines) + "\n").encode("utf-8"))
         return str(target_path)
 
-    exportToJsonl = export_to_jsonl
 
     @property
     def header(self) -> dict[str, Any]:

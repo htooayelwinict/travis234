@@ -16,6 +16,8 @@ from travis.coding_agent.agent_session import AgentSession, default_convert_to_l
 from travis.coding_agent.auth_storage import AuthStorage
 from travis.coding_agent.extensions import ExtensionRunner
 from travis.coding_agent.model_registry import ModelRegistry
+from travis.coding_agent.object_utils import call_optional as _call_or_none
+from travis.coding_agent.object_utils import first_defined as _first_defined
 from travis.coding_agent.provider_control_plane import ProviderControlPlane
 from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.session_catalog import SessionCatalog
@@ -30,13 +32,7 @@ class CreateAgentSessionResult:
     extensions_result: dict[str, object]
     model_fallback_message: str | None = None
 
-    @property
-    def extensionsResult(self) -> dict[str, object]:
-        return self.extensions_result
 
-    @property
-    def modelFallbackMessage(self) -> str | None:
-        return self.model_fallback_message
 
 
 def create_agent_session_services(options: dict[str, Any]) -> dict[str, Any]:
@@ -124,7 +120,6 @@ def create_agent_session_services(options: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-createAgentSessionServices = create_agent_session_services
 
 
 def create_agent_session(options: Mapping[str, Any] | None = None, **kwargs: Any) -> CreateAgentSessionResult:
@@ -143,7 +138,6 @@ def create_agent_session(options: Mapping[str, Any] | None = None, **kwargs: Any
     return create_agent_session_from_services({**resolved_options, "services": services})
 
 
-createAgentSession = create_agent_session
 
 
 def create_agent_session_from_services(options: dict[str, Any]) -> CreateAgentSessionResult:
@@ -164,7 +158,7 @@ def create_agent_session_from_services(options: dict[str, Any]) -> CreateAgentSe
             existing_session.model.get("provider", ""),
             existing_session.model.get("modelId", ""),
         )
-        if restored_model and services["modelRegistry"].hasConfiguredAuth(restored_model):
+        if restored_model and services["modelRegistry"].has_configured_auth(restored_model):
             model = restored_model
         else:
             model_fallback_message = (
@@ -246,15 +240,6 @@ def create_agent_session_from_services(options: dict[str, Any]) -> CreateAgentSe
     )
 
 
-createAgentSessionFromServices = create_agent_session_from_services
-
-
-def _call_or_none(target: object, *names: str) -> Any:
-    for name in names:
-        method = getattr(target, name, None)
-        if callable(method):
-            return method()
-    return None
 
 
 def _provider_retry_settings(settings_manager: object) -> dict[str, Any]:
@@ -392,13 +377,6 @@ def _stream_fn_for_sdk(
         return provider_control_plane.api_providers.require(model.api).stream_simple(model, context, next_options)
 
     return _stream
-
-
-def _first_defined(*values):
-    for value in values:
-        if value is not None:
-            return value
-    return None
 
 
 _OPENROUTER_HOST = "openrouter.ai"
@@ -580,7 +558,7 @@ def _drain_pending_provider_registrations(
     runtime.clear_pending_provider_registrations()
     for name, config, extension_path in pending:
         try:
-            model_registry.registerProvider(name, config)
+            model_registry.register_provider(name, config)
         except Exception as error:  # noqa: BLE001 - Travis reports extension registration failures as diagnostics.
             diagnostics.append(
                 {

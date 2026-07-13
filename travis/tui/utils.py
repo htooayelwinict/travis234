@@ -477,12 +477,3 @@ def _cell_width(char: str) -> int:
     if unicodedata.east_asian_width(char) in {"F", "W"}:
         return 2
     return 1
-
-
-def truncateToWidth(text: str, maxWidth: int, ellipsis: str = "...", pad: bool = False) -> str:
-    return truncate_to_width(text, maxWidth, ellipsis, pad)
-
-
-extractSegments = extract_segments
-visibleWidth = visible_width
-wrapTextWithAnsi = wrap_text

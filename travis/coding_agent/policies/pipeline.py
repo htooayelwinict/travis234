@@ -25,4 +25,6 @@ class PolicyPipeline:
         return Allow()
 
 
-__all__ = ["PolicyPipeline"]
+__all__ = [
+    "PolicyPipeline",
+]

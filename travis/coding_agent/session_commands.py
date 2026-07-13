@@ -89,4 +89,6 @@ class SessionCommandExecutor:
                     self._active_name = None
 
 
-__all__ = ["SessionCommandExecutor"]
+__all__ = [
+    "SessionCommandExecutor",
+]

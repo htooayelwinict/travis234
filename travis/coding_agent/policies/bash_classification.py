@@ -429,4 +429,8 @@ def _is_shell_punctuation(token: str) -> bool:
     return bool(token) and all(character in ";&|<>" for character in token)
 
 
-__all__ = ["BashMutationClass", "BashMutationHint", "classify_bash_mutation"]
+__all__ = [
+    "BashMutationClass",
+    "BashMutationHint",
+    "classify_bash_mutation",
+]

@@ -108,4 +108,8 @@ class CodingTurnMailbox:
             raise ValueError("mailbox kind must be steering or follow_up")
 
 
-__all__ = ["CodingTurnMailbox", "MailboxKind", "QueuedCodingMessage"]
+__all__ = [
+    "CodingTurnMailbox",
+    "MailboxKind",
+    "QueuedCodingMessage",
+]

@@ -27,9 +27,6 @@ class ApiProvider:
     stream: StreamFn
     stream_simple: SimpleStreamFn
 
-    @property
-    def streamSimple(self) -> SimpleStreamFn:
-        return self.stream_simple
 
 
 class ProviderRegistration:
@@ -126,11 +123,6 @@ def reset_api_providers() -> None:
 
 
 clear_api_providers = reset_api_providers
-registerApiProvider = register_api_provider
-getApiProvider = get_api_provider
-getApiProviders = get_api_providers
-unregisterApiProviders = unregister_api_providers
-clearApiProviders = clear_api_providers
 
 
 def _with_model_auth(model: Model, options, options_type=StreamOptions):
@@ -189,7 +181,3 @@ def complete_simple_sync(
     model: Model, context: Context, options: SimpleStreamOptions | None = None
 ) -> AssistantMessage:
     return stream_simple(model, context, options).result_sync()
-
-
-streamSimple = stream_simple
-completeSimple = complete_simple

@@ -98,13 +98,6 @@ _ACTION_FIELDS = {
     "list": {"action"},
 }
 
-_PROCESS_ARGUMENT_ALIASES = {
-    "sessionId": "session_id",
-    "nextCursor": "cursor",
-    "yieldTimeMs": "yield_time_ms",
-    "waitTimeMs": "wait_time_ms",
-    "maxBytes": "max_bytes",
-}
 _PROCESS_INTEGER_FIELDS = {"cursor", "yield_time_ms", "wait_time_ms", "max_bytes", "rows", "cols"}
 
 
@@ -121,16 +114,6 @@ def prepare_process_arguments(raw_args):
     if not isinstance(raw_args, Mapping):
         return raw_args
     args = dict(raw_args)
-    for alias, canonical in _PROCESS_ARGUMENT_ALIASES.items():
-        if alias not in args:
-            continue
-        canonical_value = _coerce_process_integer(args[canonical]) if canonical in args else None
-        alias_value = _coerce_process_integer(args[alias])
-        if canonical in args and canonical_value != alias_value:
-            raise ValueError(f"conflicting process arguments: {canonical} and {alias}")
-        args[canonical] = alias_value
-        args.pop(alias)
-
     for field in _PROCESS_INTEGER_FIELDS.intersection(args):
         args[field] = _coerce_process_integer(args[field])
 

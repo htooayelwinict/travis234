@@ -14,18 +14,18 @@ ImageProtocol = Literal["kitty", "iterm2"] | None
 
 class TerminalCapabilities(TypedDict):
     images: ImageProtocol
-    trueColor: bool
+    true_color: bool
     hyperlinks: bool
 
 
 class CellDimensions(TypedDict):
-    widthPx: int
-    heightPx: int
+    width_px: int
+    height_px: int
 
 
 class ImageDimensions(TypedDict):
-    widthPx: int
-    heightPx: int
+    width_px: int
+    height_px: int
 
 
 class ImageCellSize(TypedDict):
@@ -414,26 +414,3 @@ def image_fallback(mime_type: str, dimensions: ImageDimensions | None = None, fi
     if dimensions:
         parts.append(f"{dimensions['widthPx']}x{dimensions['heightPx']}")
     return f"[Image: {' '.join(parts)}]"
-
-
-getCellDimensions = get_cell_dimensions
-setCellDimensions = set_cell_dimensions
-detectCapabilities = detect_capabilities
-getCapabilities = get_capabilities
-resetCapabilitiesCache = reset_capabilities_cache
-setCapabilities = set_capabilities
-isImageLine = is_image_line
-allocateImageId = allocate_image_id
-encodeKitty = encode_kitty
-deleteKittyImage = delete_kitty_image
-deleteAllKittyImages = delete_all_kitty_images
-encodeITerm2 = encode_iterm2
-calculateImageCellSize = calculate_image_cell_size
-calculateImageRows = calculate_image_rows
-getPngDimensions = get_png_dimensions
-getJpegDimensions = get_jpeg_dimensions
-getGifDimensions = get_gif_dimensions
-getWebpDimensions = get_webp_dimensions
-getImageDimensions = get_image_dimensions
-renderImage = render_image
-imageFallback = image_fallback

@@ -12,32 +12,38 @@ from travis.ai.providers.faux import (
 )
 from travis.ai.stream import register_api_provider, reset_api_providers
 from travis.app import CodingApp
-from test_coding_agent import (
+from tests.test_coding_persistence_and_compaction import (
     test_agent_session_manual_compaction_persists_managed_process_ledger as _compaction_ledger,
+)
+from tests.test_coding_policy_and_extensions import (
     test_concurrent_external_steering_is_delivered_once_with_distinct_ids as _concurrent_steering,
 )
-from test_process_context import (
+from tests.test_process_context import (
     test_provider_receives_transient_process_overlay_without_jsonl_append as _unavailable_overlay,
 )
-from test_process_output import (
+from tests.test_process_output import (
     test_live_spool_budget_is_shared_and_released_exactly_once as _shared_spool_budget,
 )
-from test_process_service import (
+from tests.test_process_service import (
     owner,
     test_active_limit_is_per_owner_scope_with_global_ceiling as _owner_scope_quota,
     test_process_output_limit_fails_only_producer_and_preserves_prefix as _output_limit,
     test_spool_failure_stops_process_and_publishes_failed as _spool_failure,
     test_terminal_poll_falls_back_to_durable_completion_after_memory_eviction as _terminal_recovery,
 )
-from test_process_tools import (
+from tests.test_process_tools import (
     managed_tools,
     test_process_wait_collapses_large_output_to_bounded_borrowed_artifact as _large_artifact,
     test_process_wait_uses_terminal_wait_streams_updates_and_is_sequential as _sequential_wait,
 )
-from test_tui import (
+from tests.test_tui_commands_and_extensions import (
     test_allow_grants_during_active_turn_without_waiting_for_turn_executor as _allow_during_turn,
-    test_ctrl_c_interrupts_focused_user_command_without_aborting_agent as _focused_ctrl_c,
+)
+from tests.test_tui_runtime_compaction_and_models import (
     test_interactive_mode_serializes_bang_bash_after_streaming_turn as _bang_during_turn,
+)
+from tests.test_tui_terminal_and_input import (
+    test_ctrl_c_interrupts_focused_user_command_without_aborting_agent as _focused_ctrl_c,
 )
 
 

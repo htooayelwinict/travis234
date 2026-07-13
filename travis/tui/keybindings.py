@@ -111,28 +111,23 @@ class KeybindingsManager:
     def get_keys(self, keybinding: str) -> list[str]:
         return list(self._keys_by_id.get(keybinding, []))
 
-    getKeys = get_keys
 
     def get_definition(self, keybinding: str) -> dict[str, object] | None:
         return self.definitions.get(keybinding)
 
-    getDefinition = get_definition
 
     def get_conflicts(self) -> list[dict[str, object]]:
         return deepcopy(self._conflicts)
 
-    getConflicts = get_conflicts
 
     def set_user_bindings(self, user_bindings: dict[str, object]) -> None:
         self.user_bindings = dict(user_bindings)
         self._rebuild()
 
-    setUserBindings = set_user_bindings
 
     def get_user_bindings(self) -> dict[str, object]:
         return dict(self.user_bindings)
 
-    getUserBindings = get_user_bindings
 
     def get_resolved_bindings(self) -> dict[str, object]:
         resolved: dict[str, object] = {}
@@ -141,7 +136,6 @@ class KeybindingsManager:
             resolved[keybinding] = keys[0] if len(keys) == 1 else list(keys)
         return resolved
 
-    getResolvedBindings = get_resolved_bindings
 
 
 _global_keybindings: KeybindingsManager | None = None
@@ -157,7 +151,3 @@ def get_keybindings() -> KeybindingsManager:
     if _global_keybindings is None:
         _global_keybindings = KeybindingsManager(TUI_KEYBINDINGS)
     return _global_keybindings
-
-
-setKeybindings = set_keybindings
-getKeybindings = get_keybindings

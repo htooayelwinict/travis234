@@ -202,7 +202,6 @@ class Agent:
             self._signal = AbortSignal()
         return self._signal
 
-    resetAbortSignal = reset_abort_signal
 
     def wait_for_idle(self, timeout: float | None = None) -> bool:
         return self._idle_event.wait(timeout)

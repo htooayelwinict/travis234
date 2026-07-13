@@ -93,15 +93,3 @@ def get_debug_log_path() -> str:
 
 
 # Public compatibility aliases retained until the API cleanup is completed.
-expandTildePath = expand_tilde_path
-getShareViewerUrl = get_share_viewer_url
-getAgentDir = get_agent_dir
-getCustomThemesDir = get_custom_themes_dir
-getModelsPath = get_models_path
-getAuthPath = get_auth_path
-getSettingsPath = get_settings_path
-getToolsDir = get_tools_dir
-getBinDir = get_bin_dir
-getPromptsDir = get_prompts_dir
-getSessionsDir = get_sessions_dir
-getDebugLogPath = get_debug_log_path

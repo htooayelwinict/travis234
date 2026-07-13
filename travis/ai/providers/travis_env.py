@@ -14,6 +14,7 @@ import httpx
 from travis.ai.env_config import ModelConfig, load_model_config
 from travis.ai.event_stream import AssistantMessageEventStream, create_assistant_message_event_stream
 from travis.ai.providers.base import ProviderProfile
+from travis.ai.providers._shared import blank_assistant_message as _blank
 from travis.ai.providers.capabilities import build_generation_payload
 from travis.ai.providers.catalog import get_provider_profile, resolve_provider_runtime
 from travis.ai.providers.message_sanitization import repair_tool_call_arguments
@@ -462,11 +463,16 @@ def _sanitize_surrogates(text: str) -> str:
     return "".join(char for char in text if not 0xD800 <= ord(char) <= 0xDFFF)
 
 
-def _blank(model: Model) -> AssistantMessage:
-    return AssistantMessage(
-        content=[], api=model.api, provider=model.provider, model=model.id,
-        usage=empty_usage(), stop_reason="stop", timestamp=now_ms(),
-    )
+class _StartEventState:
+    def __init__(self, message: AssistantMessage) -> None:
+        self.message = message
+        self.started = False
+
+    def ensure(self) -> StartEvent | None:
+        if self.started:
+            return None
+        self.started = True
+        return StartEvent(partial=self.message)
 
 
 def _map_stop_reason(reason: str | None) -> tuple[str, str | None]:
@@ -1054,7 +1060,7 @@ def parse_sse_chunks(
         return
 
     message = _blank(model)
-    started = False
+    start_state = _StartEventState(message)
     text_index: int | None = None
     text_buf = ""
     thinking_index: int | None = None
@@ -1074,13 +1080,6 @@ def parse_sse_chunks(
                 return index
         return -1
 
-    def ensure_start():
-        nonlocal started
-        if not started:
-            started = True
-            return StartEvent(partial=message)
-        return None
-
     def end_content_events() -> Iterator:
         for content_index, block in enumerate(message.content):
             if isinstance(block, TextContent):
@@ -1092,7 +1091,7 @@ def parse_sse_chunks(
                 block.arguments = _parse_streaming_json(tool_arg_bufs.get(content_index, ""))
                 yield ToolcallEndEvent(content_index=content_index, tool_call=block, partial=message)
 
-        if not started:
+        if not start_state.started:
             yield StartEvent(partial=message)
         message.usage = usage
 
@@ -1191,7 +1190,7 @@ def parse_sse_chunks(
                 message,
                 usage_ref := {"usage": usage},
                 state := {
-                    "started": started,
+                    "started": start_state.started,
                     "text_index": text_index,
                     "text_buf": text_buf,
                     "thinking_index": thinking_index,
@@ -1202,12 +1201,12 @@ def parse_sse_chunks(
                     "tool_arg_previews": tool_arg_previews,
                     "leaked_tool_protocol_text": stream_leaked_tool_protocol_text,
                     "content_index_of": content_index_of,
-                    "ensure_start": ensure_start,
+                    "ensure_start": start_state.ensure,
                 },
                 include_reasoning=include_reasoning,
             )
             usage = usage_ref["usage"]
-            started = state["started"]
+            start_state.started = state["started"]
             text_index = state["text_index"]
             text_buf = state["text_buf"]
             thinking_index = state["thinking_index"]
@@ -1268,26 +1267,19 @@ def _parse_codex_responses_sse_chunks(
     include_reasoning: bool = True,
 ) -> Iterator:
     message = _blank(model)
-    started = False
+    start_state = _StartEventState(message)
     usage = empty_usage()
     output_slots: dict[int, tuple[str, int]] = {}
     tool_arg_bufs: dict[int, str] = {}
     tool_arg_previews: dict[int, dict] = {}
     completed = False
 
-    def ensure_start():
-        nonlocal started
-        if not started:
-            started = True
-            return StartEvent(partial=message)
-        return None
-
     def create_slot(output_index: int, item: dict[str, Any]) -> Iterator:
         item_type = item.get("type")
         if item_type == "reasoning":
             if not include_reasoning:
                 return
-            start = ensure_start()
+            start = start_state.ensure()
             if start:
                 yield start
             content_index = len(message.content)
@@ -1296,7 +1288,7 @@ def _parse_codex_responses_sse_chunks(
             yield ThinkingStartEvent(content_index=content_index, partial=message)
             return
         if item_type == "message":
-            start = ensure_start()
+            start = start_state.ensure()
             if start:
                 yield start
             content_index = len(message.content)
@@ -1309,7 +1301,7 @@ def _parse_codex_responses_sse_chunks(
             item_id = str(item.get("id") or "") or None
             name = str(item.get("name") or "")
             raw_arguments = item.get("arguments") if isinstance(item.get("arguments"), str) else ""
-            start = ensure_start()
+            start = start_state.ensure()
             if start:
                 yield start
             content_index = len(message.content)
@@ -1567,7 +1559,7 @@ def _parse_anthropic_messages_sse_chunks(
     include_reasoning: bool = True,
 ) -> Iterator:
     message = _blank(model)
-    started = False
+    start_state = _StartEventState(message)
     usage = empty_usage()
     block_slots: dict[int, tuple[str, int]] = {}
     tool_arg_bufs: dict[int, str] = {}
@@ -1576,13 +1568,6 @@ def _parse_anthropic_messages_sse_chunks(
     error_message: str | None = None
     saw_message_start = False
     saw_message_stop = False
-
-    def ensure_start():
-        nonlocal started
-        if not started:
-            started = True
-            return StartEvent(partial=message)
-        return None
 
     try:
         payloads = _iter_sse_data(lines, data_idle_timeout_seconds=data_idle_timeout_seconds, clock=clock)
@@ -1608,7 +1593,7 @@ def _parse_anthropic_messages_sse_chunks(
                 if not isinstance(index, int) or not isinstance(content_block, dict):
                     continue
                 block_type = content_block.get("type")
-                start = ensure_start()
+                start = start_state.ensure()
                 if start:
                     yield start
                 content_index = len(message.content)

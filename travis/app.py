@@ -20,6 +20,8 @@ from travis.ai.overflow import is_context_overflow, parse_available_output_token
 from travis.ai.types import Context, Model, SimpleStreamOptions, TextContent, ToolResultMessage, UserMessage, now_ms
 from travis.ai.types import AssistantMessage
 from travis.coding_agent.agent_session import AgentSession
+from travis.coding_agent.message_utils import last_assistant_message as _last_assistant_message
+from travis.coding_agent.object_utils import first_defined as _first_setting
 from travis.coding_agent.agent_session_runtime import AgentSessionRuntime, CreateAgentSessionRuntimeResult
 from travis.coding_agent.compaction_adapter import to_compressor_messages
 from travis.coding_agent.branch_summarization import SUMMARIZATION_SYSTEM_PROMPT
@@ -72,13 +74,6 @@ def _call_setting(settings_manager: object, *names: str) -> Any:
     return None
 
 
-def _first_setting(*values: Any) -> Any:
-    for value in values:
-        if value is not None:
-            return value
-    return None
-
-
 def _coerce_nonnegative_int(value: Any, *, default: int) -> int:
     try:
         parsed = int(value)
@@ -116,7 +111,7 @@ class CodingApp:
         self.conversation_log = conversation_log
         self.provider_control_plane = provider_control_plane or ProviderControlPlane.create_default()
         self.provider_control_plane.ensure_model(model)
-        self._settings_manager = settings_manager or SettingsManager.inMemory()
+        self._settings_manager = settings_manager or SettingsManager.in_memory()
         self._retry_settings = _resolve_session_retry_settings(self._settings_manager)
         self._scoped_models = list(scoped_models or [])
         self._max_iterations = max_iterations
@@ -623,13 +618,6 @@ def _summarizer_max_tokens(model: Model) -> int:
     if model.max_tokens and model.max_tokens > 0:
         return min(model.max_tokens, 12_000)
     return 2048
-
-
-def _last_assistant_message(messages) -> AssistantMessage | None:
-    for message in reversed(messages):
-        if isinstance(message, AssistantMessage):
-            return message
-    return None
 
 
 def _assistant_text_after(messages, start_index: int) -> str | None:

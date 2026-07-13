@@ -40,8 +40,8 @@ class _Key:
     clear = "clear"
     home = "home"
     end = "end"
-    pageUp = "pageUp"
-    pageDown = "pageDown"
+    page_up = "pageUp"
+    page_down = "pageDown"
     up = "up"
     down = "down"
     left = "left"
@@ -102,46 +102,46 @@ class _Key:
     def super(self, key: str) -> str:
         return f"super+{key}"
 
-    def ctrlShift(self, key: str) -> str:
+    def ctrl_shift(self, key: str) -> str:
         return f"ctrl+shift+{key}"
 
-    def shiftCtrl(self, key: str) -> str:
+    def shift_ctrl(self, key: str) -> str:
         return f"shift+ctrl+{key}"
 
-    def ctrlAlt(self, key: str) -> str:
+    def ctrl_alt(self, key: str) -> str:
         return f"ctrl+alt+{key}"
 
-    def altCtrl(self, key: str) -> str:
+    def alt_ctrl(self, key: str) -> str:
         return f"alt+ctrl+{key}"
 
-    def shiftAlt(self, key: str) -> str:
+    def shift_alt(self, key: str) -> str:
         return f"shift+alt+{key}"
 
-    def altShift(self, key: str) -> str:
+    def alt_shift(self, key: str) -> str:
         return f"alt+shift+{key}"
 
-    def ctrlSuper(self, key: str) -> str:
+    def ctrl_super(self, key: str) -> str:
         return f"ctrl+super+{key}"
 
-    def superCtrl(self, key: str) -> str:
+    def super_ctrl(self, key: str) -> str:
         return f"super+ctrl+{key}"
 
-    def shiftSuper(self, key: str) -> str:
+    def shift_super(self, key: str) -> str:
         return f"shift+super+{key}"
 
-    def superShift(self, key: str) -> str:
+    def super_shift(self, key: str) -> str:
         return f"super+shift+{key}"
 
-    def altSuper(self, key: str) -> str:
+    def alt_super(self, key: str) -> str:
         return f"alt+super+{key}"
 
-    def superAlt(self, key: str) -> str:
+    def super_alt(self, key: str) -> str:
         return f"super+alt+{key}"
 
-    def ctrlShiftAlt(self, key: str) -> str:
+    def ctrl_shift_alt(self, key: str) -> str:
         return f"ctrl+shift+alt+{key}"
 
-    def ctrlShiftSuper(self, key: str) -> str:
+    def ctrl_shift_super(self, key: str) -> str:
         return f"ctrl+shift+super+{key}"
 
 
@@ -153,14 +153,12 @@ def set_kitty_protocol_active(active: bool) -> None:
     _kitty_protocol_active = bool(active)
 
 
-setKittyProtocolActive = set_kitty_protocol_active
 
 
 def is_kitty_protocol_active() -> bool:
     return _kitty_protocol_active
 
 
-isKittyProtocolActive = is_kitty_protocol_active
 
 
 def is_key_release(data: str) -> bool:
@@ -169,7 +167,6 @@ def is_key_release(data: str) -> bool:
     return any(marker in data for marker in (":3u", ":3~", ":3A", ":3B", ":3C", ":3D", ":3H", ":3F"))
 
 
-isKeyRelease = is_key_release
 
 
 def is_key_repeat(data: str) -> bool:
@@ -178,7 +175,6 @@ def is_key_repeat(data: str) -> bool:
     return any(marker in data for marker in (":2u", ":2~", ":2A", ":2B", ":2C", ":2D", ":2H", ":2F"))
 
 
-isKeyRepeat = is_key_repeat
 
 
 def decode_kitty_printable(data: str) -> str | None:
@@ -208,14 +204,12 @@ def decode_kitty_printable(data: str) -> str | None:
         return None
 
 
-decodeKittyPrintable = decode_kitty_printable
 
 
 def matches_key(data: str, key_id: str) -> bool:
     return parse_key(data) == key_id
 
 
-matchesKey = matches_key
 
 
 def parse_key(data: str) -> str | None:
@@ -247,7 +241,6 @@ def parse_key(data: str) -> str | None:
     return None
 
 
-parseKey = parse_key
 
 
 def _parse_kitty_csi_u(data: str) -> tuple[int, int] | None:

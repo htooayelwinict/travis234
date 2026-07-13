@@ -11,6 +11,7 @@ from typing import Any
 
 from travis.coding_agent.event_bus import EventBusController, create_event_bus
 from travis.coding_agent.extensions import ExtensionRunner
+from travis.coding_agent.object_utils import settings_value as _settings_value
 from travis.coding_agent.settings_manager import SettingsManager
 from travis.coding_agent.source_info import SourceInfo, create_synthetic_source_info
 
@@ -52,25 +53,10 @@ class Skill:
     disable_model_invocation: bool = False
     allowed_tools: tuple[str, ...] = ()
 
-    @property
-    def filePath(self) -> str:
-        return self.file_path
 
-    @property
-    def baseDir(self) -> str:
-        return self.base_dir
 
-    @property
-    def sourceInfo(self) -> SourceInfo:
-        return self.source_info
 
-    @property
-    def disableModelInvocation(self) -> bool:
-        return self.disable_model_invocation
 
-    @property
-    def allowedTools(self) -> tuple[str, ...]:
-        return self.allowed_tools
 
 
 @dataclass
@@ -82,17 +68,8 @@ class PromptTemplate:
     file_path: str
     argument_hint: str | None = None
 
-    @property
-    def argumentHint(self) -> str | None:
-        return self.argument_hint
 
-    @property
-    def sourceInfo(self) -> SourceInfo:
-        return self.source_info
 
-    @property
-    def filePath(self) -> str:
-        return self.file_path
 
 
 @dataclass
@@ -103,13 +80,7 @@ class Theme:
     source_path: str
     source_info: SourceInfo
 
-    @property
-    def sourcePath(self) -> str:
-        return self.source_path
 
-    @property
-    def sourceInfo(self) -> SourceInfo:
-        return self.source_info
 
 
 class DefaultPackageManager:
@@ -218,7 +189,6 @@ class DefaultResourceLoader:
         system_prompt: str | None = None,
         append_system_prompt: list[str] | None = None,
         event_bus: EventBusController | None = None,
-        eventBus: EventBusController | None = None,
         additional_extension_paths: list[str] | None = None,
         extension_factories: list[Callable[[ExtensionRunner], object]] | None = None,
         no_extensions: bool = False,
@@ -241,11 +211,10 @@ class DefaultResourceLoader:
         self.cwd = str(Path(cwd).expanduser().resolve())
         self.agent_dir = str(Path(agent_dir).expanduser().resolve()) if agent_dir else str(Path.home() / ".travis234" / "agent")
         self.settings_manager = settings_manager or SettingsManager.create(self.cwd, self.agent_dir)
-        self.event_bus = event_bus or eventBus or create_event_bus()
-        self.eventBus = self.event_bus
+        self.event_bus = event_bus or create_event_bus()
         self.no_context_files = no_context_files
         self.project_trusted = (
-            _settings_value(self.settings_manager, "isProjectTrusted", "is_project_trusted")
+            _settings_value(self.settings_manager, "is_project_trusted")
             if project_trusted is None
             else project_trusted
         )
@@ -257,14 +226,14 @@ class DefaultResourceLoader:
         self.no_extensions = no_extensions
         self.extensions_override = extensions_override
         self.package_paths = _settings_package_paths(self.settings_manager) + list(package_paths or [])
-        self.additional_skill_paths = _settings_list(self.settings_manager, "getSkillPaths") + list(
+        self.additional_skill_paths = _settings_list(self.settings_manager, "get_skill_paths") + list(
             additional_skill_paths or []
         )
         self.additional_prompt_template_paths = _settings_list(
             self.settings_manager,
-            "getPromptTemplatePaths",
+            "get_prompt_template_paths",
         ) + list(additional_prompt_template_paths or [])
-        self.additional_theme_paths = _settings_list(self.settings_manager, "getThemePaths") + list(
+        self.additional_theme_paths = _settings_list(self.settings_manager, "get_theme_paths") + list(
             additional_theme_paths or []
         )
         self.no_skills = no_skills
@@ -297,37 +266,30 @@ class DefaultResourceLoader:
     def get_extensions(self) -> dict[str, object]:
         return self.extensions_result
 
-    getExtensions = get_extensions
 
     def get_skills(self) -> dict[str, list[object]]:
         return self.skills_result
 
-    getSkills = get_skills
 
     def get_prompts(self) -> dict[str, list[object]]:
         return self.prompts_result
 
-    getPrompts = get_prompts
 
     def get_themes(self) -> dict[str, list[object]]:
         return self.themes_result
 
-    getThemes = get_themes
 
     def get_agents_files(self) -> dict[str, list[dict[str, str]]]:
         return {"agentsFiles": self.agents_files}
 
-    getAgentsFiles = get_agents_files
 
     def get_system_prompt(self) -> str | None:
         return self.system_prompt
 
-    getSystemPrompt = get_system_prompt
 
     def get_append_system_prompt(self) -> list[str]:
         return self.append_system_prompt
 
-    getAppendSystemPrompt = get_append_system_prompt
 
     def extend_resources(self, paths: dict[str, list[dict[str, object]]]) -> None:
         self.last_skill_paths = _merge_paths(self.cwd, self.last_skill_paths, _resource_paths(paths.get("skillPaths", [])))
@@ -341,7 +303,6 @@ class DefaultResourceLoader:
         self._update_prompts_from_paths(self.last_prompt_paths)
         self._update_themes_from_paths(self.last_theme_paths)
 
-    extendResources = extend_resources
 
     def reload(self, options: object | None = None) -> None:
         del options
@@ -488,18 +449,6 @@ def _resource_paths(entries: list[dict[str, object]]) -> list[str]:
     return paths
 
 
-def _settings_value(settings_manager: object, *names: str):
-    for name in names:
-        value = getattr(settings_manager, name, None)
-        if callable(value):
-            result = value()
-            if result is not None:
-                return result
-        elif value is not None:
-            return value
-    return None
-
-
 def _settings_list(settings_manager: object, *names: str) -> list[str]:
     value = _settings_value(settings_manager, *names)
     if not isinstance(value, list):
@@ -508,7 +457,7 @@ def _settings_list(settings_manager: object, *names: str) -> list[str]:
 
 
 def _settings_package_paths(settings_manager: object) -> list[str]:
-    value = _settings_value(settings_manager, "getPackages")
+    value = _settings_value(settings_manager, "get_packages")
     if not isinstance(value, list):
         return []
     paths: list[str] = []
@@ -586,8 +535,6 @@ def load_skills_from_dir(options: dict[str, object]) -> dict[str, list[object]]:
     return load_skills([directory], cwd=cwd, metadata_by_path=metadata_by_path if isinstance(metadata_by_path, dict) else None)
 
 
-loadSkills = load_skills
-loadSkillsFromDir = load_skills_from_dir
 
 
 def load_prompt_templates(
@@ -754,7 +701,6 @@ def format_skills_for_prompt(skills: list[Skill]) -> str:
     return "\n".join(lines)
 
 
-formatSkillsForPrompt = format_skills_for_prompt
 
 
 def _parse_frontmatter(raw: str) -> tuple[dict[str, Any], str]:

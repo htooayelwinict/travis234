@@ -26,4 +26,8 @@ def run_sync(coroutine: Coroutine[Any, Any, T]) -> T:
     raise RuntimeError("Use the async travis API from an active event loop")
 
 
-__all__ = ["MaybeAwaitable", "resolve", "run_sync"]
+__all__ = [
+    "MaybeAwaitable",
+    "resolve",
+    "run_sync",
+]

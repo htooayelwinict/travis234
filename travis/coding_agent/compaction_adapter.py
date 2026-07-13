@@ -42,13 +42,7 @@ class CompactionEndEvent:
     error_message: str | None = None
     type: str = "compaction_end"
 
-    @property
-    def willRetry(self) -> bool:
-        return self.will_retry
 
-    @property
-    def errorMessage(self) -> str | None:
-        return self.error_message
 
 
 class SessionCompactionAdapter:

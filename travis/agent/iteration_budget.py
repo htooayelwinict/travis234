@@ -38,4 +38,6 @@ class IterationBudget:
             return max(0, self.max_total - self._used)
 
 
-__all__ = ["IterationBudget"]
+__all__ = [
+    "IterationBudget",
+]

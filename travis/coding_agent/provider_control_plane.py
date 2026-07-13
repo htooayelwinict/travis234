@@ -142,4 +142,7 @@ class ProviderControlPlane:
         return self.api_providers.require(model.api).stream_simple(model, context, next_options)
 
 
-__all__ = ["ProviderControlPlane", "ProviderRegistration"]
+__all__ = [
+    "ProviderControlPlane",
+    "ProviderRegistration",
+]

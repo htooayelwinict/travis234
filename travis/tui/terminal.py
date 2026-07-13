@@ -23,6 +23,13 @@ _PROGRESS_ACTIVE = "\x1b]9;4;3\x07"
 _PROGRESS_CLEAR = "\x1b]9;4;0;\x07"
 
 
+def _move_terminal(write: Callable[[str], None], lines: int) -> None:
+    if lines > 0:
+        write(f"\x1b[{lines}B")
+    elif lines < 0:
+        write(f"\x1b[{-lines}A")
+
+
 def _env_flag_enabled(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -94,51 +101,39 @@ class FakeTerminal:
     def drain_input(self, max_ms: int = 1000, idle_ms: int = 50) -> None:
         return None
 
-    drainInput = drain_input
 
     def move_by(self, lines: int) -> None:
-        if lines > 0:
-            self.write(f"\x1b[{lines}B")
-        elif lines < 0:
-            self.write(f"\x1b[{-lines}A")
+        _move_terminal(self.write, lines)
 
-    moveBy = move_by
 
     def set_title(self, title: str) -> None:
         self.write(f"\x1b]0;{title}\x07")
 
-    setTitle = set_title
 
     def set_progress(self, active: bool) -> None:
         self._progress_active = active
         self.write(_PROGRESS_ACTIVE if active else _PROGRESS_CLEAR)
 
-    setProgress = set_progress
 
     def hide_cursor(self) -> None:
         self.write("\x1b[?25l")
 
-    hideCursor = hide_cursor
 
     def show_cursor(self) -> None:
         self.write("\x1b[?25h")
 
-    showCursor = show_cursor
 
     def clear_line(self) -> None:
         self.write("\x1b[K")
 
-    clearLine = clear_line
 
     def clear_from_cursor(self) -> None:
         self.write("\x1b[J")
 
-    clearFromCursor = clear_from_cursor
 
     def clear_screen(self) -> None:
         self.write("\x1b[2J\x1b[H")
 
-    clearScreen = clear_screen
 
     @property
     def output(self) -> str:
@@ -304,7 +299,6 @@ class ProcessTerminal:
             self._draining_input = False
             self.input_handler = previous_handler
 
-    drainInput = drain_input
 
     def _process_stdin_bytes(self, data: bytes) -> None:
         text = self._stdin_decoder.decode(data, final=False)
@@ -326,17 +320,12 @@ class ProcessTerminal:
             self.input_handler(f"\x1b[200~{content}\x1b[201~")
 
     def move_by(self, lines: int) -> None:  # pragma: no cover - real IO
-        if lines > 0:
-            self.write(f"\x1b[{lines}B")
-        elif lines < 0:
-            self.write(f"\x1b[{-lines}A")
+        _move_terminal(self.write, lines)
 
-    moveBy = move_by
 
     def set_title(self, title: str) -> None:  # pragma: no cover - real IO
         self.write(f"\x1b]0;{title}\x07")
 
-    setTitle = set_title
 
     def set_progress(self, active: bool) -> None:  # pragma: no cover - real IO
         if active:
@@ -352,7 +341,6 @@ class ProcessTerminal:
             self._clear_progress_timer_locked()
         self.write(_PROGRESS_CLEAR)
 
-    setProgress = set_progress
 
     def _schedule_progress_keepalive_locked(self) -> None:
         if not self._progress_active or self._progress_keepalive_seconds <= 0:
@@ -379,27 +367,22 @@ class ProcessTerminal:
     def hide_cursor(self) -> None:  # pragma: no cover - real IO
         self.write("\x1b[?25l")
 
-    hideCursor = hide_cursor
 
     def show_cursor(self) -> None:  # pragma: no cover - real IO
         self.write("\x1b[?25h")
 
-    showCursor = show_cursor
 
     def clear_line(self) -> None:  # pragma: no cover - real IO
         self.write("\x1b[K")
 
-    clearLine = clear_line
 
     def clear_from_cursor(self) -> None:  # pragma: no cover - real IO
         self.write("\x1b[J")
 
-    clearFromCursor = clear_from_cursor
 
     def clear_screen(self) -> None:  # pragma: no cover - real IO
         self.write("\x1b[2J\x1b[H")
 
-    clearScreen = clear_screen
 
 
 def _terminal_size() -> tuple[int, int]:

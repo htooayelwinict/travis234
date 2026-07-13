@@ -353,7 +353,7 @@ def test_coding_app_wires_settings_retry_for_sse_idle_timeout(tmp_path: Path) ->
         return text_response_events(m, "Recovered after retry")
 
     register_api_provider(create_faux_provider(script))
-    settings = SettingsManager.inMemory({"retry": {"enabled": True, "maxRetries": 1, "baseDelayMs": 0}})
+    settings = SettingsManager.in_memory({"retry": {"enabled": True, "maxRetries": 1, "baseDelayMs": 0}})
     app = CodingApp(
         cwd=str(tmp_path),
         model=model,
@@ -421,7 +421,8 @@ def test_coding_app_model_can_spawn_visible_subagent(tmp_path: Path) -> None:
     event_types = [event["type"] if isinstance(event, dict) else event.type for event in events]
     assert "subagent_start" in event_types
     assert "subagent_stop" in event_types
-    assert set(child_tool_names) == {"read", "grep", "find", "ls", "run"}
+    assert set(child_tool_names) == {"read", "grep", "find", "ls"}
+    assert "run" not in child_tool_names
     assert provider_calls["n"] == 3
 
 
@@ -596,7 +597,6 @@ def test_coding_app_internal_subagent_tool_trace_records_guardrail_halt(tmp_path
     assert any("repeated_exact_failure_block" in error for error in result.errors)
     formatted = app.session._format_subagent_result(result)
     assert "guardrail: repeated_exact_failure_block" in formatted
-    assert "guardrail: repeated_exact_failure_block" in formatted
     assert "error: Subagent stopped by tool guardrail" in formatted
     assert "read guardrail_halt" not in formatted
     assert "toolTrace:" not in formatted
@@ -632,7 +632,7 @@ def test_coding_app_forwards_initial_thinking_level_to_session(tmp_path: Path) -
 
 
 def test_coding_app_forwards_travis234_settings_manager_to_session(tmp_path: Path) -> None:
-    settings = SettingsManager.inMemory({"shellCommandPrefix": "printf app-settings;"})
+    settings = SettingsManager.in_memory({"shellCommandPrefix": "printf app-settings;"})
 
     app = CodingApp(
         cwd=str(tmp_path),

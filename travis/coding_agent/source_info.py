@@ -14,9 +14,6 @@ class SourceInfo:
     origin: str = "top-level"
     base_dir: str | None = None
 
-    @property
-    def baseDir(self) -> str | None:
-        return self.base_dir
 
     def to_dict(self) -> dict[str, str]:
         data = {
@@ -52,20 +49,9 @@ def create_source_info(path: str, metadata: Mapping[str, object]) -> SourceInfo:
     )
 
 
-def createSyntheticSourceInfo(path: str, options: Mapping[str, object]) -> SourceInfo:
-    return SourceInfo(
-        path=path,
-        source=str(options.get("source") or ""),
-        scope=str(options.get("scope") or "temporary"),
-        origin=str(options.get("origin") or "top-level"),
-        base_dir=_optional_string(options.get("baseDir", options.get("base_dir"))),
-    )
 
 
 def _optional_string(value: object) -> str | None:
     if value is None:
         return None
     return str(value)
-
-
-createSourceInfo = create_source_info

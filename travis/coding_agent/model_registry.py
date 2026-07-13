@@ -26,7 +26,6 @@ class ModelRegistry:
         models_json_path: str | os.PathLike[str] | None,
         api_providers: ApiProviderRegistry | None = None,
     ) -> None:
-        self.authStorage = auth_storage
         self.auth_storage = auth_storage
         self._models_json_path = Path(models_json_path).expanduser().resolve() if models_json_path else None
         self.api_providers = api_providers or _DEFAULT_API_PROVIDER_REGISTRY
@@ -36,8 +35,8 @@ class ModelRegistry:
         self._model_request_headers: dict[str, dict[str, str]] = {}
         self._registered_providers: dict[str, dict[str, Any]] = {}
         self._load_error: str | None = None
-        self.authStorage.setFallbackResolver(self._fallback_api_key)
-        self.loadModels()
+        self.auth_storage.set_fallback_resolver(self._fallback_api_key)
+        self.load_models()
 
     def _fallback_api_key(self, provider: str) -> str | None:
         value = self._provider_request_configs.get(provider, {}).get("apiKey")
@@ -50,14 +49,13 @@ class ModelRegistry:
             return self._fallback_api_key(provider)
 
     @staticmethod
-    def create(authStorage: AuthStorage, modelsJsonPath: str | os.PathLike[str] | None = None) -> "ModelRegistry":
-        return ModelRegistry(authStorage, modelsJsonPath or _agent_models_path())
+    def create(auth_storage: AuthStorage, models_json_path: str | os.PathLike[str] | None = None) -> "ModelRegistry":
+        return ModelRegistry(auth_storage, models_json_path or _agent_models_path())
 
     @staticmethod
-    def inMemory(authStorage: AuthStorage) -> "ModelRegistry":
-        return ModelRegistry(authStorage, None)
+    def in_memory(auth_storage: AuthStorage) -> "ModelRegistry":
+        return ModelRegistry(auth_storage, None)
 
-    in_memory = inMemory
 
     def refresh(self) -> None:
         with self._lock:
@@ -66,16 +64,15 @@ class ModelRegistry:
             self._provider_request_configs.clear()
             self._model_request_headers.clear()
             self._load_error = None
-            self.loadModels()
+            self.load_models()
             for provider_name, config in list(self._registered_providers.items()):
                 self._apply_provider_config(provider_name, config)
 
-    def getError(self) -> str | None:
+    def get_error(self) -> str | None:
         return self._load_error
 
-    get_error = getError
 
-    def loadModels(self) -> None:
+    def load_models(self) -> None:
         with self._lock:
             custom_models: list[Model] = []
             overrides: dict[str, dict[str, object]] = {}
@@ -86,7 +83,6 @@ class ModelRegistry:
             builtins = self._load_builtin_models(overrides, model_overrides)
             self._models = self._merge_custom_models(builtins, custom_models)
 
-    load_models = loadModels
 
     def _load_builtin_models(
         self,
@@ -248,7 +244,7 @@ class ModelRegistry:
             next_model.headers = {str(k): str(v) for k, v in override["headers"].items()}  # type: ignore[index]
         return next_model
 
-    def getAll(self) -> list[Model]:
+    def get_all(self) -> list[Model]:
         return list(self.snapshot())
 
     def snapshot(self) -> tuple[Model, ...]:
@@ -288,35 +284,35 @@ class ModelRegistry:
         with self._lock:
             self._models[:] = list(models)
 
-    def getProviders(self) -> list[str]:
+    def get_providers(self) -> list[str]:
         with self._lock:
             return list(
                 dict.fromkeys(
                     [model.provider for model in self._models]
                     + list(self._registered_providers)
-                    + self.authStorage.list()
+                    + self.auth_storage.list()
                 )
             )
 
-    def getApiKeyProviders(self) -> list[str]:
+    def get_api_key_providers(self) -> list[str]:
         from travis.ai.providers.catalog import get_provider_profile
 
         providers: list[str] = []
-        for provider in self.getProviders():
+        for provider in self.get_providers():
             profile = get_provider_profile(provider)
             if (
                 provider in self._registered_providers
                 or provider in self._provider_request_configs
-                or provider in self.authStorage.list()
+                or provider in self.auth_storage.list()
                 or (profile is not None and profile.auth_type not in {"virtual", "none"})
             ):
                 providers.append(provider)
         return providers
 
-    def getAvailable(self) -> list[Model]:
-        return self.getSelectable()
+    def get_available(self) -> list[Model]:
+        return self.get_selectable()
 
-    def isSelectable(self, model: Model) -> bool:
+    def is_selectable(self, model: Model) -> bool:
         from travis.ai.providers.catalog import get_provider_profile
 
         profile = get_provider_profile(model.provider)
@@ -327,10 +323,10 @@ class ModelRegistry:
             return False
         auth_free = profile is not None and profile.auth_type in {"virtual", "none"}
         local = model.base_url.startswith(("http://127.0.0.1", "http://localhost"))
-        return auth_free or local or self.hasConfiguredAuth(model)
+        return auth_free or local or self.has_configured_auth(model)
 
-    def getSelectable(self, active: Model | None = None) -> list[Model]:
-        selectable = [model for model in self.snapshot() if self.isSelectable(model)]
+    def get_selectable(self, active: Model | None = None) -> list[Model]:
+        selectable = [model for model in self.snapshot() if self.is_selectable(model)]
         if active is not None and not any(
             model.provider == active.provider and model.id == active.id for model in selectable
         ):
@@ -344,19 +340,12 @@ class ModelRegistry:
                     return model
         return None
 
-    def hasConfiguredAuth(self, model: Model) -> bool:
+    def has_configured_auth(self, model: Model) -> bool:
         provider_api_key = self._provider_request_configs.get(model.provider, {}).get("apiKey")
-        return self.authStorage.hasAuth(model.provider) or (
+        return self.auth_storage.has_auth(model.provider) or (
             isinstance(provider_api_key, str) and ai_models._is_config_value_configured(provider_api_key)  # noqa: SLF001
         )
 
-    get_all = getAll
-    get_providers = getProviders
-    get_api_key_providers = getApiKeyProviders
-    get_available = getAvailable
-    get_selectable = getSelectable
-    is_selectable = isSelectable
-    has_configured_auth = hasConfiguredAuth
 
     def _request_key(self, provider: str, model_id: str) -> str:
         return f"{provider}:{model_id}"
@@ -380,10 +369,10 @@ class ModelRegistry:
             return
         self._model_request_headers[key] = {str(header): str(value) for header, value in headers.items()}
 
-    def getApiKeyAndHeaders(self, model: Model) -> dict[str, object]:
+    def get_api_key_and_headers(self, model: Model) -> dict[str, object]:
         try:
             provider_config = self._provider_request_configs.get(model.provider, {})
-            api_key = self.authStorage.getApiKey(model.provider, {"includeFallback": False})
+            api_key = self.auth_storage.get_api_key(model.provider, {"includeFallback": False})
             provider_api_key = provider_config.get("apiKey")
             if api_key is None and isinstance(provider_api_key, str):
                 api_key = ai_models._resolve_config_value_or_throw(  # noqa: SLF001
@@ -410,10 +399,9 @@ class ModelRegistry:
         except Exception as error:  # noqa: BLE001 - Travis returns request-auth resolution errors as values.
             return {"ok": False, "error": str(error)}
 
-    get_api_key_and_headers = getApiKeyAndHeaders
 
-    def getProviderAuthStatus(self, provider: str) -> dict[str, object]:
-        auth_status = self.authStorage.getAuthStatus(provider)
+    def get_provider_auth_status(self, provider: str) -> dict[str, object]:
+        auth_status = self.auth_storage.get_auth_status(provider)
         if auth_status.get("source") and auth_status.get("source") != "fallback":
             return auth_status
 
@@ -429,9 +417,8 @@ class ModelRegistry:
             return {"configured": False}
         return {"configured": True, "source": "models_json_key"}
 
-    get_provider_auth_status = getProviderAuthStatus
 
-    def getProviderDisplayName(self, provider: str) -> str:
+    def get_provider_display_name(self, provider: str) -> str:
         registered = self._registered_providers.get(provider, {})
         if registered.get("name"):
             return str(registered["name"])
@@ -440,10 +427,9 @@ class ModelRegistry:
             return str(oauth["name"])
         return ai_models.get_provider_display_name(provider)
 
-    get_provider_display_name = getProviderDisplayName
 
-    def getApiKeyForProvider(self, provider: str) -> str | None:
-        api_key = self.authStorage.getApiKey(provider, {"includeFallback": False})
+    def get_api_key_for_provider(self, provider: str) -> str | None:
+        api_key = self.auth_storage.get_api_key(provider, {"includeFallback": False})
         if api_key is not None:
             return api_key
         provider_api_key = self._provider_request_configs.get(provider, {}).get("apiKey")
@@ -453,20 +439,17 @@ class ModelRegistry:
             else None
         )
 
-    get_api_key_for_provider = getApiKeyForProvider
 
-    def isUsingOAuth(self, model: Model) -> bool:
-        credential = self.authStorage.get(model.provider)
+    def is_using_oauth(self, model: Model) -> bool:
+        credential = self.auth_storage.get(model.provider)
         return credential is not None and credential.get("type") == "oauth"
 
-    is_using_oauth = isUsingOAuth
 
-    def setAuthCredential(self, provider: str, credential: dict[str, object]) -> None:
-        self.authStorage.set(provider, credential)
+    def set_auth_credential(self, provider: str, credential: dict[str, object]) -> None:
+        self.auth_storage.set(provider, credential)
 
-    set_auth_credential = setAuthCredential
 
-    def loginOAuthProvider(self, provider: str, callbacks: dict[str, object]) -> None:
+    def login_oauth_provider(self, provider: str, callbacks: dict[str, object]) -> None:
         config = self._registered_providers.get(provider, {})
         oauth = config.get("oauth")
         if not isinstance(oauth, dict):
@@ -477,16 +460,14 @@ class ModelRegistry:
         credential = ai_models._settle_oauth_result(login(callbacks))  # noqa: SLF001
         if not isinstance(credential, dict):
             raise RuntimeError(f"OAuth provider {provider} returned invalid credentials")
-        self.authStorage.set(provider, {"type": "oauth", **credential})
+        self.auth_storage.set(provider, {"type": "oauth", **credential})
 
-    login_oauth_provider = loginOAuthProvider
 
-    def logoutProvider(self, provider: str) -> None:
-        self.authStorage.remove(provider)
+    def logout_provider(self, provider: str) -> None:
+        self.auth_storage.remove(provider)
 
-    logout_provider = logoutProvider
 
-    def getOAuthProviders(self) -> list[dict[str, object]]:
+    def get_oauth_providers(self) -> list[dict[str, object]]:
         providers: list[dict[str, object]] = []
         for provider, config in self._registered_providers.items():
             oauth = config.get("oauth")
@@ -494,9 +475,8 @@ class ModelRegistry:
                 providers.append({"id": provider, "name": str(oauth.get("name") or provider)})
         return providers
 
-    get_oauth_providers = getOAuthProviders
 
-    def registerProvider(self, provider: str, config: dict[str, Any]) -> None:
+    def register_provider(self, provider: str, config: dict[str, Any]) -> None:
         with self._lock:
             self._validate_provider_config(provider, config)
             self._apply_provider_config(provider, config)
@@ -506,13 +486,12 @@ class ModelRegistry:
             else:
                 existing.update({key: value for key, value in config.items() if value is not None})
 
-    register_provider = registerProvider
 
     def has_registered_provider(self, provider: str) -> bool:
         with self._lock:
             return provider in self._registered_providers
 
-    def unregisterProvider(self, provider: str) -> bool:
+    def unregister_provider(self, provider: str) -> bool:
         with self._lock:
             if provider not in self._registered_providers:
                 return False
@@ -521,7 +500,6 @@ class ModelRegistry:
             self.refresh()
             return True
 
-    unregister_provider = unregisterProvider
 
     def _validate_provider_config(self, provider: str, config: dict[str, object]) -> None:
         if (callable(config.get("streamSimple")) or callable(config.get("stream_simple"))) and not config.get("api"):

@@ -197,7 +197,6 @@ class Loader(Text):
         self.message = message
         self._update_display()
 
-    setMessage = set_message
 
     def set_indicator(self, indicator: dict[str, Any] | None = None) -> None:
         self._render_indicator_verbatim = indicator is not None
@@ -212,7 +211,6 @@ class Loader(Text):
         self.current_frame = 0
         self.start()
 
-    setIndicator = set_indicator
 
     def _restart_animation(self) -> None:
         if self._timer is not None:
@@ -246,7 +244,7 @@ class CancellableLoader(Loader):
 
     def __init__(self, *args, **kwargs) -> None:
         self._abort_signal = AbortSignal()
-        self.onAbort: Callable[[], object] | None = None
+        self.on_abort: Callable[[], object] | None = None
         super().__init__(*args, **kwargs)
 
     @property
@@ -260,10 +258,9 @@ class CancellableLoader(Loader):
     def handle_input(self, data: str) -> None:
         if get_keybindings().matches(data, "tui.select.cancel"):
             self._abort_signal.abort()
-            if callable(self.onAbort):
-                self.onAbort()
+            if callable(self.on_abort):
+                self.on_abort()
 
-    handleInput = handle_input
 
     def dispose(self) -> None:
         self.stop()
@@ -292,7 +289,6 @@ class Image(Component):
     def get_image_id(self) -> int | None:
         return self.image_id
 
-    getImageId = get_image_id
 
     def invalidate(self) -> None:
         self._cached_lines = None
@@ -375,15 +371,15 @@ class SimpleAutocompleteProvider:
 
     def __init__(self, commands: list[dict[str, Any]] | None = None) -> None:
         self.commands = list(commands or [])
-        self.triggerCharacters: list[str] = []
+        self._trigger_characters: list[str] = []
 
     @property
     def trigger_characters(self) -> list[str]:
-        return self.triggerCharacters
+        return self._trigger_characters
 
     @trigger_characters.setter
     def trigger_characters(self, value: list[str]) -> None:
-        self.triggerCharacters = list(value)
+        self._trigger_characters = list(value)
 
     def get_suggestions(
         self,
@@ -425,7 +421,6 @@ class SimpleAutocompleteProvider:
             return None
         return {"prefix": argument_prefix, "items": items}
 
-    getSuggestions = get_suggestions
 
     def apply_completion(
         self,
@@ -447,12 +442,10 @@ class SimpleAutocompleteProvider:
             cursor_line = len(new_lines) - 1
         return {"lines": new_lines, "cursorLine": cursor_line, "cursorCol": prefix_start + len(replacement)}
 
-    applyCompletion = apply_completion
 
     def should_trigger_file_completion(self, lines: list[str], cursor_line: int, cursor_col: int) -> bool:
         return True
 
-    shouldTriggerFileCompletion = should_trigger_file_completion
 
 
 class CombinedAutocompleteProvider:
@@ -532,7 +525,6 @@ class CombinedAutocompleteProvider:
             return None
         return {"items": suggestions, "prefix": path_prefix}
 
-    getSuggestions = get_suggestions
 
     def apply_completion(
         self,
@@ -592,7 +584,6 @@ class CombinedAutocompleteProvider:
         cursor_offset = len(item_value) - 1 if is_directory and has_trailing_quote_in_item else len(item_value)
         return {"lines": new_lines, "cursorLine": cursor_line, "cursorCol": len(before_prefix) + cursor_offset}
 
-    applyCompletion = apply_completion
 
     def should_trigger_file_completion(self, lines: list[str], cursor_line: int, cursor_col: int) -> bool:
         current_line = lines[cursor_line] if 0 <= cursor_line < len(lines) else ""
@@ -602,7 +593,6 @@ class CombinedAutocompleteProvider:
             return False
         return True
 
-    shouldTriggerFileCompletion = should_trigger_file_completion
 
     def _get_file_suggestions(self, prefix: str) -> list[dict[str, str]]:
         try:
@@ -799,7 +789,7 @@ class Input(Component):
         self.cursor = len(value)
         self.on_submit = on_submit
         self.on_escape: Callable[[], None] | None = None
-        self.onEscape: Callable[[], None] | None = None
+        self.on_escape: Callable[[], None] | None = None
         self.focused = False
         self.autocomplete_provider: object | None = None
         self._history: list[str] = []
@@ -813,7 +803,6 @@ class Input(Component):
     def set_autocomplete_provider(self, provider: object | None) -> None:
         self.autocomplete_provider = provider
 
-    setAutocompleteProvider = set_autocomplete_provider
 
     def set_value(self, value: str) -> None:
         self.value = value
@@ -827,7 +816,6 @@ class Input(Component):
         self._history = history
         self._exit_history_browsing()
 
-    setHistory = set_history
 
     def add_to_history(self, text: str) -> None:
         trimmed = text.strip()
@@ -838,7 +826,6 @@ class Input(Component):
         self._history.insert(0, trimmed)
         del self._history[100:]
 
-    addToHistory = add_to_history
 
     def apply_autocomplete(self, *, force: bool = True) -> bool:
         if self.autocomplete_provider is None:
@@ -1299,7 +1286,6 @@ class SettingsList(Component):
         if item is not None:
             item["currentValue"] = new_value
 
-    updateValue = update_value
 
     def invalidate(self) -> None:
         if self.submenu_component is not None:
@@ -1338,7 +1324,6 @@ class SettingsList(Component):
             self.search_input.handle_input(sanitized)
             self._apply_filter(self.search_input.get_value())
 
-    handleInput = handle_input
 
     def _render_main_list(self, width: int) -> list[str]:
         lines: list[str] = []
@@ -1640,16 +1625,15 @@ class SelectList(Component):
         self.on_select: Callable[[SelectItem], None] | None = None
         self.on_cancel: Callable[[], None] | None = None
         self.on_selection_change: Callable[[SelectItem], None] | None = None
-        self.onSelect: Callable[[SelectItem], None] | None = None
-        self.onCancel: Callable[[], None] | None = None
-        self.onSelectionChange: Callable[[SelectItem], None] | None = None
+        self.on_select: Callable[[SelectItem], None] | None = None
+        self.on_cancel: Callable[[], None] | None = None
+        self.on_selection_change: Callable[[SelectItem], None] | None = None
 
     def set_filter(self, value: str) -> None:
         needle = value.lower()
         self.filtered_items = [item for item in self.items if item.value.lower().startswith(needle)]
         self.selected_index = 0
 
-    setFilter = set_filter
 
     def set_selected_index(self, index: int) -> None:
         if not self.filtered_items:
@@ -1657,14 +1641,12 @@ class SelectList(Component):
             return
         self.selected_index = max(0, min(int(index), len(self.filtered_items) - 1))
 
-    setSelectedIndex = set_selected_index
 
     def get_selected_item(self) -> SelectItem | None:
         if 0 <= self.selected_index < len(self.filtered_items):
             return self.filtered_items[self.selected_index]
         return None
 
-    getSelectedItem = get_selected_item
 
     def handle_input(self, data: str) -> None:
         if data in ("\x1b", "\x03"):
@@ -2027,7 +2009,6 @@ def format_cwd_for_footer(cwd: str, home: str | None) -> str:
     return "~" if relative_to_home == "." else f"~{os.sep}{relative_to_home}"
 
 
-formatCwdForFooter = format_cwd_for_footer
 
 
 class Spacer(Component):

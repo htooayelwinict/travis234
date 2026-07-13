@@ -89,4 +89,6 @@ class ModelCatalogLoader:
         self._post(deliver)
 
 
-__all__ = ["ModelCatalogLoader"]
+__all__ = [
+    "ModelCatalogLoader",
+]

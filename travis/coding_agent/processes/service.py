@@ -1081,4 +1081,7 @@ class ProcessSessionService:
             candidate.output.close(remove=True)
 
 
-__all__ = ["ProcessSessionService", "ProcessTransportFactory"]
+__all__ = [
+    "ProcessSessionService",
+    "ProcessTransportFactory",
+]

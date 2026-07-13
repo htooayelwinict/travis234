@@ -85,4 +85,7 @@ def _segment_is_package_mutation(tokens: list[str]) -> bool:
     return False
 
 
-__all__ = ["PACKAGE_MUTATION_CAPABILITY", "PackageMutationPolicy"]
+__all__ = [
+    "PACKAGE_MUTATION_CAPABILITY",
+    "PackageMutationPolicy",
+]

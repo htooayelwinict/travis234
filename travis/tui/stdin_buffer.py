@@ -211,7 +211,6 @@ class StdinBuffer:
     def get_buffer(self) -> str:
         return self._buffer
 
-    getBuffer = get_buffer
 
     def _normalize_input(self, data: str | bytes | bytearray) -> str:
         if isinstance(data, str):

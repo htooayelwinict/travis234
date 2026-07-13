@@ -259,4 +259,6 @@ def _signal_process_group(process: subprocess.Popen, signal_name: SignalName) ->
         process.kill()
 
 
-__all__ = ["create_local_process_transport"]
+__all__ = [
+    "create_local_process_transport",
+]

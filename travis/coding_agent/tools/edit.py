@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -11,6 +10,9 @@ from travis.agent.types import AgentTool, AgentToolResult
 from travis.ai.types import TextContent
 from travis.coding_agent.capabilities import WorkspaceCapability
 from travis.coding_agent.tools.atomic_file import atomic_replace_text
+from travis.coding_agent.tools.common import context_value as _ctx_value
+from travis.coding_agent.tools.common import file_content_metadata as _file_content_metadata
+from travis.coding_agent.tools.common import render_error_result as _render_edit_result
 from travis.coding_agent.tools.edit_diff import (
     apply_edits_to_normalized_content,
     detect_line_ending,
@@ -75,20 +77,8 @@ def prepare_edit_arguments(input_args):
     return args
 
 
-def _ctx_value(ctx, key: str, default=None):
-    if isinstance(ctx, dict):
-        return ctx.get(key, default)
-    return getattr(ctx, key, default)
-
-
 def _render_edit_call(args, ctx=None) -> str:
     return f"edit {render_tool_path((args or {}).get('file_path') or (args or {}).get('path'), _ctx_value(ctx, 'cwd', ''))}"
-
-
-def _render_edit_result(result: AgentToolResult, options=None, ctx=None) -> str:
-    if not _ctx_value(ctx, "is_error", False):
-        return ""
-    return "\n".join(block.text for block in result.content if isinstance(block, TextContent))
 
 
 def _validate_edit_input(args) -> tuple[str, list[dict]]:
@@ -104,21 +94,6 @@ def _validate_edit_input(args) -> tuple[str, list[dict]]:
         if not isinstance(edit.get("oldText"), str) or not isinstance(edit.get("newText"), str):
             raise ValueError(f"Edit tool input is invalid. edits[{index}] must contain oldText and newText strings.")
     return path, edits
-
-
-def _file_content_metadata(content: str) -> dict[str, object]:
-    encoded = content.encode("utf-8")
-    if content == "":
-        line_count = 0
-    elif content.endswith("\n"):
-        line_count = content.count("\n")
-    else:
-        line_count = content.count("\n") + 1
-    return {
-        "content_sha256": hashlib.sha256(encoded).hexdigest(),
-        "line_count": line_count,
-        "final_newline": content.endswith(("\n", "\r")),
-    }
 
 
 def _execute_edit(

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from travis.coding_agent.artifacts import ArtifactRef, ArtifactRegistry
+from travis.coding_agent.output_utils import line_count as _line_count
 from travis.coding_agent.tools.truncate import (
     DEFAULT_MAX_BYTES,
     DEFAULT_MAX_LINES,
@@ -90,7 +91,7 @@ class OutputSpool:
                         access="read",
                     )
             total_lines = self._newline_count + int(self._saw_text and not self._ends_with_newline)
-            output_lines = self._line_count(self._tail)
+            output_lines = _line_count(self._tail)
             output_bytes = len(self._tail.encode("utf-8"))
             truncation = TruncationResult(
                 content=self._tail,
@@ -156,11 +157,7 @@ class OutputSpool:
             self._was_truncated = True
             self._truncated_by = result.truncated_by
 
-    @staticmethod
-    def _line_count(content: str) -> int:
-        if not content:
-            return 0
-        return content.count("\n") + int(not content.endswith("\n"))
-
-
-__all__ = ["OutputSnapshot", "OutputSpool"]
+__all__ = [
+    "OutputSnapshot",
+    "OutputSpool",
+]

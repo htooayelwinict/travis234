@@ -12,6 +12,7 @@ from travis.agent.types import AgentTool, AgentToolResult
 from travis.ai.types import ImageContent, TextContent
 from travis.coding_agent.artifacts import ArtifactRegistry
 from travis.coding_agent.capabilities import CapabilityViolation, WorkspaceCapability
+from travis.coding_agent.tools.common import context_value as _ctx_value
 from travis.coding_agent.tools.path_utils import format_path_relative_to_cwd, resolve_read_path, resolve_to_cwd
 from travis.coding_agent.tools.truncate import (
     DEFAULT_MAX_BYTES,
@@ -240,12 +241,6 @@ def _number_arg(value) -> int | None:
     if isinstance(value, (int, float)):
         return int(value)
     return None
-
-
-def _ctx_value(ctx, key: str, default=None):
-    if isinstance(ctx, dict):
-        return ctx.get(key, default)
-    return getattr(ctx, key, default)
 
 
 def _to_posix_path(path: str) -> str:

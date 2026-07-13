@@ -6,13 +6,13 @@ import json
 import os
 import tempfile
 import threading
-import time
 from pathlib import Path
 from typing import Any, Callable
 
 import fcntl
 
 from travis.ai.env_config import find_env_keys, get_env_api_key
+from travis.ai.oauth import oauth_credential_is_expired as _oauth_is_expired
 import travis.ai.models as ai_models
 
 AuthCredential = dict[str, object]
@@ -29,10 +29,9 @@ def _agent_auth_path() -> Path:
 
 
 class AuthStorageBackend:
-    def withLock(self, fn: Callable[[str | None], LockResult]) -> object:
+    def with_lock(self, fn: Callable[[str | None], LockResult]) -> object:
         raise NotImplementedError
 
-    with_lock = withLock
 
 
 class FileAuthStorageBackend(AuthStorageBackend):
@@ -45,7 +44,7 @@ class FileAuthStorageBackend(AuthStorageBackend):
             self.auth_path.write_text("{}", encoding="utf-8")
             os.chmod(self.auth_path, 0o600)
 
-    def withLock(self, fn: Callable[[str | None], LockResult]) -> object:
+    def with_lock(self, fn: Callable[[str | None], LockResult]) -> object:
         self._ensure_file()
         lock_path = self.auth_path.with_name(f"{self.auth_path.name}.lock")
         with lock_path.open("a+", encoding="utf-8") as lock_file:
@@ -85,20 +84,18 @@ class FileAuthStorageBackend(AuthStorageBackend):
             except FileNotFoundError:
                 pass
 
-    with_lock = withLock
 
 
 class InMemoryAuthStorageBackend(AuthStorageBackend):
     def __init__(self, value: str | None = None) -> None:
         self.value = value
 
-    def withLock(self, fn: Callable[[str | None], LockResult]) -> object:
+    def with_lock(self, fn: Callable[[str | None], LockResult]) -> object:
         result = fn(self.value)
         if "next" in result:
             self.value = str(result["next"])
         return result.get("result")
 
-    with_lock = withLock
 
 
 class AuthStorage:
@@ -115,20 +112,18 @@ class AuthStorage:
         self.reload()
 
     @staticmethod
-    def create(authPath: str | os.PathLike[str] | None = None) -> "AuthStorage":
-        return AuthStorage(FileAuthStorageBackend(authPath))
+    def create(auth_path: str | os.PathLike[str] | None = None) -> "AuthStorage":
+        return AuthStorage(FileAuthStorageBackend(auth_path))
 
     @staticmethod
-    def fromStorage(storage: AuthStorageBackend) -> "AuthStorage":
+    def from_storage(storage: AuthStorageBackend) -> "AuthStorage":
         return AuthStorage(storage)
 
     @staticmethod
-    def inMemory(data: AuthStorageData | None = None) -> "AuthStorage":
+    def in_memory(data: AuthStorageData | None = None) -> "AuthStorage":
         storage = InMemoryAuthStorageBackend(json.dumps(data or {}, indent=2))
-        return AuthStorage.fromStorage(storage)
+        return AuthStorage.from_storage(storage)
 
-    from_storage = fromStorage
-    in_memory = inMemory
 
     def _record_error(self, error: object) -> None:
         self._errors.append(error if isinstance(error, Exception) else RuntimeError(str(error)))
@@ -149,7 +144,7 @@ class AuthStorage:
                 content_holder["content"] = current
                 return {"result": None}
 
-            self._storage.withLock(read)
+            self._storage.with_lock(read)
             self._data = self._parse_storage_data(content_holder["content"])
             self._load_error = None
         except Exception as error:  # noqa: BLE001 - Travis records storage errors and keeps running.
@@ -168,7 +163,7 @@ class AuthStorage:
                     merged[provider] = dict(credential)
                 return {"result": merged, "next": json.dumps(merged, indent=2)}
 
-            committed = self._storage.withLock(update)
+            committed = self._storage.with_lock(update)
             if not isinstance(committed, dict):
                 raise AuthStorageError("auth storage transaction did not return committed data")
             return {str(key): dict(value) for key, value in committed.items() if isinstance(value, dict)}
@@ -178,18 +173,15 @@ class AuthStorage:
                 raise
             raise AuthStorageError(f"auth storage update failed: {error}") from error
 
-    def setRuntimeApiKey(self, provider: str, api_key: str) -> None:
+    def set_runtime_api_key(self, provider: str, api_key: str) -> None:
         self._runtime_overrides[provider] = api_key
 
-    def removeRuntimeApiKey(self, provider: str) -> None:
+    def remove_runtime_api_key(self, provider: str) -> None:
         self._runtime_overrides.pop(provider, None)
 
-    def setFallbackResolver(self, resolver: Callable[[str], str | None]) -> None:
+    def set_fallback_resolver(self, resolver: Callable[[str], str | None]) -> None:
         self._fallback_resolver = resolver
 
-    set_runtime_api_key = setRuntimeApiKey
-    remove_runtime_api_key = removeRuntimeApiKey
-    set_fallback_resolver = setFallbackResolver
 
     def get(self, provider: str) -> AuthCredential | None:
         credential = self._data.get(provider)
@@ -209,7 +201,7 @@ class AuthStorage:
     def has(self, provider: str) -> bool:
         return provider in self._data
 
-    def hasAuth(self, provider: str) -> bool:
+    def has_auth(self, provider: str) -> bool:
         if provider in self._runtime_overrides:
             return True
         if provider in self._data:
@@ -220,9 +212,8 @@ class AuthStorage:
             return True
         return False
 
-    has_auth = hasAuth
 
-    def getAuthStatus(self, provider: str) -> dict[str, object]:
+    def get_auth_status(self, provider: str) -> dict[str, object]:
         if provider in self._data:
             return {"configured": True, "source": "stored"}
         if provider in self._runtime_overrides:
@@ -234,19 +225,16 @@ class AuthStorage:
             return {"configured": True, "source": "fallback", "label": "custom provider config"}
         return {"configured": False}
 
-    get_auth_status = getAuthStatus
 
-    def getAll(self) -> AuthStorageData:
+    def get_all(self) -> AuthStorageData:
         return {provider: dict(credential) for provider, credential in self._data.items()}
 
-    get_all = getAll
 
-    def drainErrors(self) -> list[Exception]:
+    def drain_errors(self) -> list[Exception]:
         errors = list(self._errors)
         self._errors.clear()
         return errors
 
-    drain_errors = drainErrors
 
     def logout(self, provider: str) -> None:
         self.remove(provider)
@@ -257,7 +245,7 @@ class AuthStorage:
         if credential is not None:
             self.set(provider, credential)
 
-    def getApiKey(self, provider: str, options: dict[str, object] | None = None) -> str | None:
+    def get_api_key(self, provider: str, options: dict[str, object] | None = None) -> str | None:
         if provider in self._runtime_overrides:
             return self._runtime_overrides[provider]
 
@@ -279,7 +267,6 @@ class AuthStorage:
             return self._fallback_resolver(provider)
         return None
 
-    get_api_key = getApiKey
 
     def register_oauth_provider(self, provider: str, implementation: dict[str, object]) -> None:
         self._oauth_providers[provider] = dict(implementation)
@@ -311,17 +298,5 @@ class AuthStorage:
             access = credential.get("access") or credential.get("access_token")
             return str(access) if access is not None else None
 
-    def getOAuthProviders(self) -> list[dict[str, object]]:
+    def get_oauth_providers(self) -> list[dict[str, object]]:
         return ai_models.get_oauth_providers()
-
-    get_oauth_providers = getOAuthProviders
-
-
-def _oauth_is_expired(credential: AuthCredential) -> bool:
-    expires = credential.get("expires")
-    if expires is None:
-        return False
-    try:
-        return int(expires) <= int(time.time() * 1000)
-    except (TypeError, ValueError):
-        return False
