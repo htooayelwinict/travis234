@@ -481,6 +481,47 @@ def test_continuous_eval_uses_one_tui_session_for_all_prompts(tmp_path: Path) ->
     assert result_paths and all(path.stat().st_mode & 0o777 == 0o600 for path in result_paths)
 
 
+def test_continuous_eval_can_pin_a_direct_provider_at_process_start(tmp_path: Path) -> None:
+    from evals.run_continuous_sdlc_eval import run_continuous_scenarios
+
+    scenario = Scenario(
+        "01-direct-provider",
+        "first",
+        ("implement",),
+        (),
+        ((sys.executable, "-c", ""),),
+    )
+    driver = FakeDriver()
+    starts: list[list[str]] = []
+
+    def select_direct(query: str, index: int, timeout: float):
+        driver.lines.extend([f"/model {query}", f"<select:{index}>"])
+        return {"provider": "stepfun", "model": "step-3.7-flash"}
+
+    driver.select_model = select_direct  # type: ignore[method-assign]
+
+    def start(command, _cwd, _trace):
+        command_parts = list(command)
+        starts.append(command_parts)
+        driver.conversation_path = Path(command_parts[command_parts.index("--conversation-log") + 1])
+        return driver
+
+    results = run_continuous_scenarios(
+        [scenario],
+        root=tmp_path / "eval",
+        dotenv=tmp_path / ".env",
+        model_provider="stepfun",
+        model_query="step-3.7-flash",
+        driver_factory=start,
+    )
+
+    assert starts[0][starts[0].index("--provider") + 1] == "stepfun"
+    assert starts[0][starts[0].index("--model") + 1] == "step-3.7-flash"
+    assert driver.lines[:2] == ["/model stepfun/step-3.7-flash", "<select:1>"]
+    assert results[0].model_provider == "stepfun"
+    assert results[0].model_id == "step-3.7-flash"
+
+
 def test_continuous_eval_stops_and_classifies_provider_billing_failure(tmp_path: Path) -> None:
     from evals.run_continuous_sdlc_eval import run_continuous_scenarios
 

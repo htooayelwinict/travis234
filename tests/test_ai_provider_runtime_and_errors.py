@@ -37,6 +37,61 @@ def test_travis_env_provider_uses_runtime_option_api_key_for_authorization(monke
 
     assert captured["headers"]["Authorization"] == "Bearer runtime-login-key"
 
+
+def test_travis_env_provider_does_not_reuse_configured_key_after_cross_provider_switch(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeStream:
+        def __enter__(self):
+            raise RuntimeError("stop after capture")
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def stream(self, *args, **kwargs):
+            captured["headers"] = kwargs.get("headers")
+            captured["url"] = args[1]
+            return FakeStream()
+
+    monkeypatch.setattr(travis_env.httpx, "Client", FakeClient)
+    provider = TravisProvider(
+        ModelConfig(
+            enabled=True,
+            api_key="openrouter-only-key",
+            model="openai/gpt-5.4",
+            base_url="https://openrouter.ai/api/v1",
+            timeout_seconds=60,
+            temperature=0,
+            top_p=None,
+            frequency_penalty=None,
+            presence_penalty=None,
+            seed=None,
+            provider="openrouter",
+        )
+    )
+    stepfun_model = Model(
+        id="step-3.7-flash",
+        name="Step 3.7 Flash",
+        api="openai-completions",
+        provider="stepfun",
+        base_url="https://api.stepfun.ai/step_plan/v1",
+    )
+
+    provider.stream(stepfun_model, Context(messages=[UserMessage(content="hi")])).result_sync()
+
+    assert captured["url"] == "https://api.stepfun.ai/step_plan/v1/chat/completions"
+    assert "Authorization" not in captured["headers"]
+
 def test_travis_env_provider_factory_allows_runtime_login_key_without_startup_transport_flag(tmp_path, monkeypatch) -> None:
     dotenv = tmp_path / ".env"
     dotenv.write_text(

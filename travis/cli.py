@@ -12,11 +12,11 @@ import os
 from pathlib import Path
 import sys
 
-from travis.ai.env_config import ModelConfig, get_default_model_for_provider, load_model_config
+from travis.ai.env_config import ModelConfig, get_default_model_for_provider, load_dotenv_values, load_model_config
 from travis.ai.model_resolver import ScopedModel, resolve_cli_model, resolve_model_scope
 from travis.ai.models import get_model, get_models, get_providers, has_configured_auth, register_model, set_auth_credential
 from travis.ai.providers.capabilities import ProviderParamWarning, build_generation_payload
-from travis.ai.providers.catalog import determine_api_mode, normalize_provider
+from travis.ai.providers.catalog import determine_api_mode, normalize_provider, provider_catalog
 from travis.ai.providers.model_catalog import get_live_openrouter_models
 from travis.ai.providers.params import GenerationParams, merge_generation_params, params_from_mapping
 from travis.ai.register_builtins import register_builtin_providers
@@ -232,15 +232,16 @@ def _registered_models_with_env_fallback(env_model: Model) -> list[Model]:
 
 
 def _env_model_from_config(config: ModelConfig) -> Model:
-    model_id = config.model or get_default_model_for_provider("openrouter") or "moonshotai/kimi-k2.6"
+    provider = normalize_provider(config.provider) or "openrouter"
+    model_id = config.model or get_default_model_for_provider(provider) or "moonshotai/kimi-k2.6"
     return Model(
         id=model_id,
         name=model_id,
         api="openai-completions",
-        provider="openrouter",
+        provider=provider,
         base_url=config.base_url,
         reasoning=False,
-        context_window=128000,
+        context_window=config.context_window or 128000,
         max_tokens=config.max_tokens or 8192,
     )
 
@@ -486,6 +487,7 @@ def main(argv: list[str] | None = None) -> int:
     register_builtin_providers(dotenv_path=dotenv_path, config=config)
     _load_persisted_auth_credentials()
     provider_control_plane = ProviderControlPlane.create_default()
+    provider_dotenv_secrets = _register_dotenv_provider_credentials(provider_control_plane, dotenv_path)
     if args.list_providers:
         _print_provider_list(provider_control_plane.models)
         return 0
@@ -506,8 +508,10 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as error:
         parser.error(str(error))
     if config.api_key:
-        provider_control_plane.auth.set_runtime_api_key(startup.model.provider, config.api_key)
-    evaluation_redactor = SecretRedactor([config.api_key] if config.api_key else ())
+        provider_control_plane.auth.set_runtime_api_key(config.provider, config.api_key)
+    evaluation_redactor = SecretRedactor(
+        [secret for secret in [config.api_key, *provider_dotenv_secrets] if secret]
+    )
     generation_warnings = _generation_param_warnings_for_model(startup.model, config.generation_params)
     _print_generation_param_warnings(generation_warnings)
     runtime_options: dict[str, object] = {}
@@ -620,6 +624,29 @@ def _config_with_cli_generation_params(config: ModelConfig, args: argparse.Names
         stop=list(merged.stop) if merged.stop else list(config.stop),
         generation_params=merged,
     )
+
+
+def _register_dotenv_provider_credentials(
+    provider_control_plane: ProviderControlPlane,
+    dotenv_path: str | Path,
+) -> list[str]:
+    """Bind explicit dotenv credentials to their catalog provider only."""
+    values = load_dotenv_values(dotenv_path)
+    registered: list[str] = []
+    for descriptor in provider_catalog():
+        api_key = next(
+            (
+                value
+                for key in descriptor.api_key_env_vars
+                if (value := os.environ.get(key) or values.get(key))
+            ),
+            None,
+        )
+        if not api_key:
+            continue
+        provider_control_plane.auth.set_runtime_api_key(descriptor.slug, api_key)
+        registered.append(api_key)
+    return registered
 
 
 def _print_provider_list(model_registry) -> None:

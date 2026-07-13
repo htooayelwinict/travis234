@@ -94,9 +94,21 @@ PROVIDER_API_KEY_ENV = {
     "stepfun": ("STEPFUN_API_KEY",),
 }
 SUFFIXES = (
-    "ENABLED", "API_KEY", "MODEL", "BASE_URL", "TIMEOUT_SECONDS", "TEMPERATURE",
-    "TOP_P", "FREQUENCY_PENALTY", "PRESENCE_PENALTY", "SEED", "STOP",
-    "PROVIDER_SORT", "MAX_TOKENS",
+    "ENABLED",
+    "PROVIDER",
+    "API_KEY",
+    "MODEL",
+    "BASE_URL",
+    "CONTEXT_WINDOW",
+    "TIMEOUT_SECONDS",
+    "TEMPERATURE",
+    "TOP_P",
+    "FREQUENCY_PENALTY",
+    "PRESENCE_PENALTY",
+    "SEED",
+    "STOP",
+    "PROVIDER_SORT",
+    "MAX_TOKENS",
 )
 
 
@@ -116,6 +128,8 @@ class ModelConfig:
     provider_sort: str | None = "latency"
     max_tokens: int | None = None
     generation_params: GenerationParams = field(default_factory=GenerationParams)
+    provider: str = "openrouter"
+    context_window: int | None = None
 
 
 def load_dotenv_values(path: "str | Path" = ".env") -> dict[str, str]:
@@ -140,20 +154,40 @@ def load_model_config(prefix: str, dotenv_path: "str | Path" = ".env") -> ModelC
     for key in (*COMMON_KEYS, *(f"{prefix}_{suffix}" for suffix in SUFFIXES)):
         if key in os.environ:
             config[key] = os.environ[key]
+    requested_provider = config.get(f"{prefix}_PROVIDER", "openrouter").strip().lower() or "openrouter"
+    provider_definition = get_provider(requested_provider)
+    provider = provider_definition.id if provider_definition is not None else requested_provider
+    if provider_definition is not None:
+        provider_env_keys = [*provider_definition.api_key_env_vars]
+        if provider_definition.base_url_env_var:
+            provider_env_keys.append(provider_definition.base_url_env_var)
+        for key in provider_env_keys:
+            if key in os.environ:
+                config[key] = os.environ[key]
     enabled = config.get(f"{prefix}_ENABLED", "").lower() in TRUE_VALUES
-    api_key = config.get(f"{prefix}_API_KEY") or config.get("OPENROUTER_API_KEY") or config.get("OPENAI_API_KEY")
+    provider_api_key = _first_value(
+        config,
+        provider_definition.api_key_env_vars if provider_definition is not None else (),
+    )
+    api_key = config.get(f"{prefix}_API_KEY") or provider_api_key
     model = (
         config.get(f"{prefix}_MODEL")
-        or config.get("OPENROUTER_MODEL")
-        or config.get("OPENAI_MODEL")
-        or _default_model(prefix)
+        or _provider_model_override(provider, config)
+        or get_default_model_for_provider(provider)
+        or (_default_model(prefix) if provider == "openrouter" else None)
     )
-    generation_params = _load_generation_params(prefix, config)
+    provider_base_url = (
+        config.get(provider_definition.base_url_env_var)
+        if provider_definition is not None and provider_definition.base_url_env_var
+        else None
+    )
+    default_base_url = provider_definition.base_url if provider_definition is not None else ""
+    generation_params = _load_generation_params(prefix, config, provider=provider)
     return ModelConfig(
         enabled=enabled,
         api_key=api_key,
         model=model,
-        base_url=config.get(f"{prefix}_BASE_URL") or config.get("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1",
+        base_url=config.get(f"{prefix}_BASE_URL") or provider_base_url or default_base_url,
         timeout_seconds=float(config.get(f"{prefix}_TIMEOUT_SECONDS", "60")),
         temperature=float(config.get(f"{prefix}_TEMPERATURE", "0")),
         top_p=_optional_float(config.get(f"{prefix}_TOP_P")),
@@ -161,9 +195,12 @@ def load_model_config(prefix: str, dotenv_path: "str | Path" = ".env") -> ModelC
         presence_penalty=_optional_float(config.get(f"{prefix}_PRESENCE_PENALTY")),
         seed=_optional_int(config.get(f"{prefix}_SEED")),
         stop=_optional_list(config.get(f"{prefix}_STOP")),
-        provider_sort=config.get(f"{prefix}_PROVIDER_SORT") or config.get("OPENROUTER_PROVIDER_SORT") or "latency",
+        provider_sort=config.get(f"{prefix}_PROVIDER_SORT")
+        or (config.get("OPENROUTER_PROVIDER_SORT") or "latency" if provider == "openrouter" else None),
         max_tokens=_optional_int(config.get(f"{prefix}_MAX_TOKENS")),
         generation_params=generation_params,
+        provider=provider,
+        context_window=_optional_int(config.get(f"{prefix}_CONTEXT_WINDOW")),
     )
 
 
@@ -196,7 +233,12 @@ def get_default_model_for_provider(provider: str) -> str | None:
     return DEFAULT_MODEL_PER_PROVIDER.get(provider)
 
 
-def _load_generation_params(prefix: str, config: dict[str, str]) -> GenerationParams:
+def _load_generation_params(
+    prefix: str,
+    config: dict[str, str],
+    *,
+    provider: str = "openrouter",
+) -> GenerationParams:
     parsed_params: list[GenerationParams] = []
     for key, value in {
         "temperature": config.get(f"{prefix}_TEMPERATURE"),
@@ -205,7 +247,8 @@ def _load_generation_params(prefix: str, config: dict[str, str]) -> GenerationPa
         "presence_penalty": config.get(f"{prefix}_PRESENCE_PENALTY"),
         "seed": config.get(f"{prefix}_SEED"),
         "stop": config.get(f"{prefix}_STOP"),
-        "provider_sort": config.get(f"{prefix}_PROVIDER_SORT") or config.get("OPENROUTER_PROVIDER_SORT"),
+        "provider_sort": config.get(f"{prefix}_PROVIDER_SORT")
+        or (config.get("OPENROUTER_PROVIDER_SORT") if provider == "openrouter" else None),
         "max_tokens": config.get(f"{prefix}_MAX_TOKENS"),
         "timeout_seconds": config.get(f"{prefix}_TIMEOUT_SECONDS"),
     }.items():
@@ -218,6 +261,18 @@ def _load_generation_params(prefix: str, config: dict[str, str]) -> GenerationPa
 
 def _default_model(prefix: str) -> str | None:
     return get_default_model_for_provider("openrouter") if prefix == "TRAVIS234_WORKER_LLM" else None
+
+
+def _first_value(config: dict[str, str], keys: tuple[str, ...]) -> str | None:
+    return next((config[key] for key in keys if config.get(key)), None)
+
+
+def _provider_model_override(provider: str, config: dict[str, str]) -> str | None:
+    if provider == "openrouter":
+        return config.get("OPENROUTER_MODEL")
+    if provider == "openai-api":
+        return config.get("OPENAI_MODEL")
+    return None
 
 
 def _strip_inline_comment(value: str) -> str:

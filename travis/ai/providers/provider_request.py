@@ -109,7 +109,8 @@ def prepare_provider_request(
     if isinstance(extra_headers, dict):
         headers.update({str(key): str(value) for key, value in extra_headers.items()})
     option_api_key = getattr(options, "api_key", None) if options is not None else None
-    api_key = option_api_key if isinstance(option_api_key, str) and option_api_key.strip() else config.api_key
+    configured_api_key = config.api_key if config.provider == runtime.provider else None
+    api_key = option_api_key if isinstance(option_api_key, str) and option_api_key.strip() else configured_api_key
     if api_key:
         headers.update(profile.auth_headers(api_key))
     headers.setdefault("Content-Type", "application/json")

@@ -98,6 +98,47 @@ def test_stepfun_env_metadata_is_registered(monkeypatch) -> None:
     assert find_env_keys("stepfun") == ["STEPFUN_API_KEY"]
 
 
+def test_explicit_provider_owns_its_model_key_url_and_context(tmp_path: Path, monkeypatch) -> None:
+    _clear_param_env(monkeypatch)
+    for key in (
+        "TRAVIS234_WORKER_LLM_PROVIDER",
+        "TRAVIS234_WORKER_LLM_API_KEY",
+        "TRAVIS234_WORKER_LLM_MODEL",
+        "TRAVIS234_WORKER_LLM_BASE_URL",
+        "TRAVIS234_WORKER_LLM_CONTEXT_WINDOW",
+        "STEPFUN_API_KEY",
+        "STEPFUN_BASE_URL",
+        "OPENROUTER_API_KEY",
+        "OPENROUTER_MODEL",
+        "OPENROUTER_BASE_URL",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    env = tmp_path / ".env"
+    env.write_text(
+        "\n".join(
+            [
+                "TRAVIS234_WORKER_LLM_ENABLED=true",
+                "TRAVIS234_WORKER_LLM_PROVIDER=stepfun",
+                "TRAVIS234_WORKER_LLM_CONTEXT_WINDOW=256000",
+                "STEPFUN_API_KEY=step-key",
+                "OPENROUTER_API_KEY=wrong-provider-key",
+                "OPENROUTER_PROVIDER_SORT=price",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_model_config("TRAVIS234_WORKER_LLM", env)
+
+    assert config.provider == "stepfun"
+    assert config.api_key == "step-key"
+    assert config.model == "step-3.7-flash"
+    assert config.base_url == "https://api.stepfun.ai/step_plan/v1"
+    assert config.context_window == 256_000
+    assert config.provider_sort is None
+    assert config.generation_params.provider_sort is None
+
+
 def test_model_config_exposes_generation_params(tmp_path: Path, monkeypatch) -> None:
     _clear_param_env(monkeypatch)
     dotenv = tmp_path / ".env"

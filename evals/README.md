@@ -14,6 +14,16 @@ PYTHONPATH=travis234 uv run --dev python -m evals.run_sdlc_eval \
 
 The output directory must be empty unless `--resume` is supplied. No package or image is published by this command.
 
+For a direct-provider continuous run, pin both axes instead of relying on an aggregator-style model ID:
+
+```bash
+python -m evals.run_continuous_sdlc_eval \
+  --dotenv .env \
+  --model-provider stepfun \
+  --model-query step-3.7-flash \
+  --output-dir /tmp/travis-continuous-eval
+```
+
 ## 21-prompt developer handoff
 
 Use this protocol for end-user UX and behavior testing of the 21 SDLC scenarios. This is a direct attached-terminal test. Do not use `TuiDriver`, `evals.run_sdlc_eval`, `evals.run_continuous_sdlc_eval`, a mock provider, or another wrapper as the user boundary.

@@ -62,7 +62,9 @@ TRAVIS234_SANDBOX_IMAGE
 TRAVIS234_SHARE_VIEWER_URL
 ```
 
-Provider credentials should be configured through `/login` or the provider's standard environment variable. Do not commit credentials or project-local auth state.
+Provider credentials should be configured through `/login` or the provider's standard environment variable. Credentials read from `--dotenv` are registered only for the provider that declares that variable; switching models cannot reuse another provider's key. Do not commit credentials or project-local auth state.
+
+The worker binding can be made explicit with `TRAVIS234_WORKER_LLM_PROVIDER`, `TRAVIS234_WORKER_LLM_MODEL`, and `TRAVIS234_WORKER_LLM_BASE_URL`. For a custom or newly released model whose catalog metadata is unavailable, set `TRAVIS234_WORKER_LLM_CONTEXT_WINDOW` to its documented context size so footer telemetry and auto-compaction use the correct denominator.
 
 Model-driven tool subprocesses do not inherit provider credential variables by default. If a trusted project command deliberately needs one, list its exact variable name in `TRAVIS234_TOOL_ENV_PASSTHROUGH` (comma-separated). Human-authored `!command` remains an operator shell and inherits the operator environment.
 

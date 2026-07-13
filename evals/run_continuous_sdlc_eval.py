@@ -17,6 +17,7 @@ from evals.report import sanitized_text, write_reports
 from evals.schema import Scenario, ScenarioResult, load_scenarios
 from evals.tui_driver import TuiDriver
 from evals.verify_run import verify_run, write_verification
+from travis.ai.providers.catalog import normalize_provider
 
 DEFAULT_COMPACT_AFTER = frozenset()
 MIN_TURN_TIMEOUT_SECONDS = 900
@@ -38,6 +39,7 @@ def run_continuous_scenarios(
     root: str | Path,
     dotenv: str | Path,
     model_query: str = DEFAULT_MODEL,
+    model_provider: str | None = None,
     model_index: int = 1,
     thinking: str = "medium",
     temperature: float = 0.2,
@@ -71,6 +73,7 @@ def run_continuous_scenarios(
         thinking,
         "--temperature",
         str(temperature),
+        *(["--provider", model_provider, "--model", model_query] if model_provider else []),
         "--event-trace",
         str(trace_path),
         "--conversation-log",
@@ -83,12 +86,20 @@ def run_continuous_scenarios(
         ready = driver.wait_for_event("tui_ready", 60)
         session_id = str(ready.get("session_id") or "") or None
         session_path = str(ready.get("session_path") or "") or None
-        selected = driver.select_model(model_query, model_index, 60)
+        selection_query = f"{model_provider}/{model_query}" if model_provider else model_query
+        selected = driver.select_model(selection_query, model_index, 60)
         provider = str(selected.get("provider") or "") or None
         model = str(selected.get("model") or "") or None
-        if "/" in model_query and model != model_query:
+        expected_model = model_query
+        if model_provider and model_query.startswith(f"{model_provider}/"):
+            expected_model = model_query.split("/", 1)[1]
+        if model_provider and normalize_provider(provider) != normalize_provider(model_provider):
             raise RuntimeError(
-                f"model selection mismatch: requested {model_query!r}, selected {model!r}"
+                f"provider selection mismatch: requested {model_provider!r}, selected {provider!r}"
+            )
+        if (model_provider or "/" in model_query) and model != expected_model:
+            raise RuntimeError(
+                f"model selection mismatch: requested {expected_model!r}, selected {model!r}"
             )
         driver.send_line("/agents")
         driver.wait_for_event("extension_command", 60)
@@ -405,6 +416,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run 21 SDLC prompts in one travis TUI session")
     parser.add_argument("--dotenv", required=True)
     parser.add_argument("--model-query", default=DEFAULT_MODEL)
+    parser.add_argument("--model-provider")
     parser.add_argument("--model-index", type=int, default=1)
     parser.add_argument("--thinking", default="medium")
     parser.add_argument("--temperature", type=float, default=0.2)
@@ -422,6 +434,7 @@ def main(argv: list[str] | None = None) -> int:
             root=output,
             dotenv=args.dotenv,
             model_query=args.model_query,
+            model_provider=args.model_provider,
             model_index=args.model_index,
             thinking=args.thinking,
             temperature=args.temperature,
@@ -433,6 +446,7 @@ def main(argv: list[str] | None = None) -> int:
                 "mode": "continuous-session",
                 "prompt_count": len(scenarios),
                 "model_query": args.model_query,
+                "model_provider": args.model_provider,
                 "expected_model": args.model_query,
                 "model_index": args.model_index,
                 "thinking": args.thinking,

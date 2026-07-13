@@ -1248,6 +1248,7 @@ def test_cli_list_models_includes_dotenv_model_from_isolated_control_plane(monke
     dotenv = tmp_path / ".env"
     dotenv.write_text(
         "TRAVIS234_WORKER_LLM_ENABLED=true\n"
+        "TRAVIS234_WORKER_LLM_PROVIDER=stepfun\n"
         "TRAVIS234_WORKER_LLM_MODEL=step-3.7-flash\n"
         "TRAVIS234_WORKER_LLM_BASE_URL=https://api.stepfun.example/v1\n",
         encoding="utf-8",
@@ -1257,7 +1258,50 @@ def test_cli_list_models_includes_dotenv_model_from_isolated_control_plane(monke
     code = cli.main(["--cwd", str(tmp_path), "--dotenv", str(dotenv), "--list-models"])
 
     assert code == 0
-    assert "openrouter/step-3.7-flash" in capsys.readouterr().out
+    assert "stepfun/step-3.7-flash" in capsys.readouterr().out
+
+
+def test_startup_model_preserves_explicit_provider_binding(tmp_path, monkeypatch) -> None:
+    dotenv = tmp_path / ".env"
+    dotenv.write_text(
+        "\n".join(
+            [
+                "TRAVIS234_WORKER_LLM_ENABLED=true",
+                "TRAVIS234_WORKER_LLM_PROVIDER=stepfun",
+                "TRAVIS234_WORKER_LLM_MODEL=step-3.7-flash",
+                "TRAVIS234_WORKER_LLM_CONTEXT_WINDOW=256000",
+                "STEPFUN_API_KEY=step-key",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("TRAVIS234_WORKER_LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("TRAVIS234_WORKER_LLM_MODEL", raising=False)
+    monkeypatch.delenv("STEPFUN_API_KEY", raising=False)
+
+    model = cli._model_from_env(dotenv)
+
+    assert model.provider == "stepfun"
+    assert model.id == "step-3.7-flash"
+    assert model.base_url == "https://api.stepfun.ai/step_plan/v1"
+    assert model.context_window == 256_000
+
+
+def test_dotenv_credentials_are_registered_per_provider(tmp_path, monkeypatch) -> None:
+    dotenv = tmp_path / ".env"
+    dotenv.write_text(
+        "OPENROUTER_API_KEY=router-key\nSTEPFUN_API_KEY=step-key\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("STEPFUN_API_KEY", raising=False)
+    control_plane = ProviderControlPlane.in_memory()
+
+    secrets = cli._register_dotenv_provider_credentials(control_plane, dotenv)
+
+    assert control_plane.auth.get_api_key("openrouter") == "router-key"
+    assert control_plane.auth.get_api_key("stepfun") == "step-key"
+    assert set(secrets) >= {"router-key", "step-key"}
 
 
 def test_cli_list_models_without_openrouter_provider_does_not_fetch_live_catalog(monkeypatch, tmp_path, capsys) -> None:

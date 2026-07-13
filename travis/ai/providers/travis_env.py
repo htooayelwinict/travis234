@@ -29,9 +29,9 @@ class TravisProvider:
 
     def __init__(self, config: ModelConfig) -> None:
         self.config = config
-        self.provider_profile = get_provider_profile("openrouter") or ProviderProfile(
-            name="openrouter",
-            base_url="https://openrouter.ai/api/v1",
+        self.provider_profile = get_provider_profile(config.provider) or ProviderProfile(
+            name=config.provider,
+            base_url=config.base_url,
         )
         self.transport = get_transport(self.provider_profile.api_mode)
 
