@@ -41,7 +41,7 @@ jobs:
       - name: Run Python tests
         run: PYTHONPATH=. uv run pytest -q -p no:cacheprovider tests
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "20"
       - name: Test npm launcher
