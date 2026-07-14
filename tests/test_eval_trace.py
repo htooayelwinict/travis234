@@ -8,7 +8,7 @@ import pytest
 from travis.ai.models import reset_models
 from travis.ai.providers.faux import create_faux_provider, faux_model, text_response_events
 from travis.ai.stream import register_api_provider, reset_api_providers
-from travis.ai.types import AssistantMessage, ErrorEvent, TextContent, empty_usage, now_ms
+from travis.ai.types import AssistantMessage, ErrorEvent, TextContent, UserMessage, empty_usage, now_ms
 from travis.app import CodingApp
 from travis.coding_agent.eval_trace import ConversationLogWriter, EvalTraceWriter, SecretRedactor
 from travis.tui.interactive_mode import InteractiveMode
@@ -168,6 +168,37 @@ def test_coding_app_writes_final_assistant_text_to_conversation_log(tmp_path: Pa
     record = json.loads(path.read_text(encoding="utf-8"))
     assert record["prompt"] == "Repair the fixture"
     assert record["response"] == "Implemented and tested"
+    assert record["status"] == "ok"
+
+
+def test_post_response_compaction_preserves_conversation_log_response(tmp_path: Path) -> None:
+    path = tmp_path / "conversation.jsonl"
+
+    def script(model, _context):
+        events = text_response_events(model, "Implemented and tested before compaction")
+        events[-1].message.usage.total_tokens = 200_000
+        return events
+
+    register_api_provider(create_faux_provider(script))
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=120),
+        enable_tui=False,
+        context_length=100_000,
+        summarizer=lambda _prompt: "## Goal\nkeep working\n## Remaining Work\ncontinue",
+        conversation_log=ConversationLogWriter(path),
+    )
+    app.session.agent.state.messages = [
+        UserMessage(content=f"old context {index} " * 200, timestamp=now_ms())
+        for index in range(16)
+    ]
+
+    app.run_turn("Repair the fixture")
+
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert app.compaction.compressor.compression_count == 1
+    assert record["response"] == "Implemented and tested before compaction"
     assert record["status"] == "ok"
 
 

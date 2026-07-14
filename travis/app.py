@@ -423,6 +423,7 @@ class CodingApp:
             {"turn_id": turn_id, "provider": self.session.model.provider, "model": self.session.model.id},
         )
         status = "ok"
+        completed_turn_messages = None
         try:
             if self._recover_output_cap(stream_fn=stream_fn):
                 return []
@@ -438,6 +439,12 @@ class CodingApp:
             just_compacted = self.compaction.compressor.compression_count > before_prompt_compressions
             if self._compact_failed_turn_context(skip_if_just_compacted=just_compacted):
                 return new_messages
+            # Post-response compaction can replace the session message list with a
+            # shorter summary. Preserve the completed turn before that boundary;
+            # slicing the compacted list with the pre-turn length drops the reply.
+            completed_turn_messages = list(self.session.messages[before_message_count:])
+            if not completed_turn_messages:
+                completed_turn_messages = list(new_messages)
             if on_post_response_compaction_start and self._will_compact_post_response():
                 on_post_response_compaction_start()
             self._compact_post_response()
@@ -450,7 +457,11 @@ class CodingApp:
             )
             raise
         finally:
-            turn_messages = self.session.messages[before_message_count:]
+            turn_messages = (
+                completed_turn_messages
+                if completed_turn_messages is not None
+                else self.session.messages[before_message_count:]
+            )
             terminal_message = _last_assistant_message(turn_messages)
             if status == "ok" and terminal_message is not None:
                 if terminal_message.stop_reason == "error":
