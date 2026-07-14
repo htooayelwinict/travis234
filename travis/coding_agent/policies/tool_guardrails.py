@@ -81,6 +81,7 @@ IDEMPOTENT_NO_PROGRESS_RECOVERY_BLOCK_CODE = "idempotent_no_progress_recovery_bl
 REPEATED_EXACT_FAILURE_RECOVERY_BLOCK_CODE = "repeated_exact_failure_recovery_block"
 REPEATED_EXACT_SUCCESS_RECOVERY_BLOCK_CODE = "repeated_exact_success_recovery_block"
 SAME_TARGET_MUTATION_RECOVERY_BLOCK_CODE = "same_target_mutation_recovery_block"
+SCHEMA_FAILURE_RECOVERY_BLOCK_CODE = "schema_failure_recovery_block"
 RECOVERABLE_BLOCK_CODES = frozenset(
     {
         WORKSPACE_SCOPE_VIOLATION_CODE,
@@ -88,6 +89,7 @@ RECOVERABLE_BLOCK_CODES = frozenset(
         REPEATED_EXACT_FAILURE_RECOVERY_BLOCK_CODE,
         REPEATED_EXACT_SUCCESS_RECOVERY_BLOCK_CODE,
         SAME_TARGET_MUTATION_RECOVERY_BLOCK_CODE,
+        SCHEMA_FAILURE_RECOVERY_BLOCK_CODE,
     }
 )
 
@@ -299,6 +301,7 @@ class ToolCallGuardrailController:
     def reset_for_turn(self) -> None:
         self._exact_failure_counts: dict[ToolCallSignature, int] = {}
         self._same_tool_failure_counts: dict[str, int] = {}
+        self._schema_failure_counts: dict[tuple[str, str], int] = {}
         self._no_progress: dict[ToolCallSignature, tuple[str, int]] = {}
         self._consecutive_signature: ToolCallSignature | None = None
         self._consecutive_result_hash: str | None = None
@@ -320,6 +323,17 @@ class ToolCallGuardrailController:
     def before_call(self, tool_name: str, args: Mapping[str, Any] | None) -> ToolGuardrailDecision:
         args = _coerce_args(args)
         signature = ToolCallSignature.from_call(tool_name, args)
+        schema_failure_key = _schema_failure_key(tool_name, args)
+        schema_failure_count = self._schema_failure_counts.get(schema_failure_key, 0)
+        if not self.config.blocking_enabled and schema_failure_count >= 3:
+            return ToolGuardrailDecision(
+                action="block",
+                code=SCHEMA_FAILURE_RECOVERY_BLOCK_CODE,
+                message=_schema_failure_recovery_message(tool_name, args, schema_failure_count),
+                tool_name=tool_name,
+                count=schema_failure_count + 1,
+                signature=signature,
+            )
         mutation_path = _file_mutation_path_key(tool_name, args, self.cwd)
         if not self.config.blocking_enabled and mutation_path is not None:
             mutation_count = self._landed_file_mutation_counts.get(mutation_path, 0)
@@ -497,6 +511,11 @@ class ToolCallGuardrailController:
 
             same_count = self._same_tool_failure_counts.get(tool_name, 0) + 1
             self._same_tool_failure_counts[tool_name] = same_count
+            if _is_schema_validation_failure(result):
+                schema_failure_key = _schema_failure_key(tool_name, args)
+                self._schema_failure_counts[schema_failure_key] = (
+                    self._schema_failure_counts.get(schema_failure_key, 0) + 1
+                )
 
             exact_failure_block_after = self.config.exact_failure_block_after
             if tool_name in DEFAULT_NO_PROGRESS_BLOCK_TOOL_NAMES:
@@ -589,6 +608,7 @@ class ToolCallGuardrailController:
             self._exact_failure_counts.pop(signature, None)
             self._adaptive_failure_block_counts.pop(signature, None)
             self._same_tool_failure_counts.pop(tool_name, None)
+            self._schema_failure_counts.pop(_schema_failure_key(tool_name, args), None)
 
         if track_exact_bash_success:
             self._exact_successes[signature] = (success_result_hash, success_repeat_count)
@@ -880,6 +900,35 @@ def _is_bash_validation_command(args: Mapping[str, Any]) -> bool:
             "vitest",
             "jest",
         )
+    )
+
+
+def _schema_failure_key(tool_name: str, args: Mapping[str, Any]) -> tuple[str, str]:
+    action = args.get("action")
+    return tool_name, action if isinstance(action, str) else ""
+
+
+def _is_schema_validation_failure(result: str | None) -> bool:
+    return "validation failed for tool" in (result or "").lower()
+
+
+def _schema_failure_recovery_message(
+    tool_name: str,
+    args: Mapping[str, Any],
+    count: int,
+) -> str:
+    action = args.get("action")
+    if tool_name == "process" and action == "start":
+        return (
+            f"BLOCKED: process.start failed schema validation {count} times because process has no "
+            "start action. Start the command with bash using yield_time_ms and stdin=open; then use "
+            "the returned session_id with process poll/write/interrupt. Do not retry process.start."
+        )
+    action_label = f".{action}" if isinstance(action, str) and action else ""
+    return (
+        f"BLOCKED: {tool_name}{action_label} failed schema validation {count} times. "
+        "Do not vary the same invalid payload again. Inspect the declared tool schema or switch to "
+        "the tool/action that owns this operation, then continue the task."
     )
 
 

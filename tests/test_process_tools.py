@@ -83,6 +83,13 @@ def test_process_schema_matches_action_specific_runtime_contracts() -> None:
     assert all(schema.errors(arguments) for arguments in invalid)
 
 
+def test_process_start_error_routes_model_to_bash_launcher() -> None:
+    with pytest.raises(ValueError, match="has no start action.*bash"):
+        process_tool_module.prepare_process_arguments(
+            {"action": "start", "command": "python3 producer.py"}
+        )
+
+
 def test_process_argument_preparation_normalizes_wait_modes_without_inventing_cursor() -> None:
     wait_with_yield = {
         "action": "wait",

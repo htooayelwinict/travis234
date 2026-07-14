@@ -119,6 +119,11 @@ def prepare_process_arguments(raw_args):
         args[field] = _coerce_process_integer(args[field])
 
     action = args.get("action")
+    if action == "start":
+        raise ValueError(
+            "process has no start action; start the command with bash using yield_time_ms and "
+            "stdin=open, then control the returned session_id with process"
+        )
     if action == "write_line":
         args["action"] = "write"
         action = "write"

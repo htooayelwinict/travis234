@@ -292,6 +292,28 @@ def test_validation_command_resets_same_file_rewrite_streak(tmp_path) -> None:
     ).action == "allow"
 
 
+def test_varying_schema_invalid_calls_force_a_different_tool_action() -> None:
+    controller = ToolCallGuardrailController()
+    for revision in range(3):
+        controller.after_call(
+            "process",
+            {"action": "start", "command": f"python3 producer-{revision}.py"},
+            'Validation failed for tool "process": not valid under any of the given schemas',
+            failed=True,
+        )
+
+    blocked = controller.before_call(
+        "process",
+        {"action": "start", "command": "python3 producer-final.py"},
+    )
+
+    assert blocked.action == "block"
+    assert blocked.code == "schema_failure_recovery_block"
+    assert blocked.should_halt is False
+    assert "bash" in blocked.message
+    assert controller.before_call("process", {"action": "list"}).action == "allow"
+
+
 def test_process_zero_wait_same_cursor_busy_poll_warns_then_halts() -> None:
     controller = ToolCallGuardrailController(
         ToolCallGuardrailConfig(
