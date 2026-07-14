@@ -9,7 +9,7 @@ from pathlib import Path
 
 from travis.agent.types import AgentTool, AgentToolResult
 from travis.ai.types import TextContent
-from travis.coding_agent.artifacts import ArtifactRegistry
+from travis.coding_agent.artifacts import ArtifactRegistry, artifact_read_instruction
 from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import (
     DEFAULT_PROCESS_POLL_DELAY_MS,
@@ -42,7 +42,7 @@ _PROCESS_FIELDS = {
     "wait_time_ms": {
         "type": "integer",
         "minimum": 1000,
-        "maximum": 900000,
+        "maximum": 60000,
         "description": "Terminal-state wait deadline; valid only for wait and never a command timeout",
     },
     "max_bytes": {"type": "integer", "minimum": 1024, "maximum": 51200},
@@ -85,6 +85,7 @@ PROCESS_SCHEMA = {
 
 PROCESS_WAIT_EXAMPLE = '{"action":"wait","session_id":"<id>","cursor":<nextCursor>,"wait_time_ms":60000}'
 PROCESS_POLL_EXAMPLE = '{"action":"poll","session_id":"<id>","cursor":<nextCursor>,"yield_time_ms":1000}'
+MAX_PROCESS_WAIT_MS = 60_000
 
 _ACTION_FIELDS = {
     "poll": {"action", "session_id", "cursor", "yield_time_ms", "max_bytes"},
@@ -98,13 +99,6 @@ _ACTION_FIELDS = {
     "list": {"action"},
 }
 
-_PROCESS_ARGUMENT_ALIASES = {
-    "sessionId": "session_id",
-    "nextCursor": "cursor",
-    "yieldTimeMs": "yield_time_ms",
-    "waitTimeMs": "wait_time_ms",
-    "maxBytes": "max_bytes",
-}
 _PROCESS_INTEGER_FIELDS = {"cursor", "yield_time_ms", "wait_time_ms", "max_bytes", "rows", "cols"}
 
 
@@ -121,23 +115,26 @@ def prepare_process_arguments(raw_args):
     if not isinstance(raw_args, Mapping):
         return raw_args
     args = dict(raw_args)
-    for alias, canonical in _PROCESS_ARGUMENT_ALIASES.items():
-        if alias not in args:
-            continue
-        canonical_value = _coerce_process_integer(args[canonical]) if canonical in args else None
-        alias_value = _coerce_process_integer(args[alias])
-        if canonical in args and canonical_value != alias_value:
-            raise ValueError(f"conflicting process arguments: {canonical} and {alias}")
-        args[canonical] = alias_value
-        args.pop(alias)
-
     for field in _PROCESS_INTEGER_FIELDS.intersection(args):
         args[field] = _coerce_process_integer(args[field])
 
     action = args.get("action")
+    if action == "start":
+        raise ValueError(
+            "process has no start action; start the command with bash using yield_time_ms and "
+            "stdin=open, then control the returned session_id with process"
+        )
     if action == "write_line":
         args["action"] = "write"
         action = "write"
+    if action in {"write", "write_raw"}:
+        payload_fields = [name for name in ("input", "data", "content") if name in args]
+        if len(payload_fields) > 1:
+            raise ValueError(
+                "process write received multiple stdin payload fields; use only input"
+            )
+        if payload_fields and payload_fields[0] != "input":
+            args["input"] = args.pop(payload_fields[0])
     if action == "write" and isinstance(args.get("input"), str) and any(
         character in args["input"] for character in "\r\n"
     ):
@@ -251,7 +248,7 @@ def _execute_process(
     if action != "wait" and signal is not None and getattr(signal, "aborted", False):
         raise RuntimeError("Operation aborted")
     if action == "list":
-        return _list_result(service.list(owner))
+        return _list_result(tuple(snapshot for snapshot in service.list(owner) if not snapshot.state.terminal))
     session_id = args["session_id"]
     if action == "poll":
         try:
@@ -273,10 +270,20 @@ def _execute_process(
                 wait_ms=args.get("wait_time_ms", 60_000),
                 max_bytes=args.get("max_bytes", 51_200),
                 signal=signal,
-                on_update=(lambda update: on_update(_snapshot_result(update))) if on_update else None,
+                on_update=(lambda update: on_update(_snapshot_result(update, include_poll_hint=False)))
+                if on_update
+                else None,
             )
         except InvalidCursorError as error:
-            return _recover_invalid_cursor(service, owner, session_id, args, error, artifacts)
+            return _recover_invalid_cursor(
+                service,
+                owner,
+                session_id,
+                args,
+                error,
+                artifacts,
+                include_poll_hint=False,
+            )
         if snapshot.state.terminal:
             return _terminal_process_result(service, owner, snapshot, artifacts)
     elif action in {"write", "write_raw"}:
@@ -306,7 +313,7 @@ def _execute_process(
         )
     else:
         snapshot = service.kill(owner, session_id)
-    return _snapshot_result(snapshot)
+    return _snapshot_result(snapshot, include_poll_hint=action != "wait")
 
 
 def _recover_invalid_cursor(
@@ -316,6 +323,8 @@ def _recover_invalid_cursor(
     args: Mapping[str, object],
     error: InvalidCursorError,
     artifacts: ArtifactRegistry | None,
+    *,
+    include_poll_hint: bool = True,
 ) -> AgentToolResult:
     snapshot = service.poll(
         owner,
@@ -327,7 +336,7 @@ def _recover_invalid_cursor(
     result = (
         _terminal_process_result(service, owner, snapshot, artifacts)
         if snapshot.state.terminal
-        else _snapshot_result(snapshot)
+        else _snapshot_result(snapshot, include_poll_hint=include_poll_hint)
     )
     details = dict(result.details or {})
     details["recoveredCursor"] = error.cursor
@@ -375,8 +384,8 @@ def _validate_args(raw_args) -> dict[str, object]:
             raise ValueError("yield_time_ms must be an integer between 0 and 30000")
     if "wait_time_ms" in args:
         value = args["wait_time_ms"]
-        if not isinstance(value, int) or isinstance(value, bool) or not 1_000 <= value <= 900_000:
-            raise ValueError("wait_time_ms must be an integer between 1000 and 900000")
+        if not isinstance(value, int) or isinstance(value, bool) or not 1_000 <= value <= MAX_PROCESS_WAIT_MS:
+            raise ValueError(f"wait_time_ms must be an integer between 1000 and {MAX_PROCESS_WAIT_MS}")
     if "max_bytes" in args:
         value = args["max_bytes"]
         if not isinstance(value, int) or isinstance(value, bool) or not 1024 <= value <= 51_200:
@@ -391,13 +400,13 @@ def _require_string(args: dict[str, object], action: str, field: str, *, allow_e
     return value
 
 
-def _snapshot_result(snapshot: ProcessSnapshot) -> AgentToolResult:
-    footer = _snapshot_footer(snapshot)
+def _snapshot_result(snapshot: ProcessSnapshot, *, include_poll_hint: bool = True) -> AgentToolResult:
+    footer = _snapshot_footer(snapshot, include_poll_hint=include_poll_hint)
     content = f"{snapshot.output}\n\n{footer}" if snapshot.output else footer
     return AgentToolResult(content=[TextContent(text=content)], details=snapshot.as_details())
 
 
-def _snapshot_footer(snapshot: ProcessSnapshot) -> str:
+def _snapshot_footer(snapshot: ProcessSnapshot, *, include_poll_hint: bool = True) -> str:
     position = f"next cursor {snapshot.next_cursor}, output size {snapshot.output_size}"
     if snapshot.state is ProcessState.EXITED:
         return f"Process {snapshot.session_id} exited with code {snapshot.exit_code}; {position}."
@@ -412,11 +421,13 @@ def _snapshot_footer(snapshot: ProcessSnapshot) -> str:
                 f"{position}. This was not a command timeout."
             )
         return f"Process {snapshot.session_id} failed; {position}."
-    return (
+    footer = (
         f"Process {snapshot.session_id} is {snapshot.state.value}; {position}. "
-        f"{format_process_wait_instruction(snapshot.session_id, snapshot.next_cursor)} "
-        f"Suggested poll delay: {snapshot.suggested_poll_delay_ms} ms."
+        f"{format_process_wait_instruction(snapshot.session_id, snapshot.next_cursor)}"
     )
+    if include_poll_hint:
+        footer += f" Suggested poll delay: {snapshot.suggested_poll_delay_ms} ms."
+    return footer
 
 
 def _terminal_process_result(
@@ -465,6 +476,8 @@ def _terminal_process_result(
         failure_code=snapshot.failure_code,
     )
     result = _snapshot_result(terminal)
+    if artifact is not None:
+        result.content[0].text += f"\n\n[{artifact_read_instruction(artifact.id)}]"
     return AgentToolResult(content=result.content, details=details)
 
 
@@ -487,7 +500,7 @@ def _list_result(snapshots: tuple[ProcessSnapshot, ...]) -> AgentToolResult:
         )
         lines.append(f"{snapshot.session_id}  {snapshot.state.value}  {command}")
     return AgentToolResult(
-        content=[TextContent(text="\n".join(lines) if lines else "No managed processes for this workspace.")],
+        content=[TextContent(text="\n".join(lines) if lines else "No active managed processes for this workspace.")],
         details={"processes": processes},
     )
 

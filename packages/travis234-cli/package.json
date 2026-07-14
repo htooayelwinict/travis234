@@ -8,7 +8,6 @@
     "travis234": "bin/travis234.js"
   },
   "files": [
-    "agents/**/*.md",
     "bin/travis234.js",
     "skills/**/*.md",
     "README.md",

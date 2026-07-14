@@ -50,11 +50,13 @@ class OutputSpool:
         self._path = path
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self._tail = ""
-        self._tail_starts_partial = False
+        self._tail_bytes = 0
+        self._max_rolling_bytes = max(self.max_bytes * 2, 1)
+        self._tail_starts_at_line_boundary = True
         self._total_text_bytes = 0
-        self._newline_count = 0
-        self._saw_text = False
-        self._ends_with_newline = False
+        self._completed_lines = 0
+        self._total_lines = 0
+        self._has_open_line = False
         self._last_line_bytes = 0
         self._was_truncated = False
         self._truncated_by: str | None = None
@@ -80,7 +82,21 @@ class OutputSpool:
 
     def snapshot(self, persist_if_truncated: bool = False) -> OutputSnapshot:
         with self._lock:
-            if persist_if_truncated and self._was_truncated:
+            snapshot_text = self._snapshot_text()
+            tail = truncate_tail(snapshot_text, max_lines=self.max_lines, max_bytes=self.max_bytes)
+            truncated = self._total_lines > self.max_lines or self._total_text_bytes > self.max_bytes
+            truncated_by = (
+                tail.truncated_by
+                if truncated and tail.truncated_by is not None
+                else "bytes"
+                if truncated and self._total_text_bytes > self.max_bytes
+                else "lines"
+                if truncated
+                else None
+            )
+            self._was_truncated = truncated
+            self._truncated_by = truncated_by
+            if persist_if_truncated and truncated:
                 self._preserve_artifact = True
                 self._file.flush()
                 if self._artifact_registry is not None and self._artifact_ref is None:
@@ -89,24 +105,21 @@ class OutputSpool:
                         kind=self._artifact_kind,
                         access="read",
                     )
-            total_lines = self._newline_count + int(self._saw_text and not self._ends_with_newline)
-            output_lines = self._line_count(self._tail)
-            output_bytes = len(self._tail.encode("utf-8"))
             truncation = TruncationResult(
-                content=self._tail,
-                truncated=self._was_truncated,
-                truncated_by=self._truncated_by,
-                output_lines=output_lines,
-                total_lines=total_lines,
+                content=tail.content,
+                truncated=truncated,
+                truncated_by=truncated_by,
+                output_lines=tail.output_lines,
+                total_lines=self._total_lines,
                 first_line_exceeds_limit=False,
                 total_bytes=self._total_text_bytes,
-                output_bytes=output_bytes,
-                last_line_partial=self._tail_starts_partial,
+                output_bytes=tail.output_bytes,
+                last_line_partial=tail.last_line_partial,
                 max_lines=self.max_lines,
                 max_bytes=self.max_bytes,
             )
             return OutputSnapshot(
-                content=self._tail,
+                content=tail.content,
                 truncation=truncation,
                 full_output_path=self._path if self._preserve_artifact else None,
                 artifact_id=self._artifact_ref.id if self._artifact_ref is not None else None,
@@ -134,33 +147,44 @@ class OutputSpool:
             return
         encoded_size = len(text.encode("utf-8"))
         self._total_text_bytes += encoded_size
-        self._newline_count += text.count("\n")
-        self._saw_text = True
-        self._ends_with_newline = text.endswith("\n")
-        if "\n" in text:
-            self._last_line_bytes = len(text.rsplit("\n", 1)[-1].encode("utf-8"))
-        else:
+        self._tail += text
+        self._tail_bytes += encoded_size
+        if self._tail_bytes > self._max_rolling_bytes * 2:
+            self._trim_tail()
+
+        newline_count = text.count("\n")
+        if newline_count == 0:
             self._last_line_bytes += encoded_size
-
-        candidate = self._tail + text
-        prior_starts_partial = self._tail_starts_partial
-        result = truncate_tail(candidate, max_lines=self.max_lines, max_bytes=self.max_bytes)
-        start_index = len(candidate) - len(result.content)
-        if start_index == 0:
-            starts_partial = prior_starts_partial
+            self._has_open_line = True
         else:
-            starts_partial = candidate[start_index - 1] != "\n"
-        self._tail = result.content
-        self._tail_starts_partial = starts_partial
-        if result.truncated:
-            self._was_truncated = True
-            self._truncated_by = result.truncated_by
+            self._completed_lines += newline_count
+            tail = text.rsplit("\n", 1)[-1]
+            self._last_line_bytes = len(tail.encode("utf-8"))
+            self._has_open_line = bool(tail)
+        self._total_lines = self._completed_lines + int(self._has_open_line)
+        self._was_truncated = self._total_lines > self.max_lines or self._total_text_bytes > self.max_bytes
 
-    @staticmethod
-    def _line_count(content: str) -> int:
-        if not content:
-            return 0
-        return content.count("\n") + int(not content.endswith("\n"))
+    def _trim_tail(self) -> None:
+        buffer = self._tail.encode("utf-8")
+        if len(buffer) <= self._max_rolling_bytes:
+            self._tail_bytes = len(buffer)
+            return
 
+        start = len(buffer) - self._max_rolling_bytes
+        while start < len(buffer) and (buffer[start] & 0xC0) == 0x80:
+            start += 1
+        if start > 0:
+            self._tail_starts_at_line_boundary = buffer[start - 1] == 0x0A
+        self._tail = buffer[start:].decode("utf-8")
+        self._tail_bytes = len(self._tail.encode("utf-8"))
 
-__all__ = ["OutputSnapshot", "OutputSpool"]
+    def _snapshot_text(self) -> str:
+        if self._tail_starts_at_line_boundary:
+            return self._tail
+        first_newline = self._tail.find("\n")
+        return self._tail if first_newline < 0 else self._tail[first_newline + 1 :]
+
+__all__ = [
+    "OutputSnapshot",
+    "OutputSpool",
+]

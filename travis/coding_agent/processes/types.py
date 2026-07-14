@@ -68,6 +68,7 @@ class ProcessLaunchRequest:
     cwd: str
     env: Mapping[str, str]
     shell_path: str
+    stdin_open: bool = False
     tty: bool = False
     rows: int = 24
     cols: int = 80

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 
 import pytest
 
@@ -73,3 +74,23 @@ def test_close_waits_for_active_command_and_rejects_new_work() -> None:
     assert closed.is_set()
     with pytest.raises(RuntimeError, match="closed"):
         executor.submit("late", lambda: None).result(timeout=1)
+
+
+def test_close_timeout_returns_while_active_command_is_stuck() -> None:
+    executor = SessionCommandExecutor(daemon=True)
+    started = threading.Event()
+    release = threading.Event()
+    active = executor.submit("stuck", lambda: (started.set(), release.wait()))
+    assert started.wait(timeout=1)
+
+    started_at = time.monotonic()
+    stopped = executor.close(timeout=0.05)
+
+    assert stopped is False
+    assert time.monotonic() - started_at < 0.5
+    with pytest.raises(RuntimeError, match="closed"):
+        executor.submit("late", lambda: None).result(timeout=1)
+
+    release.set()
+    assert executor.close(timeout=1) is True
+    active.result(timeout=1)

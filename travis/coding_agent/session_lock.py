@@ -37,4 +37,6 @@ class SessionFileLock:
             self._handle = None
 
 
-__all__ = ["SessionFileLock"]
+__all__ = [
+    "SessionFileLock",
+]

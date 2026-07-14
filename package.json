@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "tui": "python3 scripts/travis234_tui.py",
-    "tui:sandbox": "python3 scripts/travis234_sandbox.py",
+    "tui:sandbox": "node packages/travis234-cli/bin/travis234.js",
     "test:launcher": "npm --prefix packages/travis234-cli test",
     "pack:launcher": "npm --prefix packages/travis234-cli run pack:dry-run"
   },

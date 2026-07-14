@@ -1,12 +1,11 @@
-"""Integrated travis+travis coding app: ai + agent + coding_agent + compaction + tui.
+"""Integrated Travis234 coding app: AI, agent, tools, compaction, and TUI.
 
-Capstone composition that wires the ported parity packages into one end-to-end
+Capstone composition that wires the runtime packages into one end-to-end
 application, with no imports of external source packages.
 """
 
 from __future__ import annotations
 
-import copy
 import json
 import os
 import time
@@ -14,18 +13,20 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Literal, Mapping, Optional
 
-from travis.ai.stream import complete_simple_sync
 from travis.ai.model_resolver import ScopedModel
 from travis.ai.overflow import is_context_overflow, parse_available_output_tokens_from_error
-from travis.ai.types import Context, Model, SimpleStreamOptions, TextContent, ToolResultMessage, UserMessage, now_ms
+from travis.ai.types import Context, Model, SimpleStreamOptions, TextContent, UserMessage, now_ms
 from travis.ai.types import AssistantMessage
 from travis.coding_agent.agent_session import AgentSession
+from travis.coding_agent.message_utils import last_assistant_message as _last_assistant_message
+from travis.coding_agent.object_utils import first_defined as _first_setting
 from travis.coding_agent.agent_session_runtime import AgentSessionRuntime, CreateAgentSessionRuntimeResult
 from travis.coding_agent.compaction_adapter import to_compressor_messages
 from travis.coding_agent.branch_summarization import SUMMARIZATION_SYSTEM_PROMPT
 from travis.coding_agent.config import get_agent_dir
 from travis.coding_agent.settings_manager import SettingsManager
-from travis.coding_agent.provider_control_plane import ProviderControlPlane
+from travis.coding_agent.auth_storage import AuthStorage
+from travis.coding_agent.model_registry import ModelRegistry
 from travis.coding_agent.processes.completions import ProcessCompletionStore
 from travis.coding_agent.processes.local import create_local_process_transport
 from travis.coding_agent.processes.service import ProcessSessionService
@@ -40,8 +41,6 @@ from travis.tui.terminal import ProcessTerminal, Terminal
 from travis.tui.tui import TUI
 
 DEFAULT_CONTEXT_LENGTH = 32000
-DEFAULT_COMPACTION_RESERVE_TOKENS = 16_384
-TRAVIS_STATIC_PROMPT_BREATHING_ROOM = 4_096
 
 
 def _resolve_session_retry_settings(settings_manager: object) -> tuple[bool, int, int]:
@@ -72,13 +71,6 @@ def _call_setting(settings_manager: object, *names: str) -> Any:
     return None
 
 
-def _first_setting(*values: Any) -> Any:
-    for value in values:
-        if value is not None:
-            return value
-    return None
-
-
 def _coerce_nonnegative_int(value: Any, *, default: int) -> int:
     try:
         parsed = int(value)
@@ -98,30 +90,43 @@ class CodingApp:
         terminal: Optional[Terminal] = None,
         context_length: int | None = None,
         summarizer=None,
+        compression_model: Model | None = None,
+        compression_api_key: str | None = None,
+        compression_timeout_seconds: float | None = None,
+        compression_generation_params: object | None = None,
         thinking_level: str = "off",
         scoped_models: list[ScopedModel] | None = None,
         enable_tui: bool = True,
         settings_manager: object | None = None,
-        max_iterations: int = 90,
-        tool_loop_guardrails: Mapping[str, object] | None = None,
         session_path: str | None = None,
         session_id: str | None = None,
         agent_dir: str | None = None,
-        provider_control_plane: ProviderControlPlane | None = None,
+        model_registry: ModelRegistry | None = None,
         event_trace=None,
         conversation_log=None,
     ) -> None:
         self.cwd = str(Path(cwd).expanduser().resolve())
         self.event_trace = event_trace
         self.conversation_log = conversation_log
-        self.provider_control_plane = provider_control_plane or ProviderControlPlane.create_default()
-        self.provider_control_plane.ensure_model(model)
-        self._settings_manager = settings_manager or SettingsManager.inMemory()
+        self._agent_dir = str(Path(agent_dir or get_agent_dir()).expanduser().resolve())
+        self.model_registry = model_registry or ModelRegistry.create(
+            AuthStorage.create(Path(self._agent_dir) / "auth.json"),
+            Path(self._agent_dir) / "models.json",
+        )
+        self.model_registry.ensure_model(model)
+        if compression_model is not None:
+            self.model_registry.ensure_model(compression_model)
+        self._settings_manager = settings_manager or SettingsManager.in_memory()
+        if thinking_level != "off":
+            set_default_thinking_level = getattr(
+                self._settings_manager,
+                "set_default_thinking_level",
+                None,
+            ) or getattr(self._settings_manager, "setDefaultThinkingLevel", None)
+            if callable(set_default_thinking_level):
+                set_default_thinking_level(thinking_level)
         self._retry_settings = _resolve_session_retry_settings(self._settings_manager)
         self._scoped_models = list(scoped_models or [])
-        self._max_iterations = max_iterations
-        self._tool_loop_guardrails = tool_loop_guardrails
-        self._agent_dir = str(Path(agent_dir or get_agent_dir()).expanduser().resolve())
         self._app_instance_id = uuid.uuid4().hex
         self.process_completion_store = ProcessCompletionStore(
             Path(self._agent_dir) / "process-results"
@@ -147,13 +152,30 @@ class CodingApp:
             summarizer = _model_summarizer(
                 lambda: self.session.model,
                 thinking_level=lambda: self.session.thinking_level,
-                complete_fn=lambda active_model, context, options: self.provider_control_plane.stream_simple(
+                complete_fn=lambda active_model, context, options: self.model_registry.stream_simple(
                     active_model,
                     context,
                     options,
                 ).result_sync(),
             )
         self._summarizer = summarizer
+        self._compression_model = compression_model
+        self._compression_summarizer = (
+            _model_summarizer(
+                compression_model,
+                thinking_level="off",
+                api_key=compression_api_key,
+                timeout_seconds=compression_timeout_seconds,
+                generation_params=compression_generation_params,
+                complete_fn=lambda active_model, context, options: self.model_registry.stream_simple(
+                    active_model,
+                    context,
+                    options,
+                ).result_sync(),
+            )
+            if compression_model is not None
+            else None
+        )
         initial_session = self._create_session(
             cwd=self.cwd,
             fallback_model=model,
@@ -189,7 +211,7 @@ class CodingApp:
     ) -> AgentSession:
         resolved_cwd = str(Path(cwd).expanduser().resolve())
         model = self._restored_session_model(session_path, resolved_cwd, fallback_model)
-        self.provider_control_plane.ensure_model(model)
+        self.model_registry.ensure_model(model)
         retry_enabled, max_retries, retry_delay_ms = self._retry_settings
         fresh_session = bool(
             session_path
@@ -205,17 +227,18 @@ class CodingApp:
             retry_enabled=retry_enabled,
             max_retries=max_retries,
             retry_delay_ms=retry_delay_ms,
-            max_iterations=self._max_iterations,
-            tool_loop_guardrails=self._tool_loop_guardrails,
             session_path=session_path,
             parent_session_path=parent_session_path,
             session_id=session_id,
             session_start_event=session_start_event,
             defer_session_start=defer_session_start,
+            defer_agent_settled=True,
             agent_dir=self._agent_dir,
-            provider_control_plane=self.provider_control_plane,
+            session_index=self.session_catalog.index,
+            model_registry=self.model_registry,
             process_service=self.process_service,
             process_owner=self._process_owner_for(resolved_cwd),
+            model_change_listener=self._handle_session_model_changed,
         )
         if fresh_session and session._session_store is not None:
             session._session_store.append_model_change(session.model.provider, session.model.id)
@@ -231,7 +254,7 @@ class CodingApp:
         snapshot = SessionStore(str(path), cwd=cwd).build_context()
         if not snapshot.model:
             return fallback
-        restored = self.provider_control_plane.models.find(
+        restored = self.model_registry.find(
             snapshot.model.get("provider", ""),
             snapshot.model.get("modelId", ""),
         )
@@ -246,7 +269,15 @@ class CodingApp:
         self.compressor = ContextCompressor(
             context_length=resolved_context_length,
             threshold_percent=threshold_percent,
+            max_tokens=self.session.model.max_tokens,
             summarizer=self._summarizer,
+            summary_summarizer=self._compression_summarizer,
+            model=_model_route(self.session.model),
+            summary_model_override=(
+                _model_route(self._compression_model)
+                if self._compression_model is not None
+                else None
+            ),
         )
         self.compaction = CompactionManager(
             self.compressor,
@@ -269,6 +300,20 @@ class CodingApp:
         self.session = session
         self.cwd = str(Path(session.cwd).expanduser().resolve())
         self._configure_session_components()
+
+    def _handle_session_model_changed(self, _previous_model: Model, model: Model) -> None:
+        resolved_context_length, threshold_percent = _resolve_compaction_window(
+            model,
+            self.session,
+            explicit_context_length=self._context_length,
+        )
+        self.compressor.update_context_window(
+            resolved_context_length,
+            threshold_percent=threshold_percent,
+            max_tokens=model.max_tokens,
+            model=_model_route(model),
+        )
+        self.compaction.deep_baseline_tokens = _estimate_static_prompt_tool_tokens(self.session)
 
     def _unbind_session(self) -> None:
         for unsubscribe in self._session_unsubscribers:
@@ -344,7 +389,7 @@ class CodingApp:
         return ProcessLaunchRequest(
             command=resolved_command,
             cwd=session.cwd,
-            env=get_shell_env(),
+            env=get_shell_env(sanitize_credentials=False),
             shell_path=shell,
             launch_session_id=session.session_id or None,
         )
@@ -391,42 +436,16 @@ class CodingApp:
         except BaseException as error:  # noqa: BLE001
             if first_error is None:
                 first_error = error
+        try:
+            self.session_catalog.close()
+        except BaseException as error:  # noqa: BLE001
+            if first_error is None:
+                first_error = error
         if first_error is not None:
             raise first_error
 
     def _transform_context(self, messages, signal=None):
-        # Travis preflight timing-compaction phase.
-        should_emit = self._will_compact_preflight(messages)
-        before_compressions = self.compaction.compressor.compression_count
-        source_messages = list(messages)
-        compressor_messages = to_compressor_messages(source_messages)
-        if should_emit:
-            self.session._begin_compaction("threshold")
-        try:
-            compacted = self.compaction.maybe_compress_preflight(compressor_messages)
-            if compacted is not compressor_messages:
-                applied = self._apply_compaction_boundary(compacted, source_messages=source_messages)
-                messages[:] = applied
-                return messages
-            return compacted
-        except Exception as error:  # noqa: BLE001 - keep lifecycle events paired if compaction unexpectedly raises.
-            if should_emit:
-                self.session._end_compaction(
-                    reason="threshold",
-                    result=None,
-                    aborted=False,
-                    will_retry=False,
-                    error_message=f"Auto-compaction failed: {error}",
-                )
-            raise
-        finally:
-            if should_emit and self.session.is_compacting:
-                result = (
-                    self.session.messages
-                    if self.compaction.compressor.compression_count > before_compressions
-                    else None
-                )
-                self.session._end_compaction(reason="threshold", result=result, aborted=False, will_retry=False)
+        return self.session.compaction_transactions.preflight(messages).messages
 
     def run_turn(
         self,
@@ -442,6 +461,7 @@ class CodingApp:
             {"turn_id": turn_id, "provider": self.session.model.provider, "model": self.session.model.id},
         )
         status = "ok"
+        completed_turn_messages = None
         try:
             if self._recover_output_cap(stream_fn=stream_fn):
                 return []
@@ -457,6 +477,12 @@ class CodingApp:
             just_compacted = self.compaction.compressor.compression_count > before_prompt_compressions
             if self._compact_failed_turn_context(skip_if_just_compacted=just_compacted):
                 return new_messages
+            # Post-response compaction can replace the session message list with a
+            # shorter summary. Preserve the completed turn before that boundary;
+            # slicing the compacted list with the pre-turn length drops the reply.
+            completed_turn_messages = list(self.session.messages[before_message_count:])
+            if not completed_turn_messages:
+                completed_turn_messages = list(new_messages)
             if on_post_response_compaction_start and self._will_compact_post_response():
                 on_post_response_compaction_start()
             self._compact_post_response()
@@ -469,11 +495,23 @@ class CodingApp:
             )
             raise
         finally:
+            self.session.emit_agent_settled()
+            turn_messages = (
+                completed_turn_messages
+                if completed_turn_messages is not None
+                else self.session.messages[before_message_count:]
+            )
+            terminal_message = _last_assistant_message(turn_messages)
+            if status == "ok" and terminal_message is not None:
+                if terminal_message.stop_reason == "error":
+                    status = "error"
+                elif terminal_message.stop_reason == "aborted":
+                    status = "aborted"
             if self.conversation_log is not None:
                 self.conversation_log.write(
                     turn_id=turn_id,
                     prompt=prompt,
-                    response=_assistant_text_after(self.session.messages, before_message_count),
+                    response=_assistant_log_text(turn_messages),
                     status=status,
                 )
             self._trace(
@@ -492,20 +530,38 @@ class CodingApp:
     def _trace_session_event(self, event) -> None:
         event_type = getattr(event, "type", None)
         if event_type == "tool_execution_end":
+            tool_name = str(getattr(event, "tool_name", ""))
+            args = getattr(event, "args", None)
+            metadata = _safe_eval_tool_metadata(tool_name, args)
+            reason_code = getattr(event, "reason_code", None)
+            if isinstance(reason_code, str) and reason_code:
+                metadata["reason_code"] = reason_code
             self._trace(
                 "tool_end",
                 {
                     "tool_call_id": str(getattr(event, "tool_call_id", "")),
-                    "tool": str(getattr(event, "tool_name", "")),
+                    "tool": tool_name,
                     "status": "error" if getattr(event, "is_error", False) else "ok",
+                    **metadata,
                 },
             )
         elif event_type == "compaction_end":
+            result = self.compaction.last_compression_result
+            if getattr(event, "error_message", None):
+                status = "error"
+            elif getattr(event, "aborted", False):
+                status = "aborted"
+            else:
+                status = "ok"
             self._trace(
                 "compaction_end",
                 {
-                    "status": "error" if getattr(event, "error_message", None) else "ok",
+                    "status": status,
                     "compression_count": self.compaction.compressor.compression_count,
+                    "trigger": str(getattr(event, "reason", "")),
+                    "summary_model_requested": getattr(result, "summary_model_requested", None),
+                    "summary_model_used": getattr(result, "summary_model_used", None),
+                    "summary_model_fallback": bool(getattr(result, "summary_model_fallback", False)),
                 },
             )
 
@@ -518,36 +574,7 @@ class CodingApp:
         if message is None or message.stop_reason in {"error", "aborted"}:
             return
         prompt_tokens = _assistant_prompt_tokens(message)
-        should_emit = self._will_compact_post_response()
-        before_compressions = self.compaction.compressor.compression_count
-        source_messages = list(self.session.messages)
-        compressor_messages = to_compressor_messages(source_messages)
-        if should_emit:
-            self.session._begin_compaction("threshold")
-        try:
-            compacted = self.compaction.maybe_compress_post_response(compressor_messages, prompt_tokens)
-            if compacted is not compressor_messages:
-                self._apply_compaction_boundary(compacted, source_messages=source_messages)
-        except Exception as error:  # noqa: BLE001 - keep lifecycle events paired if compaction unexpectedly raises.
-            if should_emit:
-                self.session._end_compaction(
-                    reason="threshold",
-                    result=None,
-                    aborted=False,
-                    will_retry=False,
-                    error_message=f"Auto-compaction failed: {error}",
-                )
-            raise
-        else:
-            if should_emit:
-                result = (
-                    self.session.messages
-                    if self.compaction.compressor.compression_count > before_compressions
-                    else None
-                )
-                self.session._end_compaction(reason="threshold", result=result, aborted=False, will_retry=False)
-        finally:
-            self.compaction.reset_overflow_attempts()
+        self.session.compaction_transactions.post_response(self.session.messages, prompt_tokens)
 
     def _will_compact_post_response(self) -> bool:
         message = _last_assistant_message(self.session.messages)
@@ -556,14 +583,6 @@ class CodingApp:
         prompt_tokens = _assistant_prompt_tokens(message)
         real_tokens = 0 if prompt_tokens == -1 else prompt_tokens
         return self.compaction.compressor.should_compress(real_tokens)
-
-    def _will_compact_preflight(self, messages) -> bool:
-        if self.compaction.awaiting_real_usage_after_compression:
-            return False
-        tokens = estimate_tokens(to_compressor_messages(messages))
-        if self.compaction.compressor.should_defer_preflight_to_real_usage(tokens):
-            return False
-        return self.compaction.compressor.should_compress(tokens)
 
     def _recover_context_overflow(self, *, stream_fn=None) -> bool:
         message = _last_assistant_message(self.session.messages)
@@ -578,75 +597,20 @@ class CodingApp:
             for item in self.session.messages
             if item is not message
         ]
-        self.session._begin_compaction("overflow")
-        try:
-            compacted, recovered = self.compaction.recover_overflow(to_compressor_messages(retained))
-        except Exception as error:  # noqa: BLE001 - keep lifecycle events paired if compaction unexpectedly raises.
-            self.session._end_compaction(
-                reason="overflow",
-                result=None,
-                aborted=False,
-                will_retry=False,
-                error_message=f"Context overflow recovery failed: {error}",
-            )
-            raise
-        if not recovered:
-            self.session.agent.state.messages = retained
-            self.session._end_compaction(reason="overflow", result=None, aborted=False, will_retry=False)
-            return True
-        compacted = self._apply_compaction_boundary(compacted, source_messages=retained)
-        self.session._end_compaction(reason="overflow", result=compacted, aborted=False, will_retry=True)
-        self.session.agent.continue_(stream_fn=stream_fn)
-        self._compact_post_response()
+        outcome = self.session.compaction_transactions.recover_overflow(retained, stream_fn=stream_fn)
+        if outcome.recovered:
+            self._compact_post_response()
         return True
 
     def _compact_failed_turn_context(self, *, skip_if_just_compacted: bool = False) -> bool:
         message = _last_assistant_message(self.session.messages)
         if message is None or message.stop_reason not in {"error", "aborted"}:
             return False
-        is_prompt_guardrail = message.stop_reason == "error" and _is_prompt_injection_guardrail_error(
-            message.error_message or ""
-        )
-
         # A provider error is not proof that the post-compaction request fit.
         # Clear Travis' "await real usage" gate so the next prompt can compact
         # instead of resending a failed large turn unchanged.
         if message.stop_reason == "error":
             self.compaction.awaiting_real_usage_after_compression = False
-        if is_prompt_guardrail:
-            retained = [
-                item
-                for item in self.session.messages
-                if item is not message
-            ]
-            retained = _elide_failed_turn_tool_results(retained)
-            before_compressions = self.compaction.compressor.compression_count
-            self.session._begin_compaction("threshold")
-            try:
-                compacted = self.compaction.force_compress_error_context(to_compressor_messages(retained))
-                compacted = self._apply_compaction_boundary(
-                    compacted,
-                    source_messages=retained,
-                    retain_source_suffix=False,
-                )
-            except Exception as error:  # noqa: BLE001 - keep lifecycle events paired if compaction unexpectedly raises.
-                self.session.agent.state.messages = list(retained)
-                self.session._end_compaction(
-                    reason="threshold",
-                    result=None,
-                    aborted=False,
-                    will_retry=False,
-                    error_message=f"Auto-compaction failed: {error}",
-                )
-                raise
-            else:
-                result = (
-                    self.session.messages
-                    if self.compaction.compressor.compression_count > before_compressions
-                    else retained
-                )
-                self.session._end_compaction(reason="threshold", result=result, aborted=False, will_retry=False)
-                return True
         if skip_if_just_compacted:
             return False
 
@@ -655,49 +619,12 @@ class CodingApp:
         ):
             return False
 
-        before_compressions = self.compaction.compressor.compression_count
         source_messages = list(self.session.messages)
-        compressor_messages = to_compressor_messages(source_messages)
-        self.session._begin_compaction("threshold")
-        try:
-            compacted = self.compaction.maybe_compress_error_context(compressor_messages)
-            if compacted is not compressor_messages:
-                self._apply_compaction_boundary(compacted, source_messages=source_messages)
-        except Exception as error:  # noqa: BLE001 - keep lifecycle events paired if compaction unexpectedly raises.
-            self.session._end_compaction(
-                reason="threshold",
-                result=None,
-                aborted=False,
-                will_retry=False,
-                error_message=f"Auto-compaction failed: {error}",
-            )
-            raise
-        else:
-            result = (
-                self.session.messages
-                if self.compaction.compressor.compression_count > before_compressions
-                else None
-            )
-            self.session._end_compaction(reason="threshold", result=result, aborted=False, will_retry=False)
-            return result is not None
-
-    def _apply_compaction_boundary(
-        self,
-        compacted,
-        *,
-        source_messages,
-        retain_source_suffix: bool = True,
-    ):
-        result = self.compaction._last_compression_result  # noqa: SLF001 - app owns the compaction manager lifecycle.
-        if result is not None and getattr(result, "compressed", False):
-            return self.session.apply_compaction_result(
-                list(compacted),
-                result,
-                source_messages=list(source_messages),
-                retain_source_suffix=retain_source_suffix,
-            )
-        self.session.agent.state.messages = list(compacted)
-        return list(compacted)
+        outcome = self.session.compaction_transactions.compact_error_context(
+            source_messages,
+            retain_source_suffix=False,
+        )
+        return outcome.compressed
 
     def _recover_output_cap(self, *, stream_fn=None) -> bool:
         message = _last_assistant_message(self.session.messages)
@@ -728,13 +655,25 @@ def _model_summarizer(
     model: Model | Callable[[], Model],
     *,
     thinking_level: str | Callable[[], str] = "off",
-    complete_fn=complete_simple_sync,
+    api_key: str | None = None,
+    timeout_seconds: float | None = None,
+    generation_params: object | None = None,
+    complete_fn=None,
 ):
+    if complete_fn is None:
+        raise ValueError("summarization requires an injected model runtime")
     def summarize(prompt: str) -> str:
         active_model = model() if callable(model) else model
         active_thinking_level = thinking_level() if callable(thinking_level) else thinking_level
         options = SimpleStreamOptions(
-            max_tokens=_summarizer_max_tokens(active_model),
+            omit_max_tokens=True,
+            api_key=api_key,
+            timeout_ms=(
+                max(0, int(float(timeout_seconds) * 1000))
+                if timeout_seconds is not None
+                else None
+            ),
+            generation_params=generation_params,
             reasoning=(
                 active_thinking_level
                 if active_model.reasoning and active_thinking_level != "off"
@@ -756,17 +695,8 @@ def _model_summarizer(
     return summarize
 
 
-def _summarizer_max_tokens(model: Model) -> int:
-    if model.max_tokens and model.max_tokens > 0:
-        return min(model.max_tokens, 12_000)
-    return 2048
-
-
-def _last_assistant_message(messages) -> AssistantMessage | None:
-    for message in reversed(messages):
-        if isinstance(message, AssistantMessage):
-            return message
-    return None
+def _model_route(model: Model) -> str:
+    return f"{model.provider}/{model.id}"
 
 
 def _assistant_text_after(messages, start_index: int) -> str | None:
@@ -777,71 +707,63 @@ def _assistant_text_after(messages, start_index: int) -> str | None:
     return text or None
 
 
+def _assistant_log_text(messages) -> str | None:
+    message = _last_assistant_message(list(messages))
+    if message is None:
+        return None
+    text = "".join(block.text for block in message.content if isinstance(block, TextContent)).strip()
+    parts = [text] if text else []
+    if message.stop_reason == "error":
+        parts.append(f"Error: {message.error_message or 'Unknown error'}")
+    elif message.stop_reason == "aborted":
+        parts.append(message.error_message or "Operation aborted")
+    return "\n\n".join(parts) or None
+
+
 def _assistant_prompt_tokens(message: AssistantMessage) -> int:
     return message.usage.total_tokens or (
         message.usage.input + message.usage.output + message.usage.cache_read + message.usage.cache_write
     )
 
 
-_PROMPT_GUARDRAIL_ERROR_PATTERNS = (
-    "prompt-injection guardrail",
-    "prompt injection patterns detected",
-    "system_prefix_spoofing",
-)
+def _safe_eval_tool_metadata(tool_name: str, args: object) -> dict[str, str]:
+    """Return allowlisted semantic tags without recording tool arguments."""
 
-
-def _is_prompt_injection_guardrail_error(error_message: str) -> bool:
-    lowered = (error_message or "").lower()
-    return any(pattern in lowered for pattern in _PROMPT_GUARDRAIL_ERROR_PATTERNS)
-
-
-def _elide_failed_turn_tool_results(messages) -> list:
-    last_user_index = -1
-    for index, message in enumerate(messages):
-        if getattr(message, "role", None) == "user":
-            last_user_index = index
-    if last_user_index < 0:
-        return list(messages)
-
-    elided = list(messages)
-    for index in range(last_user_index + 1, len(elided)):
-        message = elided[index]
-        if not isinstance(message, ToolResultMessage):
-            continue
-        text = "".join(block.text for block in message.content if isinstance(block, TextContent))
-        clone = copy.copy(message)
-        clone.content = [TextContent(text=_tool_result_guardrail_placeholder(message, text))]
-        elided[index] = clone
-    return elided
-
-
-def _tool_result_guardrail_placeholder(message: ToolResultMessage, text: str) -> str:
-    line_count = text.count("\n") + 1 if text else 0
-    return (
-        f"[{message.tool_name}] result elided after provider prompt-injection guardrail "
-        f"({len(text)} chars, {line_count} lines). Use narrower reads or summarize code scans before retrying."
-    )
+    if not isinstance(args, Mapping):
+        return {}
+    if tool_name == "process":
+        action = args.get("action")
+        if isinstance(action, str) and action in {
+            "start", "poll", "write", "interrupt", "terminate", "kill", "list", "tail",
+        }:
+            return {"action": action}
+        return {}
+    if tool_name == "bash":
+        command = args.get("command")
+        if not isinstance(command, str):
+            return {}
+        lowered = command.lower()
+        if any(marker in lowered for marker in ("rg ", "grep ", "find ", "fd ")):
+            return {"operation": "search"}
+        if any(marker in lowered for marker in ("pytest", "node --test", "npm test")):
+            return {"operation": "test"}
+        if any(marker in lowered for marker in ("python -m build", "npm pack")):
+            return {"operation": "package_build"}
+    return {}
 
 
 def _resolve_compaction_window(
     model: Model,
-    session: AgentSession,
+    _session: AgentSession,
     *,
     explicit_context_length: int | None,
 ) -> tuple[int, float]:
-    if explicit_context_length is not None:
-        return explicit_context_length, 0.5
-
-    context_length = int(model.context_window or 0) or DEFAULT_CONTEXT_LENGTH
-    if context_length <= DEFAULT_CONTEXT_LENGTH:
-        return context_length, 0.5
-
-    static_tokens = _estimate_static_prompt_tool_tokens(session)
-    reserve_tokens = DEFAULT_COMPACTION_RESERVE_TOKENS + static_tokens + TRAVIS_STATIC_PROMPT_BREATHING_ROOM
-    threshold_tokens = context_length - reserve_tokens
-    if threshold_tokens <= 0:
-        threshold_tokens = max(1, context_length // 2)
-    return context_length, threshold_tokens / context_length
+    context_length = (
+        explicit_context_length
+        if explicit_context_length is not None
+        else int(model.context_window or 0) or DEFAULT_CONTEXT_LENGTH
+    )
+    return context_length, 0.5
 
 
 def _estimate_static_prompt_tool_tokens(session: AgentSession) -> int:

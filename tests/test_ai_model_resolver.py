@@ -44,12 +44,12 @@ class Registry:
     def get_all(self) -> list[Model]:
         return self._models
 
-    getAll = get_all
+    get_all = get_all
 
     def get_available(self) -> list[Model]:
         return self._available
 
-    getAvailable = get_available
+    get_available = get_available
 
     def find(self, provider: str, model_id: str) -> Model | None:
         return next((model for model in self._models if model.provider == provider and model.id == model_id), None)
@@ -59,7 +59,7 @@ class Registry:
             return True
         return (model.provider, model.id) in self._authenticated
 
-    hasConfiguredAuth = has_configured_auth
+    has_configured_auth = has_configured_auth
 
 
 def test_find_exact_model_reference_match_handles_canonical_and_ambiguous_bare_ids() -> None:

@@ -74,7 +74,6 @@ def export_from_file(input_path: str, options: str | dict[str, Any] | None = Non
     return str(target_path)
 
 
-exportFromFile = export_from_file
 
 
 def _normalize_export_options(options: str | dict[str, Any] | None) -> dict[str, Any]:

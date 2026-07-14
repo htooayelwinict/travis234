@@ -8,6 +8,7 @@ import inspect
 from dataclasses import dataclass
 from typing import Any
 
+from travis.agent.async_utils import resolve, run_sync
 from travis.coding_agent.source_info import SourceInfo, create_synthetic_source_info
 from travis.coding_agent.tools.types import ToolDefinition, wrap_tool_definition
 
@@ -30,9 +31,6 @@ class RegisteredTool:
     definition: ToolDefinition
     source_info: SourceInfo
 
-    @property
-    def sourceInfo(self) -> SourceInfo:
-        return self.source_info
 
 
 @dataclass(frozen=True)
@@ -43,13 +41,7 @@ class RegisteredCommand:
     source_info: SourceInfo
     get_argument_completions: Callable[[str], object] | None = None
 
-    @property
-    def sourceInfo(self) -> SourceInfo:
-        return self.source_info
 
-    @property
-    def getArgumentCompletions(self) -> Callable[[str], object] | None:
-        return self.get_argument_completions
 
 
 @dataclass(frozen=True)
@@ -60,9 +52,6 @@ class ExtensionFlag:
     default: bool | str | None = None
     extension_path: str = "<python-extension>"
 
-    @property
-    def extensionPath(self) -> str:
-        return self.extension_path
 
 
 @dataclass(frozen=True)
@@ -72,9 +61,6 @@ class ExtensionShortcut:
     description: str | None = None
     extension_path: str = "<python-extension>"
 
-    @property
-    def extensionPath(self) -> str:
-        return self.extension_path
 
 
 _STALE_CONTEXT_MESSAGE = (
@@ -87,19 +73,35 @@ def define_tool(tool: ToolDefinition) -> ToolDefinition:
     return tool
 
 
-defineTool = define_tool
 
 
 def wrap_registered_tool(registered_tool: RegisteredTool, runner: "ExtensionRunner"):
-    return wrap_tool_definition(registered_tool.definition, lambda: runner.create_context())
+    tool = wrap_tool_definition(registered_tool.definition, lambda: runner.create_context())
+    execute = tool.execute
+
+    async def _execute(tool_call_id, args, signal=None, on_update=None):
+        active_before = runner.get_active_tools()
+        result = execute(tool_call_id, args, signal, on_update)
+        if inspect.isawaitable(result):
+            result = await result
+        active_after = runner.get_active_tools()
+        if not all(name in active_after for name in active_before):
+            return result
+        before_names = set(active_before)
+        added_names = [name for name in active_after if name not in before_names]
+        if not added_names:
+            return result
+        result.added_tool_names = list(dict.fromkeys([*(result.added_tool_names or []), *added_names]))
+        return result
+
+    tool.execute = _execute
+    return tool
 
 
 def wrap_registered_tools(registered_tools: list[RegisteredTool], runner: "ExtensionRunner") -> list:
     return [wrap_registered_tool(registered_tool, runner) for registered_tool in registered_tools]
 
 
-wrapRegisteredTool = wrap_registered_tool
-wrapRegisteredTools = wrap_registered_tools
 
 
 def _tool_name(event: object) -> object:
@@ -140,14 +142,6 @@ def is_tool_call_event_type(tool_name: str, event: object) -> bool:
     return _tool_name(event) == tool_name
 
 
-isBashToolResult = is_bash_tool_result
-isReadToolResult = is_read_tool_result
-isEditToolResult = is_edit_tool_result
-isWriteToolResult = is_write_tool_result
-isGrepToolResult = is_grep_tool_result
-isFindToolResult = is_find_tool_result
-isLsToolResult = is_ls_tool_result
-isToolCallEventType = is_tool_call_event_type
 
 
 class ExtensionContextView:
@@ -177,10 +171,6 @@ class ExtensionContextView:
         return self._runner.has_ui()
 
     @property
-    def hasUI(self) -> bool:
-        return self.has_ui
-
-    @property
     def cwd(self) -> str:
         self._assert_active()
         return self._runner._cwd
@@ -190,18 +180,12 @@ class ExtensionContextView:
         self._assert_active()
         return self._runner._session_manager
 
-    @property
-    def sessionManager(self) -> object | None:
-        return self.session_manager
 
     @property
     def model_registry(self) -> object | None:
         self._assert_active()
         return self._runner._model_registry
 
-    @property
-    def modelRegistry(self) -> object | None:
-        return self.model_registry
 
     @property
     def model(self) -> object | None:
@@ -217,13 +201,11 @@ class ExtensionContextView:
         self._assert_active()
         return bool(self._runner._is_idle())
 
-    isIdle = is_idle
 
     def is_project_trusted(self) -> bool:
         self._assert_active()
         return bool(self._runner._is_project_trusted())
 
-    isProjectTrusted = is_project_trusted
 
     def abort(self) -> object:
         self._assert_active()
@@ -233,7 +215,6 @@ class ExtensionContextView:
         self._assert_active()
         return bool(self._runner._has_pending_messages())
 
-    hasPendingMessages = has_pending_messages
 
     def shutdown(self) -> object:
         self._assert_active()
@@ -243,7 +224,6 @@ class ExtensionContextView:
         self._assert_active()
         return self._runner._get_context_usage()
 
-    getContextUsage = get_context_usage
 
     def compact(self, options: object | None = None) -> object:
         self._assert_active()
@@ -253,31 +233,26 @@ class ExtensionContextView:
         self._assert_active()
         return str(self._runner._get_system_prompt())
 
-    getSystemPrompt = get_system_prompt
 
     def spawn_subagent(self, role: str, goal: str, options: object | None = None) -> object:
         self._assert_active()
         return self._runner._spawn_subagent(role, goal, options)
 
-    spawnSubagent = spawn_subagent
 
     def list_subagents(self) -> object:
         self._assert_active()
         return self._runner._list_subagents()
 
-    listSubagents = list_subagents
 
     def get_subagent_result(self, task_id: str) -> object | None:
         self._assert_active()
         return self._runner._get_subagent_result(task_id)
 
-    getSubagentResult = get_subagent_result
 
     def cancel_subagent(self, task_id: str, reason: str | None = None) -> object:
         self._assert_active()
         return self._runner._cancel_subagent(task_id, reason)
 
-    cancelSubagent = cancel_subagent
 
 
 class ExtensionCommandContextView(ExtensionContextView):
@@ -287,19 +262,16 @@ class ExtensionCommandContextView(ExtensionContextView):
         self._assert_active()
         return self._runner._get_system_prompt_options()
 
-    getSystemPromptOptions = get_system_prompt_options
 
     def wait_for_idle(self) -> object:
         self._assert_active()
         return self._runner._wait_for_idle()
 
-    waitForIdle = wait_for_idle
 
     def new_session(self, options: object | None = None) -> object:
         self._assert_active()
         return self._runner._new_session(options)
 
-    newSession = new_session
 
     def fork(self, entry_id: str, options: object | None = None) -> object:
         self._assert_active()
@@ -309,13 +281,11 @@ class ExtensionCommandContextView(ExtensionContextView):
         self._assert_active()
         return self._runner._navigate_tree(target_id, options)
 
-    navigateTree = navigate_tree
 
     def switch_session(self, session_path: str, options: object | None = None) -> object:
         self._assert_active()
         return self._runner._switch_session(session_path, options)
 
-    switchSession = switch_session
 
     def reload(self) -> object:
         self._assert_active()
@@ -340,6 +310,7 @@ class ExtensionRunner:
         self._handlers: dict[str, list[ExtensionHandler]] = {}
         self._error_listeners: list[ExtensionErrorListener] = []
         self._pending_provider_registrations: list[tuple[str, dict[str, Any], str]] = []
+        self._loading_extension_path: str | None = None
         self._register_provider: Callable[[str, dict[str, Any]], None] | None = None
         self._unregister_provider: Callable[[str], None] | None = None
         self._ui_context: object | None = None
@@ -372,6 +343,11 @@ class ExtensionRunner:
         self._set_active_tools: Callable[[list[str]], object] = lambda tool_names: None
         self._refresh_tools: Callable[[], object] = lambda: None
         self._get_commands: Callable[[], object] = lambda: []
+        self._exec: Callable[[str, list[str], dict[str, object] | None], dict[str, object]] = (
+            lambda command, args, options=None: (_ for _ in ()).throw(
+                RuntimeError("extension execution is unavailable before the session is bound")
+            )
+        )
         self._set_model: Callable[[object], object] = lambda model: False
         self._get_thinking_level: Callable[[], object] = lambda: "off"
         self._set_thinking_level: Callable[[object], object] = lambda level: None
@@ -403,17 +379,14 @@ class ExtensionRunner:
         self._ui_context = ui_context
         self._mode = mode
 
-    setUIContext = set_ui_context
 
     def get_ui_context(self) -> object | None:
         return self._ui_context
 
-    getUIContext = get_ui_context
 
     def has_ui(self) -> bool:
         return self._ui_context is not None
 
-    hasUI = has_ui
 
     def bind_command_context(self, actions: object | None = None) -> None:
         if actions is None:
@@ -438,17 +411,14 @@ class ExtensionRunner:
         )
         self._reload = _callable_action(actions, "reload") or (lambda: None)
 
-    bindCommandContext = bind_command_context
 
     def wait_for_idle(self) -> object:
         return self._wait_for_idle()
 
-    waitForIdle = wait_for_idle
 
     def new_session(self, options: object | None = None) -> object:
         return self._new_session(options)
 
-    newSession = new_session
 
     def fork(self, entry_id: str, options: object | None = None) -> object:
         return self._fork(entry_id, options)
@@ -456,12 +426,10 @@ class ExtensionRunner:
     def navigate_tree(self, target_id: str, options: object | None = None) -> object:
         return self._navigate_tree(target_id, options)
 
-    navigateTree = navigate_tree
 
     def switch_session(self, session_path: str, options: object | None = None) -> object:
         return self._switch_session(session_path, options)
 
-    switchSession = switch_session
 
     def reload(self) -> object:
         return self._reload()
@@ -469,7 +437,6 @@ class ExtensionRunner:
     def set_abort_handler(self, handler: Callable[[], object] | None = None) -> None:
         self._abort_handler = handler or (lambda: None)
 
-    setAbortHandler = set_abort_handler
 
     def abort(self) -> object:
         return self._abort_handler()
@@ -477,7 +444,6 @@ class ExtensionRunner:
     def set_shutdown_handler(self, handler: Callable[[], object] | None = None) -> None:
         self._shutdown_handler = handler or (lambda: None)
 
-    setShutdownHandler = set_shutdown_handler
 
     def shutdown(self) -> object:
         return self._shutdown_handler()
@@ -510,6 +476,7 @@ class ExtensionRunner:
         )
         self._refresh_tools = _callable_action(actions, "refreshTools", "refresh_tools") or (lambda: None)
         self._get_commands = _callable_action(actions, "getCommands", "get_commands") or (lambda: [])
+        self._exec = _callable_action(actions, "exec") or self._exec
         self._set_model = _callable_action(actions, "setModel", "set_model") or (lambda model: False)
         self._get_thinking_level = _callable_action(
             actions,
@@ -583,107 +550,95 @@ class ExtensionRunner:
                 unregister_provider or (lambda name: None),
             )
 
-    bindCore = bind_core
 
     def send_message(self, message: dict[str, Any], options: object | None = None) -> object:
         return self._send_message(message, options)
 
-    sendMessage = send_message
 
     def send_user_message(self, content: object, options: object | None = None) -> object:
         return self._send_user_message(content, options)
 
-    sendUserMessage = send_user_message
 
     def append_entry(self, custom_type: str, data: object | None = None) -> object:
         return self._append_entry(custom_type, data)
 
-    appendEntry = append_entry
 
     def set_session_name(self, name: str | None) -> object:
         return self._set_session_name(name)
 
-    setSessionName = set_session_name
 
     def get_session_name(self) -> str | None:
         return self._get_session_name()
 
-    getSessionName = get_session_name
 
     def set_label(self, entry_id: str, label: str | None) -> object:
         return self._set_label(entry_id, label)
 
-    setLabel = set_label
 
     def get_active_tools(self) -> list[str]:
         return list(self._get_active_tools())
 
-    getActiveTools = get_active_tools
 
     def get_all_tools(self) -> object:
         return self._get_all_tools()
 
-    getAllTools = get_all_tools
 
     def set_active_tools(self, tool_names: list[str]) -> object:
         return self._set_active_tools(list(tool_names))
 
-    setActiveTools = set_active_tools
 
     def refresh_tools(self) -> object:
         return self._refresh_tools()
 
-    refreshTools = refresh_tools
 
     def get_commands(self) -> object:
         return self._get_commands()
 
-    getCommands = get_commands
+
+    def exec(
+        self,
+        command: str,
+        args: list[str],
+        options: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        return self._exec(command, list(args), dict(options) if options is not None else None)
+
 
     def set_model(self, model: object) -> object:
         return self._set_model(model)
 
-    setModel = set_model
 
     def get_thinking_level(self) -> object:
         return self._get_thinking_level()
 
-    getThinkingLevel = get_thinking_level
 
     def set_thinking_level(self, level: object) -> object:
         return self._set_thinking_level(level)
 
-    setThinkingLevel = set_thinking_level
 
     def spawn_subagent(self, role: str, goal: str, options: object | None = None) -> object:
         return self._spawn_subagent(role, goal, options)
 
-    spawnSubagent = spawn_subagent
 
     def list_subagents(self) -> object:
         return self._list_subagents()
 
-    listSubagents = list_subagents
 
     def get_subagent_result(self, task_id: str) -> object | None:
         return self._get_subagent_result(task_id)
 
-    getSubagentResult = get_subagent_result
 
     def cancel_subagent(self, task_id: str, reason: str | None = None) -> object:
         return self._cancel_subagent(task_id, reason)
 
-    cancelSubagent = cancel_subagent
 
     def create_context(self) -> ExtensionContextView:
         return ExtensionContextView(self, self._context_generation)
 
-    createContext = create_context
 
     def create_command_context(self) -> ExtensionCommandContextView:
         return ExtensionCommandContextView(self, self._context_generation)
 
-    createCommandContext = create_command_context
 
     def invalidate(self, message: str | None = None) -> None:
         self._stale_context_message = message or _STALE_CONTEXT_MESSAGE
@@ -701,28 +656,24 @@ class ExtensionRunner:
         for name, config, _extension_path in pending:
             self.register_provider(name, config)
 
-    bindProviderActions = bind_provider_actions
 
     def register_provider(self, name: str, config: dict[str, Any], extension_path: str = "<python-extension>") -> None:
+        if extension_path == "<python-extension>" and self._loading_extension_path is not None:
+            extension_path = self._loading_extension_path
         if self._register_provider is None:
             self._pending_provider_registrations.append((name, dict(config), extension_path))
             return
         self._register_provider(name, dict(config))
 
-    registerProvider = register_provider
 
     @property
     def pending_provider_registrations(self) -> list[tuple[str, dict[str, Any], str]]:
         return [(name, dict(config), extension_path) for name, config, extension_path in self._pending_provider_registrations]
 
-    @property
-    def pendingProviderRegistrations(self) -> list[tuple[str, dict[str, Any], str]]:
-        return self.pending_provider_registrations
 
     def clear_pending_provider_registrations(self) -> None:
         self._pending_provider_registrations.clear()
 
-    clearPendingProviderRegistrations = clear_pending_provider_registrations
 
     def unregister_provider(self, name: str) -> None:
         if self._unregister_provider is None:
@@ -734,7 +685,6 @@ class ExtensionRunner:
             return
         self._unregister_provider(name)
 
-    unregisterProvider = unregister_provider
 
     def on(self, event_type: str, handler: ExtensionHandler) -> Callable[[], None]:
         handlers = self._handlers.setdefault(event_type, [])
@@ -764,20 +714,20 @@ class ExtensionRunner:
 
         return unsubscribe
 
-    onError = on_error
 
     def emit_error(self, error: dict[str, object]) -> None:
         for listener in list(self._error_listeners):
             listener(error)
 
-    emitError = emit_error
 
     def has_handlers(self, event_type: str) -> bool:
         return bool(self._handlers.get(event_type))
 
-    hasHandlers = has_handlers
 
     def emit(self, event: ExtensionEvent) -> object:
+        return run_sync(self.async_emit(event))
+
+    async def async_emit(self, event: ExtensionEvent) -> object:
         event_type = event.get("type")
         if not isinstance(event_type, str) or not event_type:
             raise ValueError("Extension event must include a string 'type'")
@@ -786,7 +736,7 @@ class ExtensionRunner:
         result: object = None
         for handler in list(self._handlers.get(event_type, [])):
             try:
-                handler_result = _call_extension_handler(handler, event, context)
+                handler_result = await _call_extension_handler_async(handler, event, context)
             except Exception as error:  # noqa: BLE001 - preserves the established extension error forwarding.
                 self.emit_error(
                     {
@@ -840,7 +790,6 @@ class ExtensionRunner:
                 )
         return discovered
 
-    emitResourcesDiscover = emit_resources_discover
 
     def emit_user_bash(self, event: ExtensionEvent) -> object:
         context = self.create_context()
@@ -860,7 +809,6 @@ class ExtensionRunner:
                 return result
         return None
 
-    emitUserBash = emit_user_bash
 
     def emit_input(
         self,
@@ -903,15 +851,21 @@ class ExtensionRunner:
                     current_images = result.get("images")
         return {"action": "transform", "text": current_text, "images": current_images}
 
-    emitInput = emit_input
 
     def emit_message_end(self, event: ExtensionEvent) -> object:
+        return run_sync(self.async_emit_message_end(event))
+
+    async def async_emit_message_end(self, event: ExtensionEvent) -> object:
         current_message = event.get("message")
         modified = False
         context = self.create_context()
         for handler in list(self._handlers.get("message_end", [])):
             try:
-                result = _call_extension_handler(handler, {**event, "message": current_message}, context)
+                result = await _call_extension_handler_async(
+                    handler,
+                    {**event, "message": current_message},
+                    context,
+                )
             except Exception as error:  # noqa: BLE001 - preserves the established extension error forwarding.
                 self.emit_error(
                     {
@@ -937,15 +891,17 @@ class ExtensionRunner:
             modified = True
         return current_message if modified else None
 
-    emitMessageEnd = emit_message_end
 
     def emit_tool_result(self, event: ExtensionEvent) -> dict[str, object] | None:
+        return run_sync(self.async_emit_tool_result(event))
+
+    async def async_emit_tool_result(self, event: ExtensionEvent) -> dict[str, object] | None:
         current_event = dict(event)
         modified = False
         context = self.create_context()
         for handler in list(self._handlers.get("tool_result", [])):
             try:
-                result = _call_extension_handler(handler, dict(current_event), context)
+                result = await _call_extension_handler_async(handler, dict(current_event), context)
             except Exception as error:  # noqa: BLE001 - preserves the established extension error forwarding.
                 self.emit_error(
                     {
@@ -969,23 +925,15 @@ class ExtensionRunner:
             "isError": current_event.get("isError"),
         }
 
-    emitToolResult = emit_tool_result
 
     def emit_tool_call(self, event: ExtensionEvent) -> dict[str, object] | None:
+        return run_sync(self.async_emit_tool_call(event))
+
+    async def async_emit_tool_call(self, event: ExtensionEvent) -> dict[str, object] | None:
         result: dict[str, object] | None = None
         context = self.create_context()
         for handler in list(self._handlers.get("tool_call", [])):
-            try:
-                handler_result = _call_extension_handler(handler, event, context)
-            except Exception as error:  # noqa: BLE001 - preserves the established extension error forwarding.
-                self.emit_error(
-                    {
-                        "extensionPath": "<python-extension>",
-                        "event": "tool_call",
-                        "error": str(error),
-                    }
-                )
-                continue
+            handler_result = await _call_extension_handler_async(handler, event, context)
             if not isinstance(handler_result, dict):
                 continue
             result = handler_result
@@ -993,7 +941,31 @@ class ExtensionRunner:
                 return handler_result
         return result
 
-    emitToolCall = emit_tool_call
+
+    def emit_before_provider_headers(self, headers: dict[str, object]) -> dict[str, object]:
+        return run_sync(self.async_emit_before_provider_headers(headers))
+
+    async def async_emit_before_provider_headers(self, headers: dict[str, object]) -> dict[str, object]:
+        context = self.create_context()
+        for handler in list(self._handlers.get("before_provider_headers", [])):
+            try:
+                # The shared object is the contract. Handler return values do
+                # not replace it; assigning None requests header deletion.
+                await _call_extension_handler_async(
+                    handler,
+                    {"type": "before_provider_headers", "headers": headers},
+                    context,
+                )
+            except Exception as error:  # noqa: BLE001 - header observers are fail-open.
+                self.emit_error(
+                    {
+                        "extensionPath": "<python-extension>",
+                        "event": "before_provider_headers",
+                        "error": str(error),
+                    }
+                )
+        return headers
+
 
     def emit_before_agent_start(
         self,
@@ -1044,14 +1016,16 @@ class ExtensionRunner:
             output["systemPrompt"] = current_system_prompt
         return output
 
-    emitBeforeAgentStart = emit_before_agent_start
 
     def emit_context(self, messages: list[object]) -> list[object]:
+        return run_sync(self.async_emit_context(messages))
+
+    async def async_emit_context(self, messages: list[object]) -> list[object]:
         current_messages = copy.deepcopy(list(messages))
         context = self.create_context()
         for handler in list(self._handlers.get("context", [])):
             try:
-                result = _call_extension_handler(
+                result = await _call_extension_handler_async(
                     handler,
                     {"type": "context", "messages": current_messages},
                     context,
@@ -1069,14 +1043,16 @@ class ExtensionRunner:
                 current_messages = result["messages"]
         return current_messages
 
-    emitContext = emit_context
 
     def emit_before_provider_request(self, payload: object) -> object:
+        return run_sync(self.async_emit_before_provider_request(payload))
+
+    async def async_emit_before_provider_request(self, payload: object) -> object:
         current_payload = payload
         context = self.create_context()
         for handler in list(self._handlers.get("before_provider_request", [])):
             try:
-                result = _call_extension_handler(
+                result = await _call_extension_handler_async(
                     handler,
                     {"type": "before_provider_request", "payload": current_payload},
                     context,
@@ -1094,32 +1070,28 @@ class ExtensionRunner:
                 current_payload = result
         return current_payload
 
-    emitBeforeProviderRequest = emit_before_provider_request
 
     def register_tool(self, definition: ToolDefinition, source_info: SourceInfo | None = None) -> None:
+        extension_path = self._loading_extension_path or f"<extension:{definition.name}>"
         self._registered_tools[definition.name] = RegisteredTool(
             definition=definition,
             source_info=source_info
             or definition.source_info
-            or create_synthetic_source_info(f"<extension:{definition.name}>", source="extension"),
+            or create_synthetic_source_info(extension_path, source="extension"),
         )
 
-    registerTool = register_tool
 
     def unregister_tool(self, name: str) -> None:
         self._registered_tools.pop(name, None)
 
-    unregisterTool = unregister_tool
 
     def clear_tools(self) -> None:
         self._registered_tools.clear()
 
-    clearTools = clear_tools
 
     def get_all_registered_tools(self) -> list[RegisteredTool]:
         return list(self._registered_tools.values())
 
-    getAllRegisteredTools = get_all_registered_tools
 
     def register_command(self, name: str, options: dict[str, object]) -> None:
         handler = options.get("handler")
@@ -1129,7 +1101,10 @@ class ExtensionRunner:
             name=name,
             description=str(options["description"]) if options.get("description") is not None else None,
             handler=handler,
-            source_info=create_synthetic_source_info(f"<extension-command:{name}>", source="extension"),
+            source_info=create_synthetic_source_info(
+                self._loading_extension_path or f"<extension-command:{name}>",
+                source="extension",
+            ),
             get_argument_completions=options.get("getArgumentCompletions")
             if callable(options.get("getArgumentCompletions"))
             else options.get("get_argument_completions")
@@ -1137,22 +1112,18 @@ class ExtensionRunner:
             else None,
         )
 
-    registerCommand = register_command
 
     def unregister_command(self, name: str) -> None:
         self._registered_commands.pop(name, None)
 
-    unregisterCommand = unregister_command
 
     def get_registered_command(self, name: str) -> RegisteredCommand | None:
         return self._registered_commands.get(name)
 
-    getRegisteredCommand = get_registered_command
 
     def get_all_registered_commands(self) -> list[RegisteredCommand]:
         return list(self._registered_commands.values())
 
-    getAllRegisteredCommands = get_all_registered_commands
 
     def register_flag(self, name: str, options: dict[str, object]) -> None:
         if name in self._registered_flags:
@@ -1163,49 +1134,42 @@ class ExtensionRunner:
             type=flag_type,
             description=str(options["description"]) if options.get("description") is not None else None,
             default=options.get("default") if isinstance(options.get("default"), (bool, str)) else None,
+            extension_path=self._loading_extension_path or "<python-extension>",
         )
         self._registered_flags[name] = flag
         if flag.default is not None and name not in self._flag_values:
             self._flag_values[name] = flag.default
 
-    registerFlag = register_flag
 
     def get_flags(self) -> dict[str, ExtensionFlag]:
         return dict(self._registered_flags)
 
-    getFlags = get_flags
 
     def set_flag_value(self, name: str, value: bool | str) -> None:
         self._flag_values[name] = value
 
-    setFlagValue = set_flag_value
 
     def get_flag_values(self) -> dict[str, bool | str]:
         return dict(self._flag_values)
 
-    getFlagValues = get_flag_values
 
     def get_flag(self, name: str) -> bool | str | None:
         if name not in self._registered_flags:
             return None
         return self._flag_values.get(name)
 
-    getFlag = get_flag
 
     def register_message_renderer(self, custom_type: str, renderer: Callable[..., object]) -> None:
         self._message_renderers[custom_type] = renderer
 
-    registerMessageRenderer = register_message_renderer
 
     def get_message_renderer(self, custom_type: str) -> Callable[..., object] | None:
         return self._message_renderers.get(custom_type)
 
-    getMessageRenderer = get_message_renderer
 
     def get_message_renderers(self) -> dict[str, Callable[..., object]]:
         return dict(self._message_renderers)
 
-    getMessageRenderers = get_message_renderers
 
     def register_shortcut(self, shortcut: str, options: dict[str, object]) -> None:
         handler = options.get("handler")
@@ -1216,15 +1180,14 @@ class ExtensionRunner:
             key=normalized,
             handler=handler,
             description=str(options["description"]) if options.get("description") is not None else None,
+            extension_path=self._loading_extension_path or "<python-extension>",
         )
 
-    registerShortcut = register_shortcut
 
     def get_shortcuts(self, resolved_keybindings: dict[str, object] | None = None) -> dict[str, ExtensionShortcut]:
         _ = resolved_keybindings
         return dict(self._shortcuts)
 
-    getShortcuts = get_shortcuts
 
 
 def _is_cancelled(result: object) -> bool:
@@ -1246,9 +1209,21 @@ def _callable_action(actions: object, *names: str) -> Callable[..., object] | No
 
 
 def _call_extension_handler(handler: ExtensionHandler, event: ExtensionEvent, context: ExtensionContextView) -> object:
+    return run_sync(_call_extension_handler_async(handler, event, context))
+
+
+async def _call_extension_handler_async(
+    handler: ExtensionHandler,
+    event: ExtensionEvent,
+    context: ExtensionContextView,
+) -> object:
     if _handler_accepts_context(handler):
-        return handler(event, context)
-    return handler(event)
+        result = handler(event, context)
+    else:
+        result = handler(event)
+    if inspect.isawaitable(result):
+        return await resolve(result)
+    return result
 
 
 def _handler_accepts_context(handler: Callable[..., object]) -> bool:
@@ -1270,6 +1245,3 @@ def emit_session_shutdown_event(extension_runner: ExtensionRunner, event: Extens
         extension_runner.emit(event)
         return True
     return False
-
-
-emitSessionShutdownEvent = emit_session_shutdown_event

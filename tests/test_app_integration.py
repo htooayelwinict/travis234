@@ -23,12 +23,14 @@ from travis.ai.types import (
     now_ms,
 )
 from travis.ai.providers.faux import create_faux_provider, faux_model, text_response_events, tool_call_response_events
-from travis.ai.stream import ApiProvider, register_api_provider, reset_api_providers
+from tests._provider_runtime import ApiProvider, register_api_provider, reset_api_providers
 from travis.coding_agent import SettingsManager
-from travis.coding_agent.provider_control_plane import ProviderControlPlane
+from travis.coding_agent.auth_storage import AuthStorage
+from travis.coding_agent.model_registry import ModelRegistry
 from travis.coding_agent.processes.types import ProcessClosedError, ProcessNotFoundError, ProcessState
 from travis.coding_agent.session_catalog import SessionCatalog
 from travis.coding_agent.session_store import SessionStore
+from travis.compaction import SUMMARY_END_MARKER, SUMMARY_PREFIX
 from travis.tui.terminal import FakeTerminal
 
 
@@ -213,9 +215,9 @@ def _seed_restorable_app_session(
 def test_coding_app_initial_session_restores_registered_model_thinking_and_messages(tmp_path: Path) -> None:
     initial_model = faux_model()
     saved_model = replace(initial_model, id="saved-model", name="Saved Model")
-    control_plane = ProviderControlPlane.in_memory()
-    control_plane.ensure_model(initial_model)
-    control_plane.ensure_model(saved_model)
+    model_registry = ModelRegistry.in_memory(AuthStorage.in_memory())
+    model_registry.ensure_model(initial_model)
+    model_registry.ensure_model(saved_model)
     session_path = tmp_path / "saved.jsonl"
     _seed_restorable_app_session(session_path, tmp_path, saved_model)
 
@@ -224,13 +226,13 @@ def test_coding_app_initial_session_restores_registered_model_thinking_and_messa
         model=initial_model,
         enable_tui=False,
         session_path=str(session_path),
-        provider_control_plane=control_plane,
+        model_registry=model_registry,
     )
 
     assert app.session.model is saved_model
     assert app.session.thinking_level == "medium"
     assert [message.content for message in app.messages if isinstance(message, UserMessage)] == ["persisted marker"]
-    assert app.session.provider_control_plane is control_plane
+    assert app.session.model_registry is model_registry
 
 
 def test_coding_app_switch_session_rebinds_session_local_state_transactionally(tmp_path: Path) -> None:
@@ -239,9 +241,9 @@ def test_coding_app_switch_session_rebinds_session_local_state_transactionally(t
     first_cwd.mkdir()
     initial_model = faux_model()
     saved_model = replace(initial_model, id="saved-model", name="Saved Model")
-    control_plane = ProviderControlPlane.in_memory()
-    control_plane.ensure_model(initial_model)
-    control_plane.ensure_model(saved_model)
+    model_registry = ModelRegistry.in_memory(AuthStorage.in_memory())
+    model_registry.ensure_model(initial_model)
+    model_registry.ensure_model(saved_model)
     agent_dir = tmp_path / "agent"
     catalog = SessionCatalog(str(agent_dir))
     initial_path, initial_id = catalog.new_session_path(str(first_cwd), "initial")
@@ -255,7 +257,7 @@ def test_coding_app_switch_session_rebinds_session_local_state_transactionally(t
         session_path=initial_path,
         session_id=initial_id,
         agent_dir=str(agent_dir),
-        provider_control_plane=control_plane,
+        model_registry=model_registry,
     )
     old_session = app.session
     old_compaction = app.compaction
@@ -275,7 +277,7 @@ def test_coding_app_switch_session_rebinds_session_local_state_transactionally(t
     assert app.session.model is saved_model
     assert app.session.thinking_level == "medium"
     assert [message.content for message in app.messages if isinstance(message, UserMessage)] == ["persisted marker"]
-    assert app.session.provider_control_plane is control_plane
+    assert app.session.model_registry is model_registry
     assert app.session._compaction_manager is app.compaction
     assert rebound == [app.session]
 
@@ -353,7 +355,7 @@ def test_coding_app_wires_settings_retry_for_sse_idle_timeout(tmp_path: Path) ->
         return text_response_events(m, "Recovered after retry")
 
     register_api_provider(create_faux_provider(script))
-    settings = SettingsManager.inMemory({"retry": {"enabled": True, "maxRetries": 1, "baseDelayMs": 0}})
+    settings = SettingsManager.in_memory({"retry": {"enabled": True, "maxRetries": 1, "baseDelayMs": 0}})
     app = CodingApp(
         cwd=str(tmp_path),
         model=model,
@@ -421,7 +423,8 @@ def test_coding_app_model_can_spawn_visible_subagent(tmp_path: Path) -> None:
     event_types = [event["type"] if isinstance(event, dict) else event.type for event in events]
     assert "subagent_start" in event_types
     assert "subagent_stop" in event_types
-    assert set(child_tool_names) == {"read", "grep", "find", "ls", "run"}
+    assert set(child_tool_names) == {"read", "grep", "find", "ls"}
+    assert "run" not in child_tool_names
     assert provider_calls["n"] == 3
 
 
@@ -559,49 +562,6 @@ def test_coding_app_tui_renderer_does_not_break_internal_subagent_tool_trace(tmp
     assert provider_calls["n"] == 4
 
 
-def test_coding_app_internal_subagent_tool_trace_records_guardrail_halt(tmp_path: Path) -> None:
-    model = faux_model()
-    provider_calls = {"n": 0}
-
-    def script(m, c):
-        provider_calls["n"] += 1
-        if provider_calls["n"] == 1:
-            return tool_call_response_events(
-                m,
-                "spawn_subagent",
-                {
-                    "role": "reviewer",
-                    "goal": "try reading missing.md and report the blocker",
-                    "wait": True,
-                    "timeoutSeconds": 5,
-                },
-            )
-        if provider_calls["n"] in {2, 3, 4, 5}:
-            return tool_call_response_events(m, "read", {"path": "missing.md"})
-        return text_response_events(m, "parent saw child guardrail")
-
-    register_api_provider(create_faux_provider(script))
-    app = CodingApp(cwd=str(tmp_path), model=model, terminal=FakeTerminal(), enable_tui=False)
-
-    app.run_turn("spawn a reviewer subagent and show its status")
-
-    result = app.session.subagents.list_results()[0]
-    result_dict = result.as_dict()
-    tool_trace = result_dict["toolTrace"]
-    assert tool_trace
-    assert tool_trace[-1]["status"] == "guardrail_halt"
-    assert tool_trace[-1]["guardrailCode"] == "repeated_exact_failure_block"
-    assert result_dict["guardrail"]["code"] == "repeated_exact_failure_block"
-    assert result.status == "failed"
-    assert any("repeated_exact_failure_block" in error for error in result.errors)
-    formatted = app.session._format_subagent_result(result)
-    assert "guardrail: repeated_exact_failure_block" in formatted
-    assert "guardrail: repeated_exact_failure_block" in formatted
-    assert "error: Subagent stopped by tool guardrail" in formatted
-    assert "read guardrail_halt" not in formatted
-    assert "toolTrace:" not in formatted
-
-
 def test_coding_app_wires_compaction_transform(tmp_path: Path) -> None:
     model = faux_model()
     register_api_provider(create_faux_provider(lambda m, c: text_response_events(m, "ok")))
@@ -612,16 +572,57 @@ def test_coding_app_wires_compaction_transform(tmp_path: Path) -> None:
     assert any(getattr(m, "role", None) == "assistant" for m in app.messages)
 
 
-def test_coding_app_default_compaction_threshold_uses_model_context_with_static_prompt_reserve(tmp_path: Path) -> None:
+@pytest.mark.parametrize("context_window", [32_000, 128_000, 256_000, 400_000])
+def test_coding_app_uses_configured_compaction_threshold_for_small_contexts(
+    tmp_path: Path,
+    context_window: int,
+) -> None:
     model = faux_model()
-    model.context_window = 128_000
+    model.context_window = context_window
     model.max_tokens = 8_192
 
     app = CodingApp(cwd=str(tmp_path), model=model, terminal=FakeTerminal())
 
-    assert app.compressor.context_length == 128_000
-    assert app.compressor.threshold_tokens < 128_000 - 16_384
-    assert app.compressor.threshold_tokens > 100_000
+    assert app.compressor.context_length == context_window
+    assert app.compressor.threshold_percent == 0.5
+    effective_window = context_window - model.max_tokens
+    expected = max(1, min(int(effective_window * 0.5), effective_window - 1))
+    assert app.compressor.threshold_tokens == expected
+
+
+def test_coding_app_recalibrates_compaction_window_after_model_switch(tmp_path: Path) -> None:
+    initial_model = faux_model()
+    initial_model.context_window = 1_000_000
+    selected_model = faux_model()
+    selected_model.id = "selected-small-context"
+    selected_model.context_window = 256_000
+
+    app = CodingApp(cwd=str(tmp_path), model=initial_model, terminal=FakeTerminal())
+    app.session.set_model(selected_model)
+
+    assert app.compressor.context_length == 256_000
+    effective_window = selected_model.context_window - (selected_model.max_tokens or 0)
+    assert app.compressor.threshold_tokens == int(effective_window * 0.5)
+
+
+def test_coding_app_keeps_explicit_compaction_window_after_model_switch(tmp_path: Path) -> None:
+    initial_model = faux_model()
+    initial_model.context_window = 1_000_000
+    selected_model = faux_model()
+    selected_model.id = "selected-small-context"
+    selected_model.context_window = 256_000
+
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=initial_model,
+        terminal=FakeTerminal(),
+        context_length=96_000,
+    )
+    app.session.set_model(selected_model)
+
+    assert app.compressor.context_length == 96_000
+    effective_window = 96_000 - (selected_model.max_tokens or 0)
+    assert app.compressor.threshold_tokens == int(effective_window * 0.5)
 
 
 def test_coding_app_forwards_initial_thinking_level_to_session(tmp_path: Path) -> None:
@@ -631,8 +632,23 @@ def test_coding_app_forwards_initial_thinking_level_to_session(tmp_path: Path) -
     assert app.session.thinking_level == "high"
 
 
+def test_coding_app_preserves_explicit_thinking_preference_when_switching_from_plain_model(
+    tmp_path: Path,
+) -> None:
+    plain_model = faux_model()
+    plain_model.reasoning = False
+    reasoning_model = faux_model()
+    reasoning_model.id = "reasoning-model"
+    reasoning_model.reasoning = True
+    app = CodingApp(cwd=str(tmp_path), model=plain_model, terminal=FakeTerminal(), thinking_level="high")
+
+    app.session.set_model(reasoning_model)
+
+    assert app.session.thinking_level == "high"
+
+
 def test_coding_app_forwards_travis234_settings_manager_to_session(tmp_path: Path) -> None:
-    settings = SettingsManager.inMemory({"shellCommandPrefix": "printf app-settings;"})
+    settings = SettingsManager.in_memory({"shellCommandPrefix": "printf app-settings;"})
 
     app = CodingApp(
         cwd=str(tmp_path),
@@ -671,8 +687,8 @@ def test_coding_app_runs_travis_post_response_compaction(tmp_path: Path) -> None
     app.run_turn("continue")
     assert app.compaction.awaiting_real_usage_after_compression is True
     assert any(
-        "[CONTEXT COMPACTION — REFERENCE ONLY]" in str(message.content)
-        and "END OF CONTEXT SUMMARY" in str(message.content)
+        SUMMARY_PREFIX.splitlines()[0] in str(message.content)
+        and SUMMARY_END_MARKER in str(message.content)
         for message in app.messages
     )
 
@@ -753,7 +769,7 @@ def test_coding_app_persists_preflight_compaction_when_provider_errors(tmp_path:
     assert app.compaction.compressor.compression_count == 1
     assert len(app.messages) < len(original_messages)
     assert any(
-        "[CONTEXT COMPACTION — REFERENCE ONLY]" in str(message.content)
+        SUMMARY_PREFIX.splitlines()[0] in str(message.content)
         and "preflight compacted" in str(message.content)
         for message in app.messages
     )
@@ -882,7 +898,7 @@ def test_coding_app_spine_smoke_contract_no_network_with_fallback_compaction(tmp
         for message in app.messages
     )
     context_text = "\n".join(str(message.content) for message in seen_contexts[0].messages)
-    assert "[CONTEXT COMPACTION" in context_text
+    assert SUMMARY_PREFIX.splitlines()[0] in context_text
     assert "Summary generation was unavailable" in context_text
     assert "finish the spine smoke request" in context_text
     assert huge_tool_result not in context_text
@@ -1106,7 +1122,7 @@ def test_coding_app_recovers_output_cap_error_by_lowering_max_tokens_without_com
 
     assert seen_max_tokens == [100]
     assert model.max_tokens == 8192
-    assert app.provider_control_plane.models.find(model.provider, model.id) is model
+    assert app.model_registry.find(model.provider, model.id) is model
     assert app.session.model.max_tokens == 100
     assert app.compaction.compressor.compression_count == 0
     assert all(getattr(message, "stop_reason", None) != "error" for message in app.messages)
@@ -1148,7 +1164,7 @@ def test_coding_app_default_compaction_summarizer_uses_active_model(tmp_path: Pa
     assert any("model-backed summary" in str(message.content) for message in status.messages)
 
 
-def test_coding_app_default_compaction_summarizer_uses_control_plane_auth(tmp_path: Path) -> None:
+def test_coding_app_default_compaction_summarizer_uses_provider_auth(tmp_path: Path) -> None:
     calls: list[tuple[Model, object | None]] = []
 
     def stream(model, context, options=None):
@@ -1159,17 +1175,16 @@ def test_coding_app_default_compaction_summarizer_uses_control_plane_auth(tmp_pa
         return result
 
     provider = ApiProvider(api="capturing", stream=stream, stream_simple=stream)
-    control_plane = ProviderControlPlane.in_memory()
-    control_plane.api_providers.register(provider)
+    model_registry = ModelRegistry.in_memory(AuthStorage.in_memory())
     register_api_provider(provider)
-    control_plane.auth.set_runtime_api_key("runtime-provider", "runtime-test-key")
+    model_registry.auth_storage.set_runtime_api_key("runtime-provider", "runtime-test-key")
     model = Model(id="initial-model", name="Initial", api="capturing", provider="runtime-provider", base_url="")
     app = CodingApp(
         cwd=str(tmp_path),
         model=model,
         terminal=FakeTerminal(),
         context_length=2000,
-        provider_control_plane=control_plane,
+        model_registry=model_registry,
     )
     app.session.agent.state.messages = [
         UserMessage(content=f"old context {index} " * 200, timestamp=now_ms())
@@ -1195,8 +1210,7 @@ def test_coding_app_default_compaction_summarizer_tracks_model_switch(tmp_path: 
         return result
 
     provider = ApiProvider(api="capturing", stream=stream, stream_simple=stream)
-    control_plane = ProviderControlPlane.in_memory()
-    control_plane.api_providers.register(provider)
+    model_registry = ModelRegistry.in_memory(AuthStorage.in_memory())
     register_api_provider(provider)
     initial_model = Model(
         id="initial-model",
@@ -1212,13 +1226,13 @@ def test_coding_app_default_compaction_summarizer_tracks_model_switch(tmp_path: 
         provider="runtime-provider",
         base_url="",
     )
-    control_plane.ensure_model(selected_model)
+    model_registry.ensure_model(selected_model)
     app = CodingApp(
         cwd=str(tmp_path),
         model=initial_model,
         terminal=FakeTerminal(),
         context_length=2000,
-        provider_control_plane=control_plane,
+        model_registry=model_registry,
     )
     app.session.set_model(selected_model)
     app.session.agent.state.messages = [
@@ -1230,6 +1244,67 @@ def test_coding_app_default_compaction_summarizer_tracks_model_switch(tmp_path: 
 
     assert status.warning is None
     assert calls[-1] is selected_model
+
+
+def test_coding_app_routes_compaction_through_configured_auxiliary_model(tmp_path: Path) -> None:
+    calls: list[tuple[Model, object | None]] = []
+
+    def stream(model, context, options=None):
+        del context
+        calls.append((model, options))
+        result = create_assistant_message_event_stream()
+        for event in text_response_events(model, "## Historical Task Snapshot\nauxiliary summary"):
+            result.push(event)
+        return result
+
+    provider = ApiProvider(api="capturing", stream=stream, stream_simple=stream)
+    model_registry = ModelRegistry.in_memory(AuthStorage.in_memory())
+    register_api_provider(provider)
+    main_model = Model(
+        id="coding-model",
+        name="Coding",
+        api="capturing",
+        provider="main-provider",
+        base_url="https://main.invalid/v1",
+    )
+    compression_model = Model(
+        id="summary-model",
+        name="Summary",
+        api="capturing",
+        provider="summary-provider",
+        base_url="https://summary.invalid/v1",
+    )
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=main_model,
+        terminal=FakeTerminal(),
+        context_length=2000,
+        model_registry=model_registry,
+        compression_model=compression_model,
+        compression_api_key="summary-test-key",
+        compression_timeout_seconds=17,
+    )
+    app.session.agent.state.messages = [
+        UserMessage(content=f"old context {index} " * 200, timestamp=now_ms())
+        for index in range(16)
+    ]
+
+    status = app.compaction.compress_manual_with_status(app.messages)
+
+    assert status.compressed is True
+    assert status.warning is None
+    assert calls[-1][0] is compression_model
+    assert getattr(calls[-1][1], "api_key", None) == "summary-test-key"
+    assert getattr(calls[-1][1], "timeout_ms", None) == 17_000
+    assert getattr(calls[-1][1], "max_tokens", None) is None
+    assert getattr(calls[-1][1], "omit_max_tokens", False) is True
+    assert app.compressor.model == "main-provider/coding-model"
+    assert app.compressor.summary_model == "summary-provider/summary-model"
+    assert status.summary_model_requested == "summary-provider/summary-model"
+    assert status.summary_model_used == "summary-provider/summary-model"
+    assert status.summary_model_fallback is False
+    assert status.summary_model_error is None
+    assert any("auxiliary summary" in str(message.content) for message in status.messages)
 
 
 def test_coding_app_wires_compaction_manager_into_session_api(tmp_path: Path) -> None:
@@ -1318,7 +1393,7 @@ def test_coding_app_preflight_compacts_after_large_tool_result_before_next_provi
     assert huge_output not in second_context_text
 
 
-def test_coding_app_compacts_failed_large_turn_before_followup_provider_call(tmp_path: Path) -> None:
+def test_coding_app_compacts_failed_large_turn_without_replaying_raw_poison(tmp_path: Path) -> None:
     huge_output = "read packages/ai/src/index.ts\n" + ("x" * 80_000)
     model = faux_model()
     seen_contexts = []
@@ -1373,161 +1448,7 @@ def test_coding_app_compacts_failed_large_turn_before_followup_provider_call(tmp
 
     assert len(seen_contexts) == 1
     context_text = "\n".join(str(message.content) for message in seen_contexts[0].messages)
+    assert "hi" in context_text
     assert "failed scan compacted" in context_text
-    assert huge_output not in context_text
-
-
-def test_coding_app_compacts_prompt_guardrail_failed_turn_before_followup_provider_call(tmp_path: Path) -> None:
-    blocked_output = (
-        "read src/providers/amazon-bedrock.ts\n"
-        + ("system prefix spoofing source fixture\n" * 400)
-    )
-    model = faux_model()
-    seen_contexts = []
-
-    def script(m, c):
-        seen_contexts.append(c)
-        return text_response_events(m, "ready")
-
-    register_api_provider(create_faux_provider(script))
-    app = CodingApp(
-        cwd=str(tmp_path),
-        model=model,
-        terminal=FakeTerminal(),
-        context_length=128_000,
-        summarizer=lambda prompt: "## Historical Task Snapshot\nguardrail scan compacted",
-    )
-    app.session.agent.state.messages = [
-        UserMessage(content=[TextContent(text="analyze the codebase and read all python files")], timestamp=now_ms()),
-        AssistantMessage(
-            content=[
-                ToolCall(
-                    id="read-1",
-                    name="read",
-                    arguments={"path": "src/providers/amazon-bedrock.ts"},
-                )
-            ],
-            api=model.api,
-            provider=model.provider,
-            model=model.id,
-            usage=empty_usage(),
-            stop_reason="toolUse",
-            timestamp=now_ms(),
-        ),
-        ToolResultMessage(
-            tool_call_id="read-1",
-            tool_name="read",
-            content=[TextContent(text=blocked_output)],
-            is_error=False,
-            timestamp=now_ms(),
-        ),
-        AssistantMessage(
-            content=[TextContent(text="")],
-            api=model.api,
-            provider=model.provider,
-            model=model.id,
-            usage=empty_usage(),
-            stop_reason="error",
-            error_message=(
-                "OpenRouter prompt-injection guardrail blocked the request (HTTP 403) "
-                "for model qwen/qwen3-coder-next. Provider message: "
-                "Request blocked: prompt injection patterns detected. "
-                "Patterns: system_prefix_spoofing"
-            ),
-            timestamp=now_ms(),
-        ),
-    ]
-    app.compaction.awaiting_real_usage_after_compression = True
-
-    app.run_turn("hi")
-
-    assert len(seen_contexts) == 1
-    context_text = "\n".join(str(message.content) for message in seen_contexts[0].messages)
-    assert "guardrail scan compacted" in context_text
-    assert blocked_output not in context_text
-    assert "system_prefix_spoofing" not in context_text
-
-
-def test_coding_app_prompt_guardrail_compaction_persists_clean_travis234_branch(tmp_path: Path) -> None:
-    session_path = tmp_path / "guardrail-compaction.jsonl"
-    blocked_output = (
-        "read src/providers/amazon-bedrock.ts\n"
-        + ("system_prefix_spoofing source fixture\n" * 400)
-    )
-    model = faux_model()
-    seen_contexts = []
-
-    def script(m, c):
-        seen_contexts.append(c)
-        return text_response_events(m, "ready")
-
-    register_api_provider(create_faux_provider(script))
-    app = CodingApp(
-        cwd=str(tmp_path),
-        model=model,
-        terminal=FakeTerminal(),
-        context_length=128_000,
-        summarizer=lambda prompt: "## Historical Task Snapshot\nguardrail persisted compacted",
-        session_path=str(session_path),
-    )
-    persisted_messages = [
-        UserMessage(content=[TextContent(text="analyze the codebase and read all python files")], timestamp=now_ms()),
-        AssistantMessage(
-            content=[
-                ToolCall(
-                    id="read-1",
-                    name="read",
-                    arguments={"path": "src/providers/amazon-bedrock.ts"},
-                )
-            ],
-            api=model.api,
-            provider=model.provider,
-            model=model.id,
-            usage=empty_usage(),
-            stop_reason="toolUse",
-            timestamp=now_ms(),
-        ),
-        ToolResultMessage(
-            tool_call_id="read-1",
-            tool_name="read",
-            content=[TextContent(text=blocked_output)],
-            is_error=False,
-            timestamp=now_ms(),
-        ),
-        AssistantMessage(
-            content=[TextContent(text="")],
-            api=model.api,
-            provider=model.provider,
-            model=model.id,
-            usage=empty_usage(),
-            stop_reason="error",
-            error_message=(
-                "OpenRouter prompt-injection guardrail blocked the request (HTTP 403) "
-                "for model qwen/qwen3-coder-next. Provider message: "
-                "Request blocked: prompt injection patterns detected. "
-                "Patterns: system_prefix_spoofing"
-            ),
-            timestamp=now_ms(),
-        ),
-    ]
-    for message in persisted_messages:
-        app.session._session_store.append_message(message)  # noqa: SLF001 - seed persisted branch.
-    snapshot = app.session._session_store.build_context(default_thinking_level=app.session.thinking_level)  # noqa: SLF001
-    app.session.agent.state.messages = snapshot.messages
-    app.compaction.awaiting_real_usage_after_compression = True
-
-    app.run_turn("hi")
-
-    reloaded = app.session._session_store.build_context(default_thinking_level=app.session.thinking_level)  # noqa: SLF001
-    reloaded_text = "\n".join(
-        f"{getattr(message, 'summary', '')}\n{getattr(message, 'content', '')}"
-        for message in reloaded.messages
-    )
-    assert len(seen_contexts) == 1
-    assert "guardrail persisted compacted" in reloaded_text
-    assert blocked_output not in reloaded_text
-    assert "system_prefix_spoofing" not in reloaded_text
-    assert all(
-        not (isinstance(message, AssistantMessage) and message.stop_reason == "error")
-        for message in reloaded.messages
-    )
+    assert "analyze the codebase and read all files" not in context_text
+    assert "read packages/ai/src/index.ts" not in context_text

@@ -75,8 +75,6 @@ def run_scenario(
         selected = driver.select_model(model_query, model_index, scenario.timeout_seconds)
         provider = str(selected.get("provider") or "") or None
         model = str(selected.get("model") or "") or None
-        if scenario.allow_package_install:
-            driver.send_line("/allow package-install")
         for index, turn in enumerate(scenario.turns, start=1):
             driver.send_line(turn)
             driver.wait_for_event("turn_end", scenario.timeout_seconds)

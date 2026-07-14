@@ -11,6 +11,7 @@ from typing import Any, Callable
 from travis.agent.types import AgentTool, AgentToolResult
 from travis.ai.types import TextContent
 from travis.coding_agent.capabilities import WorkspaceCapability
+from travis.coding_agent.tools.common import context_value as _ctx_value
 from travis.coding_agent.tools.path_utils import render_tool_path, resolve_to_cwd
 from travis.coding_agent.tools.truncate import DEFAULT_MAX_BYTES, format_size, truncate_head, truncation_to_details
 from travis.coding_agent.tools.types import ToolContext, ToolDefinition, wrap_tool_definition
@@ -35,12 +36,6 @@ class LsOperations:
 
 
 _DEFAULT_OPERATIONS = LsOperations(exists=os.path.exists, is_directory=os.path.isdir, readdir=os.listdir)
-
-
-def _ctx_value(ctx, key: str, default=None):
-    if isinstance(ctx, dict):
-        return ctx.get(key, default)
-    return getattr(ctx, key, default)
 
 
 def _render_ls_call(args, ctx=None) -> str:

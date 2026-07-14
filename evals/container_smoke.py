@@ -7,9 +7,12 @@ import tempfile
 from pathlib import Path
 
 
+CONSOLE_ENTRYPOINT = "travis234"
+
+
 def run_container_smoke(image: str) -> None:
     _run(["docker", "run", "--rm", "--entrypoint", "id", image, "-un"], expected="travis")
-    _run(["docker", "run", "--rm", "--entrypoint", "travis", image, "--help"])
+    _run(["docker", "run", "--rm", "--entrypoint", CONSOLE_ENTRYPOINT, image, "--help"])
     _run(["docker", "run", "--rm", "--entrypoint", "node", image, "--version"])
     _run(["docker", "run", "--rm", "--entrypoint", "npm", image, "--version"])
     shell_env_script = (
@@ -44,13 +47,16 @@ def run_container_smoke(image: str) -> None:
             raise RuntimeError("container npm smoke did not create node_modules/is-number")
     script = (
         "from travis.ai.providers.faux import create_faux_provider,faux_model,text_response_events;"
-        "from travis.ai.stream import register_api_provider;"
         "from travis.app import CodingApp;"
+        "from travis.coding_agent.auth_storage import AuthStorage;"
+        "from travis.coding_agent.model_registry import ModelRegistry;"
         "from travis.tui.interactive_mode import InteractiveMode;"
         "from travis.tui.terminal import FakeTerminal;"
-        "register_api_provider(create_faux_provider(lambda m,c:text_response_events(m,'smoke ok')));"
+        "r=ModelRegistry.in_memory(AuthStorage.in_memory());"
+        "r.runtime.clear_providers();"
+        "r.runtime.set_provider(create_faux_provider(lambda m,c:text_response_events(m,'smoke ok')));"
         "a=CodingApp(cwd='/workspace',model=faux_model(),terminal=FakeTerminal(),enable_tui=True,"
-        "summarizer=lambda p:'## Summary\\nsmoke');"
+        "model_registry=r,summarizer=lambda p:'## Summary\\nsmoke');"
         "i=iter(['smoke task','/compact','/exit']);"
         "raise SystemExit(InteractiveMode(a,input_fn=lambda p:next(i)).run())"
     )

@@ -2,12 +2,26 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from dataclasses import dataclass
+from typing import Callable, Literal, Sequence
 
 from travis.agent.agent import Agent
+from travis.agent.types import AgentMessage
+from travis.coding_agent.compaction_adapter import (
+    SessionCompactionAdapter,
+    merge_summary_model_compaction_details,
+    to_compressor_context,
+)
+from travis.compaction.compressor import estimate_tokens
+from travis.compaction.timing import CompactionManager, ManualCompressionStatus, summarize_manual_compression
+from travis.compaction.strategy import prepare_compaction
 
 
 class CompactionDeferredError(RuntimeError):
+    pass
+
+
+class CompactionCancelledError(RuntimeError):
     pass
 
 
@@ -27,4 +41,576 @@ class CompactionCoordinator:
         return "ready"
 
 
-__all__ = ["CompactionCoordinator", "CompactionDeferredError"]
+@dataclass(frozen=True)
+class CompactionOutcome:
+    messages: list[AgentMessage]
+    compressed: bool
+    recovered: bool = False
+    result: object | None = None
+    will_retry: bool = False
+    aborted: bool = False
+
+
+class CompactionTransactionCoordinator:
+    """Pairs lifecycle, manager execution, persistence, and error reporting."""
+
+    def __init__(
+        self,
+        *,
+        manager: CompactionManager,
+        run_coordinator: CompactionCoordinator,
+        adapter: SessionCompactionAdapter,
+        continue_agent: Callable[..., object],
+        extension_runner: object | None = None,
+        branch_entries: Callable[[], list[dict]] | None = None,
+        signal: Callable[[], object] | None = None,
+    ) -> None:
+        self.manager = manager
+        self._run_coordinator = run_coordinator
+        self._adapter = adapter
+        self._continue_agent = continue_agent
+        self._extension_runner = extension_runner
+        self._branch_entries = branch_entries or (lambda: [])
+        self._signal = signal or (lambda: None)
+
+    def manual(self, focus: str | None = None, summarizer=None, deep: bool = False):
+        if self._run_coordinator.prepare() == "deferred":
+            raise CompactionDeferredError("Compaction deferred until the active run completes")
+        source = list(self._adapter.messages)
+
+        def operation() -> CompactionOutcome:
+            extension_result = self._before_compact(
+                source,
+                reason="manual",
+                will_retry=False,
+                custom_instructions=focus,
+            )
+            extension_compaction = self._extension_compaction_payload(extension_result)
+            if extension_compaction is not None:
+                output, _record, _entry = self._apply_extension_compaction(
+                    extension_compaction,
+                    source_messages=source,
+                    trigger="manual",
+                    reason="manual",
+                    will_retry=False,
+                )
+                summary = str(extension_compaction["summary"])
+                tokens_before = int(extension_compaction["tokensBefore"])
+                first_kept_entry_id = str(extension_compaction.get("firstKeptEntryId") or "")
+                feedback = summarize_manual_compression(
+                    source,
+                    output,
+                    tokens_before,
+                    estimate_tokens(output),
+                )
+                status = ManualCompressionStatus(
+                    messages=output,
+                    compressed=True,
+                    noop=False,
+                    headline=str(feedback["headline"]),
+                    token_line=str(feedback["token_line"]),
+                    note=feedback["note"] if isinstance(feedback["note"], str) else None,
+                    focus=focus,
+                    summary=summary,
+                    details=extension_compaction.get("details") if isinstance(extension_compaction.get("details"), dict) else None,
+                    tokens_before=tokens_before,
+                    first_kept_entry_id=first_kept_entry_id,
+                    deep=deep,
+                )
+                return CompactionOutcome(messages=output, compressed=True, result=status)
+            compressor_context = to_compressor_context(source)
+            status = self.manager.compress_manual_with_status(
+                compressor_context.messages,
+                summarizer=summarizer,
+                focus=focus,
+                deep=deep,
+                durable=self._adapter.is_persistent,
+            )
+            self._adapter.apply_manual_status(
+                status,
+                source,
+                source_indices=compressor_context.source_indices,
+            )
+            if status.compressed:
+                entry = self._adapter.latest_compaction_entry() or {
+                    "type": "compaction",
+                    "summary": status.summary or "",
+                    "firstKeptEntryId": status.first_kept_entry_id or "",
+                    "tokensBefore": status.tokens_before,
+                    "details": status.details,
+                }
+                self._emit_session_compact(
+                    entry,
+                    from_extension=False,
+                    reason="manual",
+                    will_retry=False,
+                )
+            return CompactionOutcome(
+                messages=status.messages,
+                compressed=bool(status.compressed),
+                result=status,
+                aborted=bool(self.manager.compressor._last_compress_aborted),
+            )
+
+        return self._transaction(
+            reason="manual",
+            operation=operation,
+            failure_prefix="Compaction failed",
+            include_noop_result=True,
+        ).result
+
+    def preflight(self, messages: list[AgentMessage]) -> CompactionOutcome:
+        source = list(messages)
+        compressor_context = to_compressor_context(source)
+        compressor_messages = compressor_context.messages
+        should_emit = self._should_compact_preflight(compressor_messages)
+        before_compressions = self.manager.compressor.compression_count
+
+        def operation() -> CompactionOutcome:
+            if should_emit:
+                extension_result = self._before_compact(
+                    source,
+                    reason="threshold",
+                    will_retry=False,
+                )
+                extension_compaction = self._extension_compaction_payload(extension_result)
+                if extension_compaction is not None:
+                    output, record, _entry = self._apply_extension_compaction(
+                        extension_compaction,
+                        source_messages=source,
+                        trigger="preflight",
+                        reason="threshold",
+                        will_retry=False,
+                    )
+                    messages[:] = output
+                    return CompactionOutcome(
+                        messages=messages,
+                        compressed=True,
+                        result=record,
+                    )
+            compacted = self.manager.maybe_compress_preflight(
+                compressor_messages,
+                durable=self._adapter.is_persistent,
+            )
+            if compacted is not compressor_messages:
+                result = self.manager.last_compression_result
+                applied = self._adapter.apply_result(
+                    compacted,
+                    result,
+                    source_messages=source,
+                    source_indices=compressor_context.source_indices,
+                )
+                messages[:] = applied
+                output = messages
+            else:
+                output = compacted
+            compressed = self.manager.compressor.compression_count > before_compressions
+            if compressed:
+                self._emit_builtin_compaction(reason="threshold", will_retry=False)
+            return CompactionOutcome(
+                messages=output,
+                compressed=compressed,
+                result=(
+                    self._adapter.messages
+                    if compressed
+                    else self.manager.last_compression_result
+                    if self.manager.compressor._last_compress_aborted
+                    else None
+                ),
+                aborted=bool(self.manager.compressor._last_compress_aborted),
+            )
+
+        if not should_emit:
+            return operation()
+        try:
+            return self._transaction(reason="threshold", operation=operation, failure_prefix="Auto-compaction failed")
+        except CompactionCancelledError:
+            return CompactionOutcome(messages=messages, compressed=False)
+
+    def post_response(
+        self,
+        messages: Sequence[AgentMessage],
+        prompt_tokens: int,
+    ) -> CompactionOutcome:
+        source = list(messages)
+        compressor_context = to_compressor_context(source)
+        compressor_messages = compressor_context.messages
+        real_tokens = 0 if prompt_tokens == -1 else prompt_tokens
+        should_emit = self.manager.compressor.should_compress(real_tokens)
+        before_compressions = self.manager.compressor.compression_count
+
+        def operation() -> CompactionOutcome:
+            if should_emit:
+                extension_result = self._before_compact(
+                    source,
+                    reason="threshold",
+                    will_retry=False,
+                )
+                extension_compaction = self._extension_compaction_payload(extension_result)
+                if extension_compaction is not None:
+                    output, record, _entry = self._apply_extension_compaction(
+                        extension_compaction,
+                        source_messages=source,
+                        trigger="post_response",
+                        reason="threshold",
+                        will_retry=False,
+                    )
+                    return CompactionOutcome(messages=output, compressed=True, result=record)
+            compacted = self.manager.maybe_compress_post_response(
+                compressor_messages,
+                prompt_tokens,
+                durable=self._adapter.is_persistent,
+            )
+            if compacted is not compressor_messages:
+                result = self.manager.last_compression_result
+                output = self._adapter.apply_result(
+                    compacted,
+                    result,
+                    source_messages=source,
+                    source_indices=compressor_context.source_indices,
+                )
+            else:
+                output = compacted
+            compressed = self.manager.compressor.compression_count > before_compressions
+            if compressed:
+                self._emit_builtin_compaction(reason="threshold", will_retry=False)
+            return CompactionOutcome(
+                messages=output,
+                compressed=compressed,
+                result=(
+                    self._adapter.messages
+                    if compressed
+                    else self.manager.last_compression_result
+                    if self.manager.compressor._last_compress_aborted
+                    else None
+                ),
+                aborted=bool(self.manager.compressor._last_compress_aborted),
+            )
+
+        try:
+            if not should_emit:
+                return operation()
+            try:
+                return self._transaction(reason="threshold", operation=operation, failure_prefix="Auto-compaction failed")
+            except CompactionCancelledError:
+                unchanged = messages if isinstance(messages, list) else source
+                return CompactionOutcome(messages=unchanged, compressed=False)
+        finally:
+            self.manager.reset_overflow_attempts()
+
+    def recover_overflow(
+        self,
+        messages: Sequence[AgentMessage],
+        *,
+        stream_fn=None,
+    ) -> CompactionOutcome:
+        source = list(messages)
+
+        def operation() -> CompactionOutcome:
+            extension_result = self._before_compact(
+                source,
+                reason="overflow",
+                will_retry=True,
+            )
+            extension_compaction = self._extension_compaction_payload(extension_result)
+            if extension_compaction is not None:
+                output, record, _entry = self._apply_extension_compaction(
+                    extension_compaction,
+                    source_messages=source,
+                    trigger="overflow",
+                    reason="overflow",
+                    will_retry=True,
+                )
+                return CompactionOutcome(
+                    messages=output,
+                    compressed=True,
+                    recovered=True,
+                    result=record,
+                    will_retry=True,
+                )
+            compressor_context = to_compressor_context(source)
+            compacted, recovered = self.manager.recover_overflow(
+                compressor_context.messages,
+                durable=self._adapter.is_persistent,
+            )
+            if not recovered:
+                output = self._adapter.replace_messages(source)
+                return CompactionOutcome(
+                    messages=output,
+                    compressed=False,
+                    recovered=False,
+                    result=(
+                        self.manager.last_compression_result
+                        if self.manager.compressor._last_compress_aborted
+                        else None
+                    ),
+                    aborted=bool(self.manager.compressor._last_compress_aborted),
+                )
+            result = self.manager.last_compression_result
+            output = self._adapter.apply_result(
+                compacted,
+                result,
+                source_messages=source,
+                source_indices=compressor_context.source_indices,
+            )
+            self._emit_builtin_compaction(reason="overflow", will_retry=True)
+            return CompactionOutcome(
+                messages=output,
+                compressed=True,
+                recovered=True,
+                result=output,
+                will_retry=True,
+            )
+
+        try:
+            outcome = self._transaction(
+                reason="overflow",
+                operation=operation,
+                failure_prefix="Context overflow recovery failed",
+            )
+        except CompactionCancelledError:
+            outcome = CompactionOutcome(messages=source, compressed=False, recovered=False)
+        if outcome.recovered:
+            self._continue_agent(stream_fn=stream_fn)
+        return outcome
+
+    def compact_error_context(
+        self,
+        messages: Sequence[AgentMessage],
+        *,
+        retain_source_suffix: bool = True,
+    ) -> CompactionOutcome:
+        source = list(messages)
+        compressor_context = to_compressor_context(source)
+        compressor_messages = compressor_context.messages
+        before_compressions = self.manager.compressor.compression_count
+
+        def operation() -> CompactionOutcome:
+            extension_result = self._before_compact(
+                source,
+                reason="threshold",
+                will_retry=False,
+            )
+            extension_compaction = self._extension_compaction_payload(extension_result)
+            if extension_compaction is not None:
+                output, record, _entry = self._apply_extension_compaction(
+                    extension_compaction,
+                    source_messages=source,
+                    trigger="error_context",
+                    reason="threshold",
+                    will_retry=False,
+                )
+                return CompactionOutcome(messages=output, compressed=True, result=record)
+            compacted = self.manager.maybe_compress_error_context(
+                compressor_messages,
+                durable=self._adapter.is_persistent,
+                retain_recent=retain_source_suffix,
+            )
+            result = self.manager.last_compression_result
+            if compacted is not compressor_messages:
+                output = self._adapter.apply_result(
+                    compacted,
+                    result,
+                    source_messages=source,
+                    source_indices=compressor_context.source_indices,
+                    retain_source_suffix=retain_source_suffix,
+                )
+            else:
+                output = compacted
+            compressed = self.manager.compressor.compression_count > before_compressions
+            if compressed:
+                self._emit_builtin_compaction(reason="threshold", will_retry=False)
+            return CompactionOutcome(
+                messages=output,
+                compressed=compressed,
+                result=(
+                    self._adapter.messages
+                    if compressed
+                    else self.manager.last_compression_result
+                    if self.manager.compressor._last_compress_aborted
+                    else None
+                ),
+                aborted=bool(self.manager.compressor._last_compress_aborted),
+            )
+
+        try:
+            return self._transaction(reason="threshold", operation=operation, failure_prefix="Auto-compaction failed")
+        except CompactionCancelledError:
+            return CompactionOutcome(messages=source, compressed=False)
+
+    def _should_compact_preflight(self, messages: list[AgentMessage]) -> bool:
+        if self.manager.awaiting_real_usage_after_compression:
+            return False
+        tokens = estimate_tokens(messages)
+        if self.manager.compressor.should_defer_preflight_to_real_usage(tokens):
+            return False
+        return self.manager.compressor.should_compress(tokens)
+
+    def _before_compact(
+        self,
+        messages: Sequence[AgentMessage],
+        *,
+        reason: str,
+        will_retry: bool,
+        custom_instructions: str | None = None,
+    ) -> object | None:
+        runner = self._extension_runner
+        has_handlers = getattr(runner, "has_handlers", None)
+        emit = getattr(runner, "emit", None)
+        if not callable(has_handlers) or not has_handlers("session_before_compact") or not callable(emit):
+            return None
+        source = list(messages)
+        compressor_context = to_compressor_context(source)
+        context_entry_ids = self._adapter.context_message_entry_ids()
+        logical_entry_ids = [
+            context_entry_ids[index]
+            for index in compressor_context.source_indices
+            if 0 <= index < len(context_entry_ids)
+        ]
+        preparation = prepare_compaction(
+            compressor_context.messages,
+            self.manager.compressor,
+            logical_entry_ids,
+        )
+        result = emit(
+            {
+                "type": "session_before_compact",
+                "preparation": preparation.as_extension_event(),
+                "branchEntries": list(self._branch_entries()),
+                "customInstructions": custom_instructions,
+                "reason": reason,
+                "willRetry": will_retry,
+                "signal": self._signal(),
+            }
+        )
+        if isinstance(result, dict) and result.get("cancel") is True:
+            raise CompactionCancelledError("Compaction cancelled")
+        return result
+
+    @staticmethod
+    def _extension_compaction_payload(result: object) -> dict[str, object] | None:
+        if not isinstance(result, dict) or not isinstance(result.get("compaction"), dict):
+            return None
+        compaction = dict(result["compaction"])
+        summary = compaction.get("summary")
+        first_kept = compaction.get("firstKeptEntryId")
+        tokens_before = compaction.get("tokensBefore")
+        if not isinstance(summary, str) or not summary.strip():
+            raise ValueError("Extension compaction summary must be a non-empty string")
+        if not isinstance(first_kept, str):
+            raise ValueError("Extension compaction firstKeptEntryId must be a string")
+        if not isinstance(tokens_before, int) or isinstance(tokens_before, bool) or tokens_before < 0:
+            raise ValueError("Extension compaction tokensBefore must be a non-negative integer")
+        return compaction
+
+    def _apply_extension_compaction(
+        self,
+        compaction: dict[str, object],
+        *,
+        source_messages: Sequence[AgentMessage],
+        trigger: str,
+        reason: str,
+        will_retry: bool,
+    ) -> tuple[list[AgentMessage], object, dict[str, object]]:
+        output, entry = self._adapter.apply_extension_compaction(
+            compaction,
+            source_messages=source_messages,
+        )
+        record = self.manager.record_extension_compaction(
+            output,
+            summary=str(compaction["summary"]),
+            tokens_before=int(compaction["tokensBefore"]),
+            details=compaction.get("details"),
+            trigger=trigger,
+        )
+        self._emit_session_compact(
+            entry,
+            from_extension=True,
+            reason=reason,
+            will_retry=will_retry,
+        )
+        return output, record, entry
+
+    def _emit_session_compact(
+        self,
+        entry: dict[str, object],
+        *,
+        from_extension: bool,
+        reason: str,
+        will_retry: bool,
+    ) -> None:
+        runner = self._extension_runner
+        has_handlers = getattr(runner, "has_handlers", None)
+        emit = getattr(runner, "emit", None)
+        if callable(has_handlers) and has_handlers("session_compact") and callable(emit):
+            emit(
+                {
+                    "type": "session_compact",
+                    "compactionEntry": dict(entry),
+                    "fromExtension": from_extension,
+                    "reason": reason,
+                    "willRetry": will_retry,
+                }
+            )
+
+    def _emit_builtin_compaction(self, *, reason: str, will_retry: bool) -> None:
+        result = self.manager.last_compression_result
+        entry = self._adapter.latest_compaction_entry() or {
+            "type": "compaction",
+            "summary": getattr(result, "summary", "") or "",
+            "firstKeptEntryId": "",
+            "tokensBefore": int(getattr(result, "tokens_before", 0) or 0),
+            "details": merge_summary_model_compaction_details(
+                getattr(result, "details", None),
+                result,
+            ),
+        }
+        self._emit_session_compact(
+            entry,
+            from_extension=False,
+            reason=reason,
+            will_retry=will_retry,
+        )
+
+    def _transaction(
+        self,
+        *,
+        reason: str,
+        operation: Callable[[], CompactionOutcome],
+        failure_prefix: str,
+        include_noop_result: bool = False,
+    ) -> CompactionOutcome:
+        self._adapter.begin(reason)
+        try:
+            outcome = operation()
+        except Exception as error:
+            message = str(error)
+            aborted = message == "Compaction cancelled"
+            self._adapter.end(
+                reason=reason,
+                result=None,
+                aborted=aborted,
+                will_retry=False,
+                error_message=None if aborted else f"{failure_prefix}: {message}",
+            )
+            raise
+        self._adapter.end(
+            reason=reason,
+            result=(
+                outcome.result
+                if outcome.compressed or include_noop_result or outcome.aborted
+                else None
+            ),
+            aborted=outcome.aborted,
+            will_retry=outcome.will_retry,
+        )
+        return outcome
+
+
+__all__ = [
+    "CompactionCancelledError",
+    "CompactionCoordinator",
+    "CompactionDeferredError",
+    "CompactionOutcome",
+    "CompactionTransactionCoordinator",
+]

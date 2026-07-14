@@ -106,25 +106,39 @@ def test_managed_command_streams_and_completes_once(tmp_path: Path) -> None:
         service.close()
 
 
-def test_focused_interrupt_is_idempotent_and_cancels_managed_command(tmp_path: Path) -> None:
+def test_repeated_focused_interrupt_escalates_stuck_managed_command(tmp_path: Path) -> None:
     service = ProcessSessionService(
         directory=tmp_path / "processes",
-        termination_grace_seconds=0.05,
+        termination_grace_seconds=1.0,
     )
     completed = []
+    output: list[str] = []
+    source = (
+        "import signal,time; "
+        "signal.signal(signal.SIGINT, signal.SIG_IGN); "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        "print('ready', flush=True); time.sleep(30)"
+    )
+    command = f"{shlex.quote(sys.executable)} -c {shlex.quote(source)}"
     controller = UserCommandController(
         service=service,
         owner_factory=lambda: ProcessOwner("app", str(tmp_path), "user"),
         resolver=lambda value, launch, signal: ResolvedUserCommand.managed(request(value, tmp_path)),
         transport_factory=lambda launch: create_local_process_transport(launch, TrustedLocalBackend()),
+        on_output=lambda _command_id, text: output.append(text),
         on_complete=lambda handle, result: completed.append(result),
     )
     try:
-        handle = controller.start("sleep 30", binding())
+        handle = controller.start(command, binding())
         assert wait_until(lambda: controller.inspect(handle.command_id).process_id is not None)
+        assert wait_until(lambda: "ready" in "".join(output))
 
         assert controller.interrupt_focused() is True
-        assert controller.interrupt_focused() is False
+        time.sleep(0.1)
+        assert completed == []
+        escalated_at = time.monotonic()
+        assert controller.interrupt_focused() is True
+        assert time.monotonic() - escalated_at < 0.25
         assert wait_until(lambda: len(completed) == 1)
         assert completed[0].cancelled is True
     finally:

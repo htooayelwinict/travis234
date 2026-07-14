@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="420" viewBox="0 0 1400 420" role="img" aria-labelledby="title description">
+  <title id="title">Travis234 terminal coding agent</title>
+  <desc id="description">A dark terminal-inspired banner with the Travis234 name and its core capabilities.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07111f"/>
+      <stop offset="0.52" stop-color="#111c38"/>
+      <stop offset="1" stop-color="#25144a"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#39e6c7"/>
+      <stop offset="0.48" stop-color="#63a7ff"/>
+      <stop offset="1" stop-color="#bd6cff"/>
+    </linearGradient>
+    <radialGradient id="glowA" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#36e3c4" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#36e3c4" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowB" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#a45cff" stop-opacity="0.25"/>
+      <stop offset="1" stop-color="#a45cff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="12"/>
+    </filter>
+    <pattern id="grid" width="34" height="34" patternUnits="userSpaceOnUse">
+      <path d="M 34 0 L 0 0 0 34" fill="none" stroke="#b8c9ff" stroke-opacity="0.045" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <rect width="1400" height="420" rx="26" fill="url(#background)"/>
+  <rect width="1400" height="420" rx="26" fill="url(#grid)"/>
+  <ellipse cx="225" cy="85" rx="310" ry="260" fill="url(#glowA)" filter="url(#softGlow)"/>
+  <ellipse cx="1230" cy="355" rx="355" ry="280" fill="url(#glowB)" filter="url(#softGlow)"/>
+
+  <g opacity="0.9">
+    <rect x="72" y="71" width="94" height="94" rx="23" fill="#0b172b" stroke="#5ce8d0" stroke-opacity="0.5" stroke-width="2"/>
+    <path d="M101 104l22 17-22 17M130 139h17" fill="none" stroke="url(#accent)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <text x="194" y="115" fill="#89f4e3" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17" font-weight="700" letter-spacing="4">TERMINAL CODING AGENT</text>
+  <text x="188" y="222" fill="#f4f7ff" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="94" font-weight="800" letter-spacing="-4">Travis</text>
+  <text x="493" y="222" fill="url(#accent)" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="94" font-weight="800" letter-spacing="-4">234</text>
+  <text x="194" y="269" fill="#bec9e7" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="24" font-weight="500">Persistent sessions. Provider-neutral runtime. Context that stays useful.</text>
+
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" font-weight="600">
+    <rect x="194" y="310" width="182" height="40" rx="20" fill="#10243a" stroke="#48dbc5" stroke-opacity="0.42"/>
+    <circle cx="218" cy="330" r="5" fill="#48dbc5"/>
+    <text x="234" y="336" fill="#d7fff8">bounded tools</text>
+
+    <rect x="392" y="310" width="182" height="40" rx="20" fill="#13213f" stroke="#67a9ff" stroke-opacity="0.42"/>
+    <circle cx="416" cy="330" r="5" fill="#67a9ff"/>
+    <text x="432" y="336" fill="#e4efff">compaction</text>
+
+    <rect x="590" y="310" width="170" height="40" rx="20" fill="#1c1d43" stroke="#9a7cff" stroke-opacity="0.42"/>
+    <circle cx="614" cy="330" r="5" fill="#9a7cff"/>
+    <text x="630" y="336" fill="#eee8ff">extensions</text>
+
+    <rect x="776" y="310" width="216" height="40" rx="20" fill="#261b43" stroke="#c373ff" stroke-opacity="0.42"/>
+    <circle cx="800" cy="330" r="5" fill="#c373ff"/>
+    <text x="816" y="336" fill="#f5e7ff">managed processes</text>
+  </g>
+
+  <g transform="translate(1090 78)" opacity="0.78" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+    <rect width="238" height="205" rx="18" fill="#091322" stroke="#8aa6e8" stroke-opacity="0.28"/>
+    <circle cx="24" cy="22" r="5" fill="#ff6d7a"/>
+    <circle cx="42" cy="22" r="5" fill="#ffd166"/>
+    <circle cx="60" cy="22" r="5" fill="#47d7a8"/>
+    <path d="M0 42h238" stroke="#8aa6e8" stroke-opacity="0.2"/>
+    <text x="20" y="75" fill="#5ce8d0" font-size="14">$ travis234</text>
+    <text x="20" y="105" fill="#aab9db" font-size="13">session  ready</text>
+    <text x="20" y="133" fill="#aab9db" font-size="13">model    selected</text>
+    <text x="20" y="161" fill="#aab9db" font-size="13">context  healthy</text>
+    <rect x="20" y="179" width="128" height="4" rx="2" fill="url(#accent)"/>
+  </g>
+
+  <rect x="1" y="1" width="1398" height="418" rx="25" fill="none" stroke="url(#accent)" stroke-opacity="0.24" stroke-width="2"/>
+</svg>

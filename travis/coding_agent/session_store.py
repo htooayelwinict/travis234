@@ -27,6 +27,7 @@ from travis.ai.types import (
     now_ms,
 )
 from travis.coding_agent.session_lock import SessionFileLock
+from travis.coding_agent.session_index import SessionIndex
 
 CURRENT_SESSION_VERSION = 3
 
@@ -54,9 +55,6 @@ class BranchSummaryMessage:
     timestamp: int
     role: str = "branchSummary"
 
-    @property
-    def fromId(self) -> str:
-        return self.from_id
 
 
 @dataclass
@@ -67,9 +65,6 @@ class CompactionSummaryMessage:
     details: Any | None = None
     role: str = "compactionSummary"
 
-    @property
-    def tokensBefore(self) -> int:
-        return self.tokens_before
 
 
 @dataclass
@@ -84,17 +79,8 @@ class BashExecutionMessage:
     exclude_from_context: bool | None = None
     role: str = "bashExecution"
 
-    @property
-    def exitCode(self) -> int | None:
-        return self.exit_code
 
-    @property
-    def fullOutputPath(self) -> str | None:
-        return self.full_output_path
 
-    @property
-    def excludeFromContext(self) -> bool | None:
-        return self.exclude_from_context
 
 
 @dataclass
@@ -106,9 +92,6 @@ class CustomMessage:
     timestamp: int
     role: str = "custom"
 
-    @property
-    def customType(self) -> str:
-        return self.custom_type
 
 
 class SessionStore:
@@ -121,8 +104,11 @@ class SessionStore:
         cwd: str,
         parent_session: str | None = None,
         session_id: str | None = None,
+        index: SessionIndex | None = None,
     ) -> None:
         self.path = Path(path)
+        self.index = index
+        self.index_diagnostics: list[str] = []
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.file_entries: list[dict[str, Any]] = []
         self.by_id: dict[str, dict[str, Any]] = {}
@@ -158,6 +144,11 @@ class SessionStore:
         self._disk_offset = len(payload)
         self._disk_identity = _disk_signature(self.path)
         self._explicit_parent_selection = False
+        if self.index is not None:
+            try:
+                self.index.record_header(self.path, header, self.path.stat())
+            except Exception as error:  # noqa: BLE001 - JSONL is authoritative; reconciliation repairs the cache.
+                self.index_diagnostics.append(str(error))
 
     def _load(self) -> None:
         raw = self._read_range(0)
@@ -270,12 +261,10 @@ class SessionStore:
     def get_leaf_id(self) -> str | None:
         return self.leaf_id
 
-    getLeafId = get_leaf_id
 
     def get_children(self, parent_id: str) -> list[dict[str, Any]]:
         return [entry for entry in self.by_id.values() if entry.get("parentId") == parent_id]
 
-    getChildren = get_children
 
     def get_label(self, entry_id: str) -> str | None:
         label: str | None = None
@@ -285,7 +274,6 @@ class SessionStore:
                 label = value if value else None
         return label
 
-    getLabel = get_label
 
     def append_message(self, message: AgentMessage) -> str:
         return self._append_entry({"type": "message", "message": serialize_message(message)}, durable=True)
@@ -336,7 +324,6 @@ class SessionStore:
             entry["data"] = data
         return self._append_entry(entry, durable=True)
 
-    appendCustomEntry = append_custom_entry
 
     def append_custom_message_entry(
         self,
@@ -355,14 +342,12 @@ class SessionStore:
             entry["details"] = details
         return self._append_entry(entry, durable=True)
 
-    appendCustomMessageEntry = append_custom_message_entry
 
     def append_label_change(self, target_id: str, label: str | None) -> str:
         if target_id not in self.by_id:
             raise ValueError(f"Entry {target_id} not found")
         return self._append_entry({"type": "label", "targetId": target_id, "label": label or None}, durable=True)
 
-    appendLabelChange = append_label_change
 
     def branch(self, entry_id: str) -> None:
         if entry_id not in self.by_id:
@@ -374,7 +359,6 @@ class SessionStore:
         self.leaf_id = None
         self._explicit_parent_selection = True
 
-    resetLeaf = reset_leaf
 
     def branch_with_summary(
         self,
@@ -398,7 +382,6 @@ class SessionStore:
             entry["fromHook"] = from_hook
         return self._append_entry(entry, durable=True)
 
-    branchWithSummary = branch_with_summary
 
     def create_branched_session(self, leaf_id: str, path: str | None = None) -> str:
         branch_entries = self.get_branch(leaf_id)
@@ -460,7 +443,6 @@ class SessionStore:
         _atomic_write(target_path, ("\n".join(lines) + "\n").encode("utf-8"))
         return str(target_path)
 
-    exportToJsonl = export_to_jsonl
 
     @property
     def header(self) -> dict[str, Any]:
@@ -573,6 +555,11 @@ class SessionStore:
                 os.fsync(descriptor)
         finally:
             os.close(descriptor)
+        if self.index is not None:
+            try:
+                self.index.record_append(self.path, entry, self.path.stat())
+            except Exception as error:  # noqa: BLE001 - JSONL append remains committed if indexing fails.
+                self.index_diagnostics.append(str(error))
 
     def _apply_committed_entry(self, entry: dict[str, Any]) -> None:
         self.file_entries.append(entry)
@@ -688,6 +675,7 @@ def serialize_message(message: AgentMessage) -> dict[str, Any]:
             "content": [_serialize_block(block) for block in message.content],
             "isError": message.is_error,
             "details": message.details,
+            "addedToolNames": message.added_tool_names,
             "timestamp": message.timestamp,
         }
     raise TypeError(f"Unsupported session message role: {role}")
@@ -729,6 +717,7 @@ def deserialize_message(data: dict[str, Any]) -> AgentMessage:
             content=[_deserialize_block(block) for block in data.get("content", [])],
             is_error=bool(data.get("isError", False)),
             details=data.get("details"),
+            added_tool_names=data.get("addedToolNames"),
             timestamp=data.get("timestamp", now_ms()),
         )
     raise TypeError(f"Unsupported session message role: {role}")
@@ -797,6 +786,7 @@ def _serialize_usage(usage: Usage) -> dict[str, Any]:
         "output": usage.output,
         "cacheRead": usage.cache_read,
         "cacheWrite": usage.cache_write,
+        "cacheWrite1h": usage.cache_write_1h,
         "totalTokens": usage.total_tokens,
         "cost": {
             "input": usage.cost.input,
@@ -817,6 +807,7 @@ def _deserialize_usage(data: dict[str, Any] | None) -> Usage:
         output=data.get("output", 0),
         cache_read=data.get("cacheRead", data.get("cache_read", 0)),
         cache_write=data.get("cacheWrite", data.get("cache_write", 0)),
+        cache_write_1h=data.get("cacheWrite1h", data.get("cache_write_1h", 0)),
         total_tokens=data.get("totalTokens", data.get("total_tokens", 0)),
         cost=Cost(
             input=cost_data.get("input", 0.0),

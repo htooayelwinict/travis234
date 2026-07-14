@@ -6,6 +6,9 @@ import time
 
 import pytest
 
+from travis.ai.auth import ModelAuth, OAuthAuth, ProviderAuth
+from travis.ai.models import Models, Provider, ProviderStreams
+from travis.ai.types import Model
 from travis.coding_agent.auth_storage import AuthStorage, AuthStorageError
 
 
@@ -49,12 +52,39 @@ def test_expired_oauth_refreshes_once_and_persists(tmp_path) -> None:
         }
 
     storage = AuthStorage.create(path)
-    storage.register_oauth_provider(
-        "example",
-        {"getApiKey": lambda credential: credential["access"], "refreshToken": refresh_token},
+    model = Model(
+        id="example-model",
+        name="Example",
+        api="faux",
+        provider="example",
+        base_url="https://example.invalid/v1",
+    )
+    unused_stream = lambda *_args, **_kwargs: None
+    runtime = Models(credentials=storage)
+    runtime.set_provider(
+        Provider(
+            id="example",
+            auth=ProviderAuth(
+                oauth=OAuthAuth(
+                    name="Example",
+                    login=lambda _callbacks: {},
+                    refresh=refresh_token,
+                    to_auth=lambda credential: ModelAuth(api_key=str(credential["access"])),
+                )
+            ),
+            models=[model],
+            api=ProviderStreams(stream=unused_stream, stream_simple=unused_stream),
+        )
     )
     results: list[str | None] = []
-    threads = [threading.Thread(target=lambda: results.append(storage.get_api_key("example"))) for _ in range(8)]
+    threads = [
+        threading.Thread(
+            target=lambda: results.append(
+                runtime.get_auth(model).auth.api_key  # type: ignore[union-attr]
+            )
+        )
+        for _ in range(8)
+    ]
     for thread in threads:
         thread.start()
     for thread in threads:

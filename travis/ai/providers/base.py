@@ -100,6 +100,7 @@ class ProviderProfile:
     supports_health_check: bool = True
     supports_vision: bool = False
     supports_vision_tool_messages: bool = True
+    supports_usage_in_streaming: bool = True
     fallback_models: tuple[str, ...] = ()
     hostname: str = ""
     default_headers: dict[str, str] = field(default_factory=dict)
@@ -115,7 +116,11 @@ class ProviderProfile:
 
     def auth_headers(self, credential: str, *, credential_kind: str = "api_key") -> dict[str, str]:
         if self.name == "anthropic" and credential_kind == "api_key":
+            if "sk-ant-oat" in credential:
+                return {"Authorization": f"Bearer {credential}", "anthropic-version": "2023-06-01"}
             return {"x-api-key": credential, "anthropic-version": "2023-06-01"}
+        if self.name in {"gemini", "google", "google-vertex"} and credential_kind == "api_key":
+            return {"x-goog-api-key": credential}
         return {"Authorization": f"Bearer {credential}"}
 
     def get_hostname(self) -> str:
@@ -126,27 +131,6 @@ class ProviderProfile:
         from urllib.parse import urlparse
 
         return urlparse(self.base_url).hostname or ""
-
-    def prepare_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return messages
-
-    def build_extra_body(
-        self,
-        *,
-        session_id: str | None = None,
-        provider_preferences: dict[str, Any] | None = None,
-        model: str | None = None,
-        **_context: Any,
-    ) -> dict[str, Any]:
-        return {}
-
-    def build_api_kwargs_extras(
-        self,
-        *,
-        reasoning_config: dict[str, Any] | None = None,
-        **_context: Any,
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
-        return {}, {}
 
     def get_max_tokens(self, model: str | None) -> int | None:
         return self.default_max_tokens
@@ -206,6 +190,8 @@ class ProviderTransport(Protocol):
         provider_preferences: dict[str, Any] | None = None,
         session_id: str | None = None,
         reasoning_config: dict[str, Any] | None = None,
+        request_overrides: dict[str, Any] | None = None,
+        base_url: str | None = None,
     ) -> dict[str, Any]:
         ...
 

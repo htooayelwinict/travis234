@@ -9,7 +9,7 @@ from travis.agent.types import AgentTool, AgentToolResult
 from travis.coding_agent.source_info import SourceInfo
 
 if TYPE_CHECKING:
-    from travis.tui.component import Component
+    from travis.tui.components.base import Component
 
 ToolRenderContent = Union[str, "Component"]
 

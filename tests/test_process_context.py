@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from travis.ai.types import AssistantMessage, TextContent, ToolCall, ToolResultMessage, empty_usage, now_ms
 from travis.ai.providers.faux import create_faux_provider, faux_model, text_response_events
@@ -8,15 +11,16 @@ from travis.coding_agent.agent_session import AgentSession
 from travis.coding_agent.compaction_adapter import (
     compaction_summary_with_details,
     merge_process_compaction_details,
+    merge_summary_model_compaction_details,
 )
 from travis.coding_agent.process_context import (
     ProcessContextRecord,
     ProcessContextResolver,
     referenced_process_ids,
-    process_context_message,
 )
 from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import ProcessOwner, ProcessSnapshot, ProcessState
+from travis.coding_agent.session_types import default_convert_to_llm
 
 
 def tool_result(process_id: str, status: str = "running", cursor: int = 10):
@@ -142,21 +146,6 @@ def test_resolver_bounds_large_history_to_one_64_id_batch_and_16_records() -> No
     assert all(record.status == "unavailable" for record in records)
 
 
-def test_process_context_message_contains_metadata_only() -> None:
-    process_id = "proc_" + "c" * 32
-    overlay = process_context_message(
-        [ProcessContextRecord(process_id, "running", 4, 8, None, False, None)]
-    )
-
-    assert overlay is not None
-    assert overlay.custom_type == "managed_process_state"
-    assert overlay.display is False
-    assert process_id in overlay.content
-    assert "status=running" in overlay.content
-    assert "command" not in overlay.content
-    assert "output" not in overlay.content.lower().replace("outputsize", "")
-
-
 def test_compaction_details_merge_process_ledger_without_losing_file_details() -> None:
     records = [
         ProcessContextRecord(
@@ -186,6 +175,29 @@ def test_compaction_details_merge_process_ledger_without_losing_file_details() -
         "exitCode": None,
         "durableOutput": False,
     }
+
+
+def test_dedicated_summary_model_provenance_is_extension_metadata_not_prompt_text() -> None:
+    details = merge_summary_model_compaction_details(
+        {"readFiles": ["src/a.py"]},
+        SimpleNamespace(
+            summary_model_dedicated=True,
+            summary_model_requested="openrouter/openai/gpt-5.6-luna-pro",
+            summary_model_used="openrouter/xiaomi/mimo-v2.5",
+            summary_model_fallback=True,
+            summary_model_error="temporary route failure",
+        ),
+    )
+
+    assert details["summaryModel"] == {
+        "requested": "openrouter/openai/gpt-5.6-luna-pro",
+        "used": "openrouter/xiaomi/mimo-v2.5",
+        "fallback": True,
+        "error": "temporary route failure",
+    }
+    rendered = compaction_summary_with_details("summary", details)
+    assert "gpt-5.6-luna-pro" not in rendered
+    assert "temporary route failure" not in rendered
 
 
 def test_compaction_summary_renders_valid_process_metadata_once() -> None:
@@ -218,7 +230,7 @@ def test_compaction_summary_renders_valid_process_metadata_once() -> None:
     assert "invalid" not in rendered
 
 
-def test_provider_receives_transient_process_overlay_without_jsonl_append(tmp_path: Path) -> None:
+def test_provider_context_is_not_displaced_by_managed_process_state(tmp_path: Path) -> None:
     process_id = "proc_" + "d" * 32
     session_path = tmp_path / "session.jsonl"
     service = ProcessSessionService(directory=tmp_path / "processes")
@@ -247,20 +259,55 @@ def test_provider_receives_transient_process_overlay_without_jsonl_append(tmp_pa
     try:
         session.prompt("what is the build status?", stream_fn=stream_fn)
 
+        provider_messages = seen[-1]
         provider_text = "\n".join(
             block.text
-            for message in seen[-1]
+            for message in provider_messages
             for block in getattr(message, "content", [])
             if isinstance(block, TextContent)
         )
-        assert provider_text.count("<managed-process-state>") == 1
-        assert "status=unavailable" in provider_text
-        assert "reason=application-restarted" in provider_text
+        latest_text = "\n".join(
+            block.text
+            for block in getattr(provider_messages[-1], "content", [])
+            if isinstance(block, TextContent)
+        )
+        assert "<managed-process-state>" not in provider_text
+        assert latest_text == "what is the build status?"
         assert not any(
             getattr(message, "customType", None) == "managed_process_state"
             for message in session.messages
         )
-        assert "managed_process_state" not in session_path.read_text(encoding="utf-8")
+        persisted_entries = [
+            json.loads(line)
+            for line in session_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        assert not any(
+            entry.get("customType") == "managed_process_state"
+            or entry.get("message", {}).get("customType") == "managed_process_state"
+            for entry in persisted_entries
+        )
+    finally:
+        session.shutdown()
+        service.close()
+
+
+def test_context_transform_keeps_real_tool_result_last(tmp_path: Path) -> None:
+    service = ProcessSessionService(directory=tmp_path / "processes")
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        process_service=service,
+        process_owner=ProcessOwner("app", str(tmp_path), "agent"),
+    )
+    result = tool_result("proc_" + "f" * 32, status="exited")
+    try:
+        transformed = asyncio.run(session._transform_context([result]))
+        provider_messages = default_convert_to_llm(transformed)
+
+        assert transformed == [result]
+        assert provider_messages == [result]
+        assert provider_messages[-1].role == "toolResult"
     finally:
         session.shutdown()
         service.close()
@@ -275,7 +322,7 @@ def test_process_overlay_is_absent_without_structured_references(tmp_path: Path)
         process_owner=ProcessOwner("app", str(tmp_path), "agent"),
     )
     try:
-        transformed = session._transform_context([])
+        transformed = asyncio.run(session._transform_context([]))
         assert transformed == []
     finally:
         session.shutdown()

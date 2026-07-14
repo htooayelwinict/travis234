@@ -8,7 +8,7 @@ from typing import Any, Literal, Union
 
 Api = str
 Provider = str
-ThinkingLevel = Literal["off", "minimal", "low", "medium", "high", "xhigh"]
+ThinkingLevel = Literal["off", "minimal", "low", "medium", "high", "xhigh", "max"]
 StopReason = Literal["stop", "length", "toolUse", "error", "aborted"]
 Transport = Literal["sse", "websocket", "websocket-cached", "auto"]
 
@@ -53,12 +53,22 @@ ContentBlock = Union[TextContent, ThinkingContent, ImageContent, ToolCall]
 
 
 @dataclass
+class CostTier:
+    input_tokens_above: int
+    input: float = 0.0
+    output: float = 0.0
+    cache_read: float = 0.0
+    cache_write: float = 0.0
+
+
+@dataclass
 class Cost:
     input: float = 0.0
     output: float = 0.0
     cache_read: float = 0.0
     cache_write: float = 0.0
     total: float = 0.0
+    tiers: list[CostTier] = field(default_factory=list)
 
 
 @dataclass
@@ -67,6 +77,8 @@ class Usage:
     output: int = 0
     cache_read: int = 0
     cache_write: int = 0
+    cache_write_1h: int = 0
+    reasoning: int = 0
     total_tokens: int = 0
     cost: Cost = field(default_factory=Cost)
 
@@ -105,6 +117,7 @@ class ToolResultMessage:
     content: list[TextContent | ImageContent]
     is_error: bool
     details: Any | None = None
+    added_tool_names: list[str] | None = None
     timestamp: int = field(default_factory=now_ms)
     role: Literal["toolResult"] = "toolResult"
 
@@ -140,6 +153,7 @@ class Model:
     context_window: int = 0
     max_tokens: int = 0
     headers: dict[str, str] | None = None
+    compat: dict[str, Any] | None = None
 
 
 @dataclass
@@ -152,19 +166,31 @@ class ProviderResponse:
 class StreamOptions:
     temperature: float | None = None
     max_tokens: int | None = None
+    omit_max_tokens: bool = False
     signal: Any | None = None
     api_key: str | None = None
     transport: Transport | None = None
     cache_retention: str | None = None
     session_id: str | None = None
     on_payload: Any | None = None
+    on_headers: Any | None = None
     on_response: Any | None = None
     headers: dict[str, str] | None = None
+    env: dict[str, str] | None = None
     timeout_ms: int | None = None
     websocket_connect_timeout_ms: int | None = None
     max_retries: int | None = None
     max_retry_delay_ms: int | None = None
     metadata: dict[str, Any] | None = None
+    tool_choice: Any | None = None
+    reasoning_summary: str | None = None
+    service_tier: str | None = None
+    text_verbosity: str | None = None
+    azure_api_version: str | None = None
+    azure_resource_name: str | None = None
+    azure_base_url: str | None = None
+    azure_deployment_name: str | None = None
+    generation_params: Any | None = None
 
 
 @dataclass

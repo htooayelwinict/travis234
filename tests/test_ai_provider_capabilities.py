@@ -49,7 +49,7 @@ def test_anthropic_translates_stop_and_drops_unsupported_penalties() -> None:
 def test_codex_responses_payload_uses_response_native_fields() -> None:
     payload = build_generation_payload(
         provider="openai-codex",
-        api_mode="codex_responses",
+        api_mode="openai_codex_responses",
         params=GenerationParams(
             temperature=0.1,
             top_p=0.95,
@@ -116,7 +116,7 @@ def test_chat_payload_drops_parallel_tools_when_tools_are_disabled() -> None:
 def test_codex_responses_warns_when_stop_is_not_supported() -> None:
     payload = build_generation_payload(
         provider="openai-codex",
-        api_mode="codex_responses",
+        api_mode="openai_codex_responses",
         params=GenerationParams(stop=("END",), top_p=0.9),
         tools_enabled=True,
     )
@@ -128,7 +128,7 @@ def test_codex_responses_warns_when_stop_is_not_supported() -> None:
 def test_codex_responses_drops_parallel_tools_when_tools_are_disabled() -> None:
     payload = build_generation_payload(
         provider="openai-codex",
-        api_mode="codex_responses",
+        api_mode="openai_codex_responses",
         params=GenerationParams(top_p=0.9, parallel_tool_calls=True),
         tools_enabled=False,
     )

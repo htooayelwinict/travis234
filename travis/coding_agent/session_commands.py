@@ -58,13 +58,16 @@ class SessionCommandExecutor:
             self._queue.put(cast(_Command[object], _Command(name=name, callback=callback, future=future)))
         return future
 
-    def close(self, wait: bool = True) -> None:
+    def close(self, wait: bool = True, timeout: float = 1.0) -> bool:
+        if timeout < 0:
+            raise ValueError("timeout must be nonnegative")
         with self._lock:
             if not self._closed:
                 self._closed = True
                 self._queue.put(_STOP)
         if wait and self._thread is not threading.current_thread():
-            self._thread.join()
+            self._thread.join(timeout=timeout)
+        return not self._thread.is_alive()
 
     def _run(self) -> None:
         while True:
@@ -86,4 +89,6 @@ class SessionCommandExecutor:
                     self._active_name = None
 
 
-__all__ = ["SessionCommandExecutor"]
+__all__ = [
+    "SessionCommandExecutor",
+]

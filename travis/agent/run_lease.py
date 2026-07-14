@@ -56,4 +56,7 @@ class RunLeaseToken:
         self._lease._release(self._token)
 
 
-__all__ = ["RunLease", "RunLeaseToken"]
+__all__ = [
+    "RunLease",
+    "RunLeaseToken",
+]

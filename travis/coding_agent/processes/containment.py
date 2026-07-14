@@ -72,4 +72,6 @@ class ProcessTreeController:
                 continue
 
 
-__all__ = ["ProcessTreeController"]
+__all__ = [
+    "ProcessTreeController",
+]

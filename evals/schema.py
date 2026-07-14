@@ -13,7 +13,6 @@ class Scenario:
     compact_after: tuple[int, ...]
     verifiers: tuple[tuple[str, ...], ...]
     timeout_seconds: int = 300
-    allow_package_install: bool = False
 
 
 @dataclass(frozen=True)
@@ -27,6 +26,18 @@ class ScenarioResult:
     compactions: int
     duration_ms: int
     failure_tail: str | None = None
+    session_id: str | None = None
+    session_path: str | None = None
+    turn_id: str | None = None
+    prompt: str | None = None
+    response: str | None = None
+    context_tokens: int | None = None
+    context_window: int | None = None
+    context_percent: float | None = None
+    context_estimated: bool | None = None
+    context_confidence: str | None = None
+    fault_domain: str | None = None
+    failure_evidence: str | None = None
 
 
 def load_scenarios(path: str | Path | None = None) -> list[Scenario]:
@@ -40,7 +51,6 @@ def load_scenarios(path: str | Path | None = None) -> list[Scenario]:
             compact_after=tuple(int(index) for index in item.get("compact_after", [])),
             verifiers=tuple(tuple(str(part) for part in command) for command in item["verifiers"]),
             timeout_seconds=int(item.get("timeout_seconds", 300)),
-            allow_package_install=bool(item.get("allow_package_install", False)),
         )
         for item in data
     ]

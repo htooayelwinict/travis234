@@ -24,31 +24,11 @@ test("package exposes travis234 binaries only", () => {
   assert.equal(fs.existsSync(path.join(packageRoot, packageJson.bin.travis234)), true);
 });
 
-test("package prompts prevent parent rereads after bounded subagent summaries", () => {
-  const agentsPrompt = fs.readFileSync(path.join(packageRoot, "agents", "AGENTS.md"), "utf8");
+test("package does not bundle a mandatory global agent prompt", () => {
   const subagentSkill = fs.readFileSync(path.join(packageRoot, "skills", "subagent-delegation", "SKILL.md"), "utf8");
 
-  assert.match(agentsPrompt, /name is Travis/i);
-  assert.match(agentsPrompt, /travis234/i);
-  assert.match(agentsPrompt, /latest Lewis request is the active contract/i);
-  assert.match(agentsPrompt, /generated docs, reports, plans, summaries/i);
-  assert.match(agentsPrompt, /tests pass but encode the opposite/i);
-  assert.match(agentsPrompt, /subagents? (are|must remain) read-only/i);
-  assert.match(agentsPrompt, /subagents? must not write files/i);
-  assert.match(agentsPrompt, /child should inspect.*parent should write/is);
-  assert.match(agentsPrompt, /truncated child result is not a failed child result/i);
-  assert.match(agentsPrompt, /pre-read, find, list, grep, or resolve delegated target files/i);
-  assert.match(agentsPrompt, /do not re-read child-scoped files/i);
-  assert.match(agentsPrompt, /forbidden fallback/i);
-  assert.match(agentsPrompt, /do not say.*read the key files directly/is);
-  assert.match(agentsPrompt, /only allowed recovery paths/i);
-  assert.match(agentsPrompt, /expand_subagent_result/i);
-  assert.match(agentsPrompt, /Subagent system contract/i);
-  assert.match(agentsPrompt, /Do not drop leading project directories/i);
-  assert.match(agentsPrompt, /Allowed tools are its complete tool catalog/i);
-  assert.match(agentsPrompt, /For child file discovery, tell it to use `find` or `ls`/i);
-  assert.doesNotMatch(agentsPrompt, /glob is not available unless/i);
-  assert.match(agentsPrompt, /After two failed attempts/i);
+  assert.equal(fs.existsSync(path.join(packageRoot, "agents", "AGENTS.md")), false);
+  assert.doesNotMatch(subagentSkill, /\bLewis\b/i);
   assert.match(subagentSkill, /truncated child result is not a failed child result/i);
   assert.match(subagentSkill, /subagents? (are|must remain) read-only/i);
   assert.match(subagentSkill, /must not write files/i);
@@ -187,6 +167,21 @@ test("package builds install-capable docker command for npx-style use", () => {
   assert.deepEqual(command.slice(-4), ["ghcr.io/htooayelwinict/travis234:production", "--cwd", "/workspace", "hello"]);
 });
 
+test("package does not forward host provider credentials into the sandbox", () => {
+  const workspace = path.join(packageRoot, "fixtures", "workspace");
+  const config = parseArgs(["--cwd", workspace], {
+    env: {
+      OPENROUTER_API_KEY: "host-secret",
+      TRAVIS234_IMAGE: "ghcr.io/htooayelwinict/travis234:production",
+    },
+  });
+  const command = buildDockerCommand(config, { uid: 501, gid: 20, pid: 24680 });
+  const rendered = command.join(" ");
+
+  assert.doesNotMatch(rendered, /host-secret|OPENROUTER_API_KEY|--env-file/);
+  assert.doesNotMatch(rendered, /\.travis234\/agent(?:\/|\b)/);
+});
+
 test("package forwards session modes while mounting persistent app-owned state", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "travis234-session-cli-"));
   const workspace = path.join(root, "workspace");
@@ -232,7 +227,30 @@ test("package copies bundled skills into the app-owned sandbox agent directory",
   );
 });
 
-test("package seeds bundled AGENTS.md into the host app-owned agent directory when missing", () => {
+test("package skill imports exclude dotenv and auth credential files", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "travis234-cli-"));
+  const syntheticPackageRoot = path.join(root, "package");
+  const bundledSkill = path.join(syntheticPackageRoot, "skills", "credential-audit");
+  const hostHome = path.join(root, "host-home");
+  const agentHome = path.join(root, "agent-home");
+  fs.mkdirSync(bundledSkill, { recursive: true });
+  fs.mkdirSync(hostHome, { recursive: true });
+  fs.writeFileSync(path.join(bundledSkill, "SKILL.md"), "---\nname: credential-audit\n---\nAudit\n");
+  fs.writeFileSync(path.join(bundledSkill, ".env"), "OPENROUTER_API_KEY=secret\n");
+  fs.writeFileSync(path.join(bundledSkill, "auth.json"), '{"openrouter":"secret"}\n');
+
+  prepareSandboxImports(
+    { agentHome, agentsFiles: [], skillsPaths: [], importUserSkills: true },
+    { homeDir: hostHome, packageRoot: syntheticPackageRoot },
+  );
+
+  const imported = path.join(agentHome, "agent", "skills", "credential-audit");
+  assert.equal(fs.existsSync(path.join(imported, "SKILL.md")), true);
+  assert.equal(fs.existsSync(path.join(imported, ".env")), false);
+  assert.equal(fs.existsSync(path.join(imported, "auth.json")), false);
+});
+
+test("package does not seed AGENTS.md into the host agent directory", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "travis234-cli-"));
   const syntheticPackageRoot = path.join(root, "package");
   const bundledAgentsDir = path.join(syntheticPackageRoot, "agents");
@@ -247,12 +265,8 @@ test("package seeds bundled AGENTS.md into the host app-owned agent directory wh
     { homeDir: hostHome, packageRoot: syntheticPackageRoot },
   );
 
-  assert.equal(
-    fs.readFileSync(path.join(hostHome, ".travis234", "agent", "AGENTS.md"), "utf8"),
-    "Bundled travis234 kernel\n",
-  );
-  const imported = fs.readFileSync(path.join(agentHome, "agent", "AGENTS.md"), "utf8");
-  assert.match(imported, /Bundled travis234 kernel/);
+  assert.equal(fs.existsSync(path.join(hostHome, ".travis234", "agent", "AGENTS.md")), false);
+  assert.equal(fs.existsSync(path.join(agentHome, "agent", "AGENTS.md")), false);
 });
 
 test("package seeds bundled skills into the host app-owned agent directory without overwriting user skills", () => {

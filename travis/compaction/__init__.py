@@ -2,6 +2,7 @@
 
 from travis.compaction.compressor import (
     COMPRESSED_SUMMARY_METADATA_KEY,
+    SUMMARY_END_MARKER,
     SUMMARY_PREFIX,
     CompressionResult,
     ContextCompressor,
@@ -18,6 +19,7 @@ from travis.compaction.timing import (
 
 __all__ = [
     "SUMMARY_PREFIX",
+    "SUMMARY_END_MARKER",
     "COMPRESSED_SUMMARY_METADATA_KEY",
     "CompactionManager",
     "CompressionResult",

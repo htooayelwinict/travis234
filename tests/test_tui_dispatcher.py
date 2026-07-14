@@ -5,7 +5,6 @@ import threading
 import pytest
 
 from travis.tui.dispatcher import UiDispatcher
-from travis.tui.model_loader import ModelCatalogLoader
 
 
 class FakeClock:
@@ -130,46 +129,6 @@ def test_dispatcher_rejects_drain_from_non_owner() -> None:
 
     assert len(errors) == 1
     assert isinstance(errors[0], RuntimeError)
-
-
-def test_model_catalog_loader_ignores_stale_results() -> None:
-    dispatcher = UiDispatcher(render=lambda force=False: None)
-    release_old = threading.Event()
-    observed: list[list[str]] = []
-
-    def discover(query: str | None) -> list[str]:
-        if query == "old":
-            release_old.wait(timeout=1)
-        return [str(query)]
-
-    loader = ModelCatalogLoader(discover=discover, post=dispatcher.post)
-    old = loader.load("old", lambda models, error: observed.append(models))
-    current = loader.load("new", lambda models, error: observed.append(models))
-    release_old.set()
-    old.result(timeout=1)
-    current.result(timeout=1)
-    dispatcher.drain()
-    loader.close()
-
-    assert observed == [["new"]]
-
-
-def test_model_catalog_loader_cancel_suppresses_completion() -> None:
-    dispatcher = UiDispatcher(render=lambda force=False: None)
-    release = threading.Event()
-    observed: list[list[str]] = []
-    loader = ModelCatalogLoader(
-        discover=lambda query: (release.wait(timeout=1), [str(query)])[1],
-        post=dispatcher.post,
-    )
-    future = loader.load("cancelled", lambda models, error: observed.append(models))
-    loader.cancel()
-    release.set()
-    future.result(timeout=1)
-    dispatcher.drain()
-    loader.close()
-
-    assert observed == []
 
 
 def _capture_error(callback, errors: list[BaseException]) -> None:

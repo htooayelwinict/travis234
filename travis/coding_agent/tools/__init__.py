@@ -35,8 +35,8 @@ from travis.coding_agent.tools.write import create_write_tool, create_write_tool
 
 ToolName = Literal["read", "bash", "edit", "write", "grep", "find", "ls"]
 
-all_tool_names: list[str] = ["read", "bash", "edit", "write", "grep", "find", "ls"]
-allToolNames: set[str] = set(all_tool_names)
+_ORDERED_TOOL_NAMES: tuple[ToolName, ...] = ("read", "bash", "edit", "write", "grep", "find", "ls")
+all_tool_names: frozenset[str] = frozenset(_ORDERED_TOOL_NAMES)
 
 _DEFINITION_FACTORIES = {
     "read": create_read_tool_definition,
@@ -127,7 +127,7 @@ def create_read_only_tools(cwd: str, options: Mapping[str, object] | None = None
 
 
 def create_all_tools(cwd: str, options: Mapping[str, object] | None = None) -> list[AgentTool]:
-    return [create_tool(name, cwd, options) for name in all_tool_names]
+    return [create_tool(name, cwd, options) for name in _ORDERED_TOOL_NAMES]
 
 
 def create_coding_tool_definitions(cwd: str, options: Mapping[str, object] | None = None) -> list[ToolDefinition]:
@@ -139,44 +139,12 @@ def create_read_only_tool_definitions(cwd: str, options: Mapping[str, object] | 
 
 
 def create_all_tool_definitions(cwd: str, options: Mapping[str, object] | None = None) -> list[ToolDefinition]:
-    return [create_tool_definition(n, cwd, options) for n in all_tool_names]
+    return [create_tool_definition(n, cwd, options) for n in _ORDERED_TOOL_NAMES]
 
 
 def create_all_tools_map(cwd: str, options: Mapping[str, object] | None = None) -> dict[str, AgentTool]:
-    return {name: create_tool(name, cwd, options) for name in all_tool_names}
+    return {name: create_tool(name, cwd, options) for name in _ORDERED_TOOL_NAMES}
 
 
 def create_all_tool_definitions_map(cwd: str, options: Mapping[str, object] | None = None) -> dict[str, ToolDefinition]:
-    return {name: create_tool_definition(name, cwd, options) for name in all_tool_names}
-
-
-createReadTool = create_read_tool
-createReadToolDefinition = create_read_tool_definition
-createBashTool = create_bash_tool
-createBashToolDefinition = create_bash_tool_definition
-createLocalBashOperations = create_local_bash_operations
-createProcessTool = create_process_tool
-createProcessToolDefinition = create_process_tool_definition
-createEditTool = create_edit_tool
-createEditToolDefinition = create_edit_tool_definition
-createWriteTool = create_write_tool
-createWriteToolDefinition = create_write_tool_definition
-createGrepTool = create_grep_tool
-createGrepToolDefinition = create_grep_tool_definition
-createFindTool = create_find_tool
-createFindToolDefinition = create_find_tool_definition
-createLsTool = create_ls_tool
-createLsToolDefinition = create_ls_tool_definition
-createTool = create_tool
-createToolDefinition = create_tool_definition
-createCodingTools = create_coding_tools
-createCodingToolDefinitions = create_coding_tool_definitions
-createReadOnlyTools = create_read_only_tools
-createReadOnlyToolDefinitions = create_read_only_tool_definitions
-createAllTools = create_all_tools_map
-createAllToolDefinitions = create_all_tool_definitions_map
-formatSize = format_size
-truncateHead = truncate_head
-truncateLine = truncate_line
-truncateTail = truncate_tail
-withFileMutationQueue = with_file_mutation_queue
+    return {name: create_tool_definition(name, cwd, options) for name in _ORDERED_TOOL_NAMES}

@@ -9,7 +9,7 @@ from typing import Any
 
 from travis.agent.types import AgentToolResult
 from travis.ai.types import ImageContent, TextContent, ThinkingContent, ToolCall
-from travis.tui.component import Box, Component, Container, Markdown, Spacer, Text
+from travis.tui.components import Box, Component, Container, Markdown, Spacer, Text
 from travis.tui.tui import TUI
 from travis.tui.utils import truncate_to_width, visible_width
 
@@ -28,9 +28,6 @@ class ParsedSkillBlock:
     content: str
     user_message: str | None = None
 
-    @property
-    def userMessage(self) -> str | None:
-        return self.user_message
 
 
 def parse_skill_block(text: str) -> ParsedSkillBlock | None:
@@ -46,7 +43,6 @@ def parse_skill_block(text: str) -> ParsedSkillBlock | None:
     )
 
 
-parseSkillBlock = parse_skill_block
 
 
 class AssistantMessageComponent(Container):
@@ -71,14 +67,12 @@ class AssistantMessageComponent(Container):
         if self._message is not None:
             self.update_content(self._message)
 
-    setHideThinkingBlock = set_hide_thinking_block
 
     def set_hidden_thinking_label(self, label: str) -> None:
         self.hidden_thinking_label = str(label)
         if self._message is not None:
             self.update_content(self._message)
 
-    setHiddenThinkingLabel = set_hidden_thinking_label
 
     def update_content(self, message: Any) -> None:
         self._message = message
@@ -289,19 +283,31 @@ class UserMessageComponent(Container):
         return lines
 
 
-class SkillInvocationMessageComponent(Container):
-    """collapsed/expanded skill invocation renderer."""
-
-    def __init__(self, skill_block: ParsedSkillBlock) -> None:
+class _ExpandableComponent(Container):
+    def __init__(self) -> None:
         super().__init__()
-        self.skill_block = skill_block
         self.expanded = False
-        self._rebuild()
 
     def set_expanded(self, expanded: bool) -> None:
         if self.expanded != expanded:
             self.expanded = expanded
             self._rebuild()
+
+
+class _SummaryMessageComponent(_ExpandableComponent):
+    def __init__(self, message: Any) -> None:
+        super().__init__()
+        self.message = message
+        self._rebuild()
+
+
+class SkillInvocationMessageComponent(_ExpandableComponent):
+    """collapsed/expanded skill invocation renderer."""
+
+    def __init__(self, skill_block: ParsedSkillBlock) -> None:
+        super().__init__()
+        self.skill_block = skill_block
+        self._rebuild()
 
     def invalidate(self) -> None:
         self._rebuild()
@@ -343,7 +349,6 @@ class BashExecutionComponent(Container):
         else:
             self.output_lines.extend(new_lines)
 
-    appendOutput = append_output
 
     def set_complete(
         self,
@@ -363,7 +368,6 @@ class BashExecutionComponent(Container):
         else:
             self.status = "complete"
 
-    setComplete = set_complete
 
     def set_expanded(self, expanded: bool) -> None:
         self.expanded = expanded
@@ -396,27 +400,14 @@ class BashExecutionComponent(Container):
     def get_output(self) -> str:
         return "\n".join(self.output_lines)
 
-    getOutput = get_output
 
     def get_command(self) -> str:
         return self.command
 
-    getCommand = get_command
 
 
-class BranchSummaryMessageComponent(Container):
+class BranchSummaryMessageComponent(_SummaryMessageComponent):
     """collapsed/expanded branch summary renderer."""
-
-    def __init__(self, message: Any) -> None:
-        super().__init__()
-        self.message = message
-        self.expanded = False
-        self._rebuild()
-
-    def set_expanded(self, expanded: bool) -> None:
-        if self.expanded != expanded:
-            self.expanded = expanded
-            self._rebuild()
 
     def invalidate(self) -> None:
         self._rebuild()
@@ -433,19 +424,8 @@ class BranchSummaryMessageComponent(Container):
         self.add(Box(body))
 
 
-class CompactionSummaryMessageComponent(Container):
+class CompactionSummaryMessageComponent(_SummaryMessageComponent):
     """collapsed/expanded compaction summary renderer."""
-
-    def __init__(self, message: Any) -> None:
-        super().__init__()
-        self.message = message
-        self.expanded = False
-        self._rebuild()
-
-    def set_expanded(self, expanded: bool) -> None:
-        if self.expanded != expanded:
-            self.expanded = expanded
-            self._rebuild()
 
     def invalidate(self) -> None:
         self._rebuild()
@@ -464,20 +444,14 @@ class CompactionSummaryMessageComponent(Container):
         self.add(Box(body))
 
 
-class CustomMessageComponent(Container):
+class CustomMessageComponent(_ExpandableComponent):
     """renderer for extension-injected custom messages."""
 
     def __init__(self, message: Any, custom_renderer=None) -> None:
         super().__init__()
         self.message = message
         self.custom_renderer = custom_renderer
-        self.expanded = False
         self._rebuild()
-
-    def set_expanded(self, expanded: bool) -> None:
-        if self.expanded != expanded:
-            self.expanded = expanded
-            self._rebuild()
 
     def invalidate(self) -> None:
         self._rebuild()
@@ -496,7 +470,7 @@ class CustomMessageComponent(Container):
                 pass
 
         body = Container()
-        label = getattr(self.message, "customType", getattr(self.message, "custom_type", "custom"))
+        label = getattr(self.message, "custom_type", "custom")
         body.add(Text(f"[{label}]"))
         body.add(Spacer(1))
         body.add(Markdown(_custom_message_text(self.message)))
@@ -516,7 +490,7 @@ def message_to_component(
     if role == "bashExecution":
         component = BashExecutionComponent(
             getattr(message, "command", ""),
-            exclude_from_context=bool(getattr(message, "excludeFromContext", False)),
+            exclude_from_context=bool(getattr(message, "exclude_from_context", False)),
         )
         output = getattr(message, "output", "")
         if output:
@@ -537,7 +511,7 @@ def message_to_component(
     if role == "custom":
         if not bool(getattr(message, "display", True)):
             return None
-        custom_type = getattr(message, "customType", getattr(message, "custom_type", ""))
+        custom_type = getattr(message, "custom_type", "")
         component = CustomMessageComponent(message, (custom_renderers or {}).get(custom_type))
         return _with_leading_spacer(component)
     if role == "assistant":
@@ -666,14 +640,12 @@ class InteractiveRenderer:
         if self._current_assistant is not None:
             self._current_assistant.set_hidden_thinking_label(self.hidden_thinking_label)
 
-    setHiddenThinkingLabel = set_hidden_thinking_label
 
     def set_hide_thinking_block(self, hidden: bool) -> None:
         self.hide_thinking_block = bool(hidden)
         if self._current_assistant is not None:
             self._current_assistant.set_hide_thinking_block(self.hide_thinking_block)
 
-    setHideThinkingBlock = set_hide_thinking_block
 
     def _add(self, component: Component) -> None:
         self.output_container.add(component)

@@ -6,7 +6,7 @@ from travis.ai.providers.faux import (
     text_response_events,
     tool_call_response_events,
 )
-from travis.ai.stream import register_api_provider, reset_api_providers, stream
+from tests._provider_runtime import register_api_provider, reset_api_providers, stream
 from travis.ai.types import Context, UserMessage, now_ms
 
 

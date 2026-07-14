@@ -1,4 +1,4 @@
-"""Deterministic pruning followed by model-assisted context compaction.
+"""Built-in Travis234 deterministic pruning and model-assisted context compaction.
 
 Pass 1 = deterministic prune (dedup identical tool outputs, summarize old tool
 results, strip images, truncate huge tool-call args). Pass 2 = LLM structured
@@ -36,34 +36,21 @@ HISTORICAL_IN_PROGRESS_HEADING = "## Historical In-Progress State"
 HISTORICAL_PENDING_ASKS_HEADING = "## Historical Pending User Asks"
 HISTORICAL_REMAINING_WORK_HEADING = "## Historical Remaining Work"
 SUMMARY_PREFIX = (
-    "[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted "
-    "into the summary below. This is a handoff from a previous context "
-    "window — treat it as background reference, NOT as active instructions. "
-    "Do NOT answer questions or fulfill requests mentioned in this summary; "
-    "they were already addressed. "
-    "Respond ONLY to the latest user message that appears AFTER this "
-    "summary — that message is the single source of truth for what to do "
-    "right now. "
-    "Topic overlap with the summary does NOT mean you should resume its "
-    "task: even on similar topics, the latest user message WINS. Treat ONLY "
-    "the latest message as the active task and discard stale items from "
-    f"'{HISTORICAL_TASK_HEADING}' / '{HISTORICAL_IN_PROGRESS_HEADING}' / "
-    f"'{HISTORICAL_PENDING_ASKS_HEADING}' / "
-    f"'{HISTORICAL_REMAINING_WORK_HEADING}' entirely — do not 'wrap up' or "
-    "'finish' work described there unless the latest message explicitly "
-    "asks for it. "
-    "Reverse signals in the latest message (e.g. 'stop', 'undo', 'roll "
-    "back', 'just verify', 'don't do that anymore', 'never mind', a new "
-    "topic) must immediately end any in-flight work described in the "
-    "summary; do not re-surface it in later turns. "
-    "IMPORTANT: Your persistent memory (MEMORY.md, USER.md) in the system "
-    "prompt is ALWAYS authoritative and active — never ignore or deprioritize "
-    "memory content due to this compaction note. "
-    "The current session state (files, config, etc.) may reflect work "
-    "described here — avoid repeating it:"
+    "[CONTEXT COMPACTION — REFERENCE ONLY] The summary below is historical "
+    "state at the compaction cut, NOT active instructions. Do not execute or "
+    "resume requests, constraints, pending asks, or remaining work quoted in "
+    "it. Respond ONLY to the latest user message after the end marker; the "
+    "latest user message WINS even when topics overlap. Use this summary only "
+    "as background to avoid repeating completed work. The persistent memory in "
+    "the system prompt remains authoritative:"
+)
+_GENERIC_SUMMARY_PREFIX = (
+    "The conversation history before this point was compacted into the following summary:\n\n"
+    "<summary>"
 )
 LEGACY_SUMMARY_PREFIX = "[CONTEXT SUMMARY]:"
 _HISTORICAL_SUMMARY_PREFIXES = (
+    _GENERIC_SUMMARY_PREFIX,
     "[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted "
     "into the summary below. This is a handoff from a previous context "
     "window — treat it as background reference, NOT as active instructions. "
@@ -99,9 +86,13 @@ _HISTORICAL_SUMMARY_PREFIXES = (
     "config, etc.) may reflect work described here — avoid repeating it:",
 )
 SUMMARY_END_MARKER = "--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---"
+_HISTORICAL_SUMMARY_END_MARKERS = (
+    "</summary>",
+)
 # Travis234 keeps this as an underscore-prefixed in-process key so strict provider
 # gateways never see a non-standard message field on the wire.
 COMPRESSED_SUMMARY_METADATA_KEY = "_compressed_summary"
+NON_TURN_USER_METADATA_KEY = "_non_turn_user"
 _TOOL_RESULT_SUMMARY_MIN = 200
 _TOOL_ARGS_MAX = 500
 _IMAGE_TOKEN_ESTIMATE = 1600
@@ -111,12 +102,64 @@ _MAX_TAIL_MESSAGE_FLOOR = 8
 _MESSAGE_TOKEN_OVERHEAD = 10
 _AUX_MODEL_ERROR_MAX_CHARS = 220
 _FALLBACK_SUMMARY_MAX_CHARS = 8_000
+_FALLBACK_SUMMARY_TAIL_CHARS = 1_200
 _FALLBACK_TURN_MAX_CHARS = 700
 _MIN_SUMMARY_TOKENS = 2000
 _SUMMARY_RATIO = 0.20
-_SUMMARY_TOKENS_CEILING = 12_000
+_SUMMARY_TOKENS_CEILING = 10_000
 _SUMMARY_FAILURE_COOLDOWN_SECONDS = 600.0
 _NO_SUMMARY_PROVIDER_ERROR = "no auxiliary LLM provider configured"
+
+
+def _summary_failure_status(exc: Exception) -> int | None:
+    value = getattr(exc, "status_code", None)
+    if value is None:
+        value = getattr(getattr(exc, "response", None), "status_code", None)
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_summary_auth_failure(exc: Exception) -> bool:
+    if _summary_failure_status(exc) in {401, 403}:
+        return True
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in (
+            "invalid api key",
+            "invalid x-api-key",
+            "unauthorized",
+            "authentication failed",
+            "authentication error",
+            "permission denied",
+        )
+    ) or ("api key" in text and any(marker in text for marker in ("invalid", "blocked", "expired")))
+
+
+def _is_summary_network_failure(exc: Exception) -> bool:
+    error_type = type(exc).__name__.lower()
+    if any(marker in error_type for marker in ("connection", "timeout", "dns", "ssl")):
+        return True
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in (
+            "connection refused",
+            "name or service not known",
+            "no route to host",
+            "network is unreachable",
+            "timed out",
+            "connection reset",
+            "incomplete chunked read",
+            "peer closed connection",
+            "response ended prematurely",
+            "unexpected eof",
+            "remoteprotocolerror",
+            "localprotocolerror",
+        )
+    )
 _COMPRESSION_SYSTEM_NOTE = (
     "[Note: Some earlier conversation turns have been compacted into a handoff summary "
     "to preserve context space. The current session state may still reflect earlier work, "
@@ -142,7 +185,10 @@ _SECRET_ASSIGNMENT_RE = re.compile(
     re.IGNORECASE,
 )
 _JSON_SECRET_RE = re.compile(
-    r'("?[A-Za-z0-9_-]*(?:api[_-]?key|token|secret|password|credential|connection[_-]?string)[A-Za-z0-9_-]*"?\s*:\s*)"[^"]+"',
+    r'(?<![A-Za-z0-9_-])('
+    r'"?[A-Za-z0-9_-]{0,64}'
+    r'(?:api[_-]?key|token|secret|password|credential|connection[_-]?string)'
+    r'[A-Za-z0-9_-]{0,64}"?\s*:\s*)"[^"\r\n]*"',
     re.IGNORECASE,
 )
 _AUTH_HEADER_RE = re.compile(r"(Authorization\s*:\s*Bearer\s+)[^\s]+", re.IGNORECASE)
@@ -292,6 +338,32 @@ def _sanitize_summary_source_text(text: str) -> str:
     return _MEDIA_DIRECTIVE_RE.sub("[media attachment]", _redact_sensitive_text(text))
 
 
+def _strip_inline_reasoning_blocks(text: str) -> str:
+    """Remove transient model scratch work before compaction persists it."""
+
+    if not text:
+        return ""
+    tag_names = r"think|thinking|reasoning|thought|REASONING_SCRATCHPAD"
+    cleaned = re.sub(
+        rf"<(?P<tag>{tag_names})\b[^>]*>.*?</(?P=tag)>",
+        "",
+        text,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        rf"(?:^|\n)[ \t]*<(?:{tag_names})\b[^>]*>.*$",
+        "",
+        cleaned,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    return re.sub(
+        rf"</?(?:{tag_names})\b[^>]*>\s*",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+
+
 _PATH_MENTION_RE = re.compile(r"(?:/|~/?|[A-Za-z]:\\)[^\s`'\")\]}<>]+")
 _FILE_OPERATION_TAG_RE = re.compile(r"<(read-files|modified-files)>\s*(.*?)\s*</\1>", re.DOTALL)
 
@@ -398,7 +470,12 @@ class CompressionResult:
     summary: str | None = None
     tokens_before: int = 0
     first_kept_message_index: int | None = None
-    details: dict[str, list[str]] | None = None
+    details: dict[str, object] | None = None
+    summary_model_requested: str | None = None
+    summary_model_used: str | None = None
+    summary_model_fallback: bool = False
+    summary_model_error: str | None = None
+    summary_model_dedicated: bool = False
 
 
 class ContextCompressor:
@@ -421,12 +498,15 @@ class ContextCompressor:
         model: str = "main",
         summary_model_override: str | None = None,
         abort_on_summary_failure: bool = False,
+        max_tokens: int | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.model = model
         self.summary_model = summary_model_override or ""
         self.context_length = context_length
-        self.threshold_percent = threshold_percent
+        self._configured_threshold_percent = float(threshold_percent)
+        self.threshold_percent = self._configured_threshold_percent
+        self.max_tokens = self._coerce_max_tokens(max_tokens)
         self.protect_first_n = protect_first_n
         self.protect_last_n = protect_last_n
         self.summary_target_ratio = max(0.10, min(summary_target_ratio, 0.80))
@@ -437,6 +517,7 @@ class ContextCompressor:
         self._clock = clock
         self._previous_summary: str | None = None
         self._ineffective_compression_count = 0
+        self._verify_compaction_cleared_threshold = False
         self._summary_failure_cooldown_until = 0.0
         self._last_summary_error: str | None = None
         self._last_summary_dropped_count = 0
@@ -444,7 +525,12 @@ class ContextCompressor:
         self._last_compress_aborted = False
         self._last_aux_model_failure_error: str | None = None
         self._last_aux_model_failure_model: str | None = None
+        self._last_summary_model_requested: str | None = None
+        self._last_summary_model_used: str | None = None
+        self._last_summary_model_fallback_used = False
         self._summary_model_fallen_back = False
+        self._last_summary_auth_failure = False
+        self._last_summary_network_failure = False
         self.last_prompt_tokens = 0
         self.last_completion_tokens = 0
         self.last_total_tokens = 0
@@ -458,7 +544,11 @@ class ContextCompressor:
 
     @property
     def threshold_tokens(self) -> int:
-        return int(self.context_length * self.threshold_percent)
+        return self._compute_threshold_tokens(
+            self.context_length,
+            self.threshold_percent,
+            self.max_tokens,
+        )
 
     @property
     def tail_token_budget(self) -> int:
@@ -470,6 +560,64 @@ class ContextCompressor:
         if self._ineffective_compression_count >= 2:
             return False
         return True
+
+    def update_context_window(
+        self,
+        context_length: int,
+        *,
+        threshold_percent: float | None = None,
+        max_tokens: int | None = None,
+        model: str | None = None,
+    ) -> None:
+        """Recalibrate model-owned limits without discarding session compaction history."""
+
+        resolved_length = int(context_length)
+        if resolved_length <= 0:
+            raise ValueError("context_length must be positive")
+        self.context_length = resolved_length
+        if threshold_percent is not None:
+            self._configured_threshold_percent = float(threshold_percent)
+        self.threshold_percent = self._configured_threshold_percent
+        if max_tokens is not None:
+            self.max_tokens = self._coerce_max_tokens(max_tokens)
+        if model is not None:
+            self.model = model
+        self.max_summary_tokens = min(int(resolved_length * 0.05), _SUMMARY_TOKENS_CEILING)
+
+        # Provider usage and anti-thrash calibration describe the previous
+        # model's window. Preserve summaries and the durable ledger, but make
+        # the next request prove that it fits the newly selected model.
+        self.last_prompt_tokens = 0
+        self.last_completion_tokens = 0
+        self.last_total_tokens = 0
+        self.last_real_prompt_tokens = 0
+        self.last_compression_rough_tokens = 0
+        self.last_rough_tokens_when_real_prompt_fit = 0
+        self.awaiting_real_usage_after_compression = False
+        self._ineffective_compression_count = 0
+        self._verify_compaction_cleared_threshold = False
+
+    @staticmethod
+    def _coerce_max_tokens(value: object) -> int | None:
+        if value is None:
+            return None
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    @staticmethod
+    def _compute_threshold_tokens(
+        context_length: int,
+        threshold_percent: float,
+        max_tokens: int | None = None,
+    ) -> int:
+        effective_window = context_length - (max_tokens or 0)
+        if effective_window <= 0:
+            effective_window = context_length
+        percentage_value = int(effective_window * threshold_percent)
+        return max(1, min(percentage_value, effective_window - 1))
 
     def update_from_response(self, usage: dict) -> None:
         self.last_prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
@@ -486,13 +634,22 @@ class ContextCompressor:
             if self.last_prompt_tokens < self.threshold_tokens:
                 if self.awaiting_real_usage_after_compression and self.last_compression_rough_tokens > 0:
                     self.last_rough_tokens_when_real_prompt_fit = self.last_compression_rough_tokens
+                self._ineffective_compression_count = 0
             else:
                 self.last_rough_tokens_when_real_prompt_fit = 0
+            if self._verify_compaction_cleared_threshold:
+                if self.last_prompt_tokens >= self.threshold_tokens:
+                    self._ineffective_compression_count += 1
+                else:
+                    self._ineffective_compression_count = 0
+        self._verify_compaction_cleared_threshold = False
         self.awaiting_real_usage_after_compression = False
 
     def should_defer_preflight_to_real_usage(self, rough_tokens: int) -> bool:
         if rough_tokens < self.threshold_tokens:
             return False
+        if self.awaiting_real_usage_after_compression:
+            return True
         if self.last_real_prompt_tokens <= 0:
             return False
         if self.last_real_prompt_tokens >= self.threshold_tokens:
@@ -656,30 +813,63 @@ class ContextCompressor:
 
     def _find_last_user_message_index(self, messages: list[Message], head_end: int) -> int:
         for index in range(len(messages) - 1, head_end - 1, -1):
-            if getattr(messages[index], "role", None) == "user":
+            if (
+                getattr(messages[index], "role", None) == "user"
+                and not self._is_context_summary_message(messages[index])
+                and not bool(getattr(messages[index], NON_TURN_USER_METADATA_KEY, False))
+            ):
                 return index
         return -1
 
-    def _find_last_assistant_message_index(self, messages: list[Message], head_end: int) -> int:
-        last_any = -1
+    def _find_last_assistant_message_index(
+        self,
+        messages: list[Message],
+        head_end: int,
+        *,
+        include_context_summary: bool = True,
+    ) -> int:
         for index in range(len(messages) - 1, head_end - 1, -1):
             message = messages[index]
             if getattr(message, "role", None) != "assistant":
                 continue
-            if last_any < 0:
-                last_any = index
+            if not include_context_summary and self._is_context_summary_message(message):
+                continue
+            if getattr(message, "stop_reason", None) != "stop":
+                continue
             if any(isinstance(block, TextContent) and block.text.strip() for block in message.content):
                 return index
-        return last_any
+        return -1
 
     def _ensure_last_user_message_in_tail(self, messages: list[Message], tail_start: int, head_end: int) -> int:
         last_user = self._find_last_user_message_index(messages, head_end)
         if last_user < 0 or last_user >= tail_start:
             return tail_start
-        return max(last_user, head_end + 1)
+        adjusted = max(last_user, head_end + 1)
+        if adjusted > last_user:
+            return max(self._find_turn_end(messages, last_user), head_end + 1)
+        return adjusted
 
-    def _ensure_last_assistant_message_in_tail(self, messages: list[Message], tail_start: int, head_end: int) -> int:
-        last_assistant = self._find_last_assistant_message_index(messages, head_end)
+    @staticmethod
+    def _find_turn_end(messages: list[Message], user_index: int) -> int:
+        """Return the first message after the user-led turn at ``user_index``."""
+        index = user_index + 1
+        while index < len(messages) and getattr(messages[index], "role", None) != "user":
+            index += 1
+        return index
+
+    def _ensure_last_assistant_message_in_tail(
+        self,
+        messages: list[Message],
+        tail_start: int,
+        head_end: int,
+        *,
+        include_context_summary: bool = True,
+    ) -> int:
+        last_assistant = self._find_last_assistant_message_index(
+            messages,
+            head_end,
+            include_context_summary=include_context_summary,
+        )
         if last_assistant < 0 or last_assistant >= tail_start:
             return tail_start
         return max(self._align_boundary_backward(messages, last_assistant), head_end + 1)
@@ -792,13 +982,22 @@ class ContextCompressor:
         first_tail_role = self._summary_neighbor_role(messages[tail_start] if tail_start < len(messages) else None)
 
         merge_summary_into_tail = False
-        if last_head_role in {"assistant", "tool"}:
+        force_user_leading = last_head_role == "system"
+        if not force_user_leading:
+            user_survives = any(
+                getattr(message, "role", None) == "user"
+                and not self._is_context_summary_message(message)
+                for message in [*messages[:head_end], *messages[tail_start:]]
+            )
+            force_user_leading = not user_survives
+
+        if last_head_role in {"assistant", "tool"} or force_user_leading:
             summary_role = "user"
         else:
             summary_role = "assistant"
-        if summary_role == first_tail_role:
+        if tail_start < len(messages) and summary_role == first_tail_role:
             flipped = "assistant" if summary_role == "user" else "user"
-            if flipped != last_head_role:
+            if flipped != last_head_role and not force_user_leading:
                 summary_role = flipped
             else:
                 merge_summary_into_tail = True
@@ -826,8 +1025,10 @@ class ContextCompressor:
             if text.startswith(prefix):
                 text = text[len(prefix):].lstrip()
                 break
-        if text.endswith(SUMMARY_END_MARKER):
-            text = text[: -len(SUMMARY_END_MARKER)].rstrip()
+        for marker in (SUMMARY_END_MARKER, *_HISTORICAL_SUMMARY_END_MARKERS):
+            if text.endswith(marker):
+                text = text[: -len(marker)].rstrip()
+                break
         return text
 
     @classmethod
@@ -864,30 +1065,45 @@ class ContextCompressor:
 
     def _fallback_to_main_for_compression(self, exc: Exception) -> None:
         self._summary_model_fallen_back = True
-        self._last_aux_model_failure_error = self._compact_error_text(exc)
+        self._last_aux_model_failure_error = _redact_sensitive_text(self._compact_error_text(exc))
         self._last_aux_model_failure_model = self.summary_model
-        self.summary_model = ""
+        self._last_summary_model_fallback_used = True
 
     def _run_summary_summarizer(self, prompt: str, summarizer: Optional[Summarizer]) -> str | None:
         if self.summary_model and self._summary_summarizer is not None:
+            self._last_summary_model_requested = self.summary_model
             try:
-                summary = self._summary_summarizer(prompt)
+                summary = self._validated_summary_output(self._summary_summarizer(prompt))
             except Exception as exc:
                 if self._can_fallback_to_main_summarizer():
                     self._fallback_to_main_for_compression(exc)
                     if summarizer is not None:
-                        summary = summarizer(prompt)
-                        self._summary_model_fallen_back = False
+                        try:
+                            summary = self._validated_summary_output(summarizer(prompt))
+                        finally:
+                            self._summary_model_fallen_back = False
+                        self._last_summary_model_used = self.model
                         return summary
                 raise
             self._summary_model_fallen_back = False
+            self._last_summary_model_used = self.summary_model
             return summary
 
         if summarizer is not None:
-            summary = summarizer(prompt)
+            self._last_summary_model_requested = self.model
+            summary = self._validated_summary_output(summarizer(prompt))
             self._summary_model_fallen_back = False
+            self._last_summary_model_used = self.model
             return summary
         return None
+
+    @staticmethod
+    def _validated_summary_output(summary: object) -> str:
+        text = summary if isinstance(summary, str) else str(summary or "")
+        text = _strip_inline_reasoning_blocks(text).strip()
+        if not text:
+            raise RuntimeError("Context compression LLM returned empty content")
+        return text
 
     def generate_summary(
         self,
@@ -913,7 +1129,7 @@ PREVIOUS SUMMARY:
 NEW TURNS TO INCORPORATE:
 {serialized}
 
-Update the summary using this exact structure. PRESERVE all existing information that is still relevant. ADD new completed actions to the numbered list (continue numbering). Move items from "In Progress" to "Completed Actions" when done. Move answered questions to "Resolved Questions". Update "Active State" to reflect current state. Remove information only if it is clearly obsolete. CRITICAL: Update "## Active Task" to reflect the user's most recent unfulfilled input — this includes any question, decision request, or discussion turn that the assistant has not yet answered. Only write "None" if the last exchange was fully resolved.
+Update the summary using this exact structure. PRESERVE all existing information that is still relevant. ADD new completed actions to the numbered list (continue numbering). Move items from "Historical In-Progress State" to "Completed Actions" only when the supplied turns contain explicit completion evidence. Move answered questions to "Resolved Questions". Update "Active State" to reflect the historical state at the compaction cut. Remove information only if it is clearly obsolete. CRITICAL: update "Historical Task Snapshot" from the supplied turns without treating it as a new instruction. The protected raw suffix after this summary is authoritative for the current task.
 
 {template}"""
         else:
@@ -937,6 +1153,8 @@ This compaction should PRIORITISE preserving all information related to the focu
         if summary is not None:
             self._summary_failure_cooldown_until = 0.0
             self._last_summary_error = None
+            self._last_summary_auth_failure = False
+            self._last_summary_network_failure = False
             return _redact_sensitive_text(summary)
         self._summary_failure_cooldown_until = self._clock() + _SUMMARY_FAILURE_COOLDOWN_SECONDS
         self._last_summary_error = _NO_SUMMARY_PROVIDER_ERROR
@@ -966,45 +1184,46 @@ This compaction should PRIORITISE preserving all information related to the focu
 
     def _summary_template(self, summary_budget: int) -> str:
         return f"""{HISTORICAL_TASK_HEADING}
-[THE SINGLE MOST IMPORTANT FIELD. Capture the user's most recent unfulfilled input verbatim. If no outstanding task exists, write "None."]
+[Capture the user's most recent unfulfilled input in the supplied turns. This is a historical snapshot at the compaction cut, not a current instruction. If no outstanding item is evidenced, write "None."]
 
 ## Goal
-[What the user is trying to accomplish overall]
+[What the user was trying to accomplish overall. Preserve distinct tasks when the session covers multiple items.]
 
 ## Constraints & Preferences
-[User preferences, coding style, constraints, important decisions]
+[Preserve only constraints, preferences, requirements, and decisions explicitly stated by the USER. Scope task-local instructions to their originating task or turn. Never infer a global preference from assistant behavior, tool calls, generated files, or repetition. Write "(none)" if none were stated.]
 
 ## Completed Actions
-[Numbered list of concrete actions taken — include tool used, target, and outcome.]
+[Numbered concrete actions supported by supplied assistant/tool evidence — include target and outcome. Mark work completed only when explicit completion or verification evidence exists.]
 
-## Active State
-[Current working state, modified files, test status, running processes, and environment details that matter.]
+## Active State at Compaction Cut
+[Historical working state immediately before the protected raw suffix: modified files, test status, running processes, and relevant environment details. Do not claim this is the present state.]
 
 {HISTORICAL_IN_PROGRESS_HEADING}
-[Work currently underway — what was being done when compaction fired]
+[Work underway at the end of the supplied turns. A task must never appear both here and in Completed Actions.]
 
 ## Blocked
-[Any blockers, errors, or issues not yet resolved. Include exact error messages.]
+[Historical blockers or exact errors. Write "(none)" if there are none.]
 
 ## Key Decisions
-[Important technical decisions and why they were made]
+[- **Decision**: rationale. Preserve decisions from every task represented in the compacted history.]
 
 ## Resolved Questions
-[Questions the user asked that were already answered — include the answer so it is not repeated]
+[Questions already answered in the supplied turns, including the answer so they are not repeated.]
 
 {HISTORICAL_PENDING_ASKS_HEADING}
-[Questions or requests from the user that have not yet been answered or fulfilled. These are stale reference only. If none, write "None."]
+[Questions or requests not fulfilled within the supplied turns. These are historical reference only; the agent must not act on them unless the latest raw user message asks it to. Write "None." if none.]
 
 ## Relevant Files
 [Files read, modified, or created — with brief note on each]
 
 {HISTORICAL_REMAINING_WORK_HEADING}
-[What remains to be done — framed as stale context for reference only. The agent must not resume this work unless the latest user message explicitly asks for it.]
+[Work that remained at the compaction cut. Frame it as historical reference, never as an active plan. The protected raw suffix and latest raw user message are authoritative.]
 
 ## Critical Context
 [Any specific values, error messages, configuration details, or data that would be lost without explicit preservation. NEVER include API keys, tokens, passwords, or credentials — write [REDACTED] instead.]
 
 Target ~{summary_budget} tokens. Be CONCRETE — include file paths, command outputs, error messages, line numbers, and specific values. Avoid vague descriptions like "made some changes" — say exactly what changed.
+SELF-CONSISTENCY CHECK: Before output, verify that no task is listed as both completed and in progress, no task-local instruction is presented as global, and every claimed verification has explicit evidence in the supplied turns.
 {self._temporal_anchoring_rule()}
 Write only the summary body. Do not include any preamble or prefix."""
 
@@ -1081,7 +1300,8 @@ Write only the summary body. Do not include any preamble or prefix."""
     def _assistant_text_for_summary(message: Message) -> str:
         if getattr(message, "role", None) != "assistant":
             return _message_text(message)
-        return "".join(block.text for block in message.content if isinstance(block, TextContent))
+        text = "".join(block.text for block in message.content if isinstance(block, TextContent))
+        return _strip_inline_reasoning_blocks(text)
 
     @classmethod
     def _scrub_tool_arg_for_summary(cls, value):
@@ -1244,7 +1464,13 @@ Continue from the most recent unfulfilled user ask and protected tail messages. 
 Summary generation was unavailable, so this is a best-effort deterministic fallback for {len(middle)} compacted message(s).{reason_text}"""
         summary = _redact_sensitive_text(_scrub_internal_replay_markers(body.strip()))
         if len(summary) > _FALLBACK_SUMMARY_MAX_CHARS:
-            summary = summary[: _FALLBACK_SUMMARY_MAX_CHARS - 42].rstrip() + "\n...[fallback summary truncated]"
+            marker = "\n...[fallback summary middle truncated]...\n"
+            head_chars = _FALLBACK_SUMMARY_MAX_CHARS - _FALLBACK_SUMMARY_TAIL_CHARS - len(marker)
+            summary = (
+                summary[:head_chars].rstrip()
+                + marker
+                + summary[-_FALLBACK_SUMMARY_TAIL_CHARS :].lstrip()
+            )
         return summary
 
     # --- Orchestrator ---
@@ -1257,6 +1483,8 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         focus_topic: str | None = None,
         force: bool = False,
         deep: bool = False,
+        durable: bool = False,
+        summary_only: bool = False,
     ) -> CompressionResult:
         summarizer = summarizer or self._summarizer
         before = estimate_tokens(messages)
@@ -1267,23 +1495,44 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         self._last_compress_aborted = False
         self._last_aux_model_failure_error = None
         self._last_aux_model_failure_model = None
+        self._last_summary_model_requested = self.summary_model or self.model
+        self._last_summary_model_used = None
+        self._last_summary_model_fallback_used = False
+        self._summary_model_fallen_back = False
         if force and self._summary_failure_cooldown_until > 0.0:
             self._summary_failure_cooldown_until = 0.0
 
         pruned = self.prune_old_tool_results(messages)
-        head_end = self._protect_head_size(pruned)
-        head_end = self._align_boundary_forward(pruned, head_end)
-        tail_start = self._find_tail_start(pruned, head_end, deep=deep)
+        # Lossy pruning is input preparation for the summarizer only. Any head
+        # or tail retained for provider replay must come from the raw transcript;
+        # otherwise schema-valid tool arguments can be replaced by internal
+        # compaction metadata and then imitated by the model on later turns.
+        boundary_messages = messages
+        if summary_only:
+            # Failed request payloads can themselves be the oversized recent
+            # tail. Summarize the whole failed context so that payload is not
+            # immediately replayed beside its summary on the next turn.
+            head_end = 0
+            tail_start = len(boundary_messages)
+        else:
+            head_end = 0 if durable else self._protect_head_size(messages)
+            head_end = self._align_boundary_forward(boundary_messages, head_end)
+            tail_start = self._find_tail_start(
+                boundary_messages,
+                head_end,
+                deep=deep,
+                preserve_role_anchors=True,
+                preserve_summary_anchor=not durable,
+            )
 
         if tail_start <= head_end:
-            emergency_window = self._oversized_protected_head_window(pruned, head_end, before, force=force)
+            emergency_window = self._oversized_protected_head_window(messages, head_end, before, force=force)
             if emergency_window is None:
                 self._last_noop_reason = "protected_recent_context"
-                after = estimate_tokens(pruned)
                 return CompressionResult(
-                    messages=pruned,
+                    messages=messages,
                     compressed=False,
-                    savings_pct=_savings(before, after),
+                    savings_pct=0.0,
                     tokens_before=before,
                 )
             head_end, tail_start = emergency_window
@@ -1304,27 +1553,32 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         try:
             summary_text = self.generate_summary(middle, summarizer, focus_topic=focus_topic)
         except Exception as exc:  # noqa: BLE001 - fallback handoff mirrors default behavior
-            self._last_summary_error = str(exc)
+            self._last_summary_error = _redact_sensitive_text(self._compact_error_text(exc))
+            if _is_summary_auth_failure(exc):
+                self._last_summary_auth_failure = True
+            if _is_summary_network_failure(exc):
+                self._last_summary_network_failure = True
             self._summary_failure_cooldown_until = self._clock() + _SUMMARY_FAILURE_COOLDOWN_SECONDS
-            if self.abort_on_summary_failure:
-                self._last_compress_aborted = True
-                after = estimate_tokens(pruned)
-                return CompressionResult(
-                    messages=pruned,
-                    compressed=False,
-                    savings_pct=_savings(before, after),
-                    tokens_before=before,
-                )
             summary_text = None
         if summary_text is None:
-            if self.abort_on_summary_failure:
+            if (
+                self.abort_on_summary_failure
+                or self._last_summary_auth_failure
+                or self._last_summary_network_failure
+            ):
                 self._last_compress_aborted = True
-                after = estimate_tokens(pruned)
                 return CompressionResult(
-                    messages=pruned,
+                    messages=messages,
                     compressed=False,
-                    savings_pct=_savings(before, after),
+                    savings_pct=0.0,
                     tokens_before=before,
+                    summary_model_requested=self._last_summary_model_requested,
+                    summary_model_used=self._last_summary_model_used,
+                    summary_model_fallback=self._last_summary_model_fallback_used,
+                    summary_model_error=(
+                        self._last_aux_model_failure_error or self._last_summary_error
+                    ),
+                    summary_model_dedicated=bool(self.summary_model and self._summary_summarizer is not None),
                 )
             self._last_summary_dropped_count = len(middle)
             self._last_summary_fallback_used = True
@@ -1335,18 +1589,19 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         formatted_file_operations = _format_file_operations(read_files, modified_files)
         if formatted_file_operations:
             summary_text = _strip_file_operation_tags(summary_text) + formatted_file_operations
-        details = {"readFiles": read_files, "modifiedFiles": modified_files}
-        result = self._assemble_compressed_messages(pruned, head_end, tail_start, summary_text)
+        details: dict[str, object] = {"readFiles": read_files, "modifiedFiles": modified_files}
+        result = self._assemble_compressed_messages(
+            messages,
+            head_end,
+            tail_start,
+            summary_text,
+        )
         result = self._sanitize_tool_pairs(result)
         result = self._strip_historical_media(result)
 
         after = estimate_tokens(result)
         savings = _savings(before, after)
         self.last_compression_savings_pct = savings
-        if savings < 10:
-            self._ineffective_compression_count += 1
-        else:
-            self._ineffective_compression_count = 0
         self._previous_summary = summary_text
         self.compression_count += 1
         return CompressionResult(
@@ -1357,9 +1612,22 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             tokens_before=before,
             first_kept_message_index=tail_start,
             details=details,
+            summary_model_requested=self._last_summary_model_requested,
+            summary_model_used=self._last_summary_model_used,
+            summary_model_fallback=self._last_summary_model_fallback_used,
+            summary_model_error=(self._last_aux_model_failure_error or self._last_summary_error),
+            summary_model_dedicated=bool(self.summary_model and self._summary_summarizer is not None),
         )
 
-    def _find_tail_start(self, messages: list[Message], head_end: int, *, deep: bool = False) -> int:
+    def _find_tail_start(
+        self,
+        messages: list[Message],
+        head_end: int,
+        *,
+        deep: bool = False,
+        preserve_role_anchors: bool = True,
+        preserve_summary_anchor: bool = True,
+    ) -> int:
         if head_end >= len(messages):
             return len(messages)
         budget = self.tail_token_budget
@@ -1400,8 +1668,14 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             index = max(fallback_cut, head_end + 1)
 
         index = self._align_boundary_backward(messages, index)
-        index = self._ensure_last_user_message_in_tail(messages, index, head_end)
-        index = self._ensure_last_assistant_message_in_tail(messages, index, head_end)
+        if preserve_role_anchors:
+            index = self._ensure_last_user_message_in_tail(messages, index, head_end)
+            index = self._ensure_last_assistant_message_in_tail(
+                messages,
+                index,
+                head_end,
+                include_context_summary=preserve_summary_anchor,
+            )
         return min(len(messages), max(index, head_end + 1))
 
     def _oversized_protected_head_window(

@@ -83,7 +83,14 @@ def test_process_schema_matches_action_specific_runtime_contracts() -> None:
     assert all(schema.errors(arguments) for arguments in invalid)
 
 
-def test_process_argument_preparation_recovers_common_model_aliases_without_inventing_cursor() -> None:
+def test_process_start_error_routes_model_to_bash_launcher() -> None:
+    with pytest.raises(ValueError, match="has no start action.*bash"):
+        process_tool_module.prepare_process_arguments(
+            {"action": "start", "command": "python3 producer.py"}
+        )
+
+
+def test_process_argument_preparation_normalizes_wait_modes_without_inventing_cursor() -> None:
     wait_with_yield = {
         "action": "wait",
         "session_id": "proc_x",
@@ -117,21 +124,7 @@ def test_process_argument_preparation_recovers_common_model_aliases_without_inve
         "cursor": 4,
         "wait_time_ms": 60_000,
     }
-    assert process_tool_module.prepare_process_arguments(
-        {"action": "wait", "sessionId": "proc_x", "nextCursor": "9", "waitTimeMs": "60000"}
-    ) == {"action": "wait", "session_id": "proc_x", "cursor": 9, "wait_time_ms": 60_000}
-
-
-def test_process_argument_preparation_rejects_ambiguous_aliases_and_wait_timing() -> None:
-    with pytest.raises(ValueError, match="conflicting process arguments: session_id and sessionId"):
-        process_tool_module.prepare_process_arguments(
-            {
-                "action": "kill",
-                "session_id": "proc_a",
-                "sessionId": "proc_b",
-            }
-        )
-
+def test_process_argument_preparation_rejects_ambiguous_wait_timing() -> None:
     with pytest.raises(ValueError, match="wait action received both wait_time_ms and yield_time_ms"):
         process_tool_module.prepare_process_arguments(
             {
@@ -142,6 +135,14 @@ def test_process_argument_preparation_rejects_ambiguous_aliases_and_wait_timing(
                 "yield_time_ms": 1_000,
             }
         )
+
+
+@pytest.mark.parametrize("alias", ["sessionId", "nextCursor", "yieldTimeMs", "waitTimeMs", "maxBytes"])
+def test_process_tool_rejects_compatibility_arguments(alias: str) -> None:
+    arguments = {"action": "poll", "session_id": "proc_x", "cursor": 0, alias: "legacy"}
+
+    with pytest.raises(ValueError, match=rf"poll does not accept {alias}"):
+        process_tool_module._validate_args(arguments)
 
 
 def test_process_argument_preparation_explains_required_wait_shape() -> None:
@@ -158,6 +159,35 @@ def test_process_argument_preparation_preserves_legacy_write_shapes() -> None:
 
     assert process_tool_module.prepare_process_arguments(submitted)["action"] == "write"
     assert process_tool_module.prepare_process_arguments(raw)["action"] == "write_raw"
+
+
+@pytest.mark.parametrize("payload_field", ["content", "data"])
+def test_process_argument_preparation_normalizes_common_stdin_payload_names(
+    payload_field: str,
+) -> None:
+    arguments = {
+        "action": "write",
+        "session_id": "proc_x",
+        payload_field: "ping\n",
+    }
+
+    assert process_tool_module.prepare_process_arguments(arguments) == {
+        "action": "write_raw",
+        "session_id": "proc_x",
+        "input": "ping\n",
+    }
+
+
+def test_process_argument_preparation_rejects_ambiguous_stdin_payload_names() -> None:
+    with pytest.raises(ValueError, match="multiple stdin payload fields"):
+        process_tool_module.prepare_process_arguments(
+            {
+                "action": "write",
+                "session_id": "proc_x",
+                "input": "ping",
+                "content": "different",
+            }
+        )
 
 
 @pytest.fixture
@@ -226,6 +256,20 @@ def test_managed_bash_default_yield_is_independent_from_timeout(tmp_path: Path) 
     assert service.yield_time_ms == 10_000
     assert service.request.timeout_seconds == 600
     assert service.request.launch_session_id == "session-abc"
+    assert service.request.stdin_open is False
+
+
+def test_managed_bash_closes_stdin_by_default_so_searches_do_not_wait_for_input(managed_tools) -> None:
+    _service, _owner, bash, _process = managed_tools
+    command = python_command(
+        "import sys; data=sys.stdin.read(); print('EOF' if data == '' else 'UNEXPECTED_INPUT')"
+    )
+
+    result = bash.execute("bash", {"command": command, "yield_time_ms": 1_000})
+
+    assert result.details["status"] == "exited"
+    assert result.details["exitCode"] == 0
+    assert "EOF" in text(result)
 
 
 @pytest.mark.parametrize(
@@ -274,7 +318,7 @@ def test_running_process_results_expose_suggested_poll_delay(managed_tools) -> N
     _service, _owner, bash, process = managed_tools
     started = bash.execute(
         "bash",
-        {"command": python_command("import time; time.sleep(1)"), "yield_time_ms": 0},
+        {"command": python_command("import time; time.sleep(3)"), "yield_time_ms": 0},
     )
 
     polled = process.execute(
@@ -296,6 +340,20 @@ def test_running_process_results_expose_suggested_poll_delay(managed_tools) -> N
     assert "process.wait" not in text(started)
     assert "Suggested poll delay: 1000 ms." in text(started)
     assert "Suggested poll delay: 1000 ms." in text(polled)
+
+    waited = process.execute(
+        "wait",
+        {
+            "action": "wait",
+            "session_id": started.details["sessionId"],
+            "cursor": polled.details["nextCursor"],
+            "wait_time_ms": 1_000,
+        },
+    )
+
+    assert waited.details["status"] == "running"
+    assert '"action":"wait"' in text(waited)
+    assert "Suggested poll delay" not in text(waited)
 
 
 def test_managed_bash_streams_sanitized_updates_before_handoff(managed_tools) -> None:
@@ -346,6 +404,8 @@ def test_managed_bash_preserves_tail_truncation_and_exports_independent_artifact
         assert result.details["truncation"]["truncated"] is True
         assert result.details["fullOutputPath"]
         assert result.details["artifactId"].startswith("artifact-")
+        assert result.details["artifactId"] in text(result)
+        assert "byte_offset=0" in text(result)
         full_output = Path(result.details["fullOutputPath"])
         assert full_output.read_text(encoding="utf-8").endswith("FINAL-MARKER\n")
         service.close()
@@ -428,6 +488,22 @@ def test_process_list_is_scoped_and_bounds_displayed_command(managed_tools) -> N
     assert started.details["sessionId"] in text(result)
     assert len(result.details["processes"][0]["command"]) == 200
     assert "pid" not in str(result.details).lower()
+
+
+def test_process_list_only_returns_active_jobs(managed_tools) -> None:
+    _service, _owner, bash, process = managed_tools
+    completed = bash.execute("done", {"command": python_command("print('done')")})
+    running = bash.execute(
+        "running",
+        {"command": python_command("import time; time.sleep(.5)"), "yield_time_ms": 0},
+    )
+
+    result = process.execute("list", {"action": "list"})
+    listed_ids = {item["sessionId"] for item in result.details["processes"]}
+
+    assert completed.details["sessionId"] not in listed_ids
+    assert running.details["sessionId"] in listed_ids
+    assert all(item["status"] == "running" for item in result.details["processes"])
 
 
 def test_custom_bash_operations_remain_synchronous_with_managed_options(tmp_path: Path) -> None:
@@ -722,6 +798,7 @@ def test_process_write_submits_one_line(managed_tools) -> None:
             "command": python_command(
                 "import sys; print('READY', flush=True); line=sys.stdin.readline(); print('RECEIVED:'+line.rstrip('\\n'))"
             ),
+            "stdin": "open",
             "yield_time_ms": 0,
         },
     )
@@ -756,6 +833,7 @@ def test_process_write_raw_preserves_exact_input(managed_tools) -> None:
         "bash",
         {
             "command": python_command("import sys; print(repr(sys.stdin.read(5)))"),
+            "stdin": "open",
             "yield_time_ms": 0,
         },
     )
@@ -807,7 +885,7 @@ def test_process_normalizes_poll_with_wait_deadline_to_terminal_wait(managed_too
     assert "done" in text(result)
 
 
-@pytest.mark.parametrize("wait_time_ms", [999, 900_001, True])
+@pytest.mark.parametrize("wait_time_ms", [999, 60_001, True])
 def test_process_wait_validates_host_deadline(managed_tools, wait_time_ms) -> None:
     service, owner, _bash, _process = managed_tools
     definition = create_process_tool_definition(service, owner)
@@ -858,6 +936,8 @@ def test_process_wait_collapses_large_output_to_bounded_borrowed_artifact(tmp_pa
         assert len(text(result).encode("utf-8")) < 60_000
         assert result.details["truncation"]["truncated"] is True
         assert artifacts.resolve_read(result.details["artifactId"]) == full_output
+        assert result.details["artifactId"] in text(result)
+        assert "byte_offset=0" in text(result)
         assert full_output.stat().st_size == 2 * 1024 * 1024 + 1
         artifacts.close(remove_files=True)
         assert full_output.exists()

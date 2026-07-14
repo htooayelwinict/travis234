@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +11,9 @@ from travis.agent.types import AgentTool, AgentToolResult
 from travis.ai.types import TextContent
 from travis.coding_agent.capabilities import WorkspaceCapability
 from travis.coding_agent.tools.atomic_file import atomic_replace_text
+from travis.coding_agent.tools.common import context_value as _ctx_value
+from travis.coding_agent.tools.common import file_content_metadata as _file_content_metadata
+from travis.coding_agent.tools.common import render_error_result as _render_write_result
 from travis.coding_agent.tools.file_mutation_queue import with_file_mutation_queue
 from travis.coding_agent.tools.path_utils import render_tool_path, resolve_to_cwd
 from travis.coding_agent.tools.types import ToolContext, ToolDefinition, wrap_tool_definition
@@ -43,35 +45,8 @@ def _default_write_file(path: str, content: str) -> None:
 _DEFAULT_OPERATIONS = WriteOperations(mkdir=_default_mkdir, write_file=_default_write_file)
 
 
-def _ctx_value(ctx, key: str, default=None):
-    if isinstance(ctx, dict):
-        return ctx.get(key, default)
-    return getattr(ctx, key, default)
-
-
 def _render_write_call(args, ctx=None) -> str:
     return f"write {render_tool_path((args or {}).get('file_path') or (args or {}).get('path'), _ctx_value(ctx, 'cwd', ''))}"
-
-
-def _render_write_result(result: AgentToolResult, options=None, ctx=None) -> str:
-    if not _ctx_value(ctx, "is_error", False):
-        return ""
-    return "\n".join(block.text for block in result.content if isinstance(block, TextContent))
-
-
-def _file_content_metadata(content: str) -> dict[str, object]:
-    encoded = content.encode("utf-8")
-    if content == "":
-        line_count = 0
-    elif content.endswith("\n"):
-        line_count = content.count("\n")
-    else:
-        line_count = content.count("\n") + 1
-    return {
-        "content_sha256": hashlib.sha256(encoded).hexdigest(),
-        "line_count": line_count,
-        "final_newline": content.endswith(("\n", "\r")),
-    }
 
 
 def _execute_write(
@@ -132,7 +107,6 @@ def create_write_tool_definition(
         prompt_snippet="Create or overwrite files",
         prompt_guidelines=[
             "Use write only for new files or complete rewrites.",
-            "When the user asks for a summary, report, checklist, notes, or other deliverable in a file path, create or update that file with write before your final response.",
         ],
         execute=lambda tid, args, signal=None, on_update=None, ctx=None: _execute_write(
             cwd, workspace, tid, args, signal, on_update, ctx, ops

@@ -50,7 +50,10 @@ class _PipeTransport(ProcessTransport):
                 return
             self._stdin_closed = True
             if self._process.stdin is not None:
-                self._process.stdin.close()
+                try:
+                    self._process.stdin.close()
+                except (BrokenPipeError, OSError, ValueError):
+                    pass
 
     def resize(self, rows: int, cols: int) -> None:
         raise ProcessStateError("resize requires tty=true")
@@ -199,7 +202,7 @@ def create_local_process_transport(
         request.env,
         {
             "shell_path": request.shell_path,
-            "stdin": subprocess.PIPE,
+            "stdin": subprocess.PIPE if request.stdin_open else subprocess.DEVNULL,
             "stdout": subprocess.PIPE,
             "stderr": subprocess.PIPE,
             "start_new_session": os.name == "posix",
@@ -259,4 +262,6 @@ def _signal_process_group(process: subprocess.Popen, signal_name: SignalName) ->
         process.kill()
 
 
-__all__ = ["create_local_process_transport"]
+__all__ = [
+    "create_local_process_transport",
+]

@@ -82,6 +82,17 @@ def test_runtime_scope_is_tracked_and_excludes_only_contract_definition() -> Non
     assert ROOT / "tests" / "test_distribution_contract.py" in files
 
 
+def test_cli_and_tui_use_the_travis234_product_name() -> None:
+    cli_text = (ROOT / "travis" / "cli.py").read_text(encoding="utf-8")
+    session_commands = (ROOT / "travis" / "tui" / "interactive_session_commands.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Run the Travis234 terminal coding agent" in cli_text
+    assert '"Travis234 TUI\\n"' in session_commands
+    assert "travis travis+travis" not in cli_text + session_commands
+
+
 def test_runtime_patterns_cover_paths_without_generic_pi_false_positives() -> None:
     forbidden_paths = (
         ".github/workflows/appv231-release-image.yml",

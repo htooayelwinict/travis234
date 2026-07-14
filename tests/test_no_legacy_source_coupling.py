@@ -14,7 +14,6 @@ _FORBIDDEN_IMPORTS = tuple(
 _REMOVED_LEGACY_PATHS = (
     "travis/runtime",
     "travis/context",
-    "travis/extensions",
     "travis/state",
     "travis/tools",
     "travis/prompts",
@@ -54,17 +53,18 @@ def test_legacy_divergent_paths_removed() -> None:
     assert offenders == []
 
 
-def test_new_ai_provider_returns_null_when_disabled(tmp_path: Path, monkeypatch) -> None:
-    from travis.ai.providers.travis_env import create_travis_provider
-    from travis.ai.types import Context, Model
+def test_provider_runtime_reports_unconfigured_auth_without_legacy_null_provider(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from travis.ai.providers.all import builtin_models
 
     for key in ("TRAVIS234_WORKER_LLM_ENABLED", "TRAVIS234_WORKER_LLM_API_KEY"):
         monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     env = tmp_path / ".env"
     env.write_text("OPENROUTER_API_KEY=k\n", encoding="utf-8")  # not enabled
-    provider = create_travis_provider(dotenv_path=str(env))
-    model = Model(id="m", name="m", api="openai-completions", provider="openrouter", base_url="")
-    stream = provider.stream(model, Context(messages=[]), None)
-    message = stream.result_sync()
-    assert message.stop_reason == "error"
-    assert "not configured" in (message.error_message or "")
+    runtime = builtin_models()
+    model = runtime.get_models("openrouter")[0]
+
+    assert runtime.get_auth(model) is None

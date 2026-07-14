@@ -19,6 +19,7 @@ from travis.coding_agent.processes.types import (
     ProcessLaunchRequest,
     ProcessOwner,
     ProcessState,
+    ProcessStateError,
 )
 
 
@@ -30,6 +31,7 @@ def request(
     command: str,
     cwd: Path,
     *,
+    stdin_open: bool = False,
     tty: bool = False,
     rows: int = 24,
     cols: int = 80,
@@ -40,6 +42,7 @@ def request(
         cwd=str(cwd),
         env=dict(os.environ),
         shell_path="/bin/bash",
+        stdin_open=stdin_open,
         tty=tty,
         rows=rows,
         cols=cols,
@@ -83,6 +86,22 @@ def _process_is_live(pid: int) -> bool:
             return False
         return state != "Z"
     return True
+
+
+def _wait_for_pid_file(path: Path, *, timeout: float = 2) -> int:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            value = path.read_text().strip()
+        except FileNotFoundError:
+            value = ""
+        if value:
+            try:
+                return int(value)
+            except ValueError:
+                pass
+        time.sleep(0.01)
+    pytest.fail(f"process did not publish a valid PID to {path}")
 
 
 @pytest.fixture
@@ -150,6 +169,7 @@ def test_pipe_transport_accepts_ordered_input_and_eof(service, owner, tmp_path: 
     launch = request(
         python_command("import sys; data=sys.stdin.read(); print('got=' + data.replace('\\n', '|'))"),
         tmp_path,
+        stdin_open=True,
     )
     started = service.start(owner, launch, local_factory(), yield_time_ms=0)
 
@@ -159,6 +179,32 @@ def test_pipe_transport_accepts_ordered_input_and_eof(service, owner, tmp_path: 
 
     assert terminal.exit_code == 0
     assert "got=first|second|" in output
+
+
+def test_pipe_transport_shutdown_is_clean_after_child_closes_stdin(tmp_path: Path, owner) -> None:
+    service = ProcessSessionService(
+        directory=tmp_path / "processes",
+        termination_grace_seconds=0.1,
+        drain_timeout_seconds=0.5,
+    )
+    source = "import os,time; os.close(0); print('READY', flush=True); time.sleep(30)"
+    started = service.start(
+        owner,
+        request(python_command(source), tmp_path, stdin_open=True),
+        local_factory(),
+        yield_time_ms=1_000,
+    )
+
+    try:
+        assert "READY" in started.output
+        with pytest.raises(ProcessStateError, match="stdin write failed.*BrokenPipeError"):
+            service.write(owner, started.session_id, "PING\n", wait_ms=1_000)
+        terminal, _output = collect_until_terminal(service, owner, started)
+        assert terminal.state is ProcessState.FAILED
+
+        service.close()
+    finally:
+        service.close()
 
 
 def test_pipe_transport_spools_output_flood_without_tool_result_overflow(service, owner, tmp_path: Path) -> None:
@@ -193,10 +239,7 @@ def test_terminate_kills_descendant_in_same_process_group(service, owner, tmp_pa
         "time.sleep(30)"
     )
     started = service.start(owner, request(python_command(source), tmp_path), local_factory(), yield_time_ms=0)
-    deadline = time.monotonic() + 2
-    while not child_pid_path.exists() and time.monotonic() < deadline:
-        time.sleep(0.01)
-    child_pid = int(child_pid_path.read_text())
+    child_pid = _wait_for_pid_file(child_pid_path)
 
     service.terminate(owner, started.session_id, wait_ms=1_000)
     terminal, _output = collect_until_terminal(service, owner, started)
@@ -221,10 +264,7 @@ def test_leader_exit_cleans_descendant_that_keeps_output_open(service, owner, tm
         f"pathlib.Path({str(child_pid_path)!r}).write_text(str(p.pid))"
     )
     started = service.start(owner, request(python_command(source), tmp_path), local_factory(), yield_time_ms=0)
-    deadline = time.monotonic() + 2
-    while not child_pid_path.exists() and time.monotonic() < deadline:
-        time.sleep(0.01)
-    child_pid = int(child_pid_path.read_text())
+    child_pid = _wait_for_pid_file(child_pid_path)
     try:
         terminal, _output = collect_until_terminal(service, owner, started)
 
@@ -300,14 +340,11 @@ def test_timeout_kills_descendant_that_calls_setsid(tmp_path: Path, owner) -> No
     try:
         started = service.start(
             owner,
-            request(python_command(parent), tmp_path, timeout=0.4),
+            request(python_command(parent), tmp_path, timeout=2.0),
             local_factory(),
             yield_time_ms=0,
         )
-        deadline = time.monotonic() + 2
-        while not pid_file.exists() and time.monotonic() < deadline:
-            time.sleep(0.01)
-        escaped_pid = int(pid_file.read_text())
+        escaped_pid = _wait_for_pid_file(pid_file, timeout=3)
         terminal, _output = collect_until_terminal(service, owner, started)
 
         assert terminal.state is ProcessState.TIMED_OUT

@@ -137,8 +137,6 @@ class SubagentTask:
             "- Do not drop leading project directories from paths in the Goal; preserve prefixes such as travis/.\n"
             "- Allowed tools are the complete tool catalog for this child. Do not use any tool names outside Allowed tools.\n"
             "- For file discovery, use find or ls.\n"
-            "- After two failed attempts for the same path or unavailable tool, stop retrying, summarize the blocker, "
-            "and return the best evidence gathered so far.\n"
             "- Every factual claim in your summary must be backed by observed evidence from the available tools or context pack.\n"
             "- If evidence is missing or ambiguous, mark the claim as uncertain and state what evidence is missing.\n"
             "- Do not infer behavior from filenames, conventions, or expectations alone.\n"
@@ -174,7 +172,6 @@ class SubagentResult:
     started_at_ms: int = 0
     ended_at_ms: int = 0
     tool_trace: list[dict[str, object]] = field(default_factory=list)
-    guardrail: dict[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.task_id, str) or not self.task_id.strip() or not _TASK_ID_PATTERN.fullmatch(self.task_id):
@@ -207,8 +204,6 @@ class SubagentResult:
             raise ValueError("Subagent usage must be a dict")
         if not isinstance(self.tool_trace, list) or any(not isinstance(item, dict) for item in self.tool_trace):
             raise ValueError("Subagent tool_trace must be a list of dicts")
-        if self.guardrail is not None and not isinstance(self.guardrail, dict):
-            raise ValueError("Subagent guardrail must be a dict when set")
 
     @property
     def duration_ms(self) -> int:
@@ -234,7 +229,6 @@ class SubagentResult:
             "endedAtMs": self.ended_at_ms,
             "durationMs": self.duration_ms,
             "toolTrace": [dict(item) for item in self.tool_trace],
-            "guardrail": dict(self.guardrail) if self.guardrail is not None else None,
         }
 
 

@@ -9,7 +9,8 @@ import os
 import re
 import threading
 
-from travis.tui.component import CURSOR_MARKER, Container
+from travis.tui.components.base import Container
+from travis.tui.components.editor import CURSOR_MARKER
 from travis.tui.dispatcher import UiDispatcher
 from travis.tui.keys import is_key_release
 from travis.tui.terminal import Terminal
@@ -96,7 +97,6 @@ def is_focusable(component: object | None) -> bool:
     return component is not None and hasattr(component, "focused")
 
 
-isFocusable = is_focusable
 
 
 def _parse_size_value(value: object, reference_size: int) -> int | None:
@@ -128,7 +128,6 @@ class TUI(Container):
         terminal: Terminal,
         show_hardware_cursor: bool | None = None,
         *,
-        showHardwareCursor: bool | None = None,
         render_interval: float = 0.0,
     ) -> None:
         super().__init__()
@@ -139,7 +138,7 @@ class TUI(Container):
         self._hardware_cursor_row = 0
         self._clear_on_shrink = os.environ.get("TRAVIS234_CLEAR_ON_SHRINK") == "1"
         self._full_redraw_count = 0
-        explicit_hardware_cursor = show_hardware_cursor if show_hardware_cursor is not None else showHardwareCursor
+        explicit_hardware_cursor = show_hardware_cursor
         self._show_hardware_cursor = (
             os.environ.get("TRAVIS234_HARDWARE_CURSOR") == "1"
             if explicit_hardware_cursor is None
@@ -163,12 +162,10 @@ class TUI(Container):
     def full_redraws(self) -> int:
         return self._full_redraw_count
 
-    fullRedraws = full_redraws
 
     def get_show_hardware_cursor(self) -> bool:
         return self._show_hardware_cursor
 
-    getShowHardwareCursor = get_show_hardware_cursor
 
     def set_show_hardware_cursor(self, enabled: bool) -> None:
         enabled = bool(enabled)
@@ -179,17 +176,14 @@ class TUI(Container):
             self.terminal.hide_cursor()
         self.request_render()
 
-    setShowHardwareCursor = set_show_hardware_cursor
 
     def get_clear_on_shrink(self) -> bool:
         return self._clear_on_shrink
 
-    getClearOnShrink = get_clear_on_shrink
 
     def set_clear_on_shrink(self, enabled: bool) -> None:
         self._clear_on_shrink = bool(enabled)
 
-    setClearOnShrink = set_clear_on_shrink
 
     def start(self) -> None:
         if self._started:
@@ -225,13 +219,11 @@ class TUI(Container):
 
         return unsubscribe
 
-    addInputListener = add_input_listener
 
     def remove_input_listener(self, listener: Callable[[str], object]) -> None:
         if listener in self._input_listeners:
             self._input_listeners.remove(listener)
 
-    removeInputListener = remove_input_listener
 
     def add_scroll_listener(self, listener: Callable[[], None]) -> Callable[[], None]:
         self._scroll_listeners.append(listener)
@@ -241,13 +233,11 @@ class TUI(Container):
 
         return unsubscribe
 
-    addScrollListener = add_scroll_listener
 
     def remove_scroll_listener(self, listener: Callable[[], None]) -> None:
         if listener in self._scroll_listeners:
             self._scroll_listeners.remove(listener)
 
-    removeScrollListener = remove_scroll_listener
 
     def set_focus(self, component: object | None) -> None:
         if self._focused_component is component:
@@ -258,7 +248,6 @@ class TUI(Container):
         if is_focusable(component):
             component.focused = True
 
-    setFocus = set_focus
 
     @property
     def focused_component(self):
@@ -281,7 +270,6 @@ class TUI(Container):
         self.request_render()
         return _OverlayHandle(self, entry)
 
-    showOverlay = show_overlay
 
     def hide_overlay(self) -> None:
         if not self._overlay_stack:
@@ -295,12 +283,10 @@ class TUI(Container):
             self.terminal.hide_cursor()
         self.request_render()
 
-    hideOverlay = hide_overlay
 
     def has_overlay(self) -> bool:
         return any(self._is_overlay_visible(entry) for entry in self._overlay_stack)
 
-    hasOverlay = has_overlay
 
     def invalidate(self) -> None:
         super().invalidate()
@@ -436,7 +422,6 @@ class TUI(Container):
         self.terminal.write("\x1b]11;?\x07")
         return query
 
-    queryTerminalBackgroundColor = query_terminal_background_color
 
     @staticmethod
     def _timeout_osc11_background_query(query: Future[dict[str, int] | None]) -> None:
@@ -511,7 +496,6 @@ class TUI(Container):
         self.request_render()
         return old_offset - new_offset
 
-    scrollBy = scroll_by
 
     def scroll_to_bottom(self) -> None:
         if self._scroll_offset_from_bottom == 0:
@@ -520,12 +504,10 @@ class TUI(Container):
         self._notify_scroll_listeners()
         self.request_render()
 
-    scrollToBottom = scroll_to_bottom
 
     def is_scrolled(self) -> bool:
         return self._scroll_offset_from_bottom > 0
 
-    isScrolled = is_scrolled
 
     def _notify_scroll_listeners(self) -> None:
         for listener in list(self._scroll_listeners):
@@ -939,12 +921,10 @@ class _OverlayHandle:
             self._tui.set_focus(component)
         self._tui.request_render()
 
-    setHidden = set_hidden
 
     def is_hidden(self) -> bool:
         return bool(self._entry.get("hidden"))
 
-    isHidden = is_hidden
 
     def focus(self) -> None:
         if self._entry not in self._tui._overlay_stack or not self._tui._is_overlay_visible(self._entry):
@@ -964,5 +944,3 @@ class _OverlayHandle:
 
     def is_focused(self) -> bool:
         return self._tui.focused_component is self._entry["component"]
-
-    isFocused = is_focused

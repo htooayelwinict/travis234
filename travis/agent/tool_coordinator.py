@@ -50,4 +50,6 @@ class ToolCoordinator:
         await self.close()
 
 
-__all__ = ["ToolCoordinator"]
+__all__ = [
+    "ToolCoordinator",
+]

@@ -12,6 +12,7 @@ from typing import Any
 
 from travis.coding_agent.agent_session import AgentSession
 from travis.coding_agent.extensions import emit_session_shutdown_event
+from travis.coding_agent.object_utils import call_optional as _call_optional
 from travis.coding_agent.session_catalog import SessionCatalog
 
 
@@ -22,9 +23,6 @@ class CreateAgentSessionRuntimeResult:
     diagnostics: list[Any] = field(default_factory=list)
     model_fallback_message: str | None = None
 
-    @property
-    def modelFallbackMessage(self) -> str | None:
-        return self.model_fallback_message
 
 
 CreateAgentSessionRuntimeFactory = Callable[[dict[str, Any]], CreateAgentSessionRuntimeResult | AgentSession | dict[str, Any]]
@@ -38,17 +36,8 @@ class SessionCwdIssue:
     fallback_cwd: str
     session_file: str | None = None
 
-    @property
-    def sessionCwd(self) -> str:
-        return self.session_cwd
 
-    @property
-    def fallbackCwd(self) -> str:
-        return self.fallback_cwd
 
-    @property
-    def sessionFile(self) -> str | None:
-        return self.session_file
 
 
 class SessionImportFileNotFoundError(FileNotFoundError):
@@ -102,19 +91,14 @@ class AgentSessionRuntime:
     def model_fallback_message(self) -> str | None:
         return self._model_fallback_message
 
-    @property
-    def modelFallbackMessage(self) -> str | None:
-        return self._model_fallback_message
 
     def set_rebind_session(self, rebind_session: RebindSession | None = None) -> None:
         self._rebind_session = rebind_session
 
-    setRebindSession = set_rebind_session
 
     def set_before_session_invalidate(self, before_session_invalidate: Callable[[], object] | None = None) -> None:
         self._before_session_invalidate = before_session_invalidate
 
-    setBeforeSessionInvalidate = set_before_session_invalidate
 
     def new_session(self, options: dict[str, Any] | None = None) -> dict[str, bool]:
         options = options or {}
@@ -146,7 +130,6 @@ class AgentSessionRuntime:
         )
         return {"cancelled": False}
 
-    newSession = new_session
 
     def switch_session(self, session_path: str, options: dict[str, Any] | None = None) -> dict[str, bool]:
         options = options or {}
@@ -182,7 +165,6 @@ class AgentSessionRuntime:
         )
         return {"cancelled": False}
 
-    switchSession = switch_session
 
     def fork(self, entry_id: str, options: dict[str, Any] | None = None) -> dict[str, object]:
         options = options or {}
@@ -212,23 +194,26 @@ class AgentSessionRuntime:
         else:
             target_session_file = self._next_session_path()
 
-        self._teardown_current("fork", target_session_file)
-        self._apply(
-            self._create_runtime(
-                {
-                    "cwd": self.cwd,
-                    "agentDir": self._services.get("agentDir"),
-                    "session_path": target_session_file,
-                    "parent_session_path": previous_session_file if not target_leaf_id else None,
-                    "session_start_event": {
-                        "type": "session_start",
-                        "reason": "fork",
-                        "previousSessionFile": previous_session_file,
-                    },
-                }
-            )
+        replacement = self._create_runtime(
+            {
+                "cwd": self.cwd,
+                "agentDir": self._services.get("agentDir"),
+                "session_path": target_session_file,
+                "parent_session_path": previous_session_file if not target_leaf_id else None,
+                "session_start_event": {
+                    "type": "session_start",
+                    "reason": "fork",
+                    "previousSessionFile": previous_session_file,
+                },
+                "defer_session_start": True,
+            }
         )
-        self._finish_session_replacement(options.get("with_session") or options.get("withSession"))
+        self._activate_replacement(
+            replacement,
+            reason="fork",
+            target_session_file=target_session_file,
+            with_session=options.get("with_session") or options.get("withSession"),
+        )
         result: dict[str, object] = {"cancelled": False}
         if selected_text is not None:
             result["selectedText"] = selected_text
@@ -255,25 +240,27 @@ class AgentSessionRuntime:
         if cwd_override is None:
             assert_session_cwd_exists(destination, stored_cwd, self.cwd)
         next_cwd = cwd_override or stored_cwd or self.cwd
-        self._teardown_current("resume", destination)
-        self._apply(
-            self._create_runtime(
-                {
-                    "cwd": next_cwd,
-                    "agentDir": self._services.get("agentDir"),
-                    "session_path": destination,
-                    "session_start_event": {
-                        "type": "session_start",
-                        "reason": "resume",
-                        "previousSessionFile": previous_session_file,
-                    },
-                }
-            )
+        replacement = self._create_runtime(
+            {
+                "cwd": next_cwd,
+                "agentDir": self._services.get("agentDir"),
+                "session_path": destination,
+                "session_start_event": {
+                    "type": "session_start",
+                    "reason": "resume",
+                    "previousSessionFile": previous_session_file,
+                },
+                "defer_session_start": True,
+            }
         )
-        self._finish_session_replacement()
+        self._activate_replacement(
+            replacement,
+            reason="resume",
+            target_session_file=destination,
+            with_session=None,
+        )
         return {"cancelled": False}
 
-    importFromJsonl = import_from_jsonl
 
     def dispose(self) -> None:
         emit_session_shutdown_event(
@@ -345,8 +332,8 @@ class AgentSessionRuntime:
             result.session.dispose()
             raise
         self._apply(result)
-        self._session.emit_deferred_session_start()
         self._finish_session_replacement(with_session)
+        self._session.emit_deferred_session_start()
 
     def _finish_session_replacement(self, with_session: Callable[[AgentSession], object] | None = None) -> None:
         if self._rebind_session:
@@ -406,7 +393,6 @@ def create_agent_session_runtime(
     )
 
 
-createAgentSessionRuntime = create_agent_session_runtime
 
 
 def get_missing_session_cwd_issue(
@@ -444,10 +430,6 @@ def assert_session_cwd_exists(session_file: str | None, session_cwd: str | None,
         raise MissingSessionCwdError(issue)
 
 
-getMissingSessionCwdIssue = get_missing_session_cwd_issue
-formatMissingSessionCwdError = format_missing_session_cwd_error
-formatMissingSessionCwdPrompt = format_missing_session_cwd_prompt
-assertSessionCwdExists = assert_session_cwd_exists
 
 
 def _is_cancelled(result: object) -> bool:
@@ -493,11 +475,3 @@ def _session_source_file_and_cwd(options: dict[str, Any]) -> tuple[str | None, s
     if session_cwd is None and session_file:
         session_cwd = _session_cwd(Path(str(session_file)))
     return (str(session_file) if session_file else None, str(session_cwd) if session_cwd else None)
-
-
-def _call_optional(target: object, *names: str) -> object | None:
-    for name in names:
-        method = getattr(target, name, None)
-        if callable(method):
-            return method()
-    return None

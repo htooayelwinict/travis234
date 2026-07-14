@@ -104,7 +104,3 @@ def fuzzy_filter(items: list[T], query: str, get_text: Callable[[T], str]) -> li
 
     results.sort(key=lambda result: result[1])
     return [item for item, _score in results]
-
-
-fuzzyMatch = fuzzy_match
-fuzzyFilter = fuzzy_filter

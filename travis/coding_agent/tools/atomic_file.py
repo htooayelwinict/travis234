@@ -36,4 +36,6 @@ def atomic_replace_text(path: Path, content: str, *, encoding: str = "utf-8") ->
                 pass
 
 
-__all__ = ["atomic_replace_text"]
+__all__ = [
+    "atomic_replace_text",
+]

@@ -50,7 +50,6 @@ def create_event_bus() -> EventBusController:
     return EventBusController()
 
 
-createEventBus = create_event_bus
 
 
 def _settle_awaitable(awaitable: object) -> None:

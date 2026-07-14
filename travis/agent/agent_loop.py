@@ -11,7 +11,6 @@ from dataclasses import replace
 from typing import Any, Callable, Optional, Union
 
 from travis.ai.event_stream import EventStream
-from travis.ai.stream import stream_simple as default_stream_simple
 from travis.ai.types import (
     AssistantMessage,
     Context,
@@ -31,7 +30,6 @@ from travis.agent.types import (
     AgentEndEvent,
     AgentEvent,
     AgentLoopConfig,
-    IterationLimitContext,
     ImmediateToolOutcome,
     AgentMessage,
     AgentStartEvent,
@@ -185,7 +183,6 @@ async def _run_loop(
     current_context = initial_context
     config = initial_config
     first_turn = True
-    api_call_count = 0
     pending_messages = await _get_messages(config.get_steering_messages)
 
     while True:
@@ -205,14 +202,6 @@ async def _run_loop(
                     new_messages.append(message)
                 pending_messages = []
 
-            if _iteration_budget_exhausted(api_call_count, config):
-                await _handle_iteration_limit(
-                    current_context, new_messages, config, signal, emit, stream_fn, api_call_count
-                )
-                return
-
-            _consume_iteration_budget(config)
-            api_call_count += 1
             message = await _stream_assistant_response(current_context, config, signal, emit, stream_fn)
             new_messages.append(message)
 
@@ -276,70 +265,10 @@ async def _run_loop(
     await _emit_event(emit, AgentEndEvent(messages=new_messages))
 
 
-def _iteration_budget_exhausted(api_call_count: int, config: AgentLoopConfig) -> bool:
-    max_iterations = max(1, int(config.max_iterations or 90))
-    if api_call_count >= max_iterations:
-        return True
-    budget = config.iteration_budget
-    return bool(budget is not None and getattr(budget, "remaining", 1) <= 0)
-
-
-def _consume_iteration_budget(config: AgentLoopConfig) -> None:
-    budget = config.iteration_budget
-    if budget is not None:
-        budget.consume()
-
-
 async def _get_messages(callback: Callable | None) -> list[AgentMessage]:
     if callback is None:
         return []
     return list(await resolve(callback()) or [])
-
-
-async def _handle_iteration_limit(
-    current_context: AgentContext,
-    new_messages: list[AgentMessage],
-    config: AgentLoopConfig,
-    signal: Optional[AbortSignal],
-    emit: AgentEventSink,
-    stream_fn: Optional[Callable],
-    api_call_count: int,
-) -> None:
-    max_iterations = max(1, int(config.max_iterations or 90))
-    if config.on_iteration_limit is None:
-        await _emit_event(emit, AgentEndEvent(messages=new_messages))
-        return
-    summary_request = await resolve(config.on_iteration_limit(
-        IterationLimitContext(
-            context=current_context,
-            api_call_count=api_call_count,
-            max_iterations=max_iterations,
-            signal=signal,
-        )
-    ))
-    if summary_request is None:
-        await _emit_event(emit, AgentEndEvent(messages=new_messages))
-        return
-    await _emit_event(emit, MessageStartEvent(message=summary_request))
-    await _emit_event(emit, MessageEndEvent(message=summary_request))
-    current_context.messages.append(summary_request)
-    new_messages.append(summary_request)
-
-    summary_context = AgentContext(
-        system_prompt=current_context.system_prompt,
-        messages=current_context.messages,
-        tools=[],
-    )
-    summary_config = replace(
-        config,
-        max_iterations=max_iterations,
-        iteration_budget=None,
-        on_iteration_limit=None,
-    )
-    message = await _stream_assistant_response(summary_context, summary_config, signal, emit, stream_fn)
-    new_messages.append(message)
-    await _emit_event(emit, TurnEndEvent(message=message, tool_results=[]))
-    await _emit_event(emit, AgentEndEvent(messages=new_messages))
 
 
 async def _stream_assistant_response(
@@ -356,7 +285,9 @@ async def _stream_assistant_response(
     llm_messages = await resolve(config.convert_to_llm(messages))
     llm_context = Context(system_prompt=context.system_prompt, messages=llm_messages, tools=_llm_tools(context.tools))
 
-    stream_function = stream_fn or default_stream_simple
+    if stream_fn is None:
+        raise ValueError("agent loop requires an injected provider stream")
+    stream_function = stream_fn
     resolved_api_key = await resolve(config.get_api_key(config.model.provider)) if config.get_api_key else None
     options = SimpleStreamOptions(
         temperature=config.temperature,
@@ -367,6 +298,7 @@ async def _stream_assistant_response(
         session_id=config.session_id,
         max_retry_delay_ms=config.max_retry_delay_ms,
         on_payload=config.on_payload,
+        on_headers=config.on_headers,
         on_response=config.on_response,
         reasoning=config.reasoning,
         thinking_budgets=config.thinking_budgets,
@@ -660,8 +592,6 @@ async def _execute_parallel(
     ordered: list[dict] = []
     for entry in entries:
         finalized = await entry if isinstance(entry, asyncio.Task) else entry
-        if isinstance(entry, asyncio.Task):
-            await _emit_tool_end(finalized, emit)
         ordered.append(finalized)
 
     messages: list[ToolResultMessage] = []
@@ -680,9 +610,11 @@ async def _execute_and_finalize(
     current_context, assistant_message, preparation, config, signal, emit, coordinator
 ) -> dict:
     executed = await _execute_prepared(preparation, signal, emit, coordinator)
-    return await _finalize(
+    finalized = await _finalize(
         current_context, assistant_message, preparation, executed, config, signal
     )
+    await _emit_tool_end(finalized, emit)
+    return finalized
 
 
 async def _prepare_tool_call(
@@ -836,6 +768,7 @@ async def _finalize(current_context, assistant_message, prepared, executed, conf
                     content=after.content if after.content is not None else result.content,
                     details=after.details if after.details is not None else result.details,
                     terminate=after.terminate if after.terminate is not None else result.terminate,
+                    added_tool_names=result.added_tool_names,
                 )
                 if after.is_error is not None:
                     is_error = after.is_error
@@ -877,8 +810,6 @@ def _unknown_tool_message(tool_name: str, tools: list[AgentTool]) -> str:
         available.append(tool.name)
     if available:
         message += f". Available tools: {', '.join(available)}"
-    if tool_name == "glob":
-        message += ". Use find or ls for file discovery; glob is not available in this tool catalog"
     return message
 
 
@@ -902,6 +833,7 @@ def _tool_result_message(finalized: dict) -> ToolResultMessage:
         tool_name=finalized["tool_call"].name,
         content=finalized["result"].content,
         details=finalized["result"].details,
+        added_tool_names=finalized["result"].added_tool_names,
         is_error=finalized["is_error"],
         timestamp=now_ms(),
     )

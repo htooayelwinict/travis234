@@ -8,6 +8,3 @@ ModifierKey = str
 
 def is_native_modifier_pressed(key: ModifierKey) -> bool:
     return False
-
-
-isNativeModifierPressed = is_native_modifier_pressed

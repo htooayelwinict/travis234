@@ -6,7 +6,9 @@ import json
 from typing import Callable
 
 from travis.ai.event_stream import AssistantMessageEventStream, create_assistant_message_event_stream
-from travis.ai.stream import ApiProvider
+from travis.ai.providers._shared import blank_assistant_message as _blank_message
+from travis.ai.auth import ApiKeyAuth, AuthResult, ModelAuth, ProviderAuth
+from travis.ai.models import Provider, ProviderStreams
 from travis.ai.types import (
     AssistantMessage,
     AssistantMessageEvent,
@@ -32,18 +34,6 @@ FauxScript = Callable[[Model, Context], "list[AssistantMessageEvent]"]
 
 def faux_model(api: str = "faux") -> Model:
     return Model(id="faux-model", name="Faux", api=api, provider="faux", base_url="")
-
-
-def _blank_message(model: Model) -> AssistantMessage:
-    return AssistantMessage(
-        content=[],
-        api=model.api,
-        provider=model.provider,
-        model=model.id,
-        usage=empty_usage(),
-        stop_reason="stop",
-        timestamp=now_ms(),
-    )
 
 
 def text_response_events(model: Model, text: str) -> list[AssistantMessageEvent]:
@@ -88,14 +78,39 @@ def tool_call_response_events(
     return events
 
 
-def create_faux_provider(script: FauxScript, api: str = "faux") -> ApiProvider:
+def create_faux_streams(script: FauxScript) -> ProviderStreams:
     def _stream(model: Model, context: Context, options=None) -> AssistantMessageEventStream:
         s = create_assistant_message_event_stream()
         for event in script(model, context):
             s.push(event)
         return s
 
-    return ApiProvider(api=api, stream=_stream, stream_simple=_stream)
+    return ProviderStreams(stream=_stream, stream_simple=_stream)
+
+
+def create_faux_provider(
+    script: FauxScript,
+    api: str = "faux",
+    *,
+    provider_id: str = "faux",
+    models: list[Model] | None = None,
+) -> Provider:
+    model_list = models or [faux_model(api)]
+    return Provider(
+        id=provider_id,
+        name="Faux",
+        auth=ProviderAuth(
+            api_key=ApiKeyAuth(
+                name="Faux",
+                resolve=lambda _model, _context, _credential: AuthResult(
+                    auth=ModelAuth(),
+                    source="faux",
+                ),
+            )
+        ),
+        models=model_list,
+        api=create_faux_streams(script),
+    )
 
 
 _ = Usage  # exported type kept available for test authors

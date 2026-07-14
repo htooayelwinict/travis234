@@ -33,9 +33,25 @@ def test_preflight_compresses_over_threshold_then_defers() -> None:
     out = manager.maybe_compress_preflight(messages)
     assert len(out) < len(messages)
     assert manager.awaiting_real_usage_after_compression is True
+    assert manager.compressor._verify_compaction_cleared_threshold is True
     # second preflight defers (awaiting real usage), returns unchanged
     out2 = manager.maybe_compress_preflight(out)
     assert out2 is out
+
+
+def test_manager_exposes_last_compression_result_read_only() -> None:
+    manager = _manager()
+
+    manager.maybe_compress_preflight(_big_messages())
+
+    assert manager.last_compression_result is not None
+    assert manager.last_compression_result.compressed is True
+    try:
+        manager.last_compression_result = None
+    except AttributeError:
+        pass
+    else:
+        raise AssertionError("last_compression_result must be read-only")
 
 
 def test_preflight_records_compression_ledger_entry() -> None:
@@ -51,6 +67,10 @@ def test_preflight_records_compression_ledger_entry() -> None:
     assert entry.compressed is True
     assert entry.estimated_after is True
     assert entry.summary_fallback is False
+    assert entry.summary_model_requested == "main"
+    assert entry.summary_model_used == "main"
+    assert entry.summary_model_fallback is False
+    assert entry.summary_model_error is None
     assert entry.stop_reason is None
     assert entry.first_kept_message_index is not None
     assert entry.error is None
@@ -151,6 +171,61 @@ def test_compressor_update_from_response_tracks_real_usage_for_deferral() -> Non
     assert compressor.should_defer_preflight_to_real_usage(100_000) is False
 
 
+def test_post_compaction_real_usage_above_threshold_records_one_ineffective_attempt() -> None:
+    compressor = ContextCompressor(context_length=100_000, threshold_percent=0.5)
+    compressor._verify_compaction_cleared_threshold = True
+    compressor.awaiting_real_usage_after_compression = True
+
+    compressor.update_from_response({
+        "prompt_tokens": 80_000,
+        "completion_tokens": 1_000,
+        "total_tokens": 81_000,
+    })
+
+    assert compressor._ineffective_compression_count == 1
+    assert compressor._verify_compaction_cleared_threshold is False
+    assert compressor.awaiting_real_usage_after_compression is False
+
+
+def test_post_compaction_real_usage_below_threshold_resets_ineffective_attempts() -> None:
+    compressor = ContextCompressor(context_length=100_000, threshold_percent=0.5)
+    compressor._ineffective_compression_count = 1
+    compressor._verify_compaction_cleared_threshold = True
+    compressor.awaiting_real_usage_after_compression = True
+    compressor.last_compression_rough_tokens = 70_000
+
+    compressor.update_from_response({
+        "prompt_tokens": 40_000,
+        "completion_tokens": 1_000,
+        "total_tokens": 41_000,
+    })
+
+    assert compressor._ineffective_compression_count == 0
+    assert compressor.last_rough_tokens_when_real_prompt_fit == 70_000
+    assert compressor._verify_compaction_cleared_threshold is False
+    assert compressor.awaiting_real_usage_after_compression is False
+
+
+def test_usage_less_response_consumes_pending_compaction_verdict_without_a_strike() -> None:
+    compressor = ContextCompressor(context_length=100_000, threshold_percent=0.5)
+    compressor._verify_compaction_cleared_threshold = True
+    compressor.awaiting_real_usage_after_compression = True
+
+    compressor.update_from_response({})
+
+    assert compressor._ineffective_compression_count == 0
+    assert compressor._verify_compaction_cleared_threshold is False
+    assert compressor.awaiting_real_usage_after_compression is False
+
+
+def test_preflight_defers_once_while_waiting_for_post_compaction_real_usage() -> None:
+    compressor = ContextCompressor(context_length=100_000, threshold_percent=0.5)
+    compressor.awaiting_real_usage_after_compression = True
+    compressor.last_real_prompt_tokens = 80_000
+
+    assert compressor.should_defer_preflight_to_real_usage(90_000) is True
+
+
 def test_preflight_defers_after_real_usage_proved_rough_estimate_noisy() -> None:
     compressor = ContextCompressor(context_length=100_000, threshold_percent=0.5, protect_first_n=1, protect_last_n=4)
     manager = CompactionManager(compressor, summarizer=_summarizer)
@@ -182,6 +257,27 @@ def test_overflow_recovery_force_and_bounded() -> None:
     assert c1 is True and c2 is True
     assert c3 is False  # bounded at 2 attempts
     _ = small
+
+
+def test_overflow_recovery_arms_post_compaction_real_usage_verification() -> None:
+    manager = _manager(max_overflow_attempts=1)
+
+    recovered_messages, recovered = manager.recover_overflow(_big_messages())
+
+    assert recovered is True
+    assert recovered_messages
+    assert manager.awaiting_real_usage_after_compression is True
+    assert manager.compressor._verify_compaction_cleared_threshold is True
+
+
+def test_manual_compression_arms_post_compaction_real_usage_verification() -> None:
+    manager = _manager()
+
+    status = manager.compress_manual_with_status(_big_messages())
+
+    assert status.compressed is True
+    assert manager.awaiting_real_usage_after_compression is True
+    assert manager.compressor._verify_compaction_cleared_threshold is True
 
 
 def test_overflow_recovery_retries_once_with_already_compacted_transcript_and_stops() -> None:
@@ -223,6 +319,23 @@ def test_manual_force_clears_cooldown() -> None:
     forced = manager.compress_manual(messages)
     assert len(forced) < len(messages)
     assert manager._in_cooldown() is False
+
+
+def test_network_failed_compaction_ledger_records_abort_without_context_loss() -> None:
+    compressor = ContextCompressor(context_length=2000, protect_first_n=1, protect_last_n=4)
+    manager = CompactionManager(
+        compressor,
+        summarizer=lambda _prompt: (_ for _ in ()).throw(TimeoutError("provider timed out")),
+    )
+    messages = _big_messages()
+
+    output = manager.maybe_compress_preflight(messages)
+    entry = manager.compression_ledger[-1]
+
+    assert output is messages
+    assert entry.compressed is False
+    assert entry.stop_reason == "aborted"
+    assert entry.tokens_after == entry.tokens_before
 
 
 def test_summary_failure_sets_compressor_cooldown_and_skips_retry() -> None:
@@ -336,10 +449,8 @@ def test_manual_compression_noops_when_summary_would_increase_prompt_size() -> N
     compressor = ContextCompressor(context_length=2000, protect_first_n=1, protect_last_n=2)
     manager = CompactionManager(compressor, summarizer=_summarizer)
     messages = [
-        UserMessage(content="goal", timestamp=now_ms()),
-        UserMessage(content="middle turn", timestamp=now_ms()),
-        UserMessage(content="recent one", timestamp=now_ms()),
-        UserMessage(content="recent two", timestamp=now_ms()),
+        UserMessage(content=f"historical turn {index}", timestamp=now_ms())
+        for index in range(24)
     ]
     before_tokens = estimate_tokens(messages)
 

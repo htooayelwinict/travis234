@@ -22,9 +22,6 @@ class BashExecutorOptions:
     on_chunk: Callable[[str], None] | None = None
     signal: object | None = None
 
-    @property
-    def onChunk(self) -> Callable[[str], None] | None:
-        return self.on_chunk
 
 
 def execute_bash_with_operations(
@@ -119,6 +116,3 @@ def _sanitize_binary_output(text: str) -> str:
         else:
             kept.append(char)
     return "".join(kept)
-
-
-executeBashWithOperations = execute_bash_with_operations

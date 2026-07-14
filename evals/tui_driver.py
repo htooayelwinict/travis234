@@ -73,9 +73,15 @@ class TuiDriver:
     def send_key(self, data: bytes) -> None:
         os.write(self.master_fd, data)
 
+    def send_interrupt(self) -> None:
+        """Deliver the SIGINT a real controlling terminal emits for Ctrl-C."""
+        os.kill(self.process.pid, signal.SIGINT)
+
     def select_model(self, query: str, index: int, timeout: float) -> dict[str, object]:
         self.send_line(f"/model {query}")
-        ready = self.wait_for_event("model_picker_ready", timeout)
+        ready = self.wait_for_events({"model_picker_ready", "model_selected"}, timeout)
+        if ready.get("event") == "model_selected":
+            return ready
         model_count = int(ready.get("model_count") or 0)
         if index <= 0 or index > model_count:
             raise RuntimeError(f"model picker index {index} unavailable for {model_count} rows")
@@ -83,29 +89,56 @@ class TuiDriver:
         return self.wait_for_event("model_selected", timeout)
 
     def wait_for_event(self, event_type: str, timeout: float) -> dict[str, object]:
+        return self.wait_for_events({event_type}, timeout)
+
+    def wait_for_events(
+        self,
+        event_types: set[str],
+        timeout: float,
+    ) -> dict[str, object]:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             self._drain_output()
             self._read_trace()
             for index, event in enumerate(self._events):
-                if event.get("event") == event_type:
-                    return self._events.pop(index)
+                if event.get("event") in event_types:
+                    del self._events[: index + 1]
+                    return event
                 if event.get("event") == "fatal":
-                    fatal = self._events.pop(index)
+                    fatal = event
+                    del self._events[: index + 1]
                     code = str(fatal.get("error_code") or "fatal")
-                    raise RuntimeError(f"TUI reported fatal event before {event_type}: {code}")
+                    expected = ", ".join(sorted(event_types))
+                    raise RuntimeError(f"TUI reported fatal event before {expected}: {code}")
+            self._events.clear()
             if self.process.poll() is not None:
+                expected = ", ".join(sorted(event_types))
                 raise RuntimeError(
-                    f"TUI exited with {self.process.returncode} before {event_type}; tail={self.diagnostic_tail!r}"
+                    f"TUI exited with {self.process.returncode} before {expected}; "
+                    f"tail={self.diagnostic_tail!r}"
                 )
             time.sleep(0.02)
-        raise TimeoutError(f"timed out waiting for {event_type}; tail={self.diagnostic_tail!r}")
+        expected = ", ".join(sorted(event_types))
+        raise TimeoutError(f"timed out waiting for {expected}; tail={self.diagnostic_tail!r}")
 
     def close(self) -> None:
         if self.process.poll() is None:
             try:
                 self.send_line("/exit")
                 self.process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                # Abort the active turn before killing the TUI. This lets the
+                # application close its separately managed process groups.
+                try:
+                    self.send_interrupt()
+                    self.process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    os.killpg(self.process.pid, signal.SIGTERM)
+                    try:
+                        self.process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(self.process.pid, signal.SIGKILL)
+                        self.process.wait(timeout=2)
             except Exception:
                 os.killpg(self.process.pid, signal.SIGTERM)
                 try:

@@ -8,7 +8,6 @@ from types import SimpleNamespace
 from typing import Any
 
 from travis.agent.types import AbortSignal, AgentMessage
-from travis.ai.stream import complete_simple_sync
 from travis.ai.types import (
     AssistantMessage,
     Context,
@@ -22,7 +21,9 @@ from travis.ai.types import (
     UserMessage,
     now_ms,
 )
-from travis.compaction.compressor import estimate_tokens
+from travis.compaction.compressor import SUMMARY_END_MARKER, SUMMARY_PREFIX, estimate_tokens
+from travis.coding_agent.message_utils import bash_execution_text as _bash_execution_to_text
+from travis.coding_agent.message_utils import user_message_text as _message_text_content
 from travis.coding_agent.session_store import BranchSummaryMessage, CustomMessage, deserialize_message
 
 BRANCH_SUMMARY_PREAMBLE = """The user explored a different conversation branch before returning here.
@@ -74,13 +75,7 @@ class BranchSummaryResult:
     aborted: bool = False
     error: str | None = None
 
-    @property
-    def readFiles(self) -> list[str]:
-        return self.read_files
 
-    @property
-    def modifiedFiles(self) -> list[str]:
-        return self.modified_files
 
 
 @dataclass
@@ -164,7 +159,9 @@ def generate_branch_summary(
         messages=[UserMessage(content=[TextContent(text=prompt_text)], timestamp=now_ms())],
     )
     options = SimpleStreamOptions(api_key=api_key, headers=headers, signal=signal, max_tokens=2048)
-    response = stream_fn(model, context, options).result_sync() if stream_fn else complete_simple_sync(model, context, options)
+    if stream_fn is None:
+        raise ValueError("branch summarization requires an injected model runtime")
+    response = stream_fn(model, context, options).result_sync()
     if response.stop_reason == "aborted":
         return BranchSummaryResult(aborted=True)
     if response.stop_reason == "error":
@@ -235,7 +232,7 @@ def _get_message_from_entry(entry: dict[str, Any]) -> AgentMessage | None:
         return SimpleNamespace(
             role="compactionSummary",
             summary=entry["summary"],
-            tokensBefore=entry.get("tokensBefore", 0),
+            tokens_before=entry.get("tokensBefore", 0),
             timestamp=_timestamp_to_ms(entry.get("timestamp")),
         )
     return None
@@ -246,7 +243,7 @@ def _convert_to_llm(messages: list[AgentMessage]) -> list[Message]:
     for message in messages:
         role = getattr(message, "role", None)
         if role == "bashExecution":
-            if getattr(message, "excludeFromContext", False):
+            if getattr(message, "exclude_from_context", False):
                 continue
             converted.append(
                 UserMessage(
@@ -281,10 +278,7 @@ def _convert_to_llm(messages: list[AgentMessage]) -> list[Message]:
                 UserMessage(
                     content=[
                         TextContent(
-                            text=(
-                                "The conversation history before this point was compacted into the following summary:\n\n"
-                                f"<summary>\n{getattr(message, 'summary', '')}\n</summary>"
-                            )
+                            text=f"{SUMMARY_PREFIX}\n{getattr(message, 'summary', '')}\n\n{SUMMARY_END_MARKER}\n\n"
                         )
                     ],
                     timestamp=getattr(message, "timestamp", now_ms()),
@@ -293,24 +287,6 @@ def _convert_to_llm(messages: list[AgentMessage]) -> list[Message]:
         elif role in ("user", "assistant", "toolResult"):
             converted.append(message)
     return converted
-
-
-def _bash_execution_to_text(message) -> str:
-    text = f"Ran `{getattr(message, 'command', '')}`\n"
-    output = getattr(message, "output", "")
-    if output:
-        text += f"```\n{output}\n```"
-    else:
-        text += "(no output)"
-    if getattr(message, "cancelled", False):
-        text += "\n\n(command cancelled)"
-    else:
-        exit_code = getattr(message, "exitCode", None)
-        if exit_code not in (None, 0):
-            text += f"\n\nCommand exited with code {exit_code}"
-    if getattr(message, "truncated", False) and getattr(message, "fullOutputPath", None):
-        text += f"\n\n[Output truncated. Full output: {message.fullOutputPath}]"
-    return text
 
 
 def _extract_file_ops_from_message(message: AgentMessage, file_ops: FileOperations) -> None:
@@ -343,12 +319,6 @@ def _format_file_operations(read_files: list[str], modified_files: list[str]) ->
     if modified_files:
         sections.append("<modified-files>\n" + "\n".join(modified_files) + "\n</modified-files>")
     return "" if not sections else "\n\n" + "\n\n".join(sections)
-
-
-def _message_text_content(content) -> str:
-    if isinstance(content, str):
-        return content
-    return "".join(block.text for block in content if isinstance(block, TextContent))
 
 
 def _deserialize_custom_content(content) -> str | list[TextContent]:

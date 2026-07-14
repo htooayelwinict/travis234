@@ -20,7 +20,7 @@ Use this skill only when the user explicitly asks for subagents, delegation, han
 - Do not write files unless the user explicitly asks for written artifacts.
 - Subagents must remain read-only.
 - Subagents must not write files, edit files, create files, delete files, or receive `write`/`edit` tools.
-- If Lewis requests a written artifact from delegated work, the child should inspect only and the parent should write the artifact from the child summary.
+- If the user requests a written artifact from delegated work, the child should inspect only and the parent should write the artifact from the child summary.
 
 ## Scope control
 

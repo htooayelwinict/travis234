@@ -10,6 +10,11 @@ def _workflow() -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
+def _uses_action(step: dict, action: str) -> bool:
+    uses = step.get("uses")
+    return isinstance(uses, str) and uses.partition("@")[0] == action
+
+
 def test_release_push_depends_on_tests_and_smoke() -> None:
     workflow = _workflow()
     jobs = workflow["jobs"]
@@ -29,11 +34,17 @@ def test_release_smoke_build_is_no_cache_and_never_pushes() -> None:
     workflow = _workflow()
     smoke_build = next(
         step for step in workflow["jobs"]["image-smoke"]["steps"]
-        if step.get("uses") == "docker/build-push-action@v6"
+        if _uses_action(step, "docker/build-push-action")
     )
     assert smoke_build["with"]["load"] is True
     assert smoke_build["with"]["push"] is False
     assert smoke_build["with"]["no-cache"] is True
+
+
+def test_release_image_includes_python_test_runner() -> None:
+    dockerfile = (Path(__file__).parents[1] / "Dockerfile.release").read_text(encoding="utf-8")
+
+    assert '"pytest>=8,<10"' in dockerfile
 
 
 def test_registry_login_exists_only_in_gated_push_job() -> None:
@@ -41,7 +52,7 @@ def test_registry_login_exists_only_in_gated_push_job() -> None:
     login_jobs = {
         job_name
         for job_name, job in workflow["jobs"].items()
-        if any(step.get("uses") == "docker/login-action@v3" for step in job.get("steps", []))
+        if any(_uses_action(step, "docker/login-action") for step in job.get("steps", []))
     }
     assert login_jobs == {"build-and-push"}
     for job_name in ("test", "image-smoke"):
@@ -52,7 +63,9 @@ def test_registry_login_exists_only_in_gated_push_job() -> None:
 
 
 def test_container_smoke_prepares_linux_writable_workspace(tmp_path) -> None:
-    from evals.container_smoke import prepare_npm_workspace
+    from evals.container_smoke import CONSOLE_ENTRYPOINT, prepare_npm_workspace
+
+    assert CONSOLE_ENTRYPOINT == "travis234"
 
     prepare_npm_workspace(tmp_path)
 
