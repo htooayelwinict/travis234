@@ -130,6 +130,14 @@ def _execute_read(
     line_mode = "offset" in args or "limit" in args
     if byte_mode and line_mode:
         raise ValueError("Cannot combine line pagination (offset/limit) with byte pagination (byte_offset/byte_limit)")
+    artifact_path = artifacts.resolve_read(path) if artifacts is not None else None
+    if artifact_path is not None and line_mode:
+        raise ValueError(
+            f"Virtual artifacts require byte pagination. Retry read with path={path}, "
+            f"byte_offset=0, byte_limit={ARTIFACT_READ_BYTE_LIMIT}; do not use offset/limit."
+        )
+    if artifact_path is not None and not byte_mode:
+        byte_mode = True
     byte_offset = _number_arg(args.get("byte_offset")) if byte_mode else None
     byte_limit = _number_arg(args.get("byte_limit")) if byte_mode else None
     if byte_mode:
@@ -139,7 +147,6 @@ def _execute_read(
             raise ValueError("byte_offset must be non-negative")
         if byte_limit <= 0 or byte_limit > ARTIFACT_READ_BYTE_LIMIT:
             raise ValueError(f"byte_limit must be between 1 and {ARTIFACT_READ_BYTE_LIMIT}")
-    artifact_path = artifacts.resolve_read(path) if artifacts is not None else None
     if artifact_path is not None:
         absolute_path = str(artifact_path)
     else:

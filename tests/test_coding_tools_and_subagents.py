@@ -63,6 +63,48 @@ def test_read_tool_byte_paginates_single_line_artifact_by_public_id(tmp_path: Pa
     assert first.details["byteRange"]["totalBytes"] == target.stat().st_size
 
 
+def test_read_tool_defaults_public_artifacts_to_byte_pagination(tmp_path: Path) -> None:
+    from travis.coding_agent.artifacts import ArtifactRegistry
+    from travis.coding_agent.tools.read import create_read_tool
+
+    target = tmp_path / "single-line.log"
+    target.write_bytes(b"BEGIN_SPOOL" + (b"x" * 80_000) + b"END_SPOOL")
+    artifacts = ArtifactRegistry()
+    artifact = artifacts.register(target, kind="command-output", remove_on_close=False)
+    tool = create_read_tool(str(tmp_path), artifacts=artifacts)
+
+    result = tool.execute("read-default", {"path": artifact.id})
+
+    assert result.content[0].text.startswith("BEGIN_SPOOL")
+    assert "Use byte_offset=51200 to continue" in result.content[0].text
+    assert result.details["byteRange"] == {
+        "start": 0,
+        "endExclusive": 50 * 1024,
+        "totalBytes": target.stat().st_size,
+    }
+
+
+def test_read_tool_rejects_line_pagination_for_public_artifact_with_byte_retry(tmp_path: Path) -> None:
+    from travis.coding_agent.artifacts import ArtifactRegistry
+    from travis.coding_agent.tools.read import create_read_tool
+
+    target = tmp_path / "single-line.log"
+    target.write_bytes(b"BEGIN_SPOOL" + (b"x" * 80_000) + b"END_SPOOL")
+    artifacts = ArtifactRegistry()
+    artifact = artifacts.register(target, kind="command-output", remove_on_close=False)
+    tool = create_read_tool(str(tmp_path), artifacts=artifacts)
+
+    with pytest.raises(ValueError) as raised:
+        tool.execute("read-lines", {"path": artifact.id, "offset": 0, "limit": 1})
+
+    message = str(raised.value)
+    assert "Virtual artifacts require byte pagination" in message
+    assert f"path={artifact.id}" in message
+    assert "byte_offset=0" in message
+    assert "byte_limit=51200" in message
+    assert "bash" not in message
+
+
 def test_read_tool_rejects_mixed_line_and_byte_pagination(tmp_path: Path) -> None:
     target = tmp_path / "mixed.txt"
     target.write_text("content", encoding="utf-8")
