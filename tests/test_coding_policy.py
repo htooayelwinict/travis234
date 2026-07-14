@@ -237,6 +237,61 @@ def test_process_wait_same_cursor_forces_recovery_without_ending_turn() -> None:
     assert "terminate" in repeated.message
 
 
+def test_same_file_rewrites_force_observation_without_ending_turn(tmp_path) -> None:
+    controller = ToolCallGuardrailController(cwd=str(tmp_path))
+
+    decisions = [
+        controller.after_call(
+            "write",
+            {"path": "client.js", "content": f"revision {revision}"},
+            "ok",
+            failed=False,
+        )
+        for revision in range(3)
+    ]
+    blocked = controller.before_call(
+        "edit",
+        {"path": "client.js", "old_text": "revision 2", "new_text": "revision 3"},
+    )
+
+    assert decisions[-1].action == "warn"
+    assert decisions[-1].code == "same_target_mutation_warning"
+    assert blocked.action == "block"
+    assert blocked.code == "same_target_mutation_recovery_block"
+    assert blocked.should_halt is False
+    assert "read" in blocked.message.lower()
+    assert "test" in blocked.message.lower()
+
+    controller.after_call("read", {"path": "client.js"}, "revision 2", failed=False)
+    assert controller.before_call(
+        "write",
+        {"path": "client.js", "content": "revision 3"},
+    ).action == "allow"
+
+
+def test_validation_command_resets_same_file_rewrite_streak(tmp_path) -> None:
+    controller = ToolCallGuardrailController(cwd=str(tmp_path))
+    for revision in range(3):
+        controller.after_call(
+            "write",
+            {"path": "client.js", "content": f"revision {revision}"},
+            "ok",
+            failed=False,
+        )
+
+    controller.after_call(
+        "bash",
+        {"command": "node --test"},
+        "one assertion failed",
+        failed=True,
+    )
+
+    assert controller.before_call(
+        "edit",
+        {"path": "client.js", "old_text": "revision 2", "new_text": "revision 3"},
+    ).action == "allow"
+
+
 def test_process_zero_wait_same_cursor_busy_poll_warns_then_halts() -> None:
     controller = ToolCallGuardrailController(
         ToolCallGuardrailConfig(

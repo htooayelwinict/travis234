@@ -80,12 +80,14 @@ WORKSPACE_SCOPE_REPEATED_BLOCK_CODE = "workspace_scope_repeated_block"
 IDEMPOTENT_NO_PROGRESS_RECOVERY_BLOCK_CODE = "idempotent_no_progress_recovery_block"
 REPEATED_EXACT_FAILURE_RECOVERY_BLOCK_CODE = "repeated_exact_failure_recovery_block"
 REPEATED_EXACT_SUCCESS_RECOVERY_BLOCK_CODE = "repeated_exact_success_recovery_block"
+SAME_TARGET_MUTATION_RECOVERY_BLOCK_CODE = "same_target_mutation_recovery_block"
 RECOVERABLE_BLOCK_CODES = frozenset(
     {
         WORKSPACE_SCOPE_VIOLATION_CODE,
         IDEMPOTENT_NO_PROGRESS_RECOVERY_BLOCK_CODE,
         REPEATED_EXACT_FAILURE_RECOVERY_BLOCK_CODE,
         REPEATED_EXACT_SUCCESS_RECOVERY_BLOCK_CODE,
+        SAME_TARGET_MUTATION_RECOVERY_BLOCK_CODE,
     }
 )
 
@@ -115,6 +117,7 @@ DEFAULT_ADAPTIVE_NO_PROGRESS_BLOCK_AFTER = 2
 DEFAULT_ADAPTIVE_EXACT_REPEAT_BLOCK_AFTER = 2
 DEFAULT_MUTATING_NO_PROGRESS_WARN_AFTER = 3
 DEFAULT_MUTATING_NO_PROGRESS_HALT_AFTER = 6
+DEFAULT_SAME_TARGET_MUTATION_BLOCK_AFTER = 3
 _BASH_FILE_PREVIEW_COMMANDS = frozenset({"awk", "cat", "head", "sed", "tail"})
 _BASH_INVENTORY_COMMANDS = frozenset({"find", "ls", "rg"})
 _BASH_READ_ONLY_COMMANDS = _BASH_FILE_PREVIEW_COMMANDS | _BASH_INVENTORY_COMMANDS | frozenset({"grep"})
@@ -317,6 +320,23 @@ class ToolCallGuardrailController:
     def before_call(self, tool_name: str, args: Mapping[str, Any] | None) -> ToolGuardrailDecision:
         args = _coerce_args(args)
         signature = ToolCallSignature.from_call(tool_name, args)
+        mutation_path = _file_mutation_path_key(tool_name, args, self.cwd)
+        if not self.config.blocking_enabled and mutation_path is not None:
+            mutation_count = self._landed_file_mutation_counts.get(mutation_path, 0)
+            if mutation_count >= DEFAULT_SAME_TARGET_MUTATION_BLOCK_AFTER:
+                display_path = _display_file_mutation_path(tool_name, args)
+                return ToolGuardrailDecision(
+                    action="block",
+                    code=SAME_TARGET_MUTATION_RECOVERY_BLOCK_CODE,
+                    message=(
+                        f"BLOCKED: {display_path} was mutated {mutation_count} times without new "
+                        "evidence, so this rewrite was not executed. Read the current file or run a "
+                        "focused test, use that result to choose one materially different fix, then continue."
+                    ),
+                    tool_name=tool_name,
+                    count=mutation_count + 1,
+                    signature=ToolCallSignature(tool_name=tool_name, args_hash=_sha256(mutation_path)),
+                )
         if (
             self.config.blocking_enabled
             and
@@ -462,6 +482,11 @@ class ToolCallGuardrailController:
         if failed is None:
             failed, _ = classify_tool_failure(tool_name, result)
 
+        if tool_name == "bash" and _is_bash_validation_command(args):
+            self._landed_file_mutations.clear()
+            self._landed_file_mutation_counts.clear()
+            self._mutating_no_progress.clear()
+
         if failed:
             self._reset_consecutive()
             self._exact_successes.pop(signature, None)
@@ -592,11 +617,43 @@ class ToolCallGuardrailController:
 
         mutation_path = _file_mutation_path_key(tool_name, args, self.cwd)
         mutating_no_progress_decision: ToolGuardrailDecision | None = None
+        same_target_mutation_decision: ToolGuardrailDecision | None = None
         if mutation_path is not None:
             display_path = _display_file_mutation_path(tool_name, args)
             mutation_count = self._landed_file_mutation_counts.get(mutation_path, 0) + 1
             self._landed_file_mutation_counts[mutation_path] = mutation_count
             self._landed_file_mutations[mutation_path] = display_path
+            if (
+                self.config.blocking_enabled
+                and mutation_count >= self.config.mutating_no_progress_halt_after
+            ):
+                same_target_mutation_decision = ToolGuardrailDecision(
+                    action="halt",
+                    code="same_target_mutation_halt",
+                    message=(
+                        f"STOP: {display_path} was mutated {mutation_count} times without an "
+                        "intervening read or test. The edit loop is not evidence-driven."
+                    ),
+                    tool_name=tool_name,
+                    count=mutation_count,
+                    signature=signature,
+                )
+                self._halt_decision = same_target_mutation_decision
+            elif (
+                self.config.guidance_enabled
+                and mutation_count >= DEFAULT_SAME_TARGET_MUTATION_BLOCK_AFTER
+            ):
+                same_target_mutation_decision = ToolGuardrailDecision(
+                    action="warn",
+                    code="same_target_mutation_warning",
+                    message=(
+                        f"{display_path} was mutated {mutation_count} times without an intervening "
+                        "read or test. Inspect current state or run a focused test before editing it again."
+                    ),
+                    tool_name=tool_name,
+                    count=mutation_count,
+                    signature=signature,
+                )
             mutation_fingerprint = _sha256(f"{canonical_tool_args(args)}\n{_result_hash(result)}")
             previous_mutation = self._mutating_no_progress.get(mutation_path)
             repeat_count = (
@@ -641,6 +698,7 @@ class ToolCallGuardrailController:
             self._reset_consecutive()
             return (
                 mutating_no_progress_decision
+                or same_target_mutation_decision
                 or ToolGuardrailDecision(tool_name=tool_name, signature=signature)
             )
 
@@ -801,6 +859,28 @@ def _tool_call_may_change_state(tool_name: str, args: Mapping[str, Any]) -> bool
     if not isinstance(command, str):
         return True
     return classify_bash_mutation(command).classification is not BashMutationClass.READ_ONLY
+
+
+def _is_bash_validation_command(args: Mapping[str, Any]) -> bool:
+    command = args.get("command")
+    if not isinstance(command, str):
+        return False
+    lowered = f" {command.lower()} "
+    return any(
+        marker in lowered
+        for marker in (
+            " pytest",
+            "node --test",
+            "npm test",
+            "npm run test",
+            "pnpm test",
+            "yarn test",
+            "cargo test",
+            "go test",
+            "vitest",
+            "jest",
+        )
+    )
 
 
 def _file_observation_path_key(tool_name: str, args: Mapping[str, Any], cwd: str | None = None) -> str | None:
