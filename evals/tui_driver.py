@@ -126,6 +126,19 @@ class TuiDriver:
             try:
                 self.send_line("/exit")
                 self.process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                # Abort the active turn before killing the TUI. This lets the
+                # application close its separately managed process groups.
+                try:
+                    self.send_interrupt()
+                    self.process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    os.killpg(self.process.pid, signal.SIGTERM)
+                    try:
+                        self.process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(self.process.pid, signal.SIGKILL)
+                        self.process.wait(timeout=2)
             except Exception:
                 os.killpg(self.process.pid, signal.SIGTERM)
                 try:

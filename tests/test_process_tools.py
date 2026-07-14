@@ -862,7 +862,7 @@ def test_process_normalizes_poll_with_wait_deadline_to_terminal_wait(managed_too
     assert "done" in text(result)
 
 
-@pytest.mark.parametrize("wait_time_ms", [999, 900_001, True])
+@pytest.mark.parametrize("wait_time_ms", [999, 60_001, True])
 def test_process_wait_validates_host_deadline(managed_tools, wait_time_ms) -> None:
     service, owner, _bash, _process = managed_tools
     definition = create_process_tool_definition(service, owner)

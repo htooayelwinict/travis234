@@ -214,6 +214,29 @@ def test_process_cooperative_same_cursor_polls_do_not_trigger_no_progress() -> N
     assert third.action == "allow"
 
 
+def test_process_wait_same_cursor_forces_recovery_without_ending_turn() -> None:
+    controller = ToolCallGuardrailController()
+    first_args = {
+        "action": "wait",
+        "session_id": "proc_x",
+        "cursor": 10,
+        "wait_time_ms": 60_000,
+    }
+    second_args = {**first_args, "wait_time_ms": 30_000}
+
+    first = controller.after_call("process", first_args, "still running", failed=False)
+    second = controller.after_call("process", second_args, "still running", failed=False)
+    repeated = controller.before_call("process", first_args)
+
+    assert first.action == "allow"
+    assert second.action == "warn"
+    assert second.code == "idempotent_no_progress_warning"
+    assert repeated.action == "block"
+    assert repeated.code == "idempotent_no_progress_recovery_block"
+    assert repeated.should_halt is False
+    assert "terminate" in repeated.message
+
+
 def test_process_zero_wait_same_cursor_busy_poll_warns_then_halts() -> None:
     controller = ToolCallGuardrailController(
         ToolCallGuardrailConfig(

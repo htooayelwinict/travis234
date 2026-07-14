@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import signal
+import subprocess
 import sys
 from pathlib import Path
 
@@ -300,6 +301,46 @@ def test_driver_interrupt_sends_sigint_like_a_controlling_terminal(
     assert signals == [(_RunningProcess.pid, signal.SIGINT)]
 
 
+def test_driver_close_interrupts_active_tui_before_force_kill(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SlowProcess:
+        pid = 12345
+        returncode = None
+
+        def __init__(self) -> None:
+            self.waits: list[float] = []
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout: float):
+            self.waits.append(timeout)
+            if len(self.waits) == 1:
+                raise subprocess.TimeoutExpired("travis234", timeout)
+            self.returncode = 0
+            return 0
+
+    read_fd, write_fd = os.pipe()
+    process = SlowProcess()
+    driver = TuiDriver(process, write_fd, tmp_path / "trace.jsonl")
+    signals: list[tuple[int, int]] = []
+    group_signals: list[tuple[int, int]] = []
+    monkeypatch.setattr(os, "kill", lambda pid, value: signals.append((pid, value)))
+    monkeypatch.setattr(os, "killpg", lambda pid, value: group_signals.append((pid, value)))
+    monkeypatch.setattr(driver, "_drain_output", lambda: None)
+
+    try:
+        driver.close()
+    finally:
+        os.close(read_fd)
+
+    assert signals == [(process.pid, signal.SIGINT)]
+    assert group_signals == []
+    assert process.waits == [3, 5]
+
+
 def test_driver_writes_ansi_free_secret_redacted_terminal_transcript(tmp_path: Path) -> None:
     read_fd, write_fd = os.pipe()
     transcript = tmp_path / "terminal.log"
@@ -522,6 +563,43 @@ def test_continuous_eval_can_pin_a_direct_provider_at_process_start(tmp_path: Pa
     assert results[0].model_id == "step-3.7-flash"
 
 
+def test_continuous_eval_separates_installed_console_from_verifier_python(tmp_path: Path) -> None:
+    from evals.run_continuous_sdlc_eval import run_continuous_scenarios
+
+    marker = tmp_path / "verified"
+    scenario = Scenario(
+        "01-separate-runtime",
+        "first",
+        ("implement",),
+        (),
+        (("python", "-c", f"from pathlib import Path; Path({str(marker)!r}).write_text('ok')"),),
+    )
+    console = tmp_path / "installed/bin/travis234"
+    console.parent.mkdir(parents=True)
+    console.write_text("", encoding="utf-8")
+    driver = FakeDriver()
+    starts: list[list[str]] = []
+
+    def start(command, _cwd, _trace):
+        command_parts = list(command)
+        starts.append(command_parts)
+        driver.conversation_path = Path(command_parts[command_parts.index("--conversation-log") + 1])
+        return driver
+
+    results = run_continuous_scenarios(
+        [scenario],
+        root=tmp_path / "eval",
+        dotenv=tmp_path / ".env",
+        console_script=console,
+        verifier_python=sys.executable,
+        driver_factory=start,
+    )
+
+    assert starts[0][0] == str(console)
+    assert marker.read_text(encoding="utf-8") == "ok"
+    assert results[0].status == "passed"
+
+
 def test_continuous_eval_stops_and_classifies_provider_billing_failure(tmp_path: Path) -> None:
     from evals.run_continuous_sdlc_eval import run_continuous_scenarios
 
@@ -612,6 +690,35 @@ def test_continuous_eval_preflights_verifiers_before_starting_tui(tmp_path: Path
             [scenario],
             root=tmp_path / "eval",
             dotenv=tmp_path / ".env",
+            driver_factory=start,
+        )
+
+    assert started is False
+
+
+def test_continuous_eval_preflights_python_verifier_modules(tmp_path: Path) -> None:
+    from evals.run_continuous_sdlc_eval import run_continuous_scenarios
+
+    scenario = Scenario(
+        "01-missing-module",
+        "first",
+        ("implement",),
+        (),
+        (("python", "-m", "definitely_missing_travis234_verifier_module"),),
+    )
+    started = False
+
+    def start(*_args):
+        nonlocal started
+        started = True
+        return FakeDriver()
+
+    with pytest.raises(RuntimeError, match="verifier preflight failed.*definitely_missing"):
+        run_continuous_scenarios(
+            [scenario],
+            root=tmp_path / "eval",
+            dotenv=tmp_path / ".env",
+            verifier_python=sys.executable,
             driver_factory=start,
         )
 

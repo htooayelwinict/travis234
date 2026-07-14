@@ -98,6 +98,7 @@ DEFAULT_NO_PROGRESS_BLOCK_TOOL_NAMES = frozenset(
         "bash",
         "read_file",
         "search_files",
+        "process",
         "mcp_filesystem_read_file",
         "mcp_filesystem_read_text_file",
         "mcp_filesystem_read_multiple_files",
@@ -355,6 +356,11 @@ class ToolCallGuardrailController:
                         "so the duplicate call was not executed and its content was not added again. "
                         "Use the earlier result. Make a materially different or state-changing tool call "
                         "if work remains; otherwise finish the task now without asking the user to repeat it."
+                        + (
+                            " The process is stuck: terminate or kill it before diagnosing and fixing the cause."
+                            if tool_name == "process"
+                            else ""
+                        )
                     ),
                     tool_name=tool_name,
                     count=count,
@@ -740,6 +746,8 @@ class ToolCallGuardrailController:
     def _is_idempotent(self, tool_name: str, args: Mapping[str, Any]) -> bool:
         if tool_name == "process":
             action = args.get("action")
+            if action == "wait":
+                return True
             if action == "poll":
                 wait_ms = args.get("yield_time_ms", COOPERATIVE_PROCESS_POLL_WAIT_MS)
                 return isinstance(wait_ms, int) and wait_ms < COOPERATIVE_PROCESS_POLL_WAIT_MS
@@ -863,6 +871,11 @@ def _no_progress_recovery_message(tool_name: str, count: int, *, blocked: bool) 
             "then use read with path/offset/limit for file contents. If the inventory is insufficient, "
             "change the path/glob once or explain the blocker without another same bash command."
         )
+    if tool_name == "process":
+        return common + (
+            "The managed process is not making observable progress. Do not wait again. "
+            "Terminate or kill it, inspect the last output, then fix the cause or choose a different strategy."
+        )
     return common + "Use a different query/path only if the existing result is insufficient."
 
 
@@ -871,9 +884,9 @@ def _coerce_args(args: Mapping[str, Any] | None) -> Mapping[str, Any]:
 
 
 def _no_progress_signature(tool_name: str, args: Mapping[str, Any], cwd: str | None = None) -> ToolCallSignature | None:
-    if tool_name == "process" and args.get("action") in {"poll", "list"}:
+    if tool_name == "process" and args.get("action") in {"poll", "wait", "list"}:
         semantic = {"action": args.get("action")}
-        if args.get("action") == "poll":
+        if args.get("action") in {"poll", "wait"}:
             semantic.update(
                 {
                     "session_id": args.get("session_id"),

@@ -44,10 +44,17 @@ def run_continuous_scenarios(
     thinking: str = "medium",
     temperature: float = 0.2,
     compact_after: set[int] | frozenset[int] = DEFAULT_COMPACT_AFTER,
+    console_script: str | Path | None = None,
+    verifier_python: str | Path | None = None,
     driver_factory: Callable[..., object] = TuiDriver.start,
 ) -> list[ScenarioResult]:
     scenario_list = list(scenarios)
-    _preflight_verifiers(scenario_list)
+    verifier_executable = (
+        os.path.abspath(os.path.expanduser(os.fspath(verifier_python)))
+        if verifier_python
+        else sys.executable
+    )
+    _preflight_verifiers(scenario_list, verifier_executable)
     output = Path(root).expanduser().resolve()
     workspace = output / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
@@ -61,10 +68,16 @@ def run_continuous_scenarios(
     trace_path = output / "trace.jsonl"
     conversation_path = output / "conversation.jsonl"
     _seed_acceptance_agent_resources()
-    console_script = Path(sys.executable).with_name("travis234")
+    selected_console = (
+        Path(console_script).expanduser().resolve()
+        if console_script is not None
+        else Path(sys.executable).with_name("travis234")
+    )
+    if console_script is not None and not selected_console.is_file():
+        raise RuntimeError(f"console script does not exist: {selected_console}")
     command = [
-        str(console_script) if console_script.is_file() else sys.executable,
-        *([] if console_script.is_file() else ["-m", "travis.cli"]),
+        str(selected_console) if selected_console.is_file() else sys.executable,
+        *([] if selected_console.is_file() else ["-m", "travis.cli"]),
         "--cwd",
         str(workspace),
         "--dotenv",
@@ -183,6 +196,7 @@ def run_continuous_scenarios(
                 verifier_codes, verifier_failure = _run_verifiers(
                     scenario,
                     scenario_workspaces[scenario.id],
+                    verifier_executable,
                 )
                 failure_tail = failure_tail or verifier_failure
                 if verifier_failure and fault_domain is None:
@@ -293,13 +307,17 @@ def _exercise_ctrl_c_escalation(driver) -> None:
     driver.wait_for_event("process_event", 30)
 
 
-def _run_verifiers(scenario: Scenario, cwd: Path) -> tuple[list[int], str | None]:
+def _run_verifiers(
+    scenario: Scenario,
+    cwd: Path,
+    verifier_python: str = sys.executable,
+) -> tuple[list[int], str | None]:
     codes: list[int] = []
     failure: str | None = None
     for verifier in scenario.verifiers:
         command = list(verifier)
         if command and command[0] == "python":
-            command[0] = sys.executable
+            command[0] = verifier_python
         completed = subprocess.run(
             command,
             cwd=cwd,
@@ -314,20 +332,42 @@ def _run_verifiers(scenario: Scenario, cwd: Path) -> tuple[list[int], str | None
     return codes, failure
 
 
-def _preflight_verifiers(scenarios: Iterable[Scenario]) -> None:
+def _preflight_verifiers(
+    scenarios: Iterable[Scenario],
+    verifier_python: str = sys.executable,
+) -> None:
     missing: set[str] = set()
+    python_modules: set[tuple[str, str]] = set()
     for scenario in scenarios:
         for verifier in scenario.verifiers:
             if not verifier:
                 missing.add(f"{scenario.id}:<empty>")
                 continue
-            executable = sys.executable if verifier[0] == "python" else verifier[0]
+            executable = verifier_python if verifier[0] == "python" else verifier[0]
             if Path(executable).is_absolute():
                 available = Path(executable).is_file()
             else:
                 available = shutil.which(executable) is not None
             if not available:
                 missing.add(f"{scenario.id}:{verifier[0]}")
+                continue
+            if verifier[0] == "python" and len(verifier) >= 3 and verifier[1] == "-m":
+                python_modules.add((scenario.id, verifier[2]))
+    for scenario_id, module in sorted(python_modules):
+        probe = subprocess.run(
+            [
+                verifier_python,
+                "-c",
+                "import importlib.util,sys; raise SystemExit(0 if importlib.util.find_spec(sys.argv[1]) else 1)",
+                module,
+            ],
+            text=True,
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+        if probe.returncode != 0:
+            missing.add(f"{scenario_id}:python -m {module}")
     if missing:
         raise RuntimeError(f"verifier preflight failed: {', '.join(sorted(missing))}")
 
@@ -420,6 +460,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model-index", type=int, default=1)
     parser.add_argument("--thinking", default="medium")
     parser.add_argument("--temperature", type=float, default=0.2)
+    parser.add_argument("--console-script")
+    parser.add_argument("--verifier-python")
     parser.add_argument("--output-dir", required=True)
     args = parser.parse_args(argv)
     output = Path(args.output_dir).expanduser().resolve()
@@ -438,6 +480,8 @@ def main(argv: list[str] | None = None) -> int:
             model_index=args.model_index,
             thinking=args.thinking,
             temperature=args.temperature,
+            console_script=args.console_script,
+            verifier_python=args.verifier_python,
         )
         write_reports(
             results,
@@ -451,6 +495,8 @@ def main(argv: list[str] | None = None) -> int:
                 "model_index": args.model_index,
                 "thinking": args.thinking,
                 "temperature": args.temperature,
+                "console_script": args.console_script,
+                "verifier_python": args.verifier_python,
             },
         )
         verification = verify_run(output, expected_model=args.model_query)

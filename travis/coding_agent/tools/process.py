@@ -42,7 +42,7 @@ _PROCESS_FIELDS = {
     "wait_time_ms": {
         "type": "integer",
         "minimum": 1000,
-        "maximum": 900000,
+        "maximum": 60000,
         "description": "Terminal-state wait deadline; valid only for wait and never a command timeout",
     },
     "max_bytes": {"type": "integer", "minimum": 1024, "maximum": 51200},
@@ -85,6 +85,7 @@ PROCESS_SCHEMA = {
 
 PROCESS_WAIT_EXAMPLE = '{"action":"wait","session_id":"<id>","cursor":<nextCursor>,"wait_time_ms":60000}'
 PROCESS_POLL_EXAMPLE = '{"action":"poll","session_id":"<id>","cursor":<nextCursor>,"yield_time_ms":1000}'
+MAX_PROCESS_WAIT_MS = 60_000
 
 _ACTION_FIELDS = {
     "poll": {"action", "session_id", "cursor", "yield_time_ms", "max_bytes"},
@@ -366,8 +367,8 @@ def _validate_args(raw_args) -> dict[str, object]:
             raise ValueError("yield_time_ms must be an integer between 0 and 30000")
     if "wait_time_ms" in args:
         value = args["wait_time_ms"]
-        if not isinstance(value, int) or isinstance(value, bool) or not 1_000 <= value <= 900_000:
-            raise ValueError("wait_time_ms must be an integer between 1000 and 900000")
+        if not isinstance(value, int) or isinstance(value, bool) or not 1_000 <= value <= MAX_PROCESS_WAIT_MS:
+            raise ValueError(f"wait_time_ms must be an integer between 1000 and {MAX_PROCESS_WAIT_MS}")
     if "max_bytes" in args:
         value = args["max_bytes"]
         if not isinstance(value, int) or isinstance(value, bool) or not 1024 <= value <= 51_200:
