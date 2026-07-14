@@ -15,7 +15,15 @@ def test_direct_runtime_dependencies_match_imported_owners() -> None:
         for item in metadata["project"]["optional-dependencies"]["browser"]
     }
 
-    assert runtime == {"httpx", "jsonschema", "psutil"}
+    assert runtime == {
+        "boto3",
+        "google-auth",
+        "httpx",
+        "jsonschema",
+        "psutil",
+        "websockets",
+        "zstandard",
+    }
     assert browser == {"playwright"}
 
 

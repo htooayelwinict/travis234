@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import hashlib
 import inspect
 import json
+import sys
+from types import ModuleType
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from travis.agent.async_utils import resolve, run_sync
 from travis.coding_agent.event_bus import EventBusController, create_event_bus
 from travis.coding_agent.extensions import ExtensionRunner
 from travis.coding_agent.object_utils import settings_value as _settings_value
@@ -129,7 +133,7 @@ class DefaultPackageManager:
             pairs.append((project_base, "project", "auto"))
         for base, scope, source in pairs:
             metadata = {"source": source, "scope": scope, "origin": "top-level", "baseDir": str(base)}
-            for resource_type in ("skills", "prompts", "themes"):
+            for resource_type in _RESOURCE_TYPES:
                 paths = _collect_resource_files(base / resource_type, resource_type)
                 target = getattr(resolved, resource_type)
                 for path in paths:
@@ -147,9 +151,23 @@ def load_context_file_from_dir(directory: str | Path) -> dict[str, str] | None:
     return None
 
 
+def _nearest_git_root(start: Path) -> Path | None:
+    """Return the active checkout/worktree boundary, if one exists."""
+
+    current = start
+    while True:
+        if (current / ".git").exists():
+            return current
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent
+
+
 def load_project_context_files(*, cwd: str, agent_dir: str) -> list[dict[str, str]]:
     resolved_cwd = Path(cwd).expanduser().resolve()
     resolved_agent_dir = Path(agent_dir).expanduser().resolve()
+    project_root = _nearest_git_root(resolved_cwd)
     context_files: list[dict[str, str]] = []
     seen_paths: set[str] = set()
 
@@ -166,6 +184,8 @@ def load_project_context_files(*, cwd: str, agent_dir: str) -> list[dict[str, st
             ancestor_context_files.insert(0, context_file)
             seen_paths.add(context_file["path"])
 
+        if project_root is not None and current_dir == project_root:
+            break
         parent = current_dir.parent
         if parent == current_dir:
             break
@@ -221,21 +241,28 @@ class DefaultResourceLoader:
         self.project_trusted = True if self.project_trusted is None else bool(self.project_trusted)
         self.system_prompt_source = system_prompt
         self.append_system_prompt_source = append_system_prompt
-        self.additional_extension_paths = list(additional_extension_paths or [])
+        self._explicit_extension_paths = list(additional_extension_paths or [])
+        self.additional_extension_paths = _settings_list(
+            self.settings_manager,
+            "get_extension_paths",
+        ) + self._explicit_extension_paths
         self.extension_factories = list(extension_factories or [])
         self.no_extensions = no_extensions
         self.extensions_override = extensions_override
-        self.package_paths = _settings_package_paths(self.settings_manager) + list(package_paths or [])
-        self.additional_skill_paths = _settings_list(self.settings_manager, "get_skill_paths") + list(
-            additional_skill_paths or []
-        )
+        self._explicit_package_paths = list(package_paths or [])
+        self._explicit_skill_paths = list(additional_skill_paths or [])
+        self._explicit_prompt_paths = list(additional_prompt_template_paths or [])
+        self._explicit_theme_paths = list(additional_theme_paths or [])
+        self.package_paths = _settings_package_paths(self.settings_manager) + self._explicit_package_paths
+        self.additional_skill_paths = _settings_list(self.settings_manager, "get_skill_paths") + self._explicit_skill_paths
         self.additional_prompt_template_paths = _settings_list(
             self.settings_manager,
             "get_prompt_template_paths",
-        ) + list(additional_prompt_template_paths or [])
-        self.additional_theme_paths = _settings_list(self.settings_manager, "get_theme_paths") + list(
-            additional_theme_paths or []
-        )
+        ) + self._explicit_prompt_paths
+        self.additional_theme_paths = _settings_list(
+            self.settings_manager,
+            "get_theme_paths",
+        ) + self._explicit_theme_paths
         self.no_skills = no_skills
         self.no_prompt_templates = no_prompt_templates
         self.no_themes = no_themes
@@ -262,6 +289,8 @@ class DefaultResourceLoader:
         self.last_skill_paths: list[str] = []
         self.last_prompt_paths: list[str] = []
         self.last_theme_paths: list[str] = []
+        self._extension_reload_generation = 0
+        self._extension_module_names: list[str] = []
 
     def get_extensions(self) -> dict[str, object]:
         return self.extensions_result
@@ -306,6 +335,27 @@ class DefaultResourceLoader:
 
     def reload(self, options: object | None = None) -> None:
         del options
+        reload_settings = getattr(self.settings_manager, "reload", None)
+        if callable(reload_settings):
+            reload_settings()
+        self.additional_extension_paths = _settings_list(
+            self.settings_manager,
+            "get_extension_paths",
+        ) + self._explicit_extension_paths
+        self.package_paths = _settings_package_paths(self.settings_manager) + self._explicit_package_paths
+        self.additional_skill_paths = _settings_list(
+            self.settings_manager,
+            "get_skill_paths",
+        ) + self._explicit_skill_paths
+        self.additional_prompt_template_paths = _settings_list(
+            self.settings_manager,
+            "get_prompt_template_paths",
+        ) + self._explicit_prompt_paths
+        self.additional_theme_paths = _settings_list(
+            self.settings_manager,
+            "get_theme_paths",
+        ) + self._explicit_theme_paths
+        self.package_manager.package_paths = list(self.package_paths)
         resolved_paths = self.package_manager.resolve()
         skill_paths = [resource.path for resource in resolved_paths.skills if resource.enabled]
         prompt_paths = [resource.path for resource in resolved_paths.prompts if resource.enabled]
@@ -315,7 +365,8 @@ class DefaultResourceLoader:
             for resources in (resolved_paths.skills, resolved_paths.prompts, resolved_paths.themes)
             for resource in resources
         }
-        self._update_extensions()
+        extension_paths = [resource.path for resource in resolved_paths.extensions if resource.enabled]
+        self._update_extensions(extension_paths)
         self.last_skill_paths = _merge_paths(self.cwd, skill_paths, self.additional_skill_paths)
         self.last_prompt_paths = _merge_paths(self.cwd, prompt_paths, self.additional_prompt_template_paths)
         self.last_theme_paths = _merge_paths(self.cwd, theme_paths, self.additional_theme_paths)
@@ -350,30 +401,82 @@ class DefaultResourceLoader:
             self.append_system_prompt_override(base_append) if self.append_system_prompt_override else base_append
         )
 
-    def _update_extensions(self) -> None:
+    def _update_extensions(self, discovered_paths: list[str] | None = None) -> None:
         runtime = ExtensionRunner(cwd=self.cwd)
         errors: list[dict[str, str]] = []
+        loaded: list[dict[str, str]] = []
+        for module_name in self._extension_module_names:
+            sys.modules.pop(module_name, None)
+        self._extension_module_names = []
+        self._extension_reload_generation += 1
+
+        extension_files: list[Path] = []
         if not self.no_extensions:
-            for path_text in self.additional_extension_paths:
-                path = Path(path_text).expanduser()
-                if not path.is_absolute():
-                    path = Path(self.cwd) / path
+            seen: set[str] = set()
+            for path_text in [*(discovered_paths or []), *self.additional_extension_paths]:
+                path = _resolve_path(path_text, self.cwd)
                 if not path.exists():
-                    errors.append({"path": str(path.resolve()), "error": f"Extension path does not exist: {path.resolve()}"})
-        for index, factory in enumerate(self.extension_factories, start=1):
+                    errors.append({"path": str(path), "error": f"Extension path does not exist: {path}"})
+                    continue
+                for extension_file in _collect_resource_files(path, "extensions"):
+                    resolved = str(extension_file.resolve())
+                    if resolved not in seen:
+                        seen.add(resolved)
+                        extension_files.append(extension_file.resolve())
+
+        for extension_file in extension_files:
+            extension_path = str(extension_file)
+            try:
+                module = self._load_extension_module(extension_file)
+                factory = getattr(module, "extension", None)
+                if not callable(factory):
+                    raise RuntimeError("Extension module must export callable extension(travis)")
+                self._run_extension_factory(runtime, factory, extension_path)
+                loaded.append({"path": extension_path})
+            except Exception as error:  # noqa: BLE001 - extension load failures are diagnostics.
+                errors.append({"path": extension_path, "error": str(error)})
+
+        factories = [] if self.no_extensions else self.extension_factories
+        for index, factory in enumerate(factories, start=1):
             extension_path = f"<inline:{index}>"
             try:
-                pending_start = len(runtime.pending_provider_registrations)
-                result = factory(runtime)
-                if inspect.isawaitable(result):
-                    raise RuntimeError("async extension factories are not supported by the Python runtime")
-                for pending_index in range(pending_start, len(runtime._pending_provider_registrations)):  # noqa: SLF001
-                    name, config, _old_path = runtime._pending_provider_registrations[pending_index]  # noqa: SLF001
-                    runtime._pending_provider_registrations[pending_index] = (name, config, extension_path)  # noqa: SLF001
+                self._run_extension_factory(runtime, factory, extension_path)
+                loaded.append({"path": extension_path})
             except Exception as error:  # noqa: BLE001 - Travis records extension load errors as diagnostics.
                 errors.append({"path": extension_path, "error": str(error)})
-        result = {"extensions": [], "errors": errors, "runtime": runtime}
+        result = {"extensions": loaded, "errors": errors, "runtime": runtime}
         self.extensions_result = self.extensions_override(result) if self.extensions_override else result
+
+    def _load_extension_module(self, path: Path) -> ModuleType:
+        digest = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:16]
+        module_name = f"_travis234_extension_{digest}_{self._extension_reload_generation}"
+        module = ModuleType(module_name)
+        module.__file__ = str(path)
+        module.__package__ = module_name
+        module.__path__ = [str(path.parent)]  # type: ignore[attr-defined]
+        sys.modules[module_name] = module
+        self._extension_module_names.append(module_name)
+        source = path.read_text(encoding="utf-8")
+        exec(compile(source, str(path), "exec"), module.__dict__)  # noqa: S102 - trusted extension execution.
+        return module
+
+    @staticmethod
+    def _run_extension_factory(
+        runtime: ExtensionRunner,
+        factory: Callable[[ExtensionRunner], object],
+        extension_path: str,
+    ) -> None:
+        pending_start = len(runtime.pending_provider_registrations)
+        runtime._loading_extension_path = extension_path  # noqa: SLF001
+        try:
+            result = factory(runtime)
+            if inspect.isawaitable(result):
+                run_sync(resolve(result))
+        finally:
+            runtime._loading_extension_path = None  # noqa: SLF001
+        for pending_index in range(pending_start, len(runtime._pending_provider_registrations)):  # noqa: SLF001
+            name, config, _old_path = runtime._pending_provider_registrations[pending_index]  # noqa: SLF001
+            runtime._pending_provider_registrations[pending_index] = (name, config, extension_path)  # noqa: SLF001
 
     def _update_skills_from_paths(self, skill_paths: list[str], metadata_by_path: dict[str, dict[str, object]] | None = None) -> None:
         if self.no_skills and not skill_paths:
@@ -757,6 +860,8 @@ def _collect_resource_files(path: Path, resource_type: str) -> list[Path]:
     if not path.exists():
         return []
     if path.is_file():
+        if resource_type == "extensions" and path.suffix == ".py":
+            return [path.resolve()]
         if resource_type == "skills" and path.suffix == ".md":
             return [path.resolve()]
         if resource_type == "prompts" and path.suffix == ".md":
@@ -764,6 +869,22 @@ def _collect_resource_files(path: Path, resource_type: str) -> list[Path]:
         if resource_type == "themes" and path.suffix == ".json":
             return [path.resolve()]
         return []
+    if resource_type == "extensions":
+        package_entry = path / "__init__.py"
+        if package_entry.is_file():
+            return [package_entry.resolve()]
+        index_entry = path / "index.py"
+        if index_entry.is_file():
+            return [index_entry.resolve()]
+        extension_paths: list[Path] = []
+        for child in sorted(path.iterdir(), key=lambda item: item.name):
+            if child.name.startswith(".") or child.name in {"__pycache__", "node_modules"}:
+                continue
+            if child.is_file() and child.suffix == ".py":
+                extension_paths.append(child.resolve())
+            elif child.is_dir():
+                extension_paths.extend(_collect_resource_files(child, resource_type))
+        return extension_paths
     if resource_type == "skills":
         skill_file = path / "SKILL.md"
         if skill_file.is_file():

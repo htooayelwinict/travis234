@@ -6,35 +6,31 @@ import argparse
 from dataclasses import dataclass
 from dataclasses import field
 from dataclasses import replace
+from importlib import resources
 import json
-import logging
 import os
 from pathlib import Path
+import shutil
 import sys
+import tempfile
 
 from travis.ai.env_config import ModelConfig, get_default_model_for_provider, load_dotenv_values, load_model_config
 from travis.ai.model_resolver import ScopedModel, resolve_cli_model, resolve_model_scope
-from travis.ai.models import get_model, get_models, get_providers, has_configured_auth, register_model, set_auth_credential
 from travis.ai.providers.capabilities import ProviderParamWarning, build_generation_payload
 from travis.ai.providers.catalog import determine_api_mode, normalize_provider, provider_catalog
-from travis.ai.providers.model_catalog import get_live_openrouter_models
 from travis.ai.providers.params import GenerationParams, merge_generation_params, params_from_mapping
-from travis.ai.register_builtins import register_builtin_providers
 from travis.ai.types import Model
 from travis.app import CodingApp
-from travis.coding_agent.config import get_agent_dir, get_auth_path
+from travis.coding_agent.auth_storage import AuthStorage
+from travis.coding_agent.config import get_agent_dir, get_auth_path, get_models_path
 from travis.coding_agent.export_html import export_from_file
 from travis.coding_agent.eval_trace import ConversationLogWriter, EvalTraceWriter, SecretRedactor
-from travis.coding_agent.provider_control_plane import ProviderControlPlane
+from travis.coding_agent.model_registry import ModelRegistry
 from travis.coding_agent.session_catalog import SessionCatalog, SessionCatalogError
 from travis.tui.interactive_mode import InteractiveMode
 
 
-logger = logging.getLogger(__name__)
-
-
-_VALID_THINKING_LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh")
-_FALSE_ENV_VALUES = {"0", "false", "no", "off"}
+_VALID_THINKING_LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
 
 
 def _positive_int_arg(value: str) -> int:
@@ -77,21 +73,6 @@ def _npm_initial_cwd() -> Path | None:
     if not initial_cwd or not os.environ.get("npm_lifecycle_event"):
         return None
     return Path(initial_cwd).expanduser().resolve()
-
-
-def _load_persisted_auth_credentials() -> None:
-    auth_path = Path(get_auth_path()).expanduser()
-    try:
-        parsed = json.loads(auth_path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return
-    except (OSError, json.JSONDecodeError):
-        return
-    if not isinstance(parsed, dict):
-        return
-    for provider, credential in parsed.items():
-        if isinstance(provider, str) and isinstance(credential, dict):
-            set_auth_credential(provider, dict(credential))
 
 
 @dataclass(frozen=True)
@@ -178,17 +159,14 @@ def _startup_model_from_env(
     model_registry=None,
 ) -> _StartupModelSelection:
     config = config or load_model_config("TRAVIS234_WORKER_LLM", dotenv_path)
-    env_model = _env_model_from_config(config)
-    registered_models = _registered_models_with_env_fallback(env_model)
-    live_models = _load_live_startup_models(
-        env_model,
-        cli_provider=cli_provider,
-        cli_model=cli_model,
-        cli_models=cli_models,
-    )
     if model_registry is None:
-        model_registry = ProviderControlPlane.in_memory().models
-    model_registry.replace_all(_dedupe_startup_models([*registered_models, *live_models]))
+        model_registry = ModelRegistry.in_memory(provider_config=config)
+    env_model = _env_model_from_config(config, model_registry=model_registry)
+    registered_models = _registered_models_with_env_fallback(
+        env_model,
+        model_registry.snapshot(),
+    )
+    model_registry.replace_all(_dedupe_startup_models(registered_models))
     registry = model_registry
     scoped_models = resolve_model_scope(cli_models or [], registry) if cli_models else []
     if not cli_model:
@@ -200,7 +178,7 @@ def _startup_model_from_env(
                 scoped_models=scoped_models,
             )
         return _StartupModelSelection(
-            model=_matching_live_model(env_model, live_models) or env_model,
+            model=env_model,
             thinking_level=cli_thinking,
             scoped_models=scoped_models,
         )
@@ -224,16 +202,34 @@ def _startup_model_from_env(
     return _StartupModelSelection(model=env_model, thinking_level=cli_thinking, scoped_models=scoped_models)
 
 
-def _registered_models_with_env_fallback(env_model: Model) -> list[Model]:
-    models = [model for provider in get_providers() for model in get_models(provider)]
-    if not any(model.provider == env_model.provider and model.id == env_model.id for model in models):
+def _registered_models_with_env_fallback(
+    env_model: Model,
+    registered_models: Iterable[Model] | None = None,
+) -> list[Model]:
+    models = list(registered_models or [])
+    for index, model in enumerate(models):
+        if (model.provider, model.id) == (env_model.provider, env_model.id):
+            models[index] = env_model
+            break
+    else:
         models.append(env_model)
     return models
 
 
-def _env_model_from_config(config: ModelConfig) -> Model:
+def _env_model_from_config(config: ModelConfig, *, model_registry: ModelRegistry | None = None) -> Model:
     provider = normalize_provider(config.provider) or "openrouter"
     model_id = config.model or get_default_model_for_provider(provider) or "moonshotai/kimi-k2.6"
+    registry = model_registry or ModelRegistry.in_memory(provider_config=config)
+    catalog_model = registry.find(provider, model_id)
+    if catalog_model is not None:
+        updates: dict[str, object] = {}
+        if config.base_url:
+            updates["base_url"] = config.base_url
+        if config.context_window is not None:
+            updates["context_window"] = config.context_window
+        if config.max_tokens is not None:
+            updates["max_tokens"] = config.max_tokens
+        return replace(catalog_model, **updates)
     return Model(
         id=model_id,
         name=model_id,
@@ -246,98 +242,6 @@ def _env_model_from_config(config: ModelConfig) -> Model:
     )
 
 
-def _load_live_startup_models(
-    env_model: Model,
-    *,
-    cli_provider: str | None,
-    cli_model: str | None,
-    cli_models: list[str] | None,
-    list_models: bool = False,
-) -> list[Model]:
-    should_fetch = _should_fetch_live_startup_models(
-        env_model=env_model,
-        cli_provider=cli_provider,
-        cli_model=cli_model,
-        cli_models=cli_models,
-        list_models=list_models,
-    ) or _implicit_default_openrouter_startup(
-        env_model,
-        cli_provider=cli_provider,
-        cli_model=cli_model,
-        cli_models=cli_models,
-        list_models=list_models,
-    )
-    if not should_fetch or not _startup_live_catalog_enabled():
-        return []
-    try:
-        return get_live_openrouter_models(base_model=env_model, force_refresh=True)
-    except Exception as exc:  # noqa: BLE001 - startup must preserve custom fallback when live catalog fails.
-        logger.warning("OpenRouter live model catalog unavailable during startup: %s", exc, exc_info=True)
-        return []
-
-
-def _should_fetch_live_startup_models(
-    *,
-    env_model: Model,
-    cli_provider: str | None,
-    cli_model: str | None,
-    cli_models: list[str] | None,
-    list_models: bool,
-) -> bool:
-    if cli_provider:
-        return normalize_provider(cli_provider) == "openrouter"
-    if list_models:
-        return False
-    if cli_model and _model_reference_points_to_openrouter(cli_model):
-        return True
-    if cli_model and "/" in cli_model and normalize_provider(env_model.provider) == "openrouter":
-        return True
-    return any(
-        _model_reference_points_to_openrouter(pattern) or _model_pattern_requests_live_catalog(pattern)
-        for pattern in cli_models or []
-    )
-
-
-def _startup_live_catalog_enabled() -> bool:
-    raw = os.environ.get("TRAVIS234_MODEL_CATALOG_STARTUP_FETCH", "true").strip().lower()
-    return raw not in _FALSE_ENV_VALUES
-
-
-def _model_reference_points_to_openrouter(reference: str) -> bool:
-    text = reference.strip()
-    if "/" not in text:
-        return False
-    prefix = text.split("/", 1)[0].strip()
-    return bool(prefix) and normalize_provider(prefix) == "openrouter"
-
-
-def _model_pattern_requests_live_catalog(pattern: str) -> bool:
-    text = pattern.strip()
-    if "*" not in text and "?" not in text and "[" not in text:
-        return False
-    if "/" not in text:
-        return False
-    prefix = text.split("/", 1)[0].strip()
-    return bool(prefix) and normalize_provider(prefix) == "openrouter"
-
-
-def _implicit_default_openrouter_startup(
-    env_model: Model,
-    *,
-    cli_provider: str | None,
-    cli_model: str | None,
-    cli_models: list[str] | None,
-    list_models: bool,
-) -> bool:
-    return (
-        not list_models
-        and not cli_provider
-        and not cli_model
-        and not cli_models
-        and normalize_provider(env_model.provider) == "openrouter"
-    )
-
-
 def _dedupe_startup_models(models: list[Model]) -> list[Model]:
     deduped: dict[tuple[str, str], Model] = {}
     for model in models:
@@ -345,35 +249,43 @@ def _dedupe_startup_models(models: list[Model]) -> list[Model]:
     return list(deduped.values())
 
 
-def _matching_live_model(env_model: Model, live_models: list[Model]) -> Model | None:
-    wanted = (normalize_provider(env_model.provider), env_model.id.lower())
-    for model in live_models:
-        if (normalize_provider(model.provider), model.id.lower()) == wanted:
-            return model
-    return None
-
-
-def _hydrate_live_models_for_list(config: ModelConfig, args: argparse.Namespace, model_registry) -> None:
-    env_model = _env_model_from_config(config)
-    cli_models = _split_models_arg(args.models)
-    live_models = _load_live_startup_models(
-        env_model,
-        cli_provider=args.provider,
-        cli_model=args.model,
-        cli_models=cli_models,
-        list_models=True,
-    )
-    if _startup_live_catalog_enabled() and not live_models and _should_fetch_live_startup_models(
-        env_model=env_model,
-        cli_provider=args.provider,
-        cli_model=args.model,
-        cli_models=cli_models,
-        list_models=True,
-    ):
-        print("OpenRouter live model catalog unavailable; showing registered models only.", file=sys.stderr)
+def _hydrate_models_for_list(config: ModelConfig, model_registry) -> None:
+    env_model = _env_model_from_config(config, model_registry=model_registry)
     model_registry.replace_all(
-        _dedupe_startup_models([*model_registry.snapshot(), env_model, *live_models])
+        _dedupe_startup_models([*model_registry.snapshot(), env_model])
     )
+
+
+def _copy_extension_resources(source, destination: Path) -> None:
+    destination.mkdir(exist_ok=True)
+    for item in source.iterdir():
+        if item.name == "__pycache__" or item.name.endswith((".pyc", ".pyo")):
+            continue
+        target = destination / item.name
+        if item.is_dir():
+            _copy_extension_resources(item, target)
+            continue
+        with item.open("rb") as source_file, target.open("wb") as target_file:
+            shutil.copyfileobj(source_file, target_file)
+
+
+def _install_first_party_extension(name: str, agent_dir: str) -> Path:
+    source = resources.files("travis").joinpath("resources", "extensions", name)
+    if not source.is_dir():
+        raise ValueError(f"unknown first-party extension: {name}")
+    parent = Path(agent_dir).expanduser() / "extensions"
+    destination = parent / name
+    if destination.exists():
+        raise FileExistsError(f"extension destination already exists: {destination}")
+    parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(tempfile.mkdtemp(prefix=f".{name}-", dir=parent))
+    try:
+        _copy_extension_resources(source, temporary)
+        temporary.rename(destination)
+    except BaseException:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
+    return destination
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -383,12 +295,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--dotenv",
         default=None,
-        help="Dotenv file for TRAVIS234_WORKER_LLM/OpenRouter settings; defaults to nearest .env in --cwd or parents",
+        help="Dotenv file for Travis234 worker, compression, and provider settings; defaults to nearest .env in --cwd or parents",
     )
     parser.add_argument("--provider", help="Provider name for --model resolution")
     parser.add_argument("--model", help='Model pattern or ID, including optional "provider/id" form')
     parser.add_argument("--models", help="Comma-separated model patterns for scoped cycling")
-    parser.add_argument("--thinking", help="Set thinking level: off, minimal, low, medium, high, xhigh")
+    parser.add_argument("--thinking", help="Set thinking level: off, minimal, low, medium, high, xhigh, max")
     parser.add_argument("--list-models", action="store_true", help="List available provider/model IDs and exit")
     parser.add_argument("--verbose-models", action="store_true", help="Show model metadata with --list-models")
     parser.add_argument("--list-providers", action="store_true", help="List available providers and exit")
@@ -417,25 +329,24 @@ def main(argv: list[str] | None = None) -> int:
     session_group.add_argument("--no-session", action="store_true", help="Run without session persistence")
     parser.add_argument("--tui", action="store_true", help="Render live agent events with the ported differential TUI")
     parser.add_argument("--plain", action="store_true", help="Use the plain stdin loop instead of the interactive TUI")
-    parser.add_argument(
-        "--max-iterations",
-        type=_positive_int_arg,
-        help="Maximum tool-calling model iterations per turn (default behavior: 90)",
-    )
-    parser.add_argument(
-        "--tool-loop-hard-stop",
-        action="store_true",
-        help="Enable Travis hard-stop thresholds for repeated failed/non-progressing tool calls",
-    )
-    parser.add_argument(
-        "--allow-package-install",
-        action="store_true",
-        help="Grant one package/dependency mutation for the initial turn",
-    )
     parser.add_argument("--export", help="Export a session JSONL file to standalone HTML and exit")
     parser.add_argument("--event-trace", help="Write a sanitized evaluation lifecycle JSONL trace")
     parser.add_argument("--conversation-log", help="Write an authorized, secret-redacted turn transcript")
+    parser.add_argument(
+        "--install-extension",
+        choices=("hypa",),
+        help="Install an optional first-party extension into the Travis234 agent directory and exit",
+    )
     args = parser.parse_args(argv)
+
+    if args.install_extension:
+        try:
+            installed = _install_first_party_extension(args.install_extension, get_agent_dir())
+        except (OSError, ValueError) as error:
+            print(f"Error: {error}", file=sys.stderr)
+            return 1
+        print(f"Installed {args.install_extension} extension: {installed}")
+        return 0
 
     if args.export:
         output_path = args.prompt[0] if args.prompt else None
@@ -482,18 +393,22 @@ def main(argv: list[str] | None = None) -> int:
     dotenv_path = _resolve_dotenv_path(args.dotenv, search_start=cwd_path)
     try:
         config = _config_with_cli_generation_params(load_model_config("TRAVIS234_WORKER_LLM", dotenv_path), args)
+        compression_config = load_model_config("TRAVIS234_COMPRESSION_LLM", dotenv_path)
     except ValueError as error:
         parser.error(str(error))
-    register_builtin_providers(dotenv_path=dotenv_path, config=config)
-    _load_persisted_auth_credentials()
-    provider_control_plane = ProviderControlPlane.create_default()
-    provider_dotenv_secrets = _register_dotenv_provider_credentials(provider_control_plane, dotenv_path)
+    auth_storage = AuthStorage.create(get_auth_path())
+    model_registry = ModelRegistry.create(
+        auth_storage,
+        get_models_path(),
+        provider_config=config,
+    )
+    provider_dotenv_secrets = _register_dotenv_provider_credentials(model_registry, dotenv_path)
     if args.list_providers:
-        _print_provider_list(provider_control_plane.models)
+        _print_provider_list(model_registry)
         return 0
     if args.list_models:
-        _hydrate_live_models_for_list(config, args, provider_control_plane.models)
-        _print_model_list(provider_control_plane.models, verbose=args.verbose_models)
+        _hydrate_models_for_list(config, model_registry)
+        _print_model_list(model_registry, verbose=args.verbose_models)
         return 0
     try:
         startup = _startup_model_from_env(
@@ -503,22 +418,34 @@ def main(argv: list[str] | None = None) -> int:
             cli_model=args.model,
             cli_thinking=args.thinking,
             cli_models=_split_models_arg(args.models),
-            model_registry=provider_control_plane.models,
+            model_registry=model_registry,
         )
     except ValueError as error:
         parser.error(str(error))
     if config.api_key:
-        provider_control_plane.auth.set_runtime_api_key(config.provider, config.api_key)
+        auth_storage.set_runtime_api_key(config.provider, config.api_key)
     evaluation_redactor = SecretRedactor(
-        [secret for secret in [config.api_key, *provider_dotenv_secrets] if secret]
+        [
+            secret
+            for secret in [config.api_key, compression_config.api_key, *provider_dotenv_secrets]
+            if secret
+        ]
     )
     generation_warnings = _generation_param_warnings_for_model(startup.model, config.generation_params)
     _print_generation_param_warnings(generation_warnings)
     runtime_options: dict[str, object] = {}
-    if args.max_iterations is not None:
-        runtime_options["max_iterations"] = args.max_iterations
-    if args.tool_loop_hard_stop:
-        runtime_options["tool_loop_guardrails"] = {"blocking_enabled": True}
+    if compression_config.enabled:
+        runtime_options.update(
+            {
+                "compression_model": _env_model_from_config(
+                    compression_config,
+                    model_registry=model_registry,
+                ),
+                "compression_api_key": compression_config.api_key,
+                "compression_timeout_seconds": compression_config.timeout_seconds,
+                "compression_generation_params": compression_config.generation_params,
+            }
+        )
     app = CodingApp(
         cwd=str(cwd_path),
         model=startup.model,
@@ -528,7 +455,7 @@ def main(argv: list[str] | None = None) -> int:
         session_path=startup_session.session_path,
         session_id=startup_session.session_id,
         agent_dir=agent_dir,
-        provider_control_plane=provider_control_plane,
+        model_registry=model_registry,
         event_trace=(
             EvalTraceWriter(args.event_trace, redactor=evaluation_redactor)
             if args.event_trace
@@ -563,9 +490,6 @@ def _run_configured_app(
     *,
     open_resume_picker: bool,
 ) -> int:
-    if args.allow_package_install:
-        app.session.grant_capability("package_mutation", uses=1)
-
     prompt = " ".join(args.prompt).strip()
     if prompt:
         app.run_turn(prompt)
@@ -627,13 +551,24 @@ def _config_with_cli_generation_params(config: ModelConfig, args: argparse.Names
 
 
 def _register_dotenv_provider_credentials(
-    provider_control_plane: ProviderControlPlane,
+    model_registry: ModelRegistry,
     dotenv_path: str | Path,
 ) -> list[str]:
     """Bind explicit dotenv credentials to their catalog provider only."""
     values = load_dotenv_values(dotenv_path)
     registered: list[str] = []
     for descriptor in provider_catalog():
+        base_url = (
+            os.environ.get(descriptor.base_url_env_var)
+            or values.get(descriptor.base_url_env_var)
+            if descriptor.base_url_env_var
+            else None
+        )
+        if base_url:
+            model_registry.set_runtime_provider_override(
+                descriptor.slug,
+                base_url=base_url,
+            )
         api_key = next(
             (
                 value
@@ -644,7 +579,7 @@ def _register_dotenv_provider_credentials(
         )
         if not api_key:
             continue
-        provider_control_plane.auth.set_runtime_api_key(descriptor.slug, api_key)
+        model_registry.auth_storage.set_runtime_api_key(descriptor.slug, api_key)
         registered.append(api_key)
     return registered
 

@@ -288,17 +288,7 @@ function prepareSandboxImports(config, runtime = {}) {
 }
 
 function seedHostDefaults(homeDir, packageRoot) {
-  seedHostAgentsFile(homeDir, packageRoot);
   seedHostSkills(homeDir, packageRoot);
-}
-
-function seedHostAgentsFile(homeDir, packageRoot) {
-  const source = path.join(packageRoot, "agents", "AGENTS.md");
-  const target = path.join(hostAgentDir(homeDir), "AGENTS.md");
-  if (!fs.existsSync(source) || fs.existsSync(target)) {
-    return;
-  }
-  copyFileSafe(source, target);
 }
 
 function seedHostSkills(homeDir, packageRoot) {

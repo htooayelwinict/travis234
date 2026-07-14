@@ -3,31 +3,14 @@
 from __future__ import annotations
 
 import json
-import re
-import threading
 import time
-from dataclasses import replace
-from typing import Any, Callable, Iterable, Iterator
+from typing import Callable, Iterable, Iterator
 
-import httpx
-
-from travis.ai.env_config import ModelConfig, load_model_config
-from travis.ai.event_stream import AssistantMessageEventStream, create_assistant_message_event_stream
-from travis.ai.providers.base import ProviderProfile
 from travis.ai.providers._shared import blank_assistant_message as _blank
-from travis.ai.providers.capabilities import build_generation_payload
-from travis.ai.providers.catalog import get_provider_profile, resolve_provider_runtime
-from travis.ai.providers.message_sanitization import repair_tool_call_arguments
-from travis.ai.providers.params import GenerationParams, merge_generation_params
-from travis.ai.providers.transports import get_transport
-from travis.ai.stream import ApiProvider
 from travis.ai.types import (
     AssistantMessage,
-    Context,
     DoneEvent,
     ErrorEvent,
-    ImageContent,
-    Message,
     Model,
     StartEvent,
     TextContent,
@@ -40,84 +23,21 @@ from travis.ai.types import (
     ThinkingStartEvent,
     Tool,
     ToolCall,
-    ToolResultMessage,
     ToolcallDeltaEvent,
     ToolcallEndEvent,
     ToolcallStartEvent,
     Usage,
     empty_usage,
-    now_ms,
 )
-from travis.ai.validation import ToolValidationError, validate_tool_arguments
-PROVIDER_API = "openai-completions"
-PARTIAL_STREAM_STUB_ID = "partial-stream-stub"
-PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE = "partial_stream_dropped_tool_calls"
-MALFORMED_STREAMED_TOOL_CALL_ARGUMENTS_CODE = "malformed_streamed_tool_call_arguments"
-_MUTATING_TOOL_REQUIRED_ARGUMENTS = {"write": ("path", "content")}
-_VALID_JSON_ESCAPES = {'"', "\\", "/", "b", "f", "n", "r", "t", "u"}
+
 _REASONING_FIELDS = ("reasoning_content", "reasoning", "reasoning_text")
-_BILLING_PATTERNS = (
-    "key limit exceeded",
-    "spending limit",
-    "insufficient credits",
-    "insufficient_quota",
-    "insufficient balance",
-    "credit balance",
-    "credits exhausted",
-    "no usable credits",
-    "top up your credits",
-    "payment required",
-    "billing hard limit",
-    "plan does not include",
-    "out of funds",
-    "run out of funds",
-)
-_OPENROUTER_POLICY_PATTERNS = (
-    "no endpoints available matching your guardrail",
-    "no endpoints available matching your data policy",
-    "no endpoints found matching your data policy",
-)
-_OPENROUTER_PROMPT_GUARDRAIL_PATTERNS = (
-    "prompt injection patterns detected",
-    "system_prefix_spoofing",
-)
-_TOOL_CALL_LEAK_PATTERN = re.compile(r"(?:^|[\s>|])to=functions\.[A-Za-z_][\w.]*", re.IGNORECASE)
-_TOOL_PROTOCOL_XML_BLOCK_PATTERN = re.compile(
-    r"(?is)"
-    r"<(?:tool_call|tool_calls|tool_response|function_call|function_calls)\b[^>]*>.*?"
-    r"</(?:tool_call|tool_calls|tool_response|function_call|function_calls)>"
-    r"|<function\s+name\s*=\s*[\"'][^\"']+[\"'][^>]*>.*?</function>"
-)
-_TOOL_PROTOCOL_XML_LINE_PATTERN = re.compile(
-    r"(?im)^[ \t]*</?(?:parameter|function|tool_call|tool_calls|tool_response|function_call|function_calls)"
-    r"(?:[\s=>][^>]*)?>[ \t]*(?:\r?\n|$)"
-)
-_TOOL_PROTOCOL_XML_PREFIX_PATTERN = re.compile(
-    r"(?is)(?:^|[\s>])(?:"
-    r"</?(?:tool_call|tool_calls|tool_response|function_call|function_calls|parameter)(?:$|[\s=>_/])"
-    r"|<tool(?:$|_)"
-    r"|</tool(?:$|[_>\s])"
-    r"|<function\s+(?:$|name\s*=)"
-    r"|</function(?:$|[\s>])"
-    r"|<parameter(?:$|[\s=>])"
-    r"|</parameter(?:$|[\s>])"
-    r")"
-)
-_PROVIDER_ERROR_DETAIL_HEAD_CHARS = 450
-_PROVIDER_ERROR_DETAIL_TAIL_CHARS = 300
-_PROVIDER_ERROR_DETAIL_TRUNCATION_MARKER = "... [truncated provider error body] ..."
-_NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)"
-_NON_VISION_TOOL_IMAGE_PLACEHOLDER = "(tool image omitted: model does not support images)"
-_STREAMING_TOOL_ARGUMENT_PREVIEW_MAX_CHARS = 8_192
-
-
 
 from travis.ai.providers.anthropic_stream import _parse_anthropic_messages_sse_chunks
-from travis.ai.providers.message_translation import _repair_tool_call_name_fragment
+from travis.ai.providers.google_stream import _parse_google_sse_chunks
+from travis.ai.providers.mistral_stream import _decode_mistral_stream
 from travis.ai.providers.responses_stream import _parse_codex_responses_sse_chunks
 from travis.ai.providers.sse_common import _StartEventState, _iter_sse_data, _map_stop_reason
 from travis.ai.providers.streaming_json import (
-    _malformed_finished_mutating_tool_call_names,
     _parse_streaming_json,
     _parse_streaming_json_preview,
 )
@@ -132,9 +52,14 @@ def parse_sse_chunks(
     api_mode: str = "chat_completions",
     tools: Iterable[Tool] | None = None,
     wait_for_usage_after_finish: bool = False,
+    anthropic_oauth: bool = False,
 ) -> Iterator:
     """Pure transform: decoded SSE lines -> AssistantMessageEvent stream."""
-    if api_mode == "codex_responses":
+    if api_mode in {
+        "openai_responses",
+        "azure_openai_responses",
+        "openai_codex_responses",
+    }:
         yield from _parse_codex_responses_sse_chunks(
             lines,
             model,
@@ -150,6 +75,26 @@ def parse_sse_chunks(
             data_idle_timeout_seconds=data_idle_timeout_seconds,
             clock=clock,
             include_reasoning=include_reasoning,
+            tools=tools,
+            is_oauth=anthropic_oauth,
+        )
+        return
+    if api_mode in {"google_generative_ai", "google_vertex"}:
+        yield from _parse_google_sse_chunks(
+            lines,
+            model,
+            data_idle_timeout_seconds=data_idle_timeout_seconds,
+            clock=clock,
+            include_reasoning=include_reasoning,
+        )
+        return
+    if api_mode == "mistral_conversations":
+        yield from _decode_mistral_stream(
+            lines,
+            model,
+            data_idle_timeout_seconds=data_idle_timeout_seconds,
+            clock=clock,
+            include_reasoning=include_reasoning,
         )
         return
 
@@ -160,7 +105,7 @@ def parse_sse_chunks(
     thinking_index: int | None = None
     tool_call_blocks_by_index: dict[int, ToolCall] = {}
     tool_call_blocks_by_id: dict[str, ToolCall] = {}
-    pending_tool_call_parts: dict[tuple[str, int | str], dict[str, str]] = {}
+    pending_reasoning_details_by_tool_call_id: dict[str, str] = {}
     tool_arg_bufs: dict[int, str] = {}
     tool_arg_previews: dict[int, dict] = {}
     finish_reason = "stop"
@@ -188,44 +133,7 @@ def parse_sse_chunks(
         message.usage = usage
 
     def final_events() -> Iterator:
-        malformed_mutating_tool_names: list[str] = []
-        if has_finish_reason and finish_reason == "tool_calls":
-            malformed_mutating_tool_names = _malformed_finished_mutating_tool_call_names(
-                message.content,
-                tool_arg_bufs,
-            )
-        streamed_tool_names = [
-            block.name or "?"
-            for block in message.content
-            if isinstance(block, ToolCall)
-        ]
         yield from end_content_events()
-        if malformed_mutating_tool_names:
-            message.stop_reason = "length"
-            diagnostics = list(message.diagnostics or [])
-            diagnostics.append(
-                {
-                    "code": MALFORMED_STREAMED_TOOL_CALL_ARGUMENTS_CODE,
-                    "tool_names": malformed_mutating_tool_names,
-                    "finish_reason": finish_reason if has_finish_reason else None,
-                }
-            )
-            message.diagnostics = diagnostics
-            yield DoneEvent(reason="length", message=message)
-            return
-        if streamed_tool_names and not has_finish_reason:
-            message.stop_reason = "length"
-            diagnostics = list(message.diagnostics or [])
-            diagnostics.append(
-                {
-                    "code": "partial_stream_tool_calls",
-                    "tool_names": streamed_tool_names,
-                    "finish_reason": None,
-                }
-            )
-            message.diagnostics = diagnostics
-            yield DoneEvent(reason="length", message=message)
-            return
         if not has_finish_reason:
             message.stop_reason = "error"
             message.error_message = "Stream ended without finish_reason"
@@ -242,6 +150,9 @@ def parse_sse_chunks(
             return
         yield DoneEvent(reason=reason, message=message)
 
+    start = start_state.ensure()
+    if start:
+        yield start
     try:
         payloads = _iter_sse_data(lines, data_idle_timeout_seconds=data_idle_timeout_seconds, clock=clock)
         for payload in payloads:
@@ -257,7 +168,7 @@ def parse_sse_chunks(
                     "thinking_index": thinking_index,
                     "tool_call_blocks_by_index": tool_call_blocks_by_index,
                     "tool_call_blocks_by_id": tool_call_blocks_by_id,
-                    "pending_tool_call_parts": pending_tool_call_parts,
+                    "pending_reasoning_details_by_tool_call_id": pending_reasoning_details_by_tool_call_id,
                     "tool_arg_bufs": tool_arg_bufs,
                     "tool_arg_previews": tool_arg_previews,
                     "content_index_of": content_index_of,
@@ -303,7 +214,10 @@ def _parse_sse_payload(
     tool_arg_previews = state["tool_arg_previews"]
     tool_call_blocks_by_index = state["tool_call_blocks_by_index"]
     tool_call_blocks_by_id = state["tool_call_blocks_by_id"]
-    pending_tool_call_parts = state.setdefault("pending_tool_call_parts", {})
+    pending_reasoning_details_by_tool_call_id = state.setdefault(
+        "pending_reasoning_details_by_tool_call_id",
+        {},
+    )
     content_index_of = state["content_index_of"]
     ensure_start = state["ensure_start"]
     text_index = state["text_index"]
@@ -380,55 +294,34 @@ def _parse_sse_payload(
         fn = tc.get("function") or {}
         if not isinstance(fn, dict):
             fn = {}
-        name_fragment = _repair_tool_call_name_fragment(fn.get("name")) if isinstance(fn.get("name"), str) else ""
+        name_fragment = fn.get("name") if isinstance(fn.get("name"), str) else ""
         arg_fragment = fn.get("arguments") if isinstance(fn.get("arguments"), str) else ""
         tool_call = tool_call_blocks_by_index.get(stream_index) if stream_index is not None else None
         if tool_call is None and tool_call_id:
             tool_call = tool_call_blocks_by_id.get(tool_call_id)
         if tool_call is None:
-            pending_key = (
-                ("index", stream_index)
-                if stream_index is not None
-                else (("id", tool_call_id) if tool_call_id else None)
-            )
-            if pending_key is None:
-                continue
-            pending = pending_tool_call_parts.setdefault(
-                pending_key,
-                {"id": "", "name": "", "arguments": ""},
-            )
-            if tool_call_id:
-                pending["id"] = tool_call_id
-            if name_fragment:
-                pending["name"] = name_fragment
-            if arg_fragment:
-                pending["arguments"] += arg_fragment
-            if not pending["id"] or not pending["name"]:
-                continue
-
             start = ensure_start()
             if start:
                 state["started"] = True
                 yield start
-            arguments_preview = _parse_streaming_json_preview(pending["arguments"])
+            arguments_preview: dict = {}
             tool_call = ToolCall(
-                id=pending["id"],
-                name=pending["name"],
+                id=tool_call_id,
+                name=name_fragment,
                 arguments=arguments_preview,
             )
             content_index = len(message.content)
             message.content.append(tool_call)
-            tool_arg_bufs[content_index] = pending["arguments"]
+            tool_arg_bufs[content_index] = ""
             tool_arg_previews[content_index] = arguments_preview
             if stream_index is not None:
                 tool_call_blocks_by_index[stream_index] = tool_call
             if tool_call.id:
                 tool_call_blocks_by_id[tool_call.id] = tool_call
-            pending_tool_call_parts.pop(pending_key, None)
+                pending_detail = pending_reasoning_details_by_tool_call_id.pop(tool_call.id, None)
+                if pending_detail:
+                    tool_call.thought_signature = pending_detail
             yield ToolcallStartEvent(content_index=content_index, partial=message)
-            if arg_fragment:
-                yield ToolcallDeltaEvent(content_index=content_index, delta=arg_fragment, partial=message)
-            continue
         else:
             start = ensure_start()
             if start:
@@ -444,6 +337,9 @@ def _parse_sse_payload(
         if tool_call_id and not tool_call.id:
             tool_call.id = tool_call_id
             tool_call_blocks_by_id[tool_call_id] = tool_call
+            pending_detail = pending_reasoning_details_by_tool_call_id.pop(tool_call_id, None)
+            if pending_detail:
+                tool_call.thought_signature = pending_detail
         if name_fragment and not tool_call.name:
             tool_call.name = name_fragment
         if arg_fragment:
@@ -456,6 +352,27 @@ def _parse_sse_payload(
             tool_call.arguments = arguments_preview
         yield ToolcallDeltaEvent(content_index=content_index, delta=arg_fragment, partial=message)
 
+    reasoning_details = delta.get("reasoning_details")
+    if isinstance(reasoning_details, list):
+        for detail in reasoning_details:
+            if not isinstance(detail, dict):
+                continue
+            detail_id = detail.get("id")
+            if (
+                detail.get("type") != "reasoning.encrypted"
+                or not isinstance(detail_id, str)
+                or not detail_id
+                or not isinstance(detail.get("data"), str)
+                or not detail["data"]
+            ):
+                continue
+            serialized = json.dumps(detail, separators=(",", ":"))
+            matching = tool_call_blocks_by_id.get(detail_id)
+            if matching is not None:
+                matching.thought_signature = serialized
+            else:
+                pending_reasoning_details_by_tool_call_id[detail_id] = serialized
+
     usage_ref["usage"] = usage
     if choice.get("finish_reason"):
         state["finish_reason"] = choice["finish_reason"]
@@ -467,9 +384,24 @@ def _merge_usage(usage: Usage, raw: "dict | None") -> Usage:
         return usage
     prompt = int(raw.get("prompt_tokens") or 0)
     completion = int(raw.get("completion_tokens") or 0)
-    usage.input = prompt or usage.input
+    prompt_details = raw.get("prompt_tokens_details")
+    if not isinstance(prompt_details, dict):
+        prompt_details = {}
+    cache_read = int(prompt_details.get("cached_tokens") or raw.get("prompt_cache_hit_tokens") or 0)
+    cache_write = int(prompt_details.get("cache_write_tokens") or 0)
+    completion_details = raw.get("completion_tokens_details")
+    if not isinstance(completion_details, dict):
+        completion_details = {}
+    usage.input = max(0, prompt - cache_read - cache_write) if prompt else usage.input
     usage.output = completion or usage.output
-    usage.total_tokens = int(raw.get("total_tokens") or 0) or usage.total_tokens
+    usage.cache_read = cache_read or usage.cache_read
+    usage.cache_write = cache_write or usage.cache_write
+    usage.reasoning = int(completion_details.get("reasoning_tokens") or 0) or usage.reasoning
+    usage.total_tokens = (
+        usage.input + usage.output + usage.cache_read + usage.cache_write
+        if prompt or completion
+        else usage.total_tokens
+    )
     return usage
 
 decode_chat_stream = parse_sse_chunks

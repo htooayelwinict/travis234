@@ -13,7 +13,6 @@ class Scenario:
     compact_after: tuple[int, ...]
     verifiers: tuple[tuple[str, ...], ...]
     timeout_seconds: int = 300
-    allow_package_install: bool = False
 
 
 @dataclass(frozen=True)
@@ -52,7 +51,6 @@ def load_scenarios(path: str | Path | None = None) -> list[Scenario]:
             compact_after=tuple(int(index) for index in item.get("compact_after", [])),
             verifiers=tuple(tuple(str(part) for part in command) for command in item["verifiers"]),
             timeout_seconds=int(item.get("timeout_seconds", 300)),
-            allow_package_install=bool(item.get("allow_package_install", False)),
         )
         for item in data
     ]

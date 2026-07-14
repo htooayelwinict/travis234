@@ -1024,6 +1024,7 @@ def test_agent_session_runtime_replaces_sessions_with_lifecycle_hooks(tmp_path: 
             parent_session_path=options.get("parent_session_path"),
             extension_runner=make_runner(),
             session_start_event=options.get("session_start_event"),
+            defer_session_start=bool(options.get("defer_session_start", False)),
         )
         return CreateAgentSessionRuntimeResult(
             session=session,
@@ -1045,7 +1046,11 @@ def test_agent_session_runtime_replaces_sessions_with_lifecycle_hooks(tmp_path: 
     )
     rebinds: list[str | None] = []
     invalidations = {"n": 0}
-    runtime.set_rebind_session(lambda session: rebinds.append(session.session_path))
+    def rebind(session) -> None:
+        rebinds.append(session.session_path)
+        events.append(("rebind", "session", session.session_path))
+
+    runtime.set_rebind_session(rebind)
     runtime.set_before_session_invalidate(lambda: invalidations.__setitem__("n", invalidations["n"] + 1))
 
     new_result = runtime.new_session()
@@ -1057,6 +1062,9 @@ def test_agent_session_runtime_replaces_sessions_with_lifecycle_hooks(tmp_path: 
     assert ("before", "new", None) in events
     assert ("shutdown", "new", runtime.session.session_path) in events
     assert ("start", "new", str(tmp_path / "initial.jsonl")) in events
+    assert events.index(("rebind", "session", runtime.session.session_path)) < events.index(
+        ("start", "new", str(tmp_path / "initial.jsonl"))
+    )
 
     active_session = runtime.session
     cancel_result = runtime.switch_session(str(tmp_path / "cancel.jsonl"))
@@ -1113,6 +1121,7 @@ def test_agent_session_runtime_fork_creates_branched_session_with_selected_text(
             parent_session_path=options.get("parent_session_path"),
             extension_runner=make_runner(),
             session_start_event=options.get("session_start_event"),
+            defer_session_start=bool(options.get("defer_session_start", False)),
         )
         return CreateAgentSessionRuntimeResult(
             session=session,
@@ -1211,6 +1220,7 @@ def test_agent_session_runtime_import_from_jsonl_copies_and_replaces_session(tmp
             session_path=options["session_path"],
             extension_runner=make_runner(),
             session_start_event=options.get("session_start_event"),
+            defer_session_start=bool(options.get("defer_session_start", False)),
         )
         return CreateAgentSessionRuntimeResult(
             session=session,
@@ -1334,6 +1344,7 @@ def test_agent_session_runtime_rejects_missing_session_cwd_before_teardown(tmp_p
             model=model,
             session_path=options["session_path"],
             session_start_event=options.get("session_start_event"),
+            defer_session_start=bool(options.get("defer_session_start", False)),
         )
         return CreateAgentSessionRuntimeResult(
             session=session,

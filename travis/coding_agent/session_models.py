@@ -22,27 +22,6 @@ from travis.agent.types import AgentToolResult
 from travis.agent.types import AgentMessage
 from travis.agent.types import BeforeToolCallResult
 from travis.agent.types import MessageEndEvent, MessageStartEvent
-from travis.coding_agent.policies.tool_guardrails import (
-    ToolCallGuardrailConfig,
-    ToolCallGuardrailController,
-    ToolGuardrailDecision,
-    ToolLoopPolicy,
-    append_toolguard_guidance,
-    classify_tool_failure,
-    toolguard_synthetic_result,
-)
-from travis.coding_agent.policies.iteration_limit import coding_iteration_limit_message
-from travis.coding_agent.policies.package_consent import PackageMutationPolicy
-from travis.coding_agent.policies.pipeline import PolicyPipeline
-from travis.coding_agent.policies.types import (
-    Allow,
-    Block,
-    CodingPolicyEvent,
-    CodingTurnContext,
-    RequireConsent,
-    ToolCallView,
-    TurnCapabilities,
-)
 from travis.ai.model_resolver import ScopedModel
 from travis.ai.models import (
     clamp_thinking_level,
@@ -62,7 +41,6 @@ from travis.coding_agent.compaction_coordinator import (
     CompactionCoordinator,
     CompactionTransactionCoordinator,
 )
-from travis.coding_agent.capabilities import CapabilityViolation, WorkspaceCapability
 from travis.coding_agent.config import get_packaged_context_paths
 from travis.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
 from travis.coding_agent.execution_backend import select_execution_backend
@@ -77,7 +55,6 @@ from travis.coding_agent.process_context import ProcessContextResolver
 from travis.coding_agent.processes.local import create_local_process_transport
 from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import ProcessOwner
-from travis.coding_agent.provider_control_plane import ProviderControlPlane
 from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.session_index import SessionIndex
 from travis.coding_agent.session_store import (
@@ -251,6 +228,15 @@ class SessionModelController:
         if explicit_level is not None:
             return explicit_level
         if not self.supports_thinking():
+            get_default_thinking_level = getattr(
+                self.settings_manager,
+                "get_default_thinking_level",
+                None,
+            ) or getattr(self.settings_manager, "getDefaultThinkingLevel", None)
+            if callable(get_default_thinking_level):
+                default_level = get_default_thinking_level()
+                if default_level:
+                    return str(default_level)
             return "off"
         return self.thinking_level
 

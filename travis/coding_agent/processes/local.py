@@ -50,7 +50,10 @@ class _PipeTransport(ProcessTransport):
                 return
             self._stdin_closed = True
             if self._process.stdin is not None:
-                self._process.stdin.close()
+                try:
+                    self._process.stdin.close()
+                except (BrokenPipeError, OSError, ValueError):
+                    pass
 
     def resize(self, rows: int, cols: int) -> None:
         raise ProcessStateError("resize requires tty=true")

@@ -470,10 +470,7 @@ def test_continuous_eval_uses_one_tui_session_for_all_prompts(tmp_path: Path) ->
 
     scenarios = [
         Scenario("01-first", "first", ("implement", "verify"), (), ((sys.executable, "-c", ""),)),
-        Scenario(
-            "02-second", "second", ("repair",), (), ((sys.executable, "-c", ""),),
-            allow_package_install=True,
-        ),
+        Scenario("02-second", "second", ("repair",), (), ((sys.executable, "-c", ""),)),
     ]
     driver = FakeDriver()
     starts: list[tuple[object, object, object]] = []
@@ -499,7 +496,6 @@ def test_continuous_eval_uses_one_tui_session_for_all_prompts(tmp_path: Path) ->
         "/agents",
         "SDLC scenario 01-first. Work only in scenarios/01-first. implement verify",
         "/compact",
-        "/allow package-install",
         "SDLC scenario 02-second. Work only in scenarios/02-second. repair",
         "/exit",
     ]
@@ -509,7 +505,7 @@ def test_continuous_eval_uses_one_tui_session_for_all_prompts(tmp_path: Path) ->
     assert driver.closed is True
     assert all(timeout >= 900 for event, timeout in driver.waits if event == "turn_end")
     assert sum(event == "turn_ready" for event, _timeout in driver.waits) == 2
-    assert ("capability_granted", 60) in driver.waits
+    assert ("capability_granted", 60) not in driver.waits
     command = list(starts[0][0])
     assert "--conversation-log" in command
     assert [result.turn_id for result in results] == ["turn-1", "turn-2"]
@@ -520,6 +516,10 @@ def test_continuous_eval_uses_one_tui_session_for_all_prompts(tmp_path: Path) ->
     assert {result.model_id for result in results} == {"stepfun/step-3.7-flash"}
     result_paths = sorted((tmp_path / "eval/runs").glob("*/result.json"))
     assert result_paths and all(path.stat().st_mode & 0o777 == 0o600 for path in result_paths)
+
+
+def test_scenario_schema_has_no_removed_package_allow_flag() -> None:
+    assert "allow_package_install" not in Scenario.__dataclass_fields__
 
 
 def test_continuous_eval_can_pin_a_direct_provider_at_process_start(tmp_path: Path) -> None:
@@ -600,6 +600,63 @@ def test_continuous_eval_separates_installed_console_from_verifier_python(tmp_pa
     assert results[0].status == "passed"
 
 
+def test_continuous_eval_rejects_a_console_with_stale_runtime_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import evals.run_continuous_sdlc_eval as continuous
+
+    source_package = tmp_path / "source/travis"
+    source_package.mkdir(parents=True)
+    (source_package / "__init__.py").write_text("BUILD = 'current'\n", encoding="utf-8")
+    console = tmp_path / "installed/bin/travis234"
+    console.parent.mkdir(parents=True)
+    console.write_text(f"#!{sys.executable}\n", encoding="utf-8")
+
+    stale_probe = subprocess.CompletedProcess(
+        args=[],
+        returncode=0,
+        stdout=json.dumps(
+            {
+                "package_root": str(tmp_path / "installed/travis"),
+                "digest": "stale-digest",
+                "file_count": 1,
+            }
+        ),
+        stderr="",
+    )
+    monkeypatch.setattr(continuous.subprocess, "run", lambda *_args, **_kwargs: stale_probe)
+
+    with pytest.raises(RuntimeError, match="stale console runtime"):
+        continuous._preflight_console_runtime(console, source_package, tmp_path)
+
+
+def test_continuous_eval_seeds_required_skills_in_the_project_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import evals.run_continuous_sdlc_eval as continuous
+
+    monkeypatch.delenv("TRAVIS234_CODING_AGENT_DIR", raising=False)
+    workspace = tmp_path / "workspace"
+
+    continuous._seed_acceptance_agent_resources(workspace)
+
+    skills = workspace / ".travis234/skills"
+    assert (skills / "acceptance-audit/SKILL.md").read_text(encoding="utf-8").endswith(
+        "with exactly `acceptance-audit skill applied\\n`, then continue the requested task.\n"
+    )
+    assert (skills / "subagent-delegation/SKILL.md").is_file()
+    from travis.coding_agent.resource_loader import DefaultResourceLoader
+
+    loader = DefaultResourceLoader(cwd=str(workspace), agent_dir=str(tmp_path / "agent"))
+    loader.reload()
+    assert {skill.name for skill in loader.get_skills()["skills"]} >= {
+        "acceptance-audit",
+        "subagent-delegation",
+    }
+
+
 def test_continuous_eval_stops_and_classifies_provider_billing_failure(tmp_path: Path) -> None:
     from evals.run_continuous_sdlc_eval import run_continuous_scenarios
 
@@ -666,6 +723,39 @@ def test_continuous_eval_stops_and_classifies_provider_billing_failure(tmp_path:
     assert not any("02-second" in line for line in driver.lines)
     assert driver.lines[-1] == "/exit"
     assert driver.closed is True
+
+
+def test_continuous_eval_stops_before_the_next_prompt_when_a_verifier_fails(tmp_path: Path) -> None:
+    from evals.run_continuous_sdlc_eval import run_continuous_scenarios
+
+    scenarios = [
+        Scenario(
+            "01-fails-verification",
+            "first",
+            ("implement",),
+            (),
+            ((sys.executable, "-c", "raise SystemExit(7)"),),
+        ),
+        Scenario("02-must-not-run", "second", ("repair",), (), ((sys.executable, "-c", ""),)),
+    ]
+    driver = FakeDriver()
+
+    def start(command, _cwd, _trace):
+        command_parts = list(command)
+        driver.conversation_path = Path(command_parts[command_parts.index("--conversation-log") + 1])
+        return driver
+
+    results = run_continuous_scenarios(
+        scenarios,
+        root=tmp_path / "eval",
+        dotenv=tmp_path / ".env",
+        driver_factory=start,
+    )
+
+    assert [result.scenario_id for result in results] == ["01-fails-verification"]
+    assert results[0].status == "failed"
+    assert not any("02-must-not-run" in line for line in driver.lines)
+    assert driver.lines[-1] == "/exit"
 
 
 def test_continuous_eval_preflights_verifiers_before_starting_tui(tmp_path: Path) -> None:

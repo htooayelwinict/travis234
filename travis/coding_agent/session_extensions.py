@@ -22,28 +22,8 @@ from travis.agent.types import AgentToolResult
 from travis.agent.types import AgentMessage
 from travis.agent.types import BeforeToolCallResult
 from travis.agent.types import MessageEndEvent, MessageStartEvent
-from travis.coding_agent.policies.tool_guardrails import (
-    ToolCallGuardrailConfig,
-    ToolCallGuardrailController,
-    ToolGuardrailDecision,
-    ToolLoopPolicy,
-    append_toolguard_guidance,
-    classify_tool_failure,
-    toolguard_synthetic_result,
-)
-from travis.coding_agent.policies.iteration_limit import coding_iteration_limit_message
-from travis.coding_agent.policies.package_consent import PackageMutationPolicy
-from travis.coding_agent.policies.pipeline import PolicyPipeline
-from travis.coding_agent.policies.types import (
-    Allow,
-    Block,
-    CodingPolicyEvent,
-    CodingTurnContext,
-    RequireConsent,
-    ToolCallView,
-    TurnCapabilities,
-)
 from travis.ai.model_resolver import ScopedModel
+from travis.ai.model_cost import cost_from_mapping
 from travis.ai.models import (
     clamp_thinking_level,
     get_supported_thinking_levels,
@@ -62,7 +42,6 @@ from travis.coding_agent.compaction_coordinator import (
     CompactionCoordinator,
     CompactionTransactionCoordinator,
 )
-from travis.coding_agent.capabilities import CapabilityViolation, WorkspaceCapability
 from travis.coding_agent.config import get_packaged_context_paths
 from travis.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
 from travis.coding_agent.execution_backend import select_execution_backend
@@ -77,7 +56,6 @@ from travis.coding_agent.process_context import ProcessContextResolver
 from travis.coding_agent.processes.local import create_local_process_transport
 from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import ProcessOwner
-from travis.coding_agent.provider_control_plane import ProviderControlPlane
 from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.session_index import SessionIndex
 from travis.coding_agent.session_store import (
@@ -156,6 +134,11 @@ def _apply_provider_config_to_model(model: Model, config: dict) -> Model:
     api = config.get("api")
     if api is not None:
         updates["api"] = str(api)
+    compat = config.get("compat")
+    if isinstance(compat, dict):
+        from travis.coding_agent.model_registry import _merge_compat
+
+        updates["compat"] = _merge_compat(model.compat, compat)
     return replace(model, **updates) if updates else model
 
 
@@ -180,18 +163,18 @@ def _model_from_provider_config(provider: str, provider_config: dict, model_conf
         cost=_cost_from_provider_model_config(model_config.get("cost")),
         context_window=int(model_config.get("contextWindow") or model_config.get("context_window") or 0),
         max_tokens=int(model_config.get("maxTokens") or model_config.get("max_tokens") or 0),
+        compat=_merge_provider_model_compat(provider_config.get("compat"), model_config.get("compat")),
     )
+
+
+def _merge_provider_model_compat(base: object, override: object) -> dict | None:
+    from travis.coding_agent.model_registry import _merge_compat
+
+    return _merge_compat(base, override)
 
 
 def _cost_from_provider_model_config(cost: object) -> Cost:
-    if not isinstance(cost, dict):
-        return Cost()
-    return Cost(
-        input=float(cost.get("input", 0.0)),
-        output=float(cost.get("output", 0.0)),
-        cache_read=float(cost.get("cacheRead", cost.get("cache_read", 0.0))),
-        cache_write=float(cost.get("cacheWrite", cost.get("cache_write", 0.0))),
-    )
+    return cost_from_mapping(cost)
 
 
 def _replace_message_in_place(target: AgentMessage, replacement: AgentMessage) -> None:
@@ -242,6 +225,7 @@ class SessionExtensionController:
     """Owns a focused AgentSession runtime concern."""
 
     def bind_extensions(self, bindings: dict[str, object] | None = None) -> None:
+        first_bind = not self._extensions_bound
         bindings = bindings or {}
         if _has_binding(bindings, "uiContext", "ui_context"):
             self._extension_ui_context = _binding_value(bindings, "uiContext", "ui_context")
@@ -265,6 +249,8 @@ class SessionExtensionController:
         self._apply_extension_bindings()
         self._extensions_bound = True
         self._defer_session_start = False
+        if not first_bind:
+            return
         self._extension_runner.emit(self._session_start_event)
         reason = "reload" if self._session_start_event.get("reason") == "reload" else "startup"
         if self._extend_resources_from_extensions(reason):
@@ -282,11 +268,26 @@ class SessionExtensionController:
             self._extension_error_unsubscribe = self._extension_runner.on_error(self._extension_error_listener)
 
     def reload(self) -> None:
-        previous_flag_values = self._extension_runner.get_flag_values()
-        emit_session_shutdown_event(self._extension_runner, {"type": "session_shutdown", "reason": "reload"})
+        previous_runner = self._extension_runner
+        previous_flag_values = previous_runner.get_flag_values()
+        emit_session_shutdown_event(previous_runner, {"type": "session_shutdown", "reason": "reload"})
+        previous_runner.invalidate()
+        for provider_name in list(self._extension_provider_registrations):
+            self._unregister_extension_provider(provider_name)
         self._resource_loader.reload()
+        replacement = self._resource_loader.get_extensions().get("runtime")
+        if not isinstance(replacement, ExtensionRunner):
+            raise RuntimeError("Resource reload did not produce an extension runtime")
+        self._extension_runner = replacement
+        self._extension_runner._model_registry = self.model_registry  # noqa: SLF001
+        self._extension_runner.bind_provider_actions(
+            self._register_extension_provider,
+            self._unregister_extension_provider,
+        )
         for name, value in previous_flag_values.items():
             self._extension_runner.set_flag_value(name, value)
+        self._bind_extension_core()
+        self._register_builtin_subagent_commands()
         self._refresh_resource_prompt_inputs()
         self.refresh_tools(include_all_extension_tools=True)
         self._apply_extension_bindings()
@@ -504,6 +505,7 @@ class SessionExtensionController:
                 "setActiveTools": self.set_active_tools_by_name,
                 "refreshTools": self.refresh_tools,
                 "getCommands": self._extension_command_infos,
+                "exec": self._extension_exec,
                 "setModel": self._extension_set_model,
                 "getThinkingLevel": lambda: self.thinking_level,
                 "setThinkingLevel": self.set_thinking_level,
@@ -691,9 +693,10 @@ class SessionExtensionController:
         previous_registration = self._extension_provider_registrations.pop(name, None)
         if previous_registration is not None:
             previous_registration.close()
-        self._extension_provider_registrations[name] = self.provider_control_plane.register_extension(
+        self._extension_provider_registrations[name] = self.model_registry.register_extension(
             f"extension:{name}",
-            {"provider": name, **config},
+            name,
+            config,
         )
 
         current = self.agent.state.model

@@ -30,7 +30,7 @@ from travis.ai.validation import ToolValidationError, validate_tool_arguments
 
 from travis.ai.model_resolver import ScopedModel
 
-from travis.ai.models import get_model, get_models, register_model, reset_models
+from tests._provider_runtime import get_model, get_models, register_model, reset_models
 
 from travis.ai.event_stream import create_assistant_message_event_stream
 
@@ -87,7 +87,7 @@ from travis.coding_agent.tools.types import ToolContext, ToolDefinition, wrap_to
 
 from travis.ai.providers.faux import create_faux_provider, faux_model, text_response_events, tool_call_response_events
 
-from travis.ai.stream import register_api_provider, reset_api_providers
+from tests._provider_runtime import register_api_provider, reset_api_providers
 
 from travis.coding_agent.resource_loader import Skill
 

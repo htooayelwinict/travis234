@@ -4,115 +4,25 @@ from __future__ import annotations
 
 import json
 import re
-import threading
-import time
 from dataclasses import replace
-from typing import Any, Callable, Iterable, Iterator
+from collections.abc import Callable
+from typing import Any
 
-import httpx
-
-from travis.ai.env_config import ModelConfig, load_model_config
-from travis.ai.event_stream import AssistantMessageEventStream, create_assistant_message_event_stream
-from travis.ai.providers.base import ProviderProfile
-from travis.ai.providers._shared import blank_assistant_message as _blank
-from travis.ai.providers.capabilities import build_generation_payload
-from travis.ai.providers.catalog import get_provider_profile, resolve_provider_runtime
-from travis.ai.providers.message_sanitization import repair_tool_call_arguments
-from travis.ai.providers.params import GenerationParams, merge_generation_params
-from travis.ai.providers.transports import get_transport
-from travis.ai.stream import ApiProvider
+from travis.ai.providers.openai_compat import OpenAICompat, resolve_openai_compat
 from travis.ai.types import (
     AssistantMessage,
     Context,
-    DoneEvent,
-    ErrorEvent,
     ImageContent,
     Message,
     Model,
-    StartEvent,
     TextContent,
-    TextDeltaEvent,
-    TextEndEvent,
-    TextStartEvent,
     ThinkingContent,
-    ThinkingDeltaEvent,
-    ThinkingEndEvent,
-    ThinkingStartEvent,
-    Tool,
     ToolCall,
     ToolResultMessage,
-    ToolcallDeltaEvent,
-    ToolcallEndEvent,
-    ToolcallStartEvent,
-    Usage,
-    empty_usage,
     now_ms,
 )
-from travis.ai.validation import ToolValidationError, validate_tool_arguments
-PROVIDER_API = "openai-completions"
-PARTIAL_STREAM_STUB_ID = "partial-stream-stub"
-PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE = "partial_stream_dropped_tool_calls"
-MALFORMED_STREAMED_TOOL_CALL_ARGUMENTS_CODE = "malformed_streamed_tool_call_arguments"
-LEAKED_TOOL_PROTOCOL_TEXT_CODE = "leaked_tool_protocol_text"
-_MUTATING_TOOL_REQUIRED_ARGUMENTS = {"write": ("path", "content")}
-_VALID_JSON_ESCAPES = {'"', "\\", "/", "b", "f", "n", "r", "t", "u"}
-_REASONING_FIELDS = ("reasoning_content", "reasoning", "reasoning_text")
-_BILLING_PATTERNS = (
-    "key limit exceeded",
-    "spending limit",
-    "insufficient credits",
-    "insufficient_quota",
-    "insufficient balance",
-    "credit balance",
-    "credits exhausted",
-    "no usable credits",
-    "top up your credits",
-    "payment required",
-    "billing hard limit",
-    "plan does not include",
-    "out of funds",
-    "run out of funds",
-)
-_OPENROUTER_POLICY_PATTERNS = (
-    "no endpoints available matching your guardrail",
-    "no endpoints available matching your data policy",
-    "no endpoints found matching your data policy",
-)
-_OPENROUTER_PROMPT_GUARDRAIL_PATTERNS = (
-    "prompt injection patterns detected",
-    "system_prefix_spoofing",
-)
-_TOOL_CALL_LEAK_PATTERN = re.compile(r"(?:^|[\s>|])to=functions\.[A-Za-z_][\w.]*", re.IGNORECASE)
-_TOOL_PROTOCOL_XML_BLOCK_PATTERN = re.compile(
-    r"(?is)"
-    r"<(?:tool_call|tool_calls|tool_response|function_call|function_calls)\b[^>]*>.*?"
-    r"</(?:tool_call|tool_calls|tool_response|function_call|function_calls)>"
-    r"|<function\s+name\s*=\s*[\"'][^\"']+[\"'][^>]*>.*?</function>"
-)
-_TOOL_PROTOCOL_XML_LINE_PATTERN = re.compile(
-    r"(?im)^[ \t]*</?(?:parameter|function|tool_call|tool_calls|tool_response|function_call|function_calls)"
-    r"(?:[\s=>][^>]*)?>[ \t]*(?:\r?\n|$)"
-)
-_TOOL_PROTOCOL_XML_PREFIX_PATTERN = re.compile(
-    r"(?is)(?:^|[\s>])(?:"
-    r"</?(?:tool_call|tool_calls|tool_response|function_call|function_calls|parameter)(?:$|[\s=>_/])"
-    r"|<tool(?:$|_)"
-    r"|</tool(?:$|[_>\s])"
-    r"|<function\s+(?:$|name\s*=)"
-    r"|</function(?:$|[\s>])"
-    r"|<parameter(?:$|[\s=>])"
-    r"|</parameter(?:$|[\s>])"
-    r")"
-)
-_PROVIDER_ERROR_DETAIL_HEAD_CHARS = 450
-_PROVIDER_ERROR_DETAIL_TAIL_CHARS = 300
-_PROVIDER_ERROR_DETAIL_TRUNCATION_MARKER = "... [truncated provider error body] ..."
 _NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)"
 _NON_VISION_TOOL_IMAGE_PLACEHOLDER = "(tool image omitted: model does not support images)"
-_STREAMING_TOOL_ARGUMENT_PREVIEW_MAX_CHARS = 8_192
-
-
-
 def _has_tool_history(messages: list[Message]) -> bool:
     for message in messages:
         if getattr(message, "role", None) == "toolResult":
@@ -124,39 +34,61 @@ def _has_tool_history(messages: list[Message]) -> bool:
     return False
 
 
-def convert_messages(context: Context, model: Model | None = None) -> "tuple[list[dict], list[dict] | None]":
+def convert_messages(
+    context: Context,
+    model: Model | None = None,
+    normalize_tool_call_id: Callable[[str, Model, AssistantMessage], str] | None = None,
+) -> "tuple[list[dict], list[dict] | None]":
     messages: list[dict] = []
+    compat = resolve_openai_compat(model) if model is not None else OpenAICompat()
     if context.system_prompt:
-        messages.append({"role": "system", "content": _sanitize_surrogates(context.system_prompt)})
-    context_messages = _transform_messages(context.messages, model) if model is not None else context.messages
+        role = "developer" if model is not None and model.reasoning and compat.supports_developer_role else "system"
+        messages.append({"role": role, "content": _sanitize_surrogates(context.system_prompt)})
+    context_messages = (
+        _transform_messages(context.messages, model, normalize_tool_call_id)
+        if model is not None
+        else context.messages
+    )
     index = 0
+    last_role: str | None = None
     while index < len(context_messages):
         message = context_messages[index]
+        if compat.requires_assistant_after_tool_result and last_role == "toolResult" and message.role == "user":
+            messages.append({"role": "assistant", "content": "I have processed the tool results."})
         if message.role == "toolResult":
             tool_messages, next_index = _convert_tool_result_group(
                 context_messages,
                 index,
                 model,
+                compat,
             )
             messages.extend(tool_messages)
+            last_role = "user" if tool_messages and tool_messages[-1].get("role") == "user" else "toolResult"
             index = next_index
             continue
-        converted_message = _convert_message(message, model)
+        converted_message = _convert_message(message, model, compat)
         if converted_message is not None:
             messages.append(converted_message)
+            last_role = message.role
         index += 1
     tools = None
     if context.tools:
-        tools = [
-            {"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.parameters}}
-            for t in context.tools
-        ]
+        tools = []
+        for tool in context.tools:
+            function = {"name": tool.name, "description": tool.description, "parameters": tool.parameters}
+            if compat.supports_strict_mode:
+                function["strict"] = False
+            tools.append({"type": "function", "function": function})
     elif _has_tool_history(context_messages):
         tools = []
     return messages, tools
 
 
-def _transform_messages(messages: list[Message], model: Model) -> list[Message]:
+def _transform_messages(
+    messages: list[Message],
+    model: Model,
+    normalize_tool_call_id: Callable[[str, Model, AssistantMessage], str] | None = None,
+) -> list[Message]:
     tool_call_id_map: dict[str, str] = {}
     image_aware_messages = _downgrade_unsupported_images(messages, model)
     transformed: list[Message] = []
@@ -200,7 +132,11 @@ def _transform_messages(messages: list[Message], model: Model) -> list[Message]:
                 if not is_same_model and block.thought_signature:
                     transformed_tool_call = replace(block, thought_signature=None)
                 if not is_same_model:
-                    normalized_id = _normalize_tool_call_id(block.id, model)
+                    normalized_id = (
+                        normalize_tool_call_id(block.id, model, message)
+                        if normalize_tool_call_id is not None
+                        else _normalize_tool_call_id(block.id, model)
+                    )
                     if normalized_id != block.id:
                         tool_call_id_map[block.id] = normalized_id
                         transformed_tool_call = replace(transformed_tool_call, id=normalized_id)
@@ -237,6 +173,15 @@ def _transform_messages(messages: list[Message], model: Model) -> list[Message]:
         if message.role == "assistant":
             insert_synthetic_tool_results()
             if message.stop_reason in ("error", "aborted"):
+                # Failed assistant messages can contain incomplete reasoning or
+                # malformed tool calls. They are retained in the session record
+                # but omitted from provider replay. If no completed assistant or
+                # tool work followed the latest user input, omit that unanswered
+                # input as well. Replaying it beside the next prompt makes some
+                # providers treat the newer instruction as an injection or as
+                # steering for the cancelled task.
+                while result and result[-1].role == "user":
+                    result.pop()
                 continue
             tool_calls = [block for block in message.content if isinstance(block, ToolCall)]
             if tool_calls:
@@ -306,48 +251,23 @@ def _normalize_tool_call_id(tool_call_id: str, model: Model) -> str:
     return tool_call_id
 
 
-def _repair_tool_call_name_fragment(name: str) -> str:
-    if not name:
-        return ""
-    separator_indexes = [index for sep in ('"', "'", "<", ">") if (index := name.find(sep)) >= 0]
-    if not separator_indexes:
-        return name
-    first = min(separator_indexes)
-    return name[:first] if first > 0 else ""
-
-
-def _coerce_tool_call_arguments_for_replay(arguments: Any, tool_name: str = "?") -> tuple[dict[str, Any], bool]:
-    if arguments is None:
-        return {}, False
-    if isinstance(arguments, dict):
-        return arguments, False
-    if isinstance(arguments, str):
-        if not arguments.strip():
-            return {}, False
-        try:
-            parsed = json.loads(arguments)
-        except json.JSONDecodeError:
-            repaired = repair_tool_call_arguments(arguments, tool_name)
-            try:
-                parsed = json.loads(repaired)
-            except json.JSONDecodeError:
-                return {}, True
-            return (parsed, True) if isinstance(parsed, dict) else ({}, True)
-        return (parsed, False) if isinstance(parsed, dict) else ({}, True)
-    return {}, True
-
-
 def _convert_message(
     message: Message,
     model: Model | None = None,
+    compat: OpenAICompat | None = None,
 ) -> dict | None:
+    compat = compat or (resolve_openai_compat(model) if model is not None else OpenAICompat())
     if message.role == "user":
         content = _sanitize_surrogates(message.content) if isinstance(message.content, str) else _convert_user_content_parts(message.content)
         return {"role": "user", "content": content}
     if message.role == "toolResult":
         return _convert_single_tool_result(message)
     # assistant
-    text_parts = [_sanitize_surrogates(b.text) for b in message.content if isinstance(b, TextContent)]
+    text_parts = [
+        _sanitize_surrogates(block.text)
+        for block in message.content
+        if isinstance(block, TextContent) and block.text.strip()
+    ]
     thinking_parts = [b for b in message.content if isinstance(b, ThinkingContent) and b.thinking.strip()]
     responses_reasoning_items: list[dict[str, Any]] = []
     textual_thinking_parts: list[ThinkingContent] = []
@@ -363,28 +283,43 @@ def _convert_message(
                 continue
         textual_thinking_parts.append(block)
     tool_calls = []
+    reasoning_details: list[object] = []
     for block in message.content:
         if not isinstance(block, ToolCall):
             continue
-        name = _repair_tool_call_name_fragment(block.name)
-        arguments, _repaired_corruption = _coerce_tool_call_arguments_for_replay(block.arguments, name)
         tool_calls.append(
             {
                 "id": block.id,
                 "type": "function",
                 "function": {
-                    "name": name,
-                    "arguments": json.dumps(arguments),
+                    "name": block.name,
+                    "arguments": json.dumps(block.arguments, separators=(",", ":")),
                 },
             },
         )
+        if block.thought_signature:
+            try:
+                reasoning_detail = json.loads(block.thought_signature)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                reasoning_detail = None
+            if reasoning_detail is not None:
+                reasoning_details.append(reasoning_detail)
     content_text = "".join(text_parts)
     if not content_text and not thinking_parts and not tool_calls:
         return None
-    out: dict = {"role": "assistant", "content": content_text}
+    out: dict = {
+        "role": "assistant",
+        "content": "" if compat.requires_assistant_after_tool_result else None,
+    }
     if responses_reasoning_items:
         out["codex_reasoning_items"] = responses_reasoning_items
-    if textual_thinking_parts:
+    if textual_thinking_parts and compat.requires_thinking_as_text:
+        thinking_text = "\n\n".join(_sanitize_surrogates(block.thinking) for block in textual_thinking_parts)
+        thinking_content = [{"type": "text", "text": thinking_text}]
+        if content_text:
+            thinking_content.append({"type": "text", "text": content_text})
+        out["content"] = thinking_content
+    elif textual_thinking_parts:
         signature = textual_thinking_parts[0].thinking_signature
         if model is not None and model.provider == "opencode-go" and signature == "reasoning":
             signature = "reasoning_content"
@@ -394,34 +329,63 @@ def _convert_message(
             )
     if tool_calls:
         out["tool_calls"] = tool_calls
+    if reasoning_details:
+        out["reasoning_details"] = reasoning_details
+    if content_text and not compat.requires_thinking_as_text:
+        out["content"] = content_text
+    if (
+        compat.requires_reasoning_content_on_assistant_messages
+        and model is not None
+        and model.reasoning
+        and "reasoning_content" not in out
+    ):
+        out["reasoning_content"] = ""
+    content = out.get("content")
+    has_content = (
+        bool(content)
+        if isinstance(content, str)
+        else bool(content)
+        if isinstance(content, list)
+        else False
+    )
+    if not has_content and not tool_calls:
+        return None
     return out
 
 
 def _convert_single_tool_result(
     message: ToolResultMessage,
+    compat: OpenAICompat | None = None,
 ) -> dict:
     content = _text_of(message.content)
-    if not content and any(isinstance(block, ImageContent) for block in message.content):
-        content = "(see attached image)"
-    return {
+    if not content:
+        content = (
+            "(see attached image)"
+            if any(isinstance(block, ImageContent) for block in message.content)
+            else "(no tool output)"
+        )
+    converted = {
         "role": "tool",
         "tool_call_id": message.tool_call_id,
-        "name": message.tool_name,
         "content": content,
     }
+    if compat is not None and compat.requires_tool_result_name and message.tool_name:
+        converted["name"] = message.tool_name
+    return converted
 
 
 def _convert_tool_result_group(
     messages: list[Message],
     start_index: int,
     model: Model | None,
+    compat: OpenAICompat,
 ) -> tuple[list[dict], int]:
     converted: list[dict] = []
     image_parts: list[dict] = []
     index = start_index
     while index < len(messages) and messages[index].role == "toolResult":
         message = messages[index]
-        converted_message = _convert_single_tool_result(message)
+        converted_message = _convert_single_tool_result(message, compat)
         converted.append(converted_message)
         if model is not None and "image" in model.input:
             for block in message.content:
@@ -432,6 +396,8 @@ def _convert_tool_result_group(
                     })
         index += 1
     if image_parts:
+        if compat.requires_assistant_after_tool_result:
+            converted.append({"role": "assistant", "content": "I have processed the tool results."})
         converted.append({
             "role": "user",
             "content": [

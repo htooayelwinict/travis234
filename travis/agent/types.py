@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Callable, Literal, Optional, Union
+from typing import Any, Awaitable, Callable, Literal, Optional, Union
 
 from travis.ai.types import (
     AssistantMessage,
@@ -19,7 +19,7 @@ from travis.ai.types import (
 
 ToolExecutionMode = Literal["sequential", "parallel"]
 QueueMode = Literal["all", "one-at-a-time"]
-ThinkingLevel = Literal["off", "minimal", "low", "medium", "high", "xhigh"]
+ThinkingLevel = Literal["off", "minimal", "low", "medium", "high", "xhigh", "max"]
 
 # AgentMessage = ai Message | app-defined custom message (any object with a `role`).
 AgentMessage = Union[Message, Any]
@@ -73,6 +73,7 @@ class AgentToolResult:
     content: list[Union[TextContent, ImageContent]]
     details: Any = None
     terminate: bool | None = None
+    added_tool_names: list[str] | None = None
 
 
 AgentToolUpdateCallback = Callable[[AgentToolResult], None]
@@ -164,14 +165,6 @@ PrepareNextTurnContext = ShouldStopAfterTurnContext
 
 
 @dataclass
-class IterationLimitContext:
-    context: AgentContext
-    api_call_count: int
-    max_iterations: int
-    signal: AbortSignal | None
-
-
-@dataclass
 class AgentLoopTurnUpdate:
     context: AgentContext | None = None
     model: Model | None = None
@@ -182,7 +175,12 @@ class AgentLoopTurnUpdate:
 class AgentLoopConfig:
     model: Model
     convert_to_llm: Callable[[list[AgentMessage]], list[Message]]
-    transform_context: Optional[Callable[[list[AgentMessage], Optional[AbortSignal]], list[AgentMessage]]] = None
+    transform_context: Optional[
+        Callable[
+            [list[AgentMessage], Optional[AbortSignal]],
+            list[AgentMessage] | Awaitable[list[AgentMessage]],
+        ]
+    ] = None
     get_api_key: Optional[Callable[[str], Optional[str]]] = None
     should_stop_after_turn: Optional[Callable[[ShouldStopAfterTurnContext], bool]] = None
     prepare_next_turn: Optional[Callable[[ShouldStopAfterTurnContext], Optional[AgentLoopTurnUpdate]]] = None
@@ -199,12 +197,10 @@ class AgentLoopConfig:
     thinking_budgets: dict[str, int] | None = None
     max_retry_delay_ms: int | None = None
     on_payload: Any | None = None
+    on_headers: Any | None = None
     on_response: Any | None = None
     temperature: float | None = None
     max_tokens: int | None = None
-    max_iterations: int = 90
-    iteration_budget: Any | None = None
-    on_iteration_limit: Optional[Callable[[IterationLimitContext], AgentMessage | None]] = None
 
 
 # --- AgentEvent union (travis AgentEvent) ---

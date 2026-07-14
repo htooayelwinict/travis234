@@ -33,6 +33,47 @@ def test_read_tool_truncation_details_are_json_serializable_travis234_shape(tmp_
     assert truncation["totalLines"] == 2005
     assert truncation["outputLines"] == 2000
 
+
+def test_read_tool_byte_paginates_single_line_artifact_by_public_id(tmp_path: Path) -> None:
+    from travis.coding_agent.artifacts import ArtifactRegistry
+    from travis.coding_agent.tools.read import create_read_tool
+
+    target = tmp_path / "single-line.log"
+    target.write_bytes(b"BEGIN_SPOOL" + (b"x" * 80_000) + b"END_SPOOL")
+    artifacts = ArtifactRegistry()
+    artifact = artifacts.register(target, kind="command-output", remove_on_close=False)
+    tool = create_read_tool(str(tmp_path), artifacts=artifacts)
+
+    first = tool.execute(
+        "read-first",
+        {"path": artifact.id, "byte_offset": 0, "byte_limit": 64},
+    )
+    last = tool.execute(
+        "read-last",
+        {
+            "path": artifact.id,
+            "byte_offset": target.stat().st_size - len(b"END_SPOOL"),
+            "byte_limit": 64,
+        },
+    )
+
+    assert "BEGIN_SPOOL" in first.content[0].text
+    assert "Use byte_offset=64 to continue" in first.content[0].text
+    assert "END_SPOOL" in last.content[0].text
+    assert first.details["byteRange"]["totalBytes"] == target.stat().st_size
+
+
+def test_read_tool_rejects_mixed_line_and_byte_pagination(tmp_path: Path) -> None:
+    target = tmp_path / "mixed.txt"
+    target.write_text("content", encoding="utf-8")
+    tool = create_tool("read", str(tmp_path))
+
+    with pytest.raises(ValueError, match="line pagination.*byte pagination"):
+        tool.execute(
+            "mixed-read",
+            {"path": "mixed.txt", "offset": 1, "byte_offset": 0},
+        )
+
 def test_read_tool_schema_and_execution_accept_travis234_number_limits(tmp_path: Path) -> None:
     target = tmp_path / "f.txt"
     target.write_text("\n".join(f"line{i}" for i in range(1, 11)), encoding="utf-8")
@@ -162,68 +203,6 @@ def test_write_tool_writes_literal_historical_marker_text_like_travis234_write(t
 
     assert target.read_text(encoding="utf-8") == marker
     assert result.content[0].text == f"Successfully wrote {len(marker.encode('utf-8'))} bytes to out.md"
-
-def test_repeated_successful_write_mutations_are_not_model_guardrail_warnings(tmp_path: Path) -> None:
-    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailController
-
-    controller = ToolCallGuardrailController(cwd=str(tmp_path))
-
-    first = controller.after_call("write", {"path": "out.md"}, "Successfully wrote 6 bytes to out.md", failed=False)
-    second = controller.after_call("write", {"path": "out.md"}, "Successfully wrote 7 bytes to out.md", failed=False)
-
-    assert first.action == "allow"
-    assert first.allows_execution is True
-    assert second.action == "allow"
-    assert second.allows_execution is True
-    assert second.should_halt is False
-    assert second.code == "allow"
-    assert second.message == ""
-
-def test_repeated_identical_successful_write_mutation_warns_when_blocking_disabled(tmp_path: Path) -> None:
-    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailConfig, ToolCallGuardrailController
-
-    controller = ToolCallGuardrailController(
-        ToolCallGuardrailConfig(blocking_enabled=False),
-        cwd=str(tmp_path),
-    )
-    args = {"path": "PROTOCOL_FIXTURE.md", "content": "line1 is"}
-
-    decisions = [
-        controller.after_call(
-            "write",
-            args,
-            "Successfully wrote 8 bytes to PROTOCOL_FIXTURE.md",
-            failed=False,
-        )
-        for _ in range(6)
-    ]
-
-    assert decisions[0].action == "allow"
-    assert decisions[1].action == "allow"
-    assert decisions[2].action == "warn"
-    assert decisions[-1].action == "warn"
-    assert decisions[-1].code == "mutating_no_progress_warning"
-    assert decisions[-1].should_halt is False
-
-def test_repeated_identical_successful_write_mutation_halts_when_blocking_enabled(tmp_path: Path) -> None:
-    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailConfig, ToolCallGuardrailController
-
-    controller = ToolCallGuardrailController(ToolCallGuardrailConfig(blocking_enabled=True), cwd=str(tmp_path))
-    args = {"path": "PROTOCOL_FIXTURE.md", "content": "line1 is"}
-
-    decisions = [
-        controller.after_call(
-            "write",
-            args,
-            "Successfully wrote 8 bytes to PROTOCOL_FIXTURE.md",
-            failed=False,
-        )
-        for _ in range(6)
-    ]
-
-    assert decisions[-1].action == "halt"
-    assert decisions[-1].code == "mutating_no_progress_halt"
-    assert decisions[-1].should_halt is True
 
 def test_read_tool_checks_abort_after_access_before_read_file(tmp_path: Path) -> None:
     from travis.coding_agent.tools.read import ReadOperations, create_read_tool
@@ -370,6 +349,39 @@ def test_write_tool_creates_dirs(tmp_path: Path) -> None:
     assert len(result.details["content_sha256"]) == 64
     assert result.details["line_count"] == 1
     assert result.details["final_newline"] is False
+
+
+def test_file_tools_accept_absolute_paths_allowed_by_the_process(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    shared = tmp_path / "shared"
+    project.mkdir()
+    shared.mkdir()
+    target = shared / "notes.txt"
+
+    create_tool("write", str(project)).execute(
+        "write-1",
+        {"path": str(target), "content": "alpha\n"},
+    )
+    read_result = create_tool("read", str(project)).execute("read-1", {"path": str(target)})
+    create_tool("edit", str(project)).execute(
+        "edit-1",
+        {"path": str(target), "edits": [{"oldText": "alpha", "newText": "beta"}]},
+    )
+    ls_result = create_tool("ls", str(project)).execute("ls-1", {"path": str(shared)})
+    find_result = create_tool("find", str(project)).execute(
+        "find-1",
+        {"path": str(shared), "pattern": "*.txt"},
+    )
+    grep_result = create_tool("grep", str(project)).execute(
+        "grep-1",
+        {"path": str(shared), "pattern": "beta", "literal": True},
+    )
+
+    assert read_result.content[0].text == "alpha\n"
+    assert target.read_text(encoding="utf-8") == "beta\n"
+    assert "notes.txt" in ls_result.content[0].text
+    assert "notes.txt" in find_result.content[0].text
+    assert "notes.txt:1: beta" in grep_result.content[0].text
 
 def test_write_tool_allows_empty_file_like_travis234(tmp_path: Path) -> None:
     tool = create_tool("write", str(tmp_path))
@@ -908,6 +920,27 @@ def test_bash_tool_truncates_tail_and_persists_full_output(tmp_path: Path) -> No
     assert "line0" in full_output
     assert "line2004" in full_output
 
+
+def test_synchronous_bash_exposes_truncated_artifact_id_to_the_model(tmp_path: Path) -> None:
+    from travis.coding_agent.artifacts import ArtifactRegistry
+
+    def exec_command(command: str, cwd: str, options) -> dict[str, int | None]:
+        options.on_data(b"BEGIN_SPOOL" + (b"x" * 80_000) + b"END_SPOOL")
+        return {"exit_code": 0}
+
+    artifacts = ArtifactRegistry()
+    tool = create_bash_tool(
+        str(tmp_path),
+        operations=BashOperations(exec=exec_command),
+        artifacts=artifacts,
+    )
+
+    result = tool.execute("c1", {"command": "emit-large-output"})
+
+    assert result.details["artifactId"] in result.content[0].text
+    assert "byte_offset=0" in result.content[0].text
+    assert artifacts.resolve_read(result.details["artifactId"]) is not None
+
 def test_bash_tool_replaces_invalid_utf8_without_dropping_output(tmp_path: Path) -> None:
     def exec_command(command: str, cwd: str, options) -> dict[str, int | None]:
         options.on_data(b"before-\xff-after")
@@ -1184,6 +1217,7 @@ def test_wrap_tool_definition_injects_ctx(tmp_path: Path) -> None:
     assert seen["cwd"] == str(tmp_path)
 
 def test_travis234_extension_define_tool_and_registered_tool_wrappers(tmp_path: Path) -> None:
+    from travis.agent.async_utils import run_sync
     from travis.coding_agent import (
         ExtensionRunner,
         RegisteredTool,
@@ -1216,7 +1250,7 @@ def test_travis234_extension_define_tool_and_registered_tool_wrappers(tmp_path: 
     registered = RegisteredTool(definition=defined, source_info=create_synthetic_source_info("<test>", source="test"))
     tool = wrap_registered_tool(registered, runner)
 
-    result = tool.execute("call-1", {"value": "x"})
+    result = run_sync(tool.execute("call-1", {"value": "x"}))
 
     assert result.content[0].text == "ok"
     assert result.details == {"wrapped": True}

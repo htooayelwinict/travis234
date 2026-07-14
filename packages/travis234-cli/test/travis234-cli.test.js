@@ -24,31 +24,11 @@ test("package exposes travis234 binaries only", () => {
   assert.equal(fs.existsSync(path.join(packageRoot, packageJson.bin.travis234)), true);
 });
 
-test("package prompts prevent parent rereads after bounded subagent summaries", () => {
-  const agentsPrompt = fs.readFileSync(path.join(packageRoot, "agents", "AGENTS.md"), "utf8");
+test("package does not bundle a mandatory global agent prompt", () => {
   const subagentSkill = fs.readFileSync(path.join(packageRoot, "skills", "subagent-delegation", "SKILL.md"), "utf8");
 
-  assert.match(agentsPrompt, /name is Travis/i);
-  assert.match(agentsPrompt, /travis234/i);
-  assert.match(agentsPrompt, /latest Lewis request is the active contract/i);
-  assert.match(agentsPrompt, /generated docs, reports, plans, summaries/i);
-  assert.match(agentsPrompt, /tests pass but encode the opposite/i);
-  assert.match(agentsPrompt, /subagents? (are|must remain) read-only/i);
-  assert.match(agentsPrompt, /subagents? must not write files/i);
-  assert.match(agentsPrompt, /child should inspect.*parent should write/is);
-  assert.match(agentsPrompt, /truncated child result is not a failed child result/i);
-  assert.match(agentsPrompt, /pre-read, find, list, grep, or resolve delegated target files/i);
-  assert.match(agentsPrompt, /do not re-read child-scoped files/i);
-  assert.match(agentsPrompt, /forbidden fallback/i);
-  assert.match(agentsPrompt, /do not say.*read the key files directly/is);
-  assert.match(agentsPrompt, /only allowed recovery paths/i);
-  assert.match(agentsPrompt, /expand_subagent_result/i);
-  assert.match(agentsPrompt, /Subagent system contract/i);
-  assert.match(agentsPrompt, /Do not drop leading project directories/i);
-  assert.match(agentsPrompt, /Allowed tools are its complete tool catalog/i);
-  assert.match(agentsPrompt, /For child file discovery, tell it to use `find` or `ls`/i);
-  assert.doesNotMatch(agentsPrompt, /glob is not available unless/i);
-  assert.match(agentsPrompt, /After two failed attempts/i);
+  assert.equal(fs.existsSync(path.join(packageRoot, "agents", "AGENTS.md")), false);
+  assert.doesNotMatch(subagentSkill, /\bLewis\b/i);
   assert.match(subagentSkill, /truncated child result is not a failed child result/i);
   assert.match(subagentSkill, /subagents? (are|must remain) read-only/i);
   assert.match(subagentSkill, /must not write files/i);
@@ -270,7 +250,7 @@ test("package skill imports exclude dotenv and auth credential files", () => {
   assert.equal(fs.existsSync(path.join(imported, "auth.json")), false);
 });
 
-test("package seeds bundled AGENTS.md into the host app-owned agent directory when missing", () => {
+test("package does not seed AGENTS.md into the host agent directory", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "travis234-cli-"));
   const syntheticPackageRoot = path.join(root, "package");
   const bundledAgentsDir = path.join(syntheticPackageRoot, "agents");
@@ -285,12 +265,8 @@ test("package seeds bundled AGENTS.md into the host app-owned agent directory wh
     { homeDir: hostHome, packageRoot: syntheticPackageRoot },
   );
 
-  assert.equal(
-    fs.readFileSync(path.join(hostHome, ".travis234", "agent", "AGENTS.md"), "utf8"),
-    "Bundled travis234 kernel\n",
-  );
-  const imported = fs.readFileSync(path.join(agentHome, "agent", "AGENTS.md"), "utf8");
-  assert.match(imported, /Bundled travis234 kernel/);
+  assert.equal(fs.existsSync(path.join(hostHome, ".travis234", "agent", "AGENTS.md")), false);
+  assert.equal(fs.existsSync(path.join(agentHome, "agent", "AGENTS.md")), false);
 });
 
 test("package seeds bundled skills into the host app-owned agent directory without overwriting user skills", () => {

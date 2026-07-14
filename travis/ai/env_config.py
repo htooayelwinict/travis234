@@ -9,6 +9,7 @@ from pathlib import Path
 
 from travis.ai.providers.params import GenerationParams, merge_generation_params, params_from_mapping
 from travis.ai.providers.catalog import get_provider
+from travis.ai.provider_metadata import PROVIDER_METADATA
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
 DEFAULT_MODEL_PER_PROVIDER = {
@@ -58,40 +59,9 @@ COMMON_KEYS = (
     "OPENAI_MODEL",
 )
 PROVIDER_API_KEY_ENV = {
-    "ant-ling": ("ANT_LING_API_KEY",),
-    "anthropic": ("ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"),
-    "azure-openai-responses": ("AZURE_OPENAI_API_KEY",),
-    "cerebras": ("CEREBRAS_API_KEY",),
-    "cloudflare-ai-gateway": ("CLOUDFLARE_API_KEY",),
-    "cloudflare-workers-ai": ("CLOUDFLARE_API_KEY",),
-    "deepseek": ("DEEPSEEK_API_KEY",),
-    "fireworks": ("FIREWORKS_API_KEY",),
-    "github-copilot": ("COPILOT_GITHUB_TOKEN",),
-    "google": ("GEMINI_API_KEY",),
-    "google-vertex": ("GOOGLE_CLOUD_API_KEY",),
-    "groq": ("GROQ_API_KEY",),
-    "huggingface": ("HF_TOKEN",),
-    "kimi-coding": ("KIMI_API_KEY",),
-    "minimax": ("MINIMAX_API_KEY",),
-    "minimax-cn": ("MINIMAX_CN_API_KEY",),
-    "mistral": ("MISTRAL_API_KEY",),
-    "moonshotai": ("MOONSHOT_API_KEY",),
-    "moonshotai-cn": ("MOONSHOT_API_KEY",),
-    "nvidia": ("NVIDIA_API_KEY",),
-    "opencode": ("OPENCODE_API_KEY",),
-    "opencode-go": ("OPENCODE_API_KEY",),
-    "openai": ("OPENAI_API_KEY",),
-    "openrouter": ("OPENROUTER_API_KEY",),
-    "together": ("TOGETHER_API_KEY",),
-    "vercel-ai-gateway": ("AI_GATEWAY_API_KEY",),
-    "xai": ("XAI_API_KEY",),
-    "xiaomi": ("XIAOMI_API_KEY",),
-    "xiaomi-token-plan-ams": ("XIAOMI_TOKEN_PLAN_AMS_API_KEY",),
-    "xiaomi-token-plan-cn": ("XIAOMI_TOKEN_PLAN_CN_API_KEY",),
-    "xiaomi-token-plan-sgp": ("XIAOMI_TOKEN_PLAN_SGP_API_KEY",),
-    "zai": ("ZAI_API_KEY",),
-    "zai-coding-cn": ("ZAI_CODING_CN_API_KEY",),
-    "stepfun": ("STEPFUN_API_KEY",),
+    provider.id: provider.api_key_env_vars
+    for provider in PROVIDER_METADATA
+    if provider.api_key_env_vars
 }
 SUFFIXES = (
     "ENABLED",
@@ -226,7 +196,20 @@ def get_env_api_key(provider: str) -> str | None:
         or os.environ.get("AWS_WEB_IDENTITY_TOKEN_FILE")
     ):
         return "<authenticated>"
+    if provider == "google-vertex" and _has_google_vertex_adc():
+        return "<authenticated>"
     return None
+
+
+def _has_google_vertex_adc() -> bool:
+    project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCLOUD_PROJECT")
+    location = os.environ.get("GOOGLE_CLOUD_LOCATION")
+    if not project or not location:
+        return False
+    configured_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if configured_path:
+        return Path(configured_path).expanduser().is_file()
+    return (Path.home() / ".config" / "gcloud" / "application_default_credentials.json").is_file()
 
 
 def get_default_model_for_provider(provider: str) -> str | None:

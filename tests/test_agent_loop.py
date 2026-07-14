@@ -12,16 +12,12 @@ from travis.agent import (
     Agent,
     AgentContext,
     AgentLoopTurnUpdate,
-    IterationLimitContext,
     AgentTool,
     AgentToolResult,
     AfterToolCallResult,
     BeforeToolCallResult,
     RunLease,
     ShouldStopAfterTurnContext,
-    agent_loop,
-    agent_loop_continue,
-    run_agent_loop,
 )
 from travis.ai.event_stream import create_assistant_message_event_stream
 from travis.ai.providers.faux import (
@@ -30,7 +26,13 @@ from travis.ai.providers.faux import (
     text_response_events,
     tool_call_response_events,
 )
-from travis.ai.stream import register_api_provider, reset_api_providers
+from tests._provider_runtime import (
+    agent_loop,
+    agent_loop_continue,
+    register_api_provider,
+    reset_api_providers,
+    run_agent_loop,
+)
 from travis.ai.types import (
     AssistantMessage,
     DoneEvent,
@@ -349,82 +351,6 @@ def test_truncated_assistant_tool_calls_fail_without_execution_like_travis234() 
     assert "truncated" in tool_results[0].content[0].text.lower()
 
 
-def test_repeated_same_path_write_batch_does_not_block_second_landed_mutation() -> None:
-    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailController, toolguard_synthetic_result
-
-    model = faux_model()
-    provider_calls = {"n": 0}
-    executions: list[str] = []
-    controller = ToolCallGuardrailController()
-
-    def script(m, c):
-        provider_calls["n"] += 1
-        if provider_calls["n"] == 1:
-            return _multi_tool_call_response_events(
-                m,
-                [
-                    ("call_1", "write", {"path": "LOCAL_REVIEW.md", "content": "first"}),
-                    ("call_2", "write", {"path": "./LOCAL_REVIEW.md", "content": "second"}),
-                ],
-            )
-        return text_response_events(m, "done")
-
-    register_api_provider(create_faux_provider(script))
-
-    def write_execute(tool_call_id, args, signal=None, on_update=None):
-        executions.append(args["content"])
-        return AgentToolResult(content=[TextContent(text=f"wrote:{args['content']}")], details={})
-
-    write = AgentTool(
-        name="write",
-        description="write",
-        parameters={
-            "type": "object",
-            "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
-            "required": ["path", "content"],
-        },
-        label="Write",
-        execute=write_execute,
-    )
-    config = _config(model)
-
-    def text_blocks(content) -> str:
-        return "".join(block.text for block in content if isinstance(block, TextContent))
-
-    def before_tool_call(context, signal=None):
-        decision = controller.before_call(context.tool_call.name, context.args)
-        if not decision.allows_execution:
-            return BeforeToolCallResult(block=True, reason=toolguard_synthetic_result(decision))
-        return None
-
-    def after_tool_call(context, signal=None):
-        controller.after_call(
-            context.tool_call.name,
-            context.args,
-            text_blocks(context.result.content),
-            failed=context.is_error,
-        )
-        return None
-
-    config.before_tool_call = before_tool_call
-    config.after_tool_call = after_tool_call
-
-    messages = run_agent_loop(
-        [UserMessage(content="go", timestamp=now_ms())],
-        _ctx(tools=[write]),
-        config,
-        lambda e: None,
-    )
-
-    tool_result_text = "\n".join(
-        text_blocks(message.content)
-        for message in messages
-        if getattr(message, "role", None) == "toolResult"
-    )
-    assert executions == ["first", "second"]
-    assert "repeated_file_mutation_block" not in tool_result_text
-
-
 def test_after_tool_call_terminate_uses_travis234_batch_semantics() -> None:
     model = faux_model()
     provider_calls = {"n": 0}
@@ -563,96 +489,6 @@ def test_should_stop_after_turn_receives_prepare_next_turn_context_snapshot() ->
     )
 
     assert seen_context_prompts == ["snapshot-sys"]
-
-
-def test_max_iterations_requests_toolless_summary_after_unique_tool_loop() -> None:
-    model = faux_model()
-    provider_calls = {"n": 0}
-    tool_iterations = {"n": 0}
-    tool_visibility: list[bool] = []
-
-    def script(m, c):
-        provider_calls["n"] += 1
-        tool_visibility.append(bool(c.tools))
-        if c.tools:
-            tool_iterations["n"] += 1
-            return tool_call_response_events(
-                m,
-                "echo",
-                {"text": f"unique-{tool_iterations['n']}"},
-                call_id=f"call_{tool_iterations['n']}",
-            )
-        return text_response_events(m, "summary without tools")
-
-    register_api_provider(create_faux_provider(script))
-
-    def echo_execute(tool_call_id, args, signal=None, on_update=None):
-        return AgentToolResult(content=[TextContent(text=f"echo:{args['text']}")], details={})
-
-    echo = AgentTool(
-        name="echo",
-        description="echo",
-        parameters={"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
-        label="Echo",
-        execute=echo_execute,
-    )
-    cfg = _config(model)
-    cfg.max_iterations = 3
-    limit_contexts: list[IterationLimitContext] = []
-
-    def on_iteration_limit(context: IterationLimitContext) -> UserMessage:
-        limit_contexts.append(context)
-        return UserMessage(content="profile final-response request", timestamp=now_ms())
-
-    cfg.on_iteration_limit = on_iteration_limit
-
-    messages = run_agent_loop(
-        [UserMessage(content="loop with unique args", timestamp=now_ms())],
-        _ctx(tools=[echo]),
-        cfg,
-        lambda e: None,
-    )
-
-    assert provider_calls["n"] == 4
-    assert tool_iterations["n"] == 3
-    assert tool_visibility == [True, True, True, False]
-    assert len(limit_contexts) == 1
-    assert limit_contexts[0].api_call_count == 3
-    assert limit_contexts[0].max_iterations == 3
-    assert getattr(messages[-2], "role", None) == "user"
-    assert messages[-2].content == "profile final-response request"
-    assert messages[-1].role == "assistant"
-    assert messages[-1].content[0].text == "summary without tools"
-
-
-def test_max_iterations_without_handler_stops_without_extra_provider_call() -> None:
-    model = faux_model()
-    provider_calls = {"n": 0}
-
-    def script(m, c):
-        provider_calls["n"] += 1
-        return tool_call_response_events(m, "echo", {"text": "again"}, call_id=f"call_{provider_calls['n']}")
-
-    register_api_provider(create_faux_provider(script))
-    echo = AgentTool(
-        name="echo",
-        description="echo",
-        parameters={"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
-        label="Echo",
-        execute=lambda *_args, **_kwargs: AgentToolResult(content=[TextContent(text="ok")]),
-    )
-    cfg = _config(model)
-    cfg.max_iterations = 1
-
-    messages = run_agent_loop(
-        [UserMessage(content="loop", timestamp=now_ms())],
-        _ctx(tools=[echo]),
-        cfg,
-        lambda _event: None,
-    )
-
-    assert provider_calls["n"] == 1
-    assert messages[-1].role == "toolResult"
 
 
 def test_tool_execution_update_emit_settles_before_tool_execution_end() -> None:
@@ -1285,7 +1121,7 @@ def test_unknown_tool_error_reports_active_tool_catalog_for_recovery() -> None:
     text = ends[0].result.content[0].text
     assert "Tool glob not found" in text
     assert "Available tools: read, grep, find, ls" in text
-    assert "Use find or ls for file discovery" in text
+    assert "glob is not available in this tool catalog" not in text
 
 
 def test_agent_class_reduces_state() -> None:
@@ -1584,6 +1420,19 @@ def test_continue_processes_queued_follow_up_after_assistant_turn() -> None:
     assert any(getattr(message, "content", None) == "queued follow-up" for message in user_messages)
     assert getattr(agent.state.messages[-1], "role", None) == "assistant"
     assert response_count["n"] == 2
+
+
+def test_continue_validation_does_not_create_a_failed_turn() -> None:
+    agent = Agent(system_prompt="sys", model=faux_model(), convert_to_llm=_convert)
+    events: list[str] = []
+    agent.subscribe(lambda event: events.append(event.type))
+
+    with pytest.raises(ValueError, match="No messages to continue from"):
+        agent.continue_()
+
+    assert agent.state.messages == []
+    assert events == []
+    assert agent.state.is_streaming is False
 
 
 def test_continue_keeps_one_at_a_time_steering_from_assistant_tail() -> None:

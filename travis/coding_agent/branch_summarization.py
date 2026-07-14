@@ -8,7 +8,6 @@ from types import SimpleNamespace
 from typing import Any
 
 from travis.agent.types import AbortSignal, AgentMessage
-from travis.ai.stream import complete_simple_sync
 from travis.ai.types import (
     AssistantMessage,
     Context,
@@ -22,7 +21,7 @@ from travis.ai.types import (
     UserMessage,
     now_ms,
 )
-from travis.compaction.compressor import estimate_tokens
+from travis.compaction.compressor import SUMMARY_END_MARKER, SUMMARY_PREFIX, estimate_tokens
 from travis.coding_agent.message_utils import bash_execution_text as _bash_execution_to_text
 from travis.coding_agent.message_utils import user_message_text as _message_text_content
 from travis.coding_agent.session_store import BranchSummaryMessage, CustomMessage, deserialize_message
@@ -160,7 +159,9 @@ def generate_branch_summary(
         messages=[UserMessage(content=[TextContent(text=prompt_text)], timestamp=now_ms())],
     )
     options = SimpleStreamOptions(api_key=api_key, headers=headers, signal=signal, max_tokens=2048)
-    response = stream_fn(model, context, options).result_sync() if stream_fn else complete_simple_sync(model, context, options)
+    if stream_fn is None:
+        raise ValueError("branch summarization requires an injected model runtime")
+    response = stream_fn(model, context, options).result_sync()
     if response.stop_reason == "aborted":
         return BranchSummaryResult(aborted=True)
     if response.stop_reason == "error":
@@ -277,10 +278,7 @@ def _convert_to_llm(messages: list[AgentMessage]) -> list[Message]:
                 UserMessage(
                     content=[
                         TextContent(
-                            text=(
-                                "The conversation history before this point was compacted into the following summary:\n\n"
-                                f"<summary>\n{getattr(message, 'summary', '')}\n</summary>"
-                            )
+                            text=f"{SUMMARY_PREFIX}\n{getattr(message, 'summary', '')}\n\n{SUMMARY_END_MARKER}\n\n"
                         )
                     ],
                     timestamp=getattr(message, "timestamp", now_ms()),

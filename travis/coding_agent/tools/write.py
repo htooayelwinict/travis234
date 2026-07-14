@@ -107,7 +107,6 @@ def create_write_tool_definition(
         prompt_snippet="Create or overwrite files",
         prompt_guidelines=[
             "Use write only for new files or complete rewrites.",
-            "When the user asks for a summary, report, checklist, notes, or other deliverable in a file path, create or update that file with write before your final response.",
         ],
         execute=lambda tid, args, signal=None, on_update=None, ctx=None: _execute_write(
             cwd, workspace, tid, args, signal, on_update, ctx, ops

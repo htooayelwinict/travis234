@@ -7,6 +7,7 @@ def test_model_tool_environment_strips_provider_credentials(monkeypatch) -> None
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-secret")
     monkeypatch.setenv("STEPFUN_API_KEY", "stepfun-secret")
     monkeypatch.setenv("TRAVIS234_WORKER_LLM_API_KEY", "worker-secret")
+    monkeypatch.setenv("TRAVIS234_COMPRESSION_LLM_API_KEY", "compression-secret")
     monkeypatch.setenv("PROJECT_SETTING", "visible")
 
     env = get_shell_env()
@@ -14,6 +15,7 @@ def test_model_tool_environment_strips_provider_credentials(monkeypatch) -> None
     assert "OPENROUTER_API_KEY" not in env
     assert "STEPFUN_API_KEY" not in env
     assert "TRAVIS234_WORKER_LLM_API_KEY" not in env
+    assert "TRAVIS234_COMPRESSION_LLM_API_KEY" not in env
     assert env["PROJECT_SETTING"] == "visible"
 
 

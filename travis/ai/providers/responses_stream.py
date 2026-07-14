@@ -1,35 +1,24 @@
-"""OpenAI-compatible provider streaming over HTTP server-sent events."""
+"""OpenAI Responses API event decoding."""
 
 from __future__ import annotations
 
 import json
-import re
-import threading
 import time
-from dataclasses import replace
-from typing import Any, Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
+from typing import Any
 
-import httpx
-
-from travis.ai.env_config import ModelConfig, load_model_config
-from travis.ai.event_stream import AssistantMessageEventStream, create_assistant_message_event_stream
-from travis.ai.providers.base import ProviderProfile
 from travis.ai.providers._shared import blank_assistant_message as _blank
-from travis.ai.providers.capabilities import build_generation_payload
-from travis.ai.providers.catalog import get_provider_profile, resolve_provider_runtime
-from travis.ai.providers.message_sanitization import repair_tool_call_arguments
-from travis.ai.providers.params import GenerationParams, merge_generation_params
-from travis.ai.providers.transports import get_transport
-from travis.ai.stream import ApiProvider
+from travis.ai.providers.sse_common import _StartEventState, _iter_sse_data
+from travis.ai.providers.responses_translation import encode_text_signature
+from travis.ai.providers.streaming_json import (
+    _parse_complete_tool_arguments,
+    _parse_streaming_json,
+    _parse_streaming_json_preview,
+)
 from travis.ai.types import (
-    AssistantMessage,
-    Context,
     DoneEvent,
     ErrorEvent,
-    ImageContent,
-    Message,
     Model,
-    StartEvent,
     TextContent,
     TextDeltaEvent,
     TextEndEvent,
@@ -46,76 +35,6 @@ from travis.ai.types import (
     ToolcallStartEvent,
     Usage,
     empty_usage,
-    now_ms,
-)
-from travis.ai.validation import ToolValidationError, validate_tool_arguments
-PROVIDER_API = "openai-completions"
-PARTIAL_STREAM_STUB_ID = "partial-stream-stub"
-PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE = "partial_stream_dropped_tool_calls"
-MALFORMED_STREAMED_TOOL_CALL_ARGUMENTS_CODE = "malformed_streamed_tool_call_arguments"
-LEAKED_TOOL_PROTOCOL_TEXT_CODE = "leaked_tool_protocol_text"
-_MUTATING_TOOL_REQUIRED_ARGUMENTS = {"write": ("path", "content")}
-_VALID_JSON_ESCAPES = {'"', "\\", "/", "b", "f", "n", "r", "t", "u"}
-_REASONING_FIELDS = ("reasoning_content", "reasoning", "reasoning_text")
-_BILLING_PATTERNS = (
-    "key limit exceeded",
-    "spending limit",
-    "insufficient credits",
-    "insufficient_quota",
-    "insufficient balance",
-    "credit balance",
-    "credits exhausted",
-    "no usable credits",
-    "top up your credits",
-    "payment required",
-    "billing hard limit",
-    "plan does not include",
-    "out of funds",
-    "run out of funds",
-)
-_OPENROUTER_POLICY_PATTERNS = (
-    "no endpoints available matching your guardrail",
-    "no endpoints available matching your data policy",
-    "no endpoints found matching your data policy",
-)
-_OPENROUTER_PROMPT_GUARDRAIL_PATTERNS = (
-    "prompt injection patterns detected",
-    "system_prefix_spoofing",
-)
-_TOOL_CALL_LEAK_PATTERN = re.compile(r"(?:^|[\s>|])to=functions\.[A-Za-z_][\w.]*", re.IGNORECASE)
-_TOOL_PROTOCOL_XML_BLOCK_PATTERN = re.compile(
-    r"(?is)"
-    r"<(?:tool_call|tool_calls|tool_response|function_call|function_calls)\b[^>]*>.*?"
-    r"</(?:tool_call|tool_calls|tool_response|function_call|function_calls)>"
-    r"|<function\s+name\s*=\s*[\"'][^\"']+[\"'][^>]*>.*?</function>"
-)
-_TOOL_PROTOCOL_XML_LINE_PATTERN = re.compile(
-    r"(?im)^[ \t]*</?(?:parameter|function|tool_call|tool_calls|tool_response|function_call|function_calls)"
-    r"(?:[\s=>][^>]*)?>[ \t]*(?:\r?\n|$)"
-)
-_TOOL_PROTOCOL_XML_PREFIX_PATTERN = re.compile(
-    r"(?is)(?:^|[\s>])(?:"
-    r"</?(?:tool_call|tool_calls|tool_response|function_call|function_calls|parameter)(?:$|[\s=>_/])"
-    r"|<tool(?:$|_)"
-    r"|</tool(?:$|[_>\s])"
-    r"|<function\s+(?:$|name\s*=)"
-    r"|</function(?:$|[\s>])"
-    r"|<parameter(?:$|[\s=>])"
-    r"|</parameter(?:$|[\s>])"
-    r")"
-)
-_PROVIDER_ERROR_DETAIL_HEAD_CHARS = 450
-_PROVIDER_ERROR_DETAIL_TAIL_CHARS = 300
-_PROVIDER_ERROR_DETAIL_TRUNCATION_MARKER = "... [truncated provider error body] ..."
-_NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)"
-_NON_VISION_TOOL_IMAGE_PLACEHOLDER = "(tool image omitted: model does not support images)"
-_STREAMING_TOOL_ARGUMENT_PREVIEW_MAX_CHARS = 8_192
-
-
-
-from travis.ai.providers.sse_common import _StartEventState, _iter_sse_data
-from travis.ai.providers.streaming_json import (
-    _parse_complete_tool_arguments, _parse_streaming_json, _parse_streaming_json_preview,
 )
 
 def _responses_tool_call_id(call_id: str, item_id: str | None) -> str:
@@ -137,14 +56,17 @@ def _merge_responses_usage(usage: Usage, raw: "dict | None") -> Usage:
         return usage
     details = raw.get("input_tokens_details")
     cached = int(details.get("cached_tokens") or 0) if isinstance(details, dict) else 0
+    cache_write = int(details.get("cache_write_tokens") or 0) if isinstance(details, dict) else 0
     output_details = raw.get("output_tokens_details")
     reasoning = int(output_details.get("reasoning_tokens") or 0) if isinstance(output_details, dict) else 0
     input_tokens = int(raw.get("input_tokens") or 0)
-    usage.input = max(0, input_tokens - cached) or usage.input
+    usage.input = max(0, input_tokens - cached - cache_write) or usage.input
     usage.output = int(raw.get("output_tokens") or 0) or usage.output
     usage.total_tokens = int(raw.get("total_tokens") or 0) or usage.total_tokens
     if hasattr(usage, "cache_read"):
         usage.cache_read = cached or getattr(usage, "cache_read")
+    if hasattr(usage, "cache_write"):
+        usage.cache_write = cache_write or getattr(usage, "cache_write")
     if hasattr(usage, "reasoning"):
         usage.reasoning = reasoning or getattr(usage, "reasoning")
     return usage
@@ -166,6 +88,10 @@ def _parse_codex_responses_sse_chunks(
     tool_arg_previews: dict[int, dict] = {}
     reasoning_blocks_by_id: dict[str, ThinkingContent] = {}
     completed = False
+
+    start = start_state.ensure()
+    if start:
+        yield start
 
     def backfill_reasoning_signatures(response_output: Any) -> None:
         if not isinstance(response_output, list):
@@ -298,6 +224,21 @@ def _parse_codex_responses_sse_chunks(
                 block.thinking += delta
                 yield ThinkingDeltaEvent(content_index=content_index, delta=delta, partial=message)
                 continue
+            if event_type == "response.reasoning_summary_part.done":
+                if not include_reasoning:
+                    continue
+                output_index = event.get("output_index")
+                if not isinstance(output_index, int):
+                    continue
+                slot = output_slots.get(output_index)
+                if slot is None:
+                    continue
+                kind, content_index = slot
+                if kind != "thinking" or not isinstance(message.content[content_index], ThinkingContent):
+                    continue
+                message.content[content_index].thinking += "\n\n"
+                yield ThinkingDeltaEvent(content_index=content_index, delta="\n\n", partial=message)
+                continue
             if event_type == "response.function_call_arguments.delta":
                 output_index = event.get("output_index")
                 if not isinstance(output_index, int):
@@ -332,9 +273,14 @@ def _parse_codex_responses_sse_chunks(
                     continue
                 arguments = event.get("arguments")
                 if isinstance(arguments, str):
+                    previous = tool_arg_bufs.get(content_index, "")
                     tool_arg_bufs[content_index] = arguments
                     message.content[content_index].arguments = _parse_streaming_json(arguments)
                     tool_arg_previews.pop(content_index, None)
+                    if arguments.startswith(previous):
+                        delta = arguments[len(previous):]
+                        if delta:
+                            yield ToolcallDeltaEvent(content_index=content_index, delta=delta, partial=message)
                 continue
             if event_type == "response.output_item.done":
                 item = event.get("item")
@@ -358,6 +304,10 @@ def _parse_codex_responses_sse_chunks(
                         )
                         if text:
                             message.content[content_index].text = text
+                    item_id = item.get("id")
+                    if isinstance(item_id, str) and item_id:
+                        phase = item.get("phase") if item.get("phase") in {"commentary", "final_answer"} else None
+                        message.content[content_index].text_signature = encode_text_signature(item_id, phase)
                     yield TextEndEvent(
                         content_index=content_index,
                         content=message.content[content_index].text,
@@ -423,6 +373,13 @@ def _parse_codex_responses_sse_chunks(
                     message.error_message = str(error.get("message") or error.get("code") or "Provider response failed")
                 else:
                     message.error_message = "Provider response failed"
+                yield ErrorEvent(reason="error", error=message)
+                return
+            if event_type == "error":
+                message.stop_reason = "error"
+                code = event.get("code")
+                detail = event.get("message")
+                message.error_message = f"Error Code {code}: {detail}" if code or detail else "Unknown error"
                 yield ErrorEvent(reason="error", error=message)
                 return
     except TimeoutError as error:

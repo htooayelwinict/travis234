@@ -24,7 +24,7 @@ def test_output_spool_bounds_memory_and_persists_every_byte(tmp_path: Path) -> N
     assert len(snapshot.content.encode("utf-8")) <= 1024
     assert not hasattr(spool, "_raw")
     assert not hasattr(spool, "_text")
-    assert len(spool._tail.encode("utf-8")) <= 1024
+    assert len(spool._tail.encode("utf-8")) <= spool._max_rolling_bytes
     assert snapshot.full_output_path is not None
     artifact = Path(snapshot.full_output_path)
     assert artifact.read_bytes() == payload
@@ -44,6 +44,23 @@ def test_output_spool_keeps_appending_after_first_truncated_snapshot(tmp_path: P
     assert Path(final.full_output_path).read_bytes() == b"first-part-second-part"
     assert final.content == "ond-part"
     assert len(final.content.encode("utf-8")) <= 8
+
+
+def test_output_spool_keeps_last_lines_when_each_line_is_a_separate_chunk(tmp_path: Path) -> None:
+    spool = OutputSpool(max_bytes=1024 * 1024, max_lines=2000, directory=tmp_path)
+    for index in range(1, 4001):
+        spool.append(f"line-{index:04d}\n".encode())
+
+    spool.finish()
+    snapshot = spool.snapshot(persist_if_truncated=True)
+    spool.close()
+
+    assert snapshot.truncation.truncated is True
+    assert snapshot.truncation.truncated_by == "lines"
+    assert snapshot.truncation.total_lines == 4000
+    assert snapshot.truncation.output_lines == 2000
+    assert snapshot.content.startswith("line-2001\n")
+    assert snapshot.content.endswith("line-4000")
 
 
 def test_output_spool_replaces_invalid_utf8_without_losing_output(tmp_path: Path) -> None:

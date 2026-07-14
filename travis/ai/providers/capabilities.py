@@ -35,7 +35,7 @@ _CHAT_COMMON = (
 )
 _ANTHROPIC_DIRECT = ("top_p", "stop")
 _RESPONSES_COMMON = ("top_p", "parallel_tool_calls", "tool_choice")
-_CHAT_API_MODES = {"chat_completions"}
+_CHAT_API_MODES = {"chat_completions", "mistral_conversations"}
 
 
 def build_generation_payload(
@@ -84,7 +84,7 @@ def build_generation_payload(
             warnings=warnings,
         )
 
-    if api_mode == "codex_responses":
+    if api_mode in {"openai_responses", "azure_openai_responses", "openai_codex_responses"}:
         _copy_supported(params, request_overrides, _RESPONSES_COMMON)
         _drop_parallel_tools_without_tools(params, request_overrides, warnings, tools_enabled=tools_enabled)
         if params.stop:
@@ -116,6 +116,26 @@ def build_generation_payload(
             "dropped",
             "Responses transport does not expose seed in travis yet.",
         )
+        return GenerationPayload(
+            temperature=params.temperature,
+            max_tokens=params.max_tokens,
+            request_overrides=request_overrides,
+            warnings=warnings,
+        )
+
+    if api_mode in {"google_generative_ai", "google_vertex"}:
+        if params.tool_choice is not None:
+            request_overrides["toolConfig"] = {
+                "functionCallingConfig": {"mode": params.tool_choice.upper()}
+            }
+        return GenerationPayload(
+            temperature=params.temperature,
+            max_tokens=params.max_tokens,
+            request_overrides=request_overrides,
+            warnings=warnings,
+        )
+
+    if api_mode == "bedrock_converse_stream":
         return GenerationPayload(
             temperature=params.temperature,
             max_tokens=params.max_tokens,

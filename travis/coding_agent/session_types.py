@@ -22,27 +22,6 @@ from travis.agent.types import AgentToolResult
 from travis.agent.types import AgentMessage
 from travis.agent.types import BeforeToolCallResult
 from travis.agent.types import MessageEndEvent, MessageStartEvent
-from travis.coding_agent.policies.tool_guardrails import (
-    ToolCallGuardrailConfig,
-    ToolCallGuardrailController,
-    ToolGuardrailDecision,
-    ToolLoopPolicy,
-    append_toolguard_guidance,
-    classify_tool_failure,
-    toolguard_synthetic_result,
-)
-from travis.coding_agent.policies.iteration_limit import coding_iteration_limit_message
-from travis.coding_agent.policies.package_consent import PackageMutationPolicy
-from travis.coding_agent.policies.pipeline import PolicyPipeline
-from travis.coding_agent.policies.types import (
-    Allow,
-    Block,
-    CodingPolicyEvent,
-    CodingTurnContext,
-    RequireConsent,
-    ToolCallView,
-    TurnCapabilities,
-)
 from travis.ai.model_resolver import ScopedModel
 from travis.ai.models import (
     clamp_thinking_level,
@@ -62,12 +41,13 @@ from travis.coding_agent.compaction_coordinator import (
     CompactionCoordinator,
     CompactionTransactionCoordinator,
 )
-from travis.coding_agent.capabilities import CapabilityViolation, WorkspaceCapability
 from travis.coding_agent.config import get_packaged_context_paths
 from travis.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
 from travis.coding_agent.execution_backend import select_execution_backend
 from travis.coding_agent.mailbox import CodingTurnMailbox, MailboxKind
 from travis.coding_agent.message_utils import (
+    BRANCH_SUMMARY_PREFIX as _BRANCH_SUMMARY_PREFIX,
+    BRANCH_SUMMARY_SUFFIX as _BRANCH_SUMMARY_SUFFIX,
     bash_execution_text as _bash_execution_to_text,
     last_assistant_message as _last_assistant_message,
     user_message_text as _text_from_user_message_content,
@@ -77,7 +57,6 @@ from travis.coding_agent.process_context import ProcessContextResolver
 from travis.coding_agent.processes.local import create_local_process_transport
 from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import ProcessOwner
-from travis.coding_agent.provider_control_plane import ProviderControlPlane
 from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.session_index import SessionIndex
 from travis.coding_agent.session_store import (
@@ -199,7 +178,7 @@ _SPAWN_SUBAGENT_SCHEMA = {
             "type": "string",
             "description": (
                 "Bounded read-only task for the child agent. Do not ask the child to write, edit, create, "
-                "delete, or save files; if Lewis requested an artifact, the child should inspect and the parent should write it."
+                "delete, or save files; if the user requested an artifact, the child should inspect and the parent should write it."
             ),
         },
         "backend": {"type": "string", "description": "Subagent backend to use. Defaults to internal."},
@@ -243,10 +222,8 @@ _CANCEL_SUBAGENT_SCHEMA = {
     "required": ["taskId"],
     "additionalProperties": False,
 }
-_BRANCH_SUMMARY_PREFIX = "The following is a summary of a branch that this conversation came back from:\n\n<summary>\n"
-_BRANCH_SUMMARY_SUFFIX = "</summary>"
-_COMPACTION_SUMMARY_PREFIX = "The conversation history before this point was compacted into the following summary:\n\n<summary>\n"
-_COMPACTION_SUMMARY_SUFFIX = "\n</summary>"
+_COMPACTION_SUMMARY_PREFIX = f"{SUMMARY_PREFIX}\n"
+_COMPACTION_SUMMARY_SUFFIX = f"\n\n{SUMMARY_END_MARKER}\n\n"
 _THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"]
 _RETRYABLE_ERROR_MARKERS = (
     "overloaded",
@@ -301,6 +278,11 @@ class QueueUpdateEvent:
     steering: list[str]
     follow_up: list[str]
     type: str = "queue_update"
+
+
+@dataclass(frozen=True)
+class AgentSettledEvent:
+    type: str = "agent_settled"
 
 
 
@@ -495,7 +477,7 @@ class ExtensionCommandContext:
 def default_convert_to_llm(messages: list[AgentMessage]) -> list[Message]:
     """Convert Travis coding-agent custom messages to provider-safe ai Messages."""
     out: list[Message] = []
-    for message in _exclude_aborted_turns_from_context(messages):
+    for message in messages:
         role = getattr(message, "role", None)
         if role == "bashExecution":
             if getattr(message, "exclude_from_context", False):
@@ -545,36 +527,6 @@ def default_convert_to_llm(messages: list[AgentMessage]) -> list[Message]:
     return out
 
 
-def _exclude_aborted_turns_from_context(messages: list[AgentMessage]) -> list[AgentMessage]:
-    """Keep aborted turns in transcript state while excluding them from future LLM context."""
-    retained: list[AgentMessage] = []
-    for message in messages:
-        if isinstance(message, AssistantMessage) and message.stop_reason == "aborted":
-            _drop_current_turn_from_context(retained)
-            continue
-        retained.append(message)
-    return retained
-
-
-def _drop_current_turn_from_context(retained: list[AgentMessage]) -> None:
-    while retained:
-        candidate = retained[-1]
-        if _is_aborted_turn_boundary(candidate):
-            return
-        removed = retained.pop()
-        if getattr(removed, "role", None) == "user":
-            while retained and getattr(retained[-1], "role", None) == "user":
-                retained.pop()
-            return
-
-
-def _is_aborted_turn_boundary(message: AgentMessage) -> bool:
-    role = getattr(message, "role", None)
-    if role in {"bashExecution", "branchSummary", "compactionSummary", "custom"}:
-        return True
-    return isinstance(message, AssistantMessage) and message.stop_reason not in {"aborted", "toolUse"}
-
-
 def _tool_result_text(content) -> str:
     if isinstance(content, str):
         return content
@@ -591,30 +543,8 @@ def _tool_result_text(content) -> str:
     return "\n".join(parts)
 
 
-def _append_toolguard_content(content, decision: ToolGuardrailDecision):
-    blocks = list(content or [])
-    if not blocks:
-        return [TextContent(text=append_toolguard_guidance("", decision))]
-    for index, block in enumerate(blocks):
-        if isinstance(block, TextContent):
-            blocks[index] = replace(block, text=append_toolguard_guidance(block.text, decision))
-            return blocks
-        if getattr(block, "type", None) == "text":
-            text = str(getattr(block, "text", ""))
-            blocks[index] = TextContent(text=append_toolguard_guidance(text, decision))
-            return blocks
-    blocks.append(TextContent(text=append_toolguard_guidance("", decision)))
-    return blocks
-
-
-def _with_toolguard_details(details, decision: ToolGuardrailDecision):
-    next_details = dict(details) if isinstance(details, dict) else {}
-    warnings = list(next_details.get("toolGuardrailWarnings") or [])
-    warnings.append(decision.to_metadata())
-    next_details["toolGuardrailWarnings"] = warnings
-    return next_details
-
 __all__ = (
+    'AgentSettledEvent',
     'AutoRetryEndEvent',
     'AutoRetryStartEvent',
     'BashResult',
@@ -658,13 +588,8 @@ __all__ = (
     '_SUBAGENT_VISIBLE_SUMMARY_LIMIT',
     '_TASK_ID_SCHEMA',
     '_THINKING_LEVELS',
-    '_append_toolguard_content',
-    '_drop_current_turn_from_context',
-    '_exclude_aborted_turns_from_context',
-    '_is_aborted_turn_boundary',
     '_prompt_requests_subagent_tools',
     '_subagent_goal_requests_file_mutation',
     '_tool_result_text',
-    '_with_toolguard_details',
     'default_convert_to_llm',
 )

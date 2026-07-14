@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Callable
 
 from travis.ai.providers.capabilities import ProviderParamWarning
-from travis.ai.providers.model_catalog import get_last_openrouter_live_catalog_error, get_live_openrouter_models
 from travis.ai.providers.params import GenerationParams, compact_generation_params_display
 from travis.compaction import estimate_tokens
 from travis.coding_agent.session_types import BashResult
@@ -42,7 +41,6 @@ from travis.tui.interactive import (
     message_to_component,
     user_message_to_component,
 )
-from travis.tui.model_loader import ModelCatalogLoader
 from travis.tui.user_commands import (
     ResolvedUserCommand,
     UserCommandBinding,
@@ -73,6 +71,10 @@ def _is_help_command(prompt: str) -> bool:
 
 def _is_processes_command(prompt: str) -> bool:
     return prompt == "/processes"
+
+
+def _is_reload_command(prompt: str) -> bool:
+    return prompt == "/reload"
 
 
 def _parse_session_command(prompt: str) -> str | None:
@@ -109,21 +111,6 @@ def _parse_params_command(prompt: str) -> str | None:
     if prompt.startswith("/params "):
         return prompt[len("/params ") :].strip()
     return None
-
-
-def _parse_allow_command(prompt: str) -> tuple[str, int] | None:
-    if not prompt.startswith("/allow"):
-        return None
-    parts = prompt.split()
-    if len(parts) not in {2, 3} or parts[0] != "/allow":
-        return "", 0
-    uses = 1
-    if len(parts) == 3:
-        try:
-            uses = int(parts[2])
-        except ValueError:
-            return parts[1], 0
-    return parts[1], uses
 
 
 def _is_openrouter_model(model) -> bool:
@@ -235,6 +222,9 @@ class InteractiveCommandDispatcher:
                 if _is_processes_command(prompt):
                     self._run_processes_command()
                     continue
+                if _is_reload_command(prompt):
+                    self._run_reload_command()
+                    continue
                 bash_command = _parse_bash_command(prompt)
                 if bash_command:
                     self._run_bash_command(bash_command[0], exclude_from_context=bash_command[1])
@@ -253,10 +243,6 @@ class InteractiveCommandDispatcher:
                 params_query = _parse_params_command(prompt)
                 if params_query is not None:
                     self._run_params_command(params_query)
-                    continue
-                allow_command = _parse_allow_command(prompt)
-                if allow_command is not None:
-                    self._run_allow_command(*allow_command)
                     continue
                 if self._dispatch_extension_command(prompt):
                     self._refresh_footer()
@@ -290,9 +276,6 @@ class InteractiveCommandDispatcher:
             if self._session_commands is not None:
                 self._session_commands.close(timeout=SESSION_COMMAND_SHUTDOWN_TIMEOUT_SECONDS)
                 self._session_commands = None
-            if self._model_loader is not None:
-                self._model_loader.close()
-                self._model_loader = None
             if self._unsubscribe_session_events is not None:
                 self._unsubscribe_session_events()
                 self._unsubscribe_session_events = None
@@ -324,8 +307,8 @@ __all__ = (
     '_is_manual_compression_command',
     '_is_openrouter_model',
     '_is_processes_command',
+    '_is_reload_command',
     '_is_prompt_level_skill_trigger',
-    '_parse_allow_command',
     '_parse_auth_command',
     '_parse_bash_command',
     '_parse_model_command',

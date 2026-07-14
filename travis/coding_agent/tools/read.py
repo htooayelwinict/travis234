@@ -10,7 +10,7 @@ from typing import Callable
 
 from travis.agent.types import AgentTool, AgentToolResult
 from travis.ai.types import ImageContent, TextContent
-from travis.coding_agent.artifacts import ArtifactRegistry
+from travis.coding_agent.artifacts import ARTIFACT_READ_BYTE_LIMIT, ArtifactRegistry
 from travis.coding_agent.capabilities import CapabilityViolation, WorkspaceCapability
 from travis.coding_agent.tools.common import context_value as _ctx_value
 from travis.coding_agent.tools.path_utils import format_path_relative_to_cwd, resolve_read_path, resolve_to_cwd
@@ -34,6 +34,17 @@ READ_SCHEMA = {
         "path": {"type": "string", "description": "Path to the file to read (relative or absolute)"},
         "offset": {"type": "number", "description": "Line number to start reading from (1-indexed)"},
         "limit": {"type": "number", "description": "Maximum number of lines to read"},
+        "byte_offset": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Byte offset to start reading from (0-indexed). Do not combine with offset/limit.",
+        },
+        "byte_limit": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": ARTIFACT_READ_BYTE_LIMIT,
+            "description": "Maximum bytes to read. Do not combine with offset/limit.",
+        },
     },
     "required": ["path"],
 }
@@ -115,6 +126,19 @@ def _execute_read(
     path = args["path"]
     offset = _number_arg(args.get("offset"))
     limit = _number_arg(args.get("limit"))
+    byte_mode = "byte_offset" in args or "byte_limit" in args
+    line_mode = "offset" in args or "limit" in args
+    if byte_mode and line_mode:
+        raise ValueError("Cannot combine line pagination (offset/limit) with byte pagination (byte_offset/byte_limit)")
+    byte_offset = _number_arg(args.get("byte_offset")) if byte_mode else None
+    byte_limit = _number_arg(args.get("byte_limit")) if byte_mode else None
+    if byte_mode:
+        byte_offset = 0 if byte_offset is None else byte_offset
+        byte_limit = ARTIFACT_READ_BYTE_LIMIT if byte_limit is None else byte_limit
+        if byte_offset < 0:
+            raise ValueError("byte_offset must be non-negative")
+        if byte_limit <= 0 or byte_limit > ARTIFACT_READ_BYTE_LIMIT:
+            raise ValueError(f"byte_limit must be between 1 and {ARTIFACT_READ_BYTE_LIMIT}")
     artifact_path = artifacts.resolve_read(path) if artifacts is not None else None
     if artifact_path is not None:
         absolute_path = str(artifact_path)
@@ -168,8 +192,34 @@ def _execute_read(
             ],
             details=None,
         )
-    text_content = operations.read_file(absolute_path).decode("utf-8", errors="replace")
+    data = operations.read_file(absolute_path)
     _check_aborted(signal)
+    if byte_mode:
+        total_bytes = len(data)
+        assert byte_offset is not None and byte_limit is not None
+        if byte_offset > total_bytes:
+            raise ValueError(f"byte_offset {byte_offset} is beyond end of file ({total_bytes} bytes total)")
+        end_offset = min(total_bytes, byte_offset + byte_limit)
+        output = data[byte_offset:end_offset].decode("utf-8", errors="replace")
+        if end_offset < total_bytes:
+            output += (
+                f"\n\n[Showing bytes {byte_offset}-{end_offset - 1} of {total_bytes}. "
+                f"Use byte_offset={end_offset} to continue.]"
+            )
+        else:
+            output += f"\n\n[Showing bytes {byte_offset}-{end_offset - 1} of {total_bytes}. End of file.]"
+        return AgentToolResult(
+            content=[TextContent(text=output)],
+            details={
+                "byteRange": {
+                    "start": byte_offset,
+                    "endExclusive": end_offset,
+                    "totalBytes": total_bytes,
+                }
+            },
+        )
+
+    text_content = data.decode("utf-8", errors="replace")
     all_lines = text_content.split("\n")
     total_file_lines = len(all_lines)
     start_line = max(0, offset - 1) if offset else 0
@@ -219,6 +269,12 @@ def _execute_read(
 
 
 def _format_read_line_range(args) -> str:
+    if args and (args.get("byte_offset") is not None or args.get("byte_limit") is not None):
+        byte_offset = _number_arg(args.get("byte_offset")) or 0
+        byte_limit = _number_arg(args.get("byte_limit"))
+        if byte_limit is None:
+            return f" bytes@{byte_offset}"
+        return f" bytes@{byte_offset}+{byte_limit}"
     if not args or (args.get("offset") is None and args.get("limit") is None):
         return ""
     raw_offset = args.get("offset")
@@ -328,7 +384,8 @@ def create_read_tool_definition(
             f"Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent "
             f"as attachments. For text files, output is truncated to {DEFAULT_MAX_LINES} lines or "
             f"{DEFAULT_MAX_BYTES // 1024}KB (whichever is hit first). Use offset/limit for large files. "
-            "When you need the full file, continue with offset until complete."
+            "Use byte_offset/byte_limit for artifacts or oversized single lines. "
+            "When you need the full file, continue with the matching offset until complete."
         ),
         parameters=READ_SCHEMA,
         prompt_snippet="Read file contents",

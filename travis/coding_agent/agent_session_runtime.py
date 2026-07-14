@@ -194,23 +194,26 @@ class AgentSessionRuntime:
         else:
             target_session_file = self._next_session_path()
 
-        self._teardown_current("fork", target_session_file)
-        self._apply(
-            self._create_runtime(
-                {
-                    "cwd": self.cwd,
-                    "agentDir": self._services.get("agentDir"),
-                    "session_path": target_session_file,
-                    "parent_session_path": previous_session_file if not target_leaf_id else None,
-                    "session_start_event": {
-                        "type": "session_start",
-                        "reason": "fork",
-                        "previousSessionFile": previous_session_file,
-                    },
-                }
-            )
+        replacement = self._create_runtime(
+            {
+                "cwd": self.cwd,
+                "agentDir": self._services.get("agentDir"),
+                "session_path": target_session_file,
+                "parent_session_path": previous_session_file if not target_leaf_id else None,
+                "session_start_event": {
+                    "type": "session_start",
+                    "reason": "fork",
+                    "previousSessionFile": previous_session_file,
+                },
+                "defer_session_start": True,
+            }
         )
-        self._finish_session_replacement(options.get("with_session") or options.get("withSession"))
+        self._activate_replacement(
+            replacement,
+            reason="fork",
+            target_session_file=target_session_file,
+            with_session=options.get("with_session") or options.get("withSession"),
+        )
         result: dict[str, object] = {"cancelled": False}
         if selected_text is not None:
             result["selectedText"] = selected_text
@@ -237,22 +240,25 @@ class AgentSessionRuntime:
         if cwd_override is None:
             assert_session_cwd_exists(destination, stored_cwd, self.cwd)
         next_cwd = cwd_override or stored_cwd or self.cwd
-        self._teardown_current("resume", destination)
-        self._apply(
-            self._create_runtime(
-                {
-                    "cwd": next_cwd,
-                    "agentDir": self._services.get("agentDir"),
-                    "session_path": destination,
-                    "session_start_event": {
-                        "type": "session_start",
-                        "reason": "resume",
-                        "previousSessionFile": previous_session_file,
-                    },
-                }
-            )
+        replacement = self._create_runtime(
+            {
+                "cwd": next_cwd,
+                "agentDir": self._services.get("agentDir"),
+                "session_path": destination,
+                "session_start_event": {
+                    "type": "session_start",
+                    "reason": "resume",
+                    "previousSessionFile": previous_session_file,
+                },
+                "defer_session_start": True,
+            }
         )
-        self._finish_session_replacement()
+        self._activate_replacement(
+            replacement,
+            reason="resume",
+            target_session_file=destination,
+            with_session=None,
+        )
         return {"cancelled": False}
 
 
@@ -326,8 +332,8 @@ class AgentSessionRuntime:
             result.session.dispose()
             raise
         self._apply(result)
-        self._session.emit_deferred_session_start()
         self._finish_session_replacement(with_session)
+        self._session.emit_deferred_session_start()
 
     def _finish_session_replacement(self, with_session: Callable[[AgentSession], object] | None = None) -> None:
         if self._rebind_session:

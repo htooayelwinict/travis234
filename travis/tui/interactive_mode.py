@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Callable
 
 from travis.ai.providers.capabilities import ProviderParamWarning
-from travis.ai.providers.model_catalog import get_last_openrouter_live_catalog_error, get_live_openrouter_models
 from travis.ai.providers.params import GenerationParams, compact_generation_params_display
 from travis.compaction import estimate_tokens
 from travis.coding_agent.agent_session import BashResult
@@ -42,7 +41,6 @@ from travis.tui.interactive import (
     message_to_component,
     user_message_to_component,
 )
-from travis.tui.model_loader import ModelCatalogLoader
 from travis.tui.user_commands import (
     ResolvedUserCommand,
     UserCommandBinding,
@@ -177,13 +175,11 @@ class _InteractiveRuntime(
         self._history_populated = False
         self._shutdown_requested = False
         self._run_loop_active = False
-        self._openrouter_model_cache: tuple[float, list[object]] | None = None
-        self._last_openrouter_model_fetch_error: Exception | None = None
-        self._model_loader: ModelCatalogLoader | None = None
         self._pending_model_picker_trace: tuple[int, str] | None = None
         self._last_turn_finished_at = 0.0
         self._last_idle_ctrl_c_at = 0.0
         self._agent_abort_requested = False
+        self._last_compaction_failure_notice_key: tuple[str, str] | None = None
         subscribe_rebound = getattr(app, "subscribe_session_rebound", None)
         if callable(subscribe_rebound):
             self._unsubscribe_app_session_rebound = subscribe_rebound(

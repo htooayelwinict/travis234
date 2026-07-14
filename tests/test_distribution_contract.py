@@ -8,9 +8,14 @@ ROOT = Path(__file__).parents[1]
 
 
 def test_python_distribution_names_only_travis234() -> None:
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    project = metadata["project"]
     assert project["name"] == "travis234"
     assert project["scripts"] == {"travis234": "travis.cli:main"}
+    assert metadata["tool"]["setuptools"]["package-data"]["travis"] == [
+        "resources/**/*.md",
+        "resources/extensions/**/*.py",
+    ]
 
 
 def test_npm_distribution_names_only_travis234() -> None:

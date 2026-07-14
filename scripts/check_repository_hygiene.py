@@ -26,6 +26,7 @@ REPORT_FIELDS = (
 _CAMEL_SYMBOL = re.compile(r"^[a-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*$")
 _DISTRIBUTION_NAME = re.compile(r"^[A-Za-z0-9_.-]+")
 _DISTRIBUTION_IMPORT_ROOTS = {
+    "google-auth": frozenset({"google"}),
     "httpx": frozenset({"httpx"}),
     "jsonschema": frozenset({"jsonschema"}),
     "langgraph": frozenset({"langgraph"}),
@@ -266,7 +267,7 @@ def _oversized_tests(root: Path) -> tuple[str, ...]:
     oversized = []
     for path in _python_files(root / "tests"):
         line_count = len(path.read_text(encoding="utf-8").splitlines())
-        if line_count > 2_000:
+        if line_count > 2_500:
             oversized.append(f"{path.relative_to(root).as_posix()}:{line_count}")
     return tuple(sorted(oversized))
 

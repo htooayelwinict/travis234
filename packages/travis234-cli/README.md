@@ -23,11 +23,10 @@ The launcher pulls and runs:
 ghcr.io/htooayelwinict/travis234:production
 ```
 
-It mounts only the selected `--cwd` as `/workspace`, stores sandbox state in `~/.travis234/sandbox-home`, copies host `~/.travis234/agent/AGENTS.md` into the sandbox agent context, and copies host `~/.travis234/agent/skills` into the sandbox.
+It mounts only the selected `--cwd` as `/workspace`, stores sandbox state in `~/.travis234/sandbox-home`, copies a user-created host `~/.travis234/agent/AGENTS.md` into the sandbox agent context when present, and copies host `~/.travis234/agent/skills` into the sandbox.
 
-On startup, the package restores compact default agent files only when they are missing:
+On startup, the package restores bundled skills only when they are missing:
 
-- `~/.travis234/agent/AGENTS.md`
 - `~/.travis234/agent/skills/web-search/SKILL.md`
 - bundled package skills such as `subagent-delegation`
 
@@ -43,6 +42,16 @@ travis234 --cwd . --image ghcr.io/htooayelwinict/travis234:production
 ```
 
 The host `.env` file is not mounted or passed automatically. Use `/login` inside the TUI for API keys.
+
+## Extensions
+
+Travis234 discovers global extensions from `~/.travis234/agent/extensions/` and project extensions from `.travis234/extensions/`. The Python CLI installs the optional first-party Hypa adapter with `travis234 --install-extension hypa`. Through this Docker launcher, pass the option to the in-container CLI:
+
+```bash
+travis234 --cwd . -- --install-extension hypa
+```
+
+The installer refuses to replace existing code. Use `/reload` in a running TUI after adding or changing an extension. Extensions execute with Travis234's permissions; install only trusted code. Travis JavaScript extensions do not run directly in the Python extension runtime and require a Python adapter.
 
 ## Sessions
 
@@ -87,7 +96,6 @@ agent and user jobs. Ctrl-C targets the focused user command first, then one act
 agent turn, and only uses the idle-TUI exit behavior when neither is active.
 
 User `!command` and `!!command` run asynchronously; `!!` output remains excluded
-from model context. `/allow package-install` can grant bounded package capability
-while an agent turn is active. Extension `user_bash` handlers preserve their
+from model context. Extension `user_bash` handlers preserve their
 payload and launch order, run on the command worker, and custom operations must
 honor cancellation.

@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Callable
 
 from travis.ai.providers.capabilities import ProviderParamWarning
-from travis.ai.providers.model_catalog import get_last_openrouter_live_catalog_error, get_live_openrouter_models
 from travis.ai.providers.params import GenerationParams, compact_generation_params_display
 from travis.compaction import estimate_tokens
 from travis.coding_agent.session_types import BashResult
@@ -42,7 +41,6 @@ from travis.tui.interactive import (
     message_to_component,
     user_message_to_component,
 )
-from travis.tui.model_loader import ModelCatalogLoader
 from travis.tui.user_commands import (
     ResolvedUserCommand,
     UserCommandBinding,
@@ -99,6 +97,8 @@ class InteractiveView:
         self._update_available_provider_count()
         self._refresh_footer()
         self.tui.start()
+        self.app.session.bind_extensions(self._extension_bindings())
+        self.setup_autocomplete_provider()
         if self.app.event_trace is not None:
             self.app.event_trace.write(
                 "tui_ready",
@@ -145,6 +145,7 @@ class InteractiveView:
             {"name": "params", "description": "Show active provider generation parameters"},
             {"name": "processes", "description": "Inspect and control managed processes"},
             {"name": "quit", "description": "Exit the interactive session"},
+            {"name": "reload", "description": "Reload extensions, skills, prompts, and themes"},
             {"name": "resume", "description": "Switch to a previous session"},
             {"name": "new", "description": "Start a new persistent session"},
             {"name": "session", "description": "Show active session details"},
@@ -201,7 +202,7 @@ class InteractiveView:
         if event_type in {"subagent_start", "subagent_stop"}:
             self._render_subagent_lifecycle_event(event)
             return
-        if event_type in {"subagent_tool_start", "subagent_tool_end", "subagent_tool_guardrail"}:
+        if event_type in {"subagent_tool_start", "subagent_tool_end"}:
             self._render_subagent_tool_event(event)
             return
         if event_type == "auto_retry_start":
@@ -269,24 +270,19 @@ class InteractiveView:
         status = str(get("status", "") or "").strip() or (
             "started" if event_type == "subagent_tool_start" else "ok"
         )
-        guardrail_code = str(get("guardrailCode", get("guardrail_code", "")) or "").strip()
-        if event_type != "subagent_tool_guardrail" and not guardrail_code and status not in {"error", "guardrail_halt"}:
+        if status != "error":
             return
-        if event_type == "subagent_tool_guardrail":
-            status = "guardrail"
         args_preview = _short_status_text(str(get("argsPreview", get("args_preview", "")) or "").strip(), limit=80)
         result_preview = _short_status_text(
             str(get("resultPreview", get("result_preview", "")) or "").strip(),
             limit=120,
         )
         line = f"subagent {role} {tool} {status}"
-        if guardrail_code:
-            line = f"{line} {guardrail_code}"
         if args_preview:
             line = f"{line} {args_preview}"
         if result_preview:
             line = f"{line} => {result_preview}"
-        kind = "warning" if status.startswith("guardrail") or status == "error" else "info"
+        kind = "warning" if status == "error" else "info"
         self.history.add(StatusLine(line, kind=kind))
         self._refresh_footer()
         self.tui.request_render()
@@ -298,6 +294,19 @@ class InteractiveView:
     def _render_auto_compaction_notice(self, before_compressions: int, before_tokens: int) -> None:
         after_compressions = self.app.compaction.compressor.compression_count
         if after_compressions <= before_compressions:
+            compressor = self.app.compaction.compressor
+            if getattr(compressor, "_last_compress_aborted", False):
+                model = getattr(compressor, "_last_summary_model_requested", None) or compressor.model
+                error = getattr(compressor, "_last_summary_error", None) or "unknown error"
+                notice_key = (model, error)
+                if notice_key != self._last_compaction_failure_notice_key:
+                    self._last_compaction_failure_notice_key = notice_key
+                    self.history.add(
+                        StatusLine(
+                            f"Context compaction aborted for '{model}' ({error}); conversation preserved unchanged.",
+                            kind="warning",
+                        )
+                    )
             return
         before = self.app.compaction.last_compression_before_tokens or before_tokens
         after_tokens = self.app.compaction.last_compression_after_tokens or estimate_tokens(self.app.messages)
@@ -307,6 +316,17 @@ class InteractiveView:
                 kind="compact",
             )
         )
+        result = self.app.compaction.last_compression_result
+        if result is not None and getattr(result, "summary_model_fallback", False):
+            requested = getattr(result, "summary_model_requested", None) or "configured compression model"
+            used = getattr(result, "summary_model_used", None) or "main model"
+            error = getattr(result, "summary_model_error", None) or "unknown error"
+            self.history.add(
+                StatusLine(
+                    f"Compression model '{requested}' failed ({error}); recovered with '{used}'.",
+                    kind="warning",
+                )
+            )
 
     def _refresh_footer(self) -> None:
         self.footer.model = self.app.session.model.id

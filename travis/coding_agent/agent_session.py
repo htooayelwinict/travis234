@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable, Mapping, Optional
+from typing import Callable, Optional
 
 from travis.agent.agent import Agent
 from travis.agent.types import AbortSignal
@@ -22,27 +22,6 @@ from travis.agent.types import AgentToolResult
 from travis.agent.types import AgentMessage
 from travis.agent.types import BeforeToolCallResult
 from travis.agent.types import MessageEndEvent, MessageStartEvent
-from travis.coding_agent.policies.tool_guardrails import (
-    ToolCallGuardrailConfig,
-    ToolCallGuardrailController,
-    ToolGuardrailDecision,
-    ToolLoopPolicy,
-    append_toolguard_guidance,
-    classify_tool_failure,
-    toolguard_synthetic_result,
-)
-from travis.coding_agent.policies.iteration_limit import coding_iteration_limit_message
-from travis.coding_agent.policies.package_consent import PackageMutationPolicy
-from travis.coding_agent.policies.pipeline import PolicyPipeline
-from travis.coding_agent.policies.types import (
-    Allow,
-    Block,
-    CodingPolicyEvent,
-    CodingTurnContext,
-    RequireConsent,
-    ToolCallView,
-    TurnCapabilities,
-)
 from travis.ai.model_resolver import ScopedModel
 from travis.ai.models import (
     clamp_thinking_level,
@@ -62,7 +41,7 @@ from travis.coding_agent.compaction_coordinator import (
     CompactionCoordinator,
     CompactionTransactionCoordinator,
 )
-from travis.coding_agent.capabilities import CapabilityViolation, WorkspaceCapability
+from travis.coding_agent.capabilities import WorkspaceCapability
 from travis.coding_agent.config import get_packaged_context_paths
 from travis.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
 from travis.coding_agent.execution_backend import select_execution_backend
@@ -77,7 +56,8 @@ from travis.coding_agent.process_context import ProcessContextResolver
 from travis.coding_agent.processes.local import create_local_process_transport
 from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import ProcessOwner
-from travis.coding_agent.provider_control_plane import ProviderControlPlane
+from travis.coding_agent.auth_storage import AuthStorage
+from travis.coding_agent.model_registry import ModelRegistry
 from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.session_index import SessionIndex
 from travis.coding_agent.session_store import (
@@ -122,7 +102,6 @@ from travis.coding_agent.session_persistence import SessionPersistence
 from travis.coding_agent.session_bash import SessionBashController
 from travis.coding_agent.session_policy_controller import SessionPolicyController
 
-from travis.coding_agent.session_policy_controller import _coerce_tool_guardrail_config
 from travis.coding_agent.session_types import default_convert_to_llm
 
 class _SessionRuntime(
@@ -171,23 +150,21 @@ class _SessionRuntime(
         extension_runner: ExtensionRunner | None = None,
         session_start_event: dict[str, object] | None = None,
         defer_session_start: bool = False,
+        defer_agent_settled: bool = False,
         resource_loader: DefaultResourceLoader | None = None,
         agent_dir: str | None = None,
         session_index: SessionIndex | None = None,
         settings_manager: object | None = None,
         stream_fn=None,
-        max_iterations: int = 90,
-        tool_loop_guardrails: ToolCallGuardrailConfig | Mapping[str, object] | None = None,
-        provider_control_plane: ProviderControlPlane | None = None,
+        model_registry: ModelRegistry | None = None,
         process_service: ProcessSessionService | None = None,
         process_owner: ProcessOwner | None = None,
         model_change_listener: Callable[[Model, Model], None] | None = None,
     ) -> None:
         self.cwd = cwd
-        self.provider_control_plane = provider_control_plane or ProviderControlPlane.create_default()
-        self.provider_control_plane.ensure_model(model)
-        self.model_registry = self.provider_control_plane.models
-        self.auth_storage = self.provider_control_plane.auth
+        self.model_registry = model_registry or ModelRegistry.create(AuthStorage.create())
+        self.model_registry.ensure_model(model)
+        self.auth_storage = self.model_registry.auth_storage
         self._workspace = WorkspaceCapability(Path(cwd))
         self._artifacts = ArtifactRegistry()
         self.execution_backend = select_execution_backend(cwd)
@@ -201,7 +178,7 @@ class _SessionRuntime(
             else None
         )
         self.settings_manager = settings_manager or SettingsManager.in_memory()
-        self._stream_fn = stream_fn or self.provider_control_plane.stream_simple
+        self._stream_fn = stream_fn or self.model_registry.stream_simple
         self._allowed_tool_names = set(allowed_tool_names) if allowed_tool_names is not None else None
         self._excluded_tool_names = set(excluded_tool_names or [])
         self._tool_by_name: dict[str, AgentTool] = {}
@@ -224,6 +201,7 @@ class _SessionRuntime(
         self._extension_provider_original_models: dict[str, Model] = {}
         self._extension_provider_registrations: dict[str, object] = {}
         self._event_listeners: list[Callable[[object], None]] = []
+        self._turn_index = 0
         self._model_change_listener = model_change_listener
         self._subagent_observer_errors: list[str] = []
         self._model_subagents_spawned_this_turn = 0
@@ -237,23 +215,6 @@ class _SessionRuntime(
         self._pending_bash_messages: list[BashExecutionMessage] = []
         self._bash_signal: AbortSignal | None = None
         self._command_signal: AbortSignal | None = None
-        self._tool_guardrails = ToolCallGuardrailController(
-            _coerce_tool_guardrail_config(tool_loop_guardrails),
-            cwd=self.cwd,
-        )
-        self._turn_capabilities = TurnCapabilities()
-        self._policy_pipeline = PolicyPipeline(
-            [PackageMutationPolicy(), ToolLoopPolicy(self._tool_guardrails)]
-        )
-        self._policy_run_id = session_id or "ephemeral"
-        self._policy_turn_number = 0
-        self._tool_guardrail_halt_decision: ToolGuardrailDecision | None = None
-        self._tool_guardrail_halt_response_emitted = False
-        self._tool_loop_recovery_steered_keys: set[tuple[str, str, int]] = set()
-        self._bash_signatures_this_assistant_turn: set[str] = set()
-        self._process_limit_recovery_steered = False
-        self._process_limit_halt_message: str | None = None
-        self._process_limit_halt_response_emitted = False
         self._scoped_models = list(scoped_models or [])
         self._convert_to_llm = convert_to_llm or default_convert_to_llm
         self._caller_transform_context = transform_context
@@ -266,6 +227,11 @@ class _SessionRuntime(
                 append_system_prompt=[append_system_prompt] if append_system_prompt else None,
             )
             self._resource_loader.reload()
+        if extension_runner is None:
+            loaded_runner = self._resource_loader.get_extensions().get("runtime")
+            if isinstance(loaded_runner, ExtensionRunner):
+                self._extension_runner = loaded_runner
+                self._extension_runner._model_registry = self.model_registry  # noqa: SLF001
         self._custom_prompt: str | None = None
         self._append_system_prompt: str | None = None
         self._context_files: list[tuple[str, str]] = []
@@ -303,6 +269,7 @@ class _SessionRuntime(
         )
         self._session_start_event = session_start_event or {"type": "session_start", "reason": "startup"}
         self._defer_session_start = bool(defer_session_start)
+        self._defer_agent_settled = bool(defer_agent_settled)
         restored_context = self._session_store.build_context(default_thinking_level=thinking_level) if self._session_store else None
         if restored_context:
             thinking_level = restored_context.thinking_level
@@ -369,7 +336,6 @@ class _SessionRuntime(
             tools=[],
             before_tool_call=self._before_tool_call,
             after_tool_call=self._after_tool_call,
-            should_stop_after_turn=self._should_stop_after_turn,
             prepare_next_turn_with_context=self._prepare_next_turn,
             transform_context=self._transform_context,
             steering_mode=steering_mode,
@@ -378,10 +344,10 @@ class _SessionRuntime(
             thinking_budgets=thinking_budgets,
             max_retry_delay_ms=max_retry_delay_ms,
             on_payload=self._on_provider_payload,
+            on_headers=self._on_provider_headers,
             on_response=self._on_provider_response,
             session_id=self.session_id or None,
-            max_iterations=max_iterations,
-            on_iteration_limit=coding_iteration_limit_message,
+            stream_fn=self._stream_fn,
         )
         self._compaction_coordinator = CompactionCoordinator(self.agent)
         self._compaction_adapter = SessionCompactionAdapter(
@@ -403,8 +369,6 @@ class _SessionRuntime(
         self.set_active_tools_by_name(initial_active_tool_names)
         if restored_context:
             self.agent.state.messages = restored_context.messages
-        if not self._defer_session_start:
-            self._emit_session_start_event()
 
 
 class AgentSession(RuntimeFacade):

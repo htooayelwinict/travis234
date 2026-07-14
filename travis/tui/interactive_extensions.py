@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Callable
 
 from travis.ai.providers.capabilities import ProviderParamWarning
-from travis.ai.providers.model_catalog import get_last_openrouter_live_catalog_error, get_live_openrouter_models
 from travis.ai.providers.params import GenerationParams, compact_generation_params_display
 from travis.compaction import estimate_tokens
 from travis.coding_agent.session_types import BashResult
@@ -42,7 +41,6 @@ from travis.tui.interactive import (
     message_to_component,
     user_message_to_component,
 )
-from travis.tui.model_loader import ModelCatalogLoader
 from travis.tui.user_commands import (
     ResolvedUserCommand,
     UserCommandBinding,
@@ -259,6 +257,79 @@ def _apply_hidden_thinking_label(component, label: str) -> None:
 
 class InteractiveExtensions:
     """Owns a focused interactive runtime concern."""
+
+    def _extension_bindings(self) -> dict[str, object]:
+        def report_error(error: dict[str, object]) -> None:
+            path = str(error.get("extensionPath") or "<extension>")
+            message = str(error.get("error") or "unknown extension error")
+            self.history.add(StatusLine(f"Extension error ({path}): {message}", kind="error"))
+            self.tui.request_render()
+
+        return {
+            "uiContext": _ExtensionShortcutUI(self),
+            "mode": "tui",
+            "abortHandler": self.app.session.agent.abort,
+            "shutdownHandler": self._request_shutdown,
+            "onError": report_error,
+            "commandContextActions": {
+                "waitForIdle": self.app.session.agent.wait_for_idle,
+                "newSession": lambda options=None: self.app.session_runtime.new_session(options),
+                "fork": lambda entry_id, options=None: self.app.session_runtime.fork(entry_id, options),
+                "navigateTree": lambda target_id, options=None: self.app.session.navigate_tree(target_id, options),
+                "switchSession": lambda session_path, options=None: self.app.session_runtime.switch_session(
+                    session_path,
+                    options,
+                ),
+                "reload": self._run_reload_command,
+            },
+        }
+
+    def _reset_extension_ui(self) -> None:
+        self._terminal_input_listeners.clear()
+        self.set_extension_footer(None)
+        self.set_extension_header(None)
+        for component in [*self.extension_widgets_above.values(), *self.extension_widgets_below.values()]:
+            _dispose_extension_widget(component)
+        self.extension_widgets_above.clear()
+        self.extension_widgets_below.clear()
+        self._render_widgets()
+        self.extension_statuses.clear()
+        self.autocomplete_provider_wrappers.clear()
+        self.set_working_message()
+        self.set_working_visible(True)
+        self.set_working_indicator()
+        self.set_hidden_thinking_label()
+        self.set_terminal_title("Travis234")
+        self.setup_autocomplete_provider()
+
+    def _run_reload_command(self) -> None:
+        if self.app.session.is_streaming:
+            self.history.add(StatusLine("Wait for the current response to finish before reloading.", kind="warning"))
+            return
+        if self.app.session.is_compacting:
+            self.history.add(StatusLine("Wait for compaction to finish before reloading.", kind="warning"))
+            return
+        self._reset_extension_ui()
+        self.status.set_message("Reloading extensions")
+        try:
+            self.app.session.reload()
+            self.setup_autocomplete_provider()
+        except Exception as error:  # noqa: BLE001 - reload failures render without ending the TUI.
+            self.history.add(StatusLine(f"Extension reload failed: {error}", kind="error"))
+            self.status.set_message("Idle")
+            self._refresh_footer()
+            self.tui.request_render()
+            return
+        errors = self.app.session.resource_loader.get_extensions().get("errors", [])
+        if errors:
+            self.history.add(StatusLine(f"Extensions reloaded with {len(errors)} error(s)", kind="error"))
+            for error in errors:
+                self.history.add(Text(f"{error.get('path', '<extension>')}: {error.get('error', 'unknown error')}"))
+        else:
+            self.history.add(StatusLine("Extensions reloaded", kind="success"))
+        self.status.set_message("Idle")
+        self._refresh_footer()
+        self.tui.request_render()
 
     def _dispatch_extension_shortcut(self, prompt: str) -> bool:
         if not prompt:

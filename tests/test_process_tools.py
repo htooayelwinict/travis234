@@ -318,7 +318,7 @@ def test_running_process_results_expose_suggested_poll_delay(managed_tools) -> N
     _service, _owner, bash, process = managed_tools
     started = bash.execute(
         "bash",
-        {"command": python_command("import time; time.sleep(1)"), "yield_time_ms": 0},
+        {"command": python_command("import time; time.sleep(3)"), "yield_time_ms": 0},
     )
 
     polled = process.execute(
@@ -340,6 +340,20 @@ def test_running_process_results_expose_suggested_poll_delay(managed_tools) -> N
     assert "process.wait" not in text(started)
     assert "Suggested poll delay: 1000 ms." in text(started)
     assert "Suggested poll delay: 1000 ms." in text(polled)
+
+    waited = process.execute(
+        "wait",
+        {
+            "action": "wait",
+            "session_id": started.details["sessionId"],
+            "cursor": polled.details["nextCursor"],
+            "wait_time_ms": 1_000,
+        },
+    )
+
+    assert waited.details["status"] == "running"
+    assert '"action":"wait"' in text(waited)
+    assert "Suggested poll delay" not in text(waited)
 
 
 def test_managed_bash_streams_sanitized_updates_before_handoff(managed_tools) -> None:
@@ -390,6 +404,8 @@ def test_managed_bash_preserves_tail_truncation_and_exports_independent_artifact
         assert result.details["truncation"]["truncated"] is True
         assert result.details["fullOutputPath"]
         assert result.details["artifactId"].startswith("artifact-")
+        assert result.details["artifactId"] in text(result)
+        assert "byte_offset=0" in text(result)
         full_output = Path(result.details["fullOutputPath"])
         assert full_output.read_text(encoding="utf-8").endswith("FINAL-MARKER\n")
         service.close()
@@ -920,6 +936,8 @@ def test_process_wait_collapses_large_output_to_bounded_borrowed_artifact(tmp_pa
         assert len(text(result).encode("utf-8")) < 60_000
         assert result.details["truncation"]["truncated"] is True
         assert artifacts.resolve_read(result.details["artifactId"]) == full_output
+        assert result.details["artifactId"] in text(result)
+        assert "byte_offset=0" in text(result)
         assert full_output.stat().st_size == 2 * 1024 * 1024 + 1
         artifacts.close(remove_files=True)
         assert full_output.exists()

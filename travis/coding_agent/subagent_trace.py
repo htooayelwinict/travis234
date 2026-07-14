@@ -22,27 +22,6 @@ from travis.agent.types import AgentToolResult
 from travis.agent.types import AgentMessage
 from travis.agent.types import BeforeToolCallResult
 from travis.agent.types import MessageEndEvent, MessageStartEvent
-from travis.coding_agent.policies.tool_guardrails import (
-    ToolCallGuardrailConfig,
-    ToolCallGuardrailController,
-    ToolGuardrailDecision,
-    ToolLoopPolicy,
-    append_toolguard_guidance,
-    classify_tool_failure,
-    toolguard_synthetic_result,
-)
-from travis.coding_agent.policies.iteration_limit import coding_iteration_limit_message
-from travis.coding_agent.policies.package_consent import PackageMutationPolicy
-from travis.coding_agent.policies.pipeline import PolicyPipeline
-from travis.coding_agent.policies.types import (
-    Allow,
-    Block,
-    CodingPolicyEvent,
-    CodingTurnContext,
-    RequireConsent,
-    ToolCallView,
-    TurnCapabilities,
-)
 from travis.ai.model_resolver import ScopedModel
 from travis.ai.models import (
     clamp_thinking_level,
@@ -62,7 +41,6 @@ from travis.coding_agent.compaction_coordinator import (
     CompactionCoordinator,
     CompactionTransactionCoordinator,
 )
-from travis.coding_agent.capabilities import CapabilityViolation, WorkspaceCapability
 from travis.coding_agent.config import get_packaged_context_paths
 from travis.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
 from travis.coding_agent.execution_backend import select_execution_backend
@@ -77,7 +55,6 @@ from travis.coding_agent.process_context import ProcessContextResolver
 from travis.coding_agent.processes.local import create_local_process_transport
 from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import ProcessOwner
-from travis.coding_agent.provider_control_plane import ProviderControlPlane
 from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.session_index import SessionIndex
 from travis.coding_agent.session_store import (
@@ -135,13 +112,6 @@ def _truncate_preview(text: str, *, limit: int = 240) -> str:
     return text[: max(0, limit - 3)].rstrip() + "..."
 
 
-def _toolguard_code_from_text(text: str) -> str | None:
-    match = re.search(r"\[Tool loop hard stop:\s*([^;\]]+)", text or "")
-    if match:
-        return match.group(1).strip()
-    return None
-
-
 def _subagent_tool_event(task: SubagentTask, event_type: str, entry: Mapping[str, object]) -> dict[str, object]:
     payload = {
         "type": event_type,
@@ -155,8 +125,6 @@ def _subagent_tool_event(task: SubagentTask, event_type: str, entry: Mapping[str
         "resultPreview": entry.get("resultPreview", ""),
         "elapsedMs": entry.get("elapsedMs", 0),
     }
-    if entry.get("guardrailCode"):
-        payload["guardrailCode"] = entry["guardrailCode"]
     return payload
 
 
@@ -178,8 +146,6 @@ def _public_subagent_tool_trace(tool_trace: list[dict[str, object]]) -> list[dic
             "resultPreview": _truncate_preview(str(entry.get("resultPreview", "")), limit=120),
             "elapsedMs": entry.get("elapsedMs", 0),
         }
-        if entry.get("guardrailCode"):
-            public_entry["guardrailCode"] = str(entry["guardrailCode"])
         public.append(public_entry)
     return public
 
@@ -202,7 +168,6 @@ def _public_subagent_result_details(result: SubagentResult) -> dict[str, object]
         "durationMs": result.duration_ms,
         "toolTrace": _public_subagent_tool_trace(result.tool_trace),
         "toolTraceCount": len(result.tool_trace),
-        "guardrail": dict(result.guardrail) if result.guardrail is not None else None,
     }
     return details
 
@@ -239,7 +204,7 @@ def _available_subagent_expansion_sections(result: SubagentResult) -> list[str]:
         sections.append("tool_trace")
     if result.files_changed or result.artifacts:
         sections.append("files")
-    if result.errors or result.guardrail:
+    if result.errors:
         sections.append("errors")
     sections.append("all")
     return list(dict.fromkeys(sections))
@@ -265,8 +230,6 @@ def _subagent_expansion_source_text(result: SubagentResult, section: str) -> str
         return "\n".join(lines).strip() or "No child file or artifact metadata is available."
     if section == "errors":
         lines = list(result.errors)
-        if result.guardrail:
-            lines.append(f"guardrail: {result.guardrail}")
         return "\n".join(lines).strip() or "No child errors are available."
     if section == "all":
         parts = [
@@ -283,7 +246,7 @@ def _subagent_expansion_source_text(result: SubagentResult, section: str) -> str
             parts.extend(["", "finalResponse:", final_response])
         if result.files_changed or result.artifacts:
             parts.extend(["", "files:", _subagent_expansion_source_text(result, "files")])
-        if result.errors or result.guardrail:
+        if result.errors:
             parts.extend(["", "errors:", _subagent_expansion_source_text(result, "errors")])
         if result.tool_trace:
             parts.extend(["", "toolTrace:", _subagent_expansion_source_text(result, "tool_trace")])
@@ -353,10 +316,7 @@ def _format_subagent_tool_trace_entry(entry: Mapping[str, object]) -> str:
     status = str(entry.get("status") or "unknown")
     args = _truncate_preview(str(entry.get("argsPreview") or "").strip(), limit=80)
     result = _truncate_preview(str(entry.get("resultPreview") or "").strip(), limit=120)
-    guardrail = str(entry.get("guardrailCode") or "").strip()
     parts = [tool, status]
-    if guardrail:
-        parts.append(guardrail)
     if args:
         parts.append(args)
     if result:
@@ -511,10 +471,6 @@ class SessionSubagentTraceController:
                 trace_by_call_id[tool_call_id] = entry
             result_preview = _subagent_tool_result_preview(getattr(event, "result", None))
             status = "error" if bool(getattr(event, "is_error", False)) else "ok"
-            guardrail_code = _toolguard_code_from_text(result_preview)
-            if guardrail_code:
-                status = "guardrail_halt"
-                entry["guardrailCode"] = guardrail_code
             ended = int(time.time() * 1000)
             entry.update(
                 {
@@ -525,8 +481,6 @@ class SessionSubagentTraceController:
                 }
             )
             self._handle_subagent_event(_subagent_tool_event(task, "subagent_tool_end", entry))
-            if guardrail_code:
-                self._handle_subagent_event(_subagent_tool_event(task, "subagent_tool_guardrail", entry))
 
         return _listener
 
@@ -626,13 +580,6 @@ class SessionSubagentTraceController:
             return
         result_preview = _tool_result_text(content)
         status = "error" if is_error else "ok"
-        guardrail_code = _toolguard_code_from_text(result_preview)
-        decision = child._tool_guardrail_halt_decision
-        if decision is not None and decision.tool_name == tool_name:
-            guardrail_code = decision.code
-        if guardrail_code:
-            status = "guardrail_halt"
-            entry["guardrailCode"] = guardrail_code
         ended = int(time.time() * 1000)
         entry.update(
             {
@@ -645,26 +592,6 @@ class SessionSubagentTraceController:
             }
         )
         self._handle_subagent_event(_subagent_tool_event(task, "subagent_tool_end", entry))
-        if guardrail_code:
-            self._handle_subagent_event(_subagent_tool_event(task, "subagent_tool_guardrail", entry))
-
-    def _mark_subagent_trace_guardrail(
-        self,
-        task: SubagentTask,
-        tool_trace: list[dict[str, object]],
-        guardrail: dict[str, object],
-    ) -> None:
-        if not tool_trace:
-            return
-        code = str(guardrail.get("code") or "tool_guardrail")
-        tool = str(guardrail.get("tool_name") or "")
-        for entry in reversed(tool_trace):
-            if tool and entry.get("toolName") != tool:
-                continue
-            entry["status"] = "guardrail_halt"
-            entry["guardrailCode"] = code
-            self._handle_subagent_event(_subagent_tool_event(task, "subagent_tool_guardrail", entry))
-            return
 
     def _messages_to_summary(self, messages: list[AgentMessage]) -> str:
         parts: list[str] = []
@@ -692,11 +619,6 @@ class SessionSubagentTraceController:
             f"status: {result.status}",
             f"summary: {summary or 'none'}",
         ]
-        if result.guardrail:
-            code = result.guardrail.get("code", "unknown")
-            tool = result.guardrail.get("tool_name", result.guardrail.get("toolName", "tool"))
-            count = result.guardrail.get("count", "?")
-            lines.append(f"guardrail: {code} ({tool}, count={count})")
         if result.status != "completed" and result.errors:
             lines.append(f"error: {_truncate_subagent_text('; '.join(result.errors), limit=180)}")
         return "\n".join(lines).strip()
@@ -735,7 +657,6 @@ __all__ = (
     '_subagent_tool_event',
     '_subagent_tool_result_preview',
     '_task_id_arg',
-    '_toolguard_code_from_text',
     '_truncate_preview',
     '_truncate_subagent_text',
 )

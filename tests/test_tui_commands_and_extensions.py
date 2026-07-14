@@ -3,6 +3,115 @@ from __future__ import annotations
 from tests._support_tui import *  # noqa: F403
 
 
+def test_interactive_mode_binds_extension_ui_before_session_start(tmp_path) -> None:
+    extension_path = tmp_path / ".travis234" / "extensions" / "ui.py"
+    extension_path.parent.mkdir(parents=True)
+    extension_path.write_text(
+        "def extension(travis):\n"
+        "    def started(event, ctx):\n"
+        "        ctx.ui.set_status('loaded-extension', 'ready')\n"
+        "    travis.on('session_start', started)\n",
+        encoding="utf-8",
+    )
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=100, rows=30),
+        enable_tui=True,
+        agent_dir=str(tmp_path / "agent"),
+    )
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+
+    try:
+        assert mode.extension_statuses == {}
+        mode.init()
+        assert mode.extension_statuses == {"loaded-extension": "ready"}
+    finally:
+        mode.footer_data_provider.dispose()
+        app.close()
+
+
+def test_interactive_reload_clears_old_extension_ui_before_new_session_start(tmp_path) -> None:
+    terminal = FakeTerminal(columns=100, rows=30)
+    extension_path = tmp_path / ".travis234" / "extensions" / "ui.py"
+    extension_path.parent.mkdir(parents=True)
+    extension_path.write_text(
+        "def extension(travis):\n"
+        "    def started(event, ctx):\n"
+        "        ctx.ui.set_status('old-status', 'old')\n"
+        "        ctx.ui.set_title('old extension title')\n"
+        "    travis.on('session_start', started)\n",
+        encoding="utf-8",
+    )
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=terminal,
+        enable_tui=True,
+        agent_dir=str(tmp_path / "agent"),
+    )
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+    mode.init()
+    assert mode.extension_statuses == {"old-status": "old"}
+
+    extension_path.write_text(
+        "def extension(travis):\n"
+        "    def started(event, ctx):\n"
+        "        ctx.ui.set_status('new-status', 'new')\n"
+        "    travis.on('session_start', started)\n",
+        encoding="utf-8",
+    )
+    try:
+        mode._run_reload_command()
+
+        assert mode.extension_statuses == {"new-status": "new"}
+        title_writes = [write for write in terminal.writes if write.startswith("\x1b]0;")]
+        assert title_writes[-1] == "\x1b]0;Travis234\x07"
+    finally:
+        mode.footer_data_provider.dispose()
+        app.close()
+
+
+def test_interactive_mode_reload_refreshes_extension_code_without_model_turn(tmp_path) -> None:
+    calls = {"model": 0}
+
+    def provider(model, context):
+        calls["model"] += 1
+        return text_response_events(model, "model should not run")
+
+    register_api_provider(create_faux_provider(provider))
+    extension_path = tmp_path / ".travis234" / "extensions" / "version.py"
+    extension_path.parent.mkdir(parents=True)
+    extension_path.write_text(
+        "def extension(travis):\n"
+        "    travis.register_command('version', {'description': 'one', 'handler': lambda args, ctx: []})\n",
+        encoding="utf-8",
+    )
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=100, rows=30),
+        enable_tui=True,
+        agent_dir=str(tmp_path / "agent"),
+    )
+    extension_path.write_text(
+        "def extension(travis):\n"
+        "    travis.register_command('version', {'description': 'two', 'handler': lambda args, ctx: []})\n",
+        encoding="utf-8",
+    )
+    inputs = iter(["/reload", "/exit"])
+    mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
+
+    mode.run()
+
+    command = app.session.extension_runner.get_registered_command("version")
+    history = strip_ansi("\n".join(mode.history.render(1_000)))
+    assert command is not None
+    assert command.description == "two"
+    assert calls["model"] == 0
+    assert "Extensions reloaded" in history
+
+
 def test_interactive_mode_resume_rebinds_history_footer_and_session_subscription(tmp_path) -> None:
     register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "unused")))
     agent_dir = tmp_path / "agent"
@@ -419,64 +528,6 @@ def test_interactive_mode_does_not_run_delegate_command_on_input_thread(tmp_path
     mode.init()
 
     assert mode._dispatch_extension_command("/delegate reviewer inspect package.json") is False
-
-def test_interactive_mode_allow_package_install_grants_bounded_capability(tmp_path) -> None:
-    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
-    terminal = FakeTerminal(columns=120)
-    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
-    grants: list[tuple[str, int]] = []
-    app.session.grant_capability = lambda capability, uses=1: grants.append((capability, uses))
-    inputs = iter(["/allow package-install 3", "/exit"])
-
-    InteractiveMode(app, input_fn=lambda prompt: next(inputs)).run()
-
-    rendered = strip_ansi("\n".join(app.tui.render(120)))
-    assert grants == [("package_mutation", 3)]
-    assert "Allowed package installation for 3 uses" in rendered
-    assert "model should not run" not in rendered
-
-def test_allow_grants_during_active_turn_without_waiting_for_turn_executor(tmp_path) -> None:
-    terminal = FakeTerminal(columns=120)
-    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
-    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
-    turn_started = threading.Event()
-    release_turn = threading.Event()
-    submitted = threading.Event()
-    future = mode._command_executor().submit(
-        "turn",
-        lambda: (turn_started.set(), release_turn.wait(timeout=2)),
-    )
-    assert turn_started.wait(timeout=1)
-    thread = threading.Thread(
-        target=lambda: (mode._run_allow_command("package-install", 1), submitted.set())
-    )
-    thread.start()
-    try:
-        assert submitted.wait(timeout=0.25)
-        assert app.session._turn_capabilities.remaining("package_mutation") == 1
-        assert release_turn.is_set() is False
-    finally:
-        release_turn.set()
-        future.result(timeout=1)
-        thread.join(timeout=1)
-        mode._command_executor().close()
-        app.close()
-
-def test_interactive_mode_allow_rejects_unknown_or_nonpositive_grants(tmp_path) -> None:
-    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
-    terminal = FakeTerminal(columns=120)
-    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
-    grants: list[tuple[str, int]] = []
-    app.session.grant_capability = lambda capability, uses=1: grants.append((capability, uses))
-    inputs = iter(["/allow shell 2", "/allow package-install 0", "/exit"])
-
-    InteractiveMode(app, input_fn=lambda prompt: next(inputs)).run()
-
-    rendered = strip_ansi("\n".join(app.tui.render(120)))
-    assert grants == []
-    assert "Unknown capability: shell" in rendered
-    assert "Capability use count must be a positive integer" in rendered
-    assert "model should not run" not in rendered
 
 def test_interactive_mode_runs_agents_command_during_active_turn_without_queueing(tmp_path) -> None:
     register_api_provider(create_faux_provider(lambda m, c: text_response_events(m, "unused")))

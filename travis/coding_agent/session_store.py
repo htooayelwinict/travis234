@@ -675,6 +675,7 @@ def serialize_message(message: AgentMessage) -> dict[str, Any]:
             "content": [_serialize_block(block) for block in message.content],
             "isError": message.is_error,
             "details": message.details,
+            "addedToolNames": message.added_tool_names,
             "timestamp": message.timestamp,
         }
     raise TypeError(f"Unsupported session message role: {role}")
@@ -716,6 +717,7 @@ def deserialize_message(data: dict[str, Any]) -> AgentMessage:
             content=[_deserialize_block(block) for block in data.get("content", [])],
             is_error=bool(data.get("isError", False)),
             details=data.get("details"),
+            added_tool_names=data.get("addedToolNames"),
             timestamp=data.get("timestamp", now_ms()),
         )
     raise TypeError(f"Unsupported session message role: {role}")
@@ -784,6 +786,7 @@ def _serialize_usage(usage: Usage) -> dict[str, Any]:
         "output": usage.output,
         "cacheRead": usage.cache_read,
         "cacheWrite": usage.cache_write,
+        "cacheWrite1h": usage.cache_write_1h,
         "totalTokens": usage.total_tokens,
         "cost": {
             "input": usage.cost.input,
@@ -804,6 +807,7 @@ def _deserialize_usage(data: dict[str, Any] | None) -> Usage:
         output=data.get("output", 0),
         cache_read=data.get("cacheRead", data.get("cache_read", 0)),
         cache_write=data.get("cacheWrite", data.get("cache_write", 0)),
+        cache_write_1h=data.get("cacheWrite1h", data.get("cache_write_1h", 0)),
         total_tokens=data.get("totalTokens", data.get("total_tokens", 0)),
         cost=Cost(
             input=cost_data.get("input", 0.0),

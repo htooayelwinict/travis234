@@ -23,10 +23,6 @@ import pytest
 import travis.tui.interactive_mode as interactive_mode
 import travis.tui.interactive_model_auth as interactive_model_auth
 
-from travis.ai.providers import model_catalog
-
-from travis.ai.providers.model_catalog import openrouter_live_catalog_item_to_model
-
 from travis.tui import (
     Image,
     Component,
@@ -103,7 +99,7 @@ from travis.agent.types import (
 
 from travis.agent.types import AgentTool, AgentToolResult
 
-from travis.agent import run_agent_loop
+from tests._provider_runtime import run_agent_loop
 
 from travis.ai.providers.capabilities import ProviderParamWarning
 
@@ -111,9 +107,14 @@ from travis.ai.providers.faux import create_faux_provider, faux_model, text_resp
 
 from travis.ai.providers.params import GenerationParams
 
-from travis.ai.models import get_api_key_for_provider, get_provider_auth_status, register_model, reset_models
+from tests._provider_runtime import (
+    get_api_key_for_provider,
+    get_provider_auth_status,
+    register_model,
+    reset_models,
+)
 
-from travis.ai.stream import register_api_provider, reset_api_providers
+from tests._provider_runtime import register_api_provider, reset_api_providers
 
 from travis.ai.types import (
     AssistantMessage,
@@ -162,12 +163,11 @@ from travis.coding_agent.tools.types import ToolDefinition
 
 from travis.ai.event_stream import create_assistant_message_event_stream
 
-from travis.ai.stream import ApiProvider
+from tests._provider_runtime import ApiProvider
 
 def setup_function() -> None:
     reset_api_providers()
     reset_models()
-    model_catalog.reset_cache()
 
 def _visible_index_of(line: str, text: str) -> int:
     index = line.index(text)

@@ -1,93 +1,12 @@
-"""OpenAI-compatible provider streaming over HTTP server-sent events."""
+"""Partial JSON parsing for streamed tool arguments."""
 
 from __future__ import annotations
 
 import json
-import re
-import threading
-import time
-from typing import Any, Callable, Iterator
+from typing import Any
 
-import httpx
-
-from travis.ai.env_config import ModelConfig, load_model_config
-from travis.ai.event_stream import AssistantMessageEventStream, create_assistant_message_event_stream
-from travis.ai.providers.base import ProviderProfile
-from travis.ai.providers._shared import blank_assistant_message as _blank
-from travis.ai.providers.capabilities import build_generation_payload
-from travis.ai.providers.catalog import get_provider_profile, resolve_provider_runtime
-from travis.ai.providers.message_sanitization import repair_tool_call_arguments
-from travis.ai.providers.params import GenerationParams, merge_generation_params
-from travis.ai.providers.transports import get_transport
-from travis.ai.stream import ApiProvider
-from travis.ai.types import (
-    AssistantMessage,
-    Context,
-    DoneEvent,
-    ErrorEvent,
-    ImageContent,
-    Message,
-    Model,
-    StartEvent,
-    TextContent,
-    TextDeltaEvent,
-    TextEndEvent,
-    TextStartEvent,
-    ThinkingContent,
-    ThinkingDeltaEvent,
-    ThinkingEndEvent,
-    ThinkingStartEvent,
-    Tool,
-    ToolCall,
-    ToolResultMessage,
-    ToolcallDeltaEvent,
-    ToolcallEndEvent,
-    ToolcallStartEvent,
-    Usage,
-    empty_usage,
-    now_ms,
-)
-PROVIDER_API = "openai-completions"
-PARTIAL_STREAM_STUB_ID = "partial-stream-stub"
-PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE = "partial_stream_dropped_tool_calls"
-MALFORMED_STREAMED_TOOL_CALL_ARGUMENTS_CODE = "malformed_streamed_tool_call_arguments"
-LEAKED_TOOL_PROTOCOL_TEXT_CODE = "leaked_tool_protocol_text"
-_MUTATING_TOOL_REQUIRED_ARGUMENTS = {"write": ("path", "content")}
 _VALID_JSON_ESCAPES = {'"', "\\", "/", "b", "f", "n", "r", "t", "u"}
-_REASONING_FIELDS = ("reasoning_content", "reasoning", "reasoning_text")
-_BILLING_PATTERNS = (
-    "key limit exceeded",
-    "spending limit",
-    "insufficient credits",
-    "insufficient_quota",
-    "insufficient balance",
-    "credit balance",
-    "credits exhausted",
-    "no usable credits",
-    "top up your credits",
-    "payment required",
-    "billing hard limit",
-    "plan does not include",
-    "out of funds",
-    "run out of funds",
-)
-_OPENROUTER_POLICY_PATTERNS = (
-    "no endpoints available matching your guardrail",
-    "no endpoints available matching your data policy",
-    "no endpoints found matching your data policy",
-)
-_OPENROUTER_PROMPT_GUARDRAIL_PATTERNS = (
-    "prompt injection patterns detected",
-    "system_prefix_spoofing",
-)
-_PROVIDER_ERROR_DETAIL_HEAD_CHARS = 450
-_PROVIDER_ERROR_DETAIL_TAIL_CHARS = 300
-_PROVIDER_ERROR_DETAIL_TRUNCATION_MARKER = "... [truncated provider error body] ..."
-_NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)"
-_NON_VISION_TOOL_IMAGE_PLACEHOLDER = "(tool image omitted: model does not support images)"
 _STREAMING_TOOL_ARGUMENT_PREVIEW_MAX_CHARS = 8_192
-
-
 
 class _PartialJson(ValueError):
     pass
@@ -343,65 +262,5 @@ def _parse_streaming_json_preview(partial_json: str | None, previous: dict | Non
     return _parse_streaming_json(partial_json[:_STREAMING_TOOL_ARGUMENT_PREVIEW_MAX_CHARS])
 
 
-def _repair_complete_tool_arguments(raw_arguments: str | None) -> dict | None:
-    if not raw_arguments or not raw_arguments.strip():
-        return {}
-
-    source = raw_arguments.strip()
-    try:
-        parsed = json.loads(source, strict=False)
-        return parsed if isinstance(parsed, dict) else None
-    except Exception:
-        pass
-
-    fixed = re.sub(r",\s*([}\]])", r"\1", source)
-    open_curly = fixed.count("{") - fixed.count("}")
-    open_bracket = fixed.count("[") - fixed.count("]")
-    if open_curly > 0:
-        fixed += "}" * open_curly
-    if open_bracket > 0:
-        fixed += "]" * open_bracket
-
-    for _ in range(50):
-        try:
-            parsed = json.loads(fixed, strict=False)
-            return parsed if isinstance(parsed, dict) else None
-        except json.JSONDecodeError:
-            if fixed.endswith("}") and fixed.count("}") > fixed.count("{"):
-                fixed = fixed[:-1]
-            elif fixed.endswith("]") and fixed.count("]") > fixed.count("["):
-                fixed = fixed[:-1]
-            else:
-                break
-
-    try:
-        repaired = _repair_json(fixed)
-        parsed = json.loads(repaired, strict=False)
-        return parsed if isinstance(parsed, dict) else None
-    except Exception:
-        return None
-
-
 def _parse_complete_tool_arguments(raw_arguments: str | None) -> dict | None:
-    return _repair_complete_tool_arguments(raw_arguments)
-
-
-def _malformed_finished_mutating_tool_call_names(
-    content: list[TextContent | ThinkingContent | ToolCall | ImageContent],
-    tool_arg_bufs: dict[int, str],
-) -> list[str]:
-    names: list[str] = []
-    for content_index, block in enumerate(content):
-        if not isinstance(block, ToolCall):
-            continue
-        if block.name not in _MUTATING_TOOL_REQUIRED_ARGUMENTS:
-            continue
-        raw_arguments = tool_arg_bufs.get(content_index, "")
-        if not raw_arguments.strip():
-            continue
-        try:
-            json.loads(raw_arguments, strict=False)
-        except (json.JSONDecodeError, TypeError, ValueError):
-            if block.name not in names:
-                names.append(block.name)
-    return names
+    return _parse_streaming_json(raw_arguments)

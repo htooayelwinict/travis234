@@ -9,14 +9,11 @@ import queue
 import signal as signal_module
 import subprocess
 import threading
-import time
-from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
 from travis.ai.providers.capabilities import ProviderParamWarning
-from travis.ai.providers.model_catalog import get_last_openrouter_live_catalog_error, get_live_openrouter_models
 from travis.ai.providers.params import GenerationParams, compact_generation_params_display
 from travis.compaction import estimate_tokens
 from travis.coding_agent.session_types import BashResult
@@ -42,7 +39,6 @@ from travis.tui.interactive import (
     message_to_component,
     user_message_to_component,
 )
-from travis.tui.model_loader import ModelCatalogLoader
 from travis.tui.user_commands import (
     ResolvedUserCommand,
     UserCommandBinding,
@@ -50,8 +46,7 @@ from travis.tui.user_commands import (
     UserCommandHandle,
 )
 
-from travis.tui.interactive_command_dispatcher import _is_openrouter_model
-from travis.tui.interactive_shutdown import OPENROUTER_MODEL_CACHE_TTL_SECONDS, OPENROUTER_MODEL_PICKER_LIMIT
+from travis.tui.interactive_shutdown import OPENROUTER_MODEL_PICKER_LIMIT
 
 def _compact_generation_param_warnings(warnings: list[ProviderParamWarning]) -> str:
     return ", ".join(f"{warning.param} {warning.action}" for warning in warnings)
@@ -131,55 +126,10 @@ class InteractiveModelAuth:
         del fetch_remote
         scoped_models = getattr(self.app.session, "scoped_models", [])
         if scoped_models:
-            models = [
-                scoped.model
-                for scoped in scoped_models
-                if self.app.session.model_registry.is_selectable(scoped.model)
-            ]
+            models = [scoped.model for scoped in scoped_models]
             return _filter_model_candidates(models, query)
         models = self.app.session.model_registry.get_selectable(self.app.session.model)
         return _filter_model_candidates(models, query)
-
-    def _openrouter_model_candidates(self):
-        active_model = self.app.session.model
-        if not _is_openrouter_model(active_model):
-            return [], None
-        now = time.monotonic()
-        if (
-            self._openrouter_model_cache is not None
-            and now - self._openrouter_model_cache[0] < OPENROUTER_MODEL_CACHE_TTL_SECONDS
-        ):
-            return list(self._openrouter_model_cache[1]), None
-        try:
-            models = get_live_openrouter_models(base_model=active_model)
-        except Exception as error:  # noqa: BLE001 - model picker should fall back to local models.
-            return [], error
-        if not models:
-            error = get_last_openrouter_live_catalog_error()
-            if error is not None:
-                return [], error
-        self._openrouter_model_cache = (now, models)
-        return list(models), None
-
-    def _catalog_loader(self) -> ModelCatalogLoader:
-        if self._model_loader is None:
-            self._model_loader = ModelCatalogLoader(
-                discover=self._discover_remote_models,
-                post=self.tui.dispatcher.post,
-            )
-        return self._model_loader
-
-    def _discover_remote_models(self, query: str | None) -> list[object]:
-        models, error = self._openrouter_model_candidates()
-        if error is not None:
-            raise error
-        return _filter_model_candidates(models, query)
-
-    def _wait_for_model_catalog(self, future: Future[list[object]]) -> list[object]:
-        while not future.done():
-            time.sleep(min(0.01, self.tui.time_until_next_work(0.01)))
-            self.tui.drain_dispatcher()
-        return future.result()
 
     def _update_available_provider_count(self) -> None:
         providers = {model.provider for model in self._get_model_candidates() if getattr(model, "provider", None)}
@@ -209,36 +159,13 @@ class InteractiveModelAuth:
                 self._switch_model(model)
                 return
 
-        if not _is_openrouter_model(self.app.session.model):
-            self._complete_model_command(command, query, [], None)
-            return
-
-        self._show_status("Loading model catalog", kind="model")
-        if self._line_input_mode:
-            try:
-                remote_models = self._wait_for_model_catalog(self._catalog_loader().load(query or None))
-                error = None
-            except BaseException as caught:  # noqa: BLE001 - model picker falls back to local models.
-                remote_models = []
-                error = caught
-            self._complete_model_command(command, query, remote_models, error)
-            return
-
-        self._catalog_loader().load(
-            query or None,
-            lambda models, error: self._complete_model_command(command, query, models, error),
-        )
+        self._complete_model_command(command, query)
 
     def _complete_model_command(
         self,
         command: str,
         query: str,
-        remote_models: list[object],
-        error: BaseException | None,
     ) -> None:
-        self._last_openrouter_model_fetch_error = error if isinstance(error, Exception) else None
-        if remote_models:
-            self.app.provider_control_plane.merge_discovered_models(remote_models)  # type: ignore[arg-type]
         scoped_models = getattr(self.app.session, "scoped_models", [])
         if scoped_models:
             candidates = [
@@ -248,20 +175,7 @@ class InteractiveModelAuth:
             ]
         else:
             candidates = self.app.session.model_registry.get_selectable(self.app.session.model)
-        if remote_models:
-            selectable_by_key = {
-                (model.provider, model.id): model
-                for model in candidates
-            }
-            preferred = [
-                selectable_by_key[(model.provider, model.id)]
-                for model in remote_models
-                if (model.provider, model.id) in selectable_by_key
-            ]
-            candidates = _dedupe_models([*preferred, *candidates])
         candidates = _filter_model_candidates(candidates, query or None)
-        if error is not None:
-            self._show_status("Could not fetch OpenRouter models; showing local models only.", kind="model")
         if command == "list":
             self._trace_model_picker_ready(len(candidates), query)
             self._show_model_list(candidates)
@@ -303,23 +217,6 @@ class InteractiveModelAuth:
         if warning_display:
             display = f"{display}; warnings: {warning_display}"
         self._show_status(f"{provider}/{model_id}: {display}", kind="model")
-
-    def _run_allow_command(self, capability: str, uses: int) -> None:
-        if capability != "package-install":
-            self._show_status(f"Unknown capability: {capability}", kind="error")
-            return
-        if uses <= 0:
-            self._show_status("Capability use count must be a positive integer", kind="error")
-            return
-        try:
-            self.app.session.grant_capability("package_mutation", uses)
-        except Exception as error:  # noqa: BLE001 - command failures are local TUI status.
-            self._show_status(f"Capability grant failed: {error}", kind="error")
-            return
-        suffix = "use" if uses == 1 else "uses"
-        self._show_status(f"Allowed package installation for {uses} {suffix}", kind="auth")
-        if self.app.event_trace is not None:
-            self.app.event_trace.write("capability_granted", {"status": "ok"})
 
     def _show_model_list(self, models) -> None:
         if not models:
@@ -416,7 +313,28 @@ class InteractiveModelAuth:
         if not api_key or not api_key.strip():
             self._show_status(f"Failed to save API key for {provider['name']}: API key cannot be empty.", kind="error")
             return
-        credential = {"type": "api_key", "key": api_key.strip()}
+        env: dict[str, str] = {}
+        cloudflare_fields = {
+            "cloudflare-workers-ai": (
+                ("CLOUDFLARE_ACCOUNT_ID", "Enter Cloudflare account ID"),
+            ),
+            "cloudflare-ai-gateway": (
+                ("CLOUDFLARE_ACCOUNT_ID", "Enter Cloudflare account ID"),
+                ("CLOUDFLARE_GATEWAY_ID", "Enter Cloudflare gateway ID"),
+            ),
+        }.get(provider["id"], ())
+        for variable, prompt in cloudflare_fields:
+            value = self.prompt_extension_input(prompt)
+            if not value or not value.strip():
+                self._show_status(
+                    f"Failed to save API key for {provider['name']}: {variable} cannot be empty.",
+                    kind="error",
+                )
+                return
+            env[variable] = value.strip()
+        credential: dict[str, object] = {"type": "api_key", "key": api_key.strip()}
+        if env:
+            credential["env"] = env
         self._run_session_command(
             "set-auth",
             lambda: self.app.session.model_registry.set_auth_credential(provider["id"], credential),

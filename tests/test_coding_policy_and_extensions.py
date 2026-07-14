@@ -1,91 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+
 from tests._support_coding_agent import *  # noqa: F403
 
-
-def test_agent_session_blocks_repeated_missing_bash_tool_loop(tmp_path: Path) -> None:
-    model = faux_model()
-    provider_calls = {"n": 0}
-    args = {"command": "ls -la src/metrics"}
-
-    def script(m, c):
-        provider_calls["n"] += 1
-        if provider_calls["n"] > 8:
-            return text_response_events(m, "loop escaped")
-        return tool_call_response_events(m, "bash", args, call_id=f"call_{provider_calls['n']}")
-
-    register_api_provider(create_faux_provider(script))
-    session = AgentSession(
-        cwd=str(tmp_path),
-        model=model,
-        tool_definitions=[],
-        max_iterations=8,
-        tool_loop_guardrails={"blocking_enabled": True},
-    )
-
-    session.prompt("scan metrics")
-
-    tool_results = [m for m in session.messages if getattr(m, "role", None) == "toolResult"]
-    assert provider_calls["n"] == 4
-    assert len(tool_results) == 4
-    assert tool_results[-1].is_error is True
-    assert "repeated_exact_failure_block" in tool_results[-1].content[0].text
-    assert "STOP repeating" in tool_results[-1].content[0].text
-    assert session.messages[-1].role == "assistant"
-    assert "I stopped retrying bash" in session.messages[-1].content[0].text
-
-def test_agent_session_blocks_repeated_extension_blocked_bash_loop(tmp_path: Path) -> None:
-    model = faux_model()
-    runner = ExtensionRunner()
-    provider_calls = {"n": 0}
-    executions: list[dict] = []
-    args = {"command": "ls -la src/metrics"}
-
-    def execute(tool_call_id, args, signal=None, on_update=None, ctx=None):
-        executions.append(dict(args))
-        return AgentToolResult(content=[TextContent(text="should not execute")], details={})
-
-    bash_definition = ToolDefinition(
-        name="bash",
-        label="bash",
-        description="Execute a bash command",
-        parameters={
-            "type": "object",
-            "properties": {"command": {"type": "string"}},
-            "required": ["command"],
-        },
-        execute=execute,
-    )
-
-    runner.on("tool_call", lambda event: {"block": True, "reason": "blocked by extension"})
-
-    def script(m, c):
-        provider_calls["n"] += 1
-        if provider_calls["n"] > 8:
-            return text_response_events(m, "loop escaped")
-        return tool_call_response_events(m, "bash", args, call_id=f"call_{provider_calls['n']}")
-
-    register_api_provider(create_faux_provider(script))
-    session = AgentSession(
-        cwd=str(tmp_path),
-        model=model,
-        tool_definitions=[bash_definition],
-        extension_runner=runner,
-        max_iterations=8,
-        tool_loop_guardrails={"blocking_enabled": True},
-    )
-
-    session.prompt("scan metrics")
-
-    tool_results = [m for m in session.messages if getattr(m, "role", None) == "toolResult"]
-    assert provider_calls["n"] == 4
-    assert executions == []
-    assert len(tool_results) == 4
-    assert tool_results[-1].is_error is True
-    assert "repeated_exact_failure_block" in tool_results[-1].content[0].text
-    assert "STOP repeating" in tool_results[-1].content[0].text
-    assert session.messages[-1].role == "assistant"
-    assert "I stopped retrying bash" in session.messages[-1].content[0].text
 
 def test_agent_session_does_not_claim_bash_token_scanning_is_containment(tmp_path: Path) -> None:
     model = faux_model()
@@ -145,7 +63,6 @@ def test_agent_session_does_not_claim_bash_token_scanning_is_containment(tmp_pat
         cwd=str(tmp_path),
         model=model,
         tool_definitions=[bash_definition, write_definition],
-        max_iterations=8,
     )
 
     session.prompt("add a cli and run tests")
@@ -157,164 +74,6 @@ def test_agent_session_does_not_claim_bash_token_scanning_is_containment(tmp_pat
     assert tool_results[-1].is_error is False
     assert session.messages[-1].role == "assistant"
     assert session.messages[-1].content[0].text == "loop escaped"
-
-def test_agent_session_blocks_repeated_invalid_read_schema_loop_when_enabled(tmp_path: Path) -> None:
-    model = faux_model()
-    provider_calls = {"n": 0}
-
-    def script(m, c):
-        provider_calls["n"] += 1
-        if provider_calls["n"] > 12:
-            return text_response_events(m, "loop escaped")
-        return tool_call_response_events(m, "read", {}, call_id=f"call_{provider_calls['n']}")
-
-    register_api_provider(create_faux_provider(script))
-    session = AgentSession(
-        cwd=str(tmp_path),
-        model=model,
-        tool_loop_guardrails={"blocking_enabled": True},
-    )
-
-    session.prompt("explain each source file")
-
-    tool_results = [m for m in session.messages if getattr(m, "role", None) == "toolResult"]
-    assert provider_calls["n"] == 4
-    assert len(tool_results) == 4
-    assert tool_results[-1].is_error is True
-    assert "repeated_exact_failure_block" in tool_results[-1].content[0].text
-    assert "STOP repeating" in tool_results[-1].content[0].text
-    assert session.messages[-1].role == "assistant"
-    assert "I stopped retrying read" in session.messages[-1].content[0].text
-    assert "repeated_exact_failure_block" in session.messages[-1].content[0].text
-
-def test_agent_session_blocks_repeated_invalid_append_schema_loop_when_enabled(tmp_path: Path) -> None:
-    model = faux_model()
-    provider_calls = {"n": 0}
-    args = {"path": "docs/probe.md", "content": ""}
-
-    def script(m, c):
-        provider_calls["n"] += 1
-        if provider_calls["n"] > 8:
-            return text_response_events(m, "loop escaped")
-        return tool_call_response_events(m, "append", args, call_id=f"call_{provider_calls['n']}")
-
-    register_api_provider(create_faux_provider(script))
-    session = AgentSession(
-        cwd=str(tmp_path),
-        model=model,
-        max_iterations=8,
-        tool_loop_guardrails={"blocking_enabled": True},
-    )
-
-    session.prompt("append empty chunks forever")
-
-    tool_results = [m for m in session.messages if getattr(m, "role", None) == "toolResult"]
-    assert provider_calls["n"] == 5
-    assert len(tool_results) == 5
-    assert tool_results[-1].is_error is True
-    assert "repeated_exact_failure_block" in tool_results[-1].content[0].text
-    assert "STOP repeating" in tool_results[-1].content[0].text
-    assert session.messages[-1].role == "assistant"
-    assert "I stopped retrying append" in session.messages[-1].content[0].text
-
-def test_agent_session_appends_recovery_guidance_before_consecutive_bash_block(tmp_path: Path) -> None:
-    model = faux_model()
-    provider_calls = {"n": 0}
-    executions: list[dict] = []
-    seen_tool_results: list[list[str]] = []
-
-    def execute(tool_call_id, args, signal=None, on_update=None, ctx=None):
-        executions.append(dict(args))
-        return AgentToolResult(content=[TextContent(text="jsonpatch.py")], details={})
-
-    bash_definition = ToolDefinition(
-        name="bash",
-        label="bash",
-        description="Execute a bash command",
-        parameters={
-            "type": "object",
-            "properties": {"command": {"type": "string"}},
-            "required": ["command"],
-        },
-        execute=execute,
-    )
-    repeated_args = {"command": "find . -maxdepth 1 -type f -name 'jsonpatch.py'"}
-
-    def script(m, c):
-        provider_calls["n"] += 1
-        tool_results = [
-            _content_text(message.content)
-            for message in c.messages
-            if getattr(message, "role", None) == "toolResult"
-        ]
-        seen_tool_results.append(tool_results)
-        if tool_results and "idempotent_no_progress_warning" in tool_results[-1]:
-            return text_response_events(m, "I will use the existing result instead.")
-        return tool_call_response_events(m, "bash", repeated_args, call_id=f"call_{provider_calls['n']}")
-
-    register_api_provider(create_faux_provider(script))
-    session = AgentSession(cwd=str(tmp_path), model=model, tool_definitions=[bash_definition])
-
-    session.prompt("find jsonpatch")
-
-    tool_results = [m for m in session.messages if getattr(m, "role", None) == "toolResult"]
-    assistants = [m for m in session.messages if getattr(m, "role", None) == "assistant"]
-    assert provider_calls["n"] == 3
-    assert executions == [repeated_args, repeated_args]
-    assert len(tool_results) == 2
-    assert "idempotent_no_progress_warning" in tool_results[-1].content[0].text
-    assert any("Tool loop warning" in results[-1] for results in seen_tool_results if results)
-    assert assistants[-1].content[0].text == "I will use the existing result instead."
-
-def test_agent_session_max_iterations_forces_toolless_summary(tmp_path: Path) -> None:
-    model = faux_model()
-    provider_calls = {"n": 0}
-    tool_calls = {"n": 0}
-    saw_tools: list[bool] = []
-
-    def execute(tool_call_id, args, signal=None, on_update=None, ctx=None):
-        return AgentToolResult(content=[TextContent(text=args["value"])], details={})
-
-    probe_definition = ToolDefinition(
-        name="probe",
-        label="probe",
-        description="Probe",
-        parameters={
-            "type": "object",
-            "properties": {"value": {"type": "string"}},
-            "required": ["value"],
-        },
-        execute=execute,
-    )
-
-    def script(m, c):
-        provider_calls["n"] += 1
-        saw_tools.append(bool(c.tools))
-        if c.tools:
-            tool_calls["n"] += 1
-            return tool_call_response_events(
-                m,
-                "probe",
-                {"value": f"run-{tool_calls['n']}"},
-                call_id=f"call_{tool_calls['n']}",
-            )
-        return text_response_events(m, "summary")
-
-    register_api_provider(create_faux_provider(script))
-    session = AgentSession(
-        cwd=str(tmp_path),
-        model=model,
-        tool_definitions=[probe_definition],
-        max_iterations=2,
-    )
-
-    session.prompt("loop")
-
-    assert provider_calls["n"] == 3
-    assert tool_calls["n"] == 2
-    assert saw_tools == [True, True, False]
-    assert session.messages[-1].role == "assistant"
-    assert session.messages[-1].content[0].text == "summary"
 
 def test_agent_session_prepare_next_turn_refreshes_travis234_turn_state_after_tool_mutation(tmp_path: Path) -> None:
     model = faux_model()
@@ -357,74 +116,6 @@ def test_agent_session_prepare_next_turn_refreshes_travis234_turn_state_after_to
     assert seen_tool_names == [["mutate_session"], []]
     assert session.messages[-1].role == "assistant"
     assert session.messages[-1].content[0].text == "done"
-
-def test_agent_session_accepts_travis_tool_loop_guardrail_config(tmp_path: Path) -> None:
-    model = faux_model()
-    provider_calls = {"n": 0}
-    executions: list[dict] = []
-
-    def execute(tool_call_id, args, signal=None, on_update=None, ctx=None):
-        executions.append(dict(args))
-        return AgentToolResult(content=[TextContent(text="Command exited with code 1")], details={})
-
-    bash_definition = ToolDefinition(
-        name="bash",
-        label="bash",
-        description="Execute a bash command",
-        parameters={
-            "type": "object",
-            "properties": {"command": {"type": "string"}},
-            "required": ["command"],
-        },
-        execute=execute,
-    )
-
-    def script(m, c):
-        provider_calls["n"] += 1
-        return tool_call_response_events(
-            m,
-            "bash",
-            {"command": f"bad-{provider_calls['n']}"},
-            call_id=f"call_{provider_calls['n']}",
-        )
-
-    register_api_provider(create_faux_provider(script))
-    session = AgentSession(
-        cwd=str(tmp_path),
-        model=model,
-        tool_definitions=[bash_definition],
-        tool_loop_guardrails={
-            "hard_stop_enabled": True,
-            "hard_stop_after": {"same_tool_failure": 2},
-        },
-    )
-
-    session.prompt("fail repeatedly")
-
-    tool_results = [m for m in session.messages if getattr(m, "role", None) == "toolResult"]
-    assert provider_calls["n"] == 2
-    assert executions == [{"command": "bad-1"}, {"command": "bad-2"}]
-    assert len(tool_results) == 2
-    assert "same_tool_failure_halt" in tool_results[-1].content[0].text
-
-def test_tool_loop_guardrail_resets_consecutive_idempotent_count_on_different_tool() -> None:
-    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailConfig, ToolCallGuardrailController
-
-    controller = ToolCallGuardrailController(
-        ToolCallGuardrailConfig(
-            blocking_enabled=True,
-            consecutive_no_progress_block_after=4,
-        )
-    )
-    repeated = {"command": "find . -name jsonpatch.py"}
-
-    for _ in range(3):
-        assert controller.before_call("bash", repeated).action == "allow"
-        controller.after_call("bash", repeated, "jsonpatch.py", failed=False)
-
-    controller.after_call("read", {"path": "README.md"}, "readme", failed=False)
-
-    assert controller.before_call("bash", repeated).action == "allow"
 
 def test_agent_session_exposes_default_coding_tools_for_greeting(tmp_path: Path) -> None:
     model = faux_model()
@@ -606,7 +297,7 @@ def test_agent_session_refreshes_extension_registered_tools_with_source_metadata
             return tool_call_response_events(m, "extension_tool", {"value": "from model"})
         return text_response_events(m, "done")
 
-    session.provider_control_plane.api_providers.register(create_faux_provider(script), source_id="test")
+    register_api_provider(create_faux_provider(script), source_id="test")
     session.prompt("use extension")
 
     assert ran == {"args": {"value": "from model"}, "cwd": str(tmp_path)}
@@ -664,6 +355,113 @@ def test_extension_runner_lifecycle_handlers_follow_travis234_emit_semantics() -
         ("shutdown", "resume", "next.jsonl"),
     ]
 
+
+def test_agent_session_forwards_awaited_runtime_lifecycle_events_to_extensions(tmp_path: Path) -> None:
+    runner = ExtensionRunner()
+    seen: list[dict[str, object]] = []
+    errors: list[dict[str, object]] = []
+
+    async def record(event):
+        await asyncio.sleep(0)
+        seen.append(dict(event))
+
+    for event_type in (
+        "agent_start",
+        "turn_start",
+        "message_start",
+        "message_update",
+        "message_end",
+        "turn_end",
+        "agent_end",
+    ):
+        runner.on(event_type, record)
+    runner.on_error(errors.append)
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "done")))
+
+    session = AgentSession(cwd=str(tmp_path), model=faux_model(), extension_runner=runner)
+    session.prompt("hello")
+
+    event_types = [str(event["type"]) for event in seen]
+    assert event_types[0:2] == ["agent_start", "turn_start"]
+    assert event_types[-2:] == ["turn_end", "agent_end"]
+    assert event_types.count("message_start") == 2
+    assert event_types.count("message_end") == 2
+    assert "message_update" in event_types
+    assert [event["turnIndex"] for event in seen if event["type"] == "turn_start"] == [0]
+    assert [event["turnIndex"] for event in seen if event["type"] == "turn_end"] == [0]
+    assert errors == []
+
+
+def test_agent_session_awaits_context_and_tool_extension_handlers(tmp_path: Path) -> None:
+    runner = ExtensionRunner()
+    seen: list[str] = []
+    errors: list[dict[str, object]] = []
+    executions: list[dict[str, object]] = []
+    calls = {"count": 0}
+
+    async def context_handler(event):
+        await asyncio.sleep(0)
+        seen.append("context")
+        return {"messages": event["messages"]}
+
+    async def tool_call_handler(event):
+        await asyncio.sleep(0)
+        seen.append(f"call:{event['toolCallId']}")
+
+    async def tool_result_handler(event):
+        await asyncio.sleep(0)
+        seen.append(f"result:{event['toolCallId']}")
+        return {"content": [TextContent(text="extension result")]}
+
+    async def tool_execution_handler(event):
+        await asyncio.sleep(0)
+        seen.append(str(event["type"]))
+
+    runner.on("context", context_handler)
+    runner.on("tool_call", tool_call_handler)
+    runner.on("tool_result", tool_result_handler)
+    runner.on("tool_execution_start", tool_execution_handler)
+    runner.on("tool_execution_end", tool_execution_handler)
+    runner.on_error(errors.append)
+
+    def execute(tool_call_id, args, signal=None, on_update=None, ctx=None):
+        executions.append(dict(args))
+        return AgentToolResult(content=[TextContent(text="base result")], details={})
+
+    definition = ToolDefinition(
+        name="probe",
+        label="probe",
+        description="Probe",
+        parameters={"type": "object", "properties": {"value": {"type": "string"}}, "required": ["value"]},
+        execute=execute,
+    )
+
+    def script(model, context):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return tool_call_response_events(model, "probe", {"value": "ok"}, call_id="call-1")
+        return text_response_events(model, "done")
+
+    register_api_provider(create_faux_provider(script))
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        tool_definitions=[definition],
+        extension_runner=runner,
+    )
+
+    session.prompt("use probe")
+
+    tool_result = next(message for message in session.messages if isinstance(message, ToolResultMessage))
+    assert executions == [{"value": "ok"}]
+    assert tool_result.content == [TextContent(text="extension result")]
+    assert seen.count("call:call-1") == 1
+    assert seen.count("result:call-1") == 1
+    assert "tool_execution_start" in seen
+    assert "tool_execution_end" in seen
+    assert seen.count("context") == 2
+    assert errors == []
+
 def test_extension_runner_flag_registration_defaults_and_values() -> None:
     runner = ExtensionRunner()
 
@@ -715,7 +513,7 @@ def test_extension_runner_shortcut_registration_normalizes_and_overrides() -> No
     shortcuts["ctrl+y"].handler(None)
     assert calls == ["second"]
 
-def test_agent_session_exposes_extension_runner_and_emits_session_start(tmp_path: Path) -> None:
+def test_agent_session_emits_session_start_once_when_extensions_are_bound(tmp_path: Path) -> None:
     from travis.coding_agent import ExtensionRunner
 
     model = faux_model()
@@ -735,6 +533,10 @@ def test_agent_session_exposes_extension_runner_and_emits_session_start(tmp_path
     )
 
     assert session.extension_runner is runner
+    assert seen == []
+
+    session.bind_extensions({})
+
     assert session.has_extension_handlers("session_start") is True
     assert session.has_extension_handlers("missing") is False
     assert seen == [("resume", "old.jsonl")]
@@ -931,8 +733,6 @@ def test_agent_session_prompt_queues_during_streaming_by_behavior(tmp_path: Path
     thread.join(timeout=2)
     assert run_error == []
     assert session.is_streaming is False
-
-    session.continue_(stream_fn=stream_fn)
 
     user_contents = [_user_text(message) for message in session.messages if isinstance(message, UserMessage)]
     assert user_contents[-2:] == ["queued steer", "queued follow"]
@@ -1390,10 +1190,10 @@ def test_agent_session_provider_extension_hooks_are_wired_into_stream_options(tm
     payloads: list[object] = []
     response_events: list[dict[str, object]] = []
 
-    def stream_fn(model, context, options):
-        payloads.append(options.on_payload({"body": "base"}) if options.on_payload else None)
+    async def stream_fn(model, context, options):
+        payloads.append(await options.on_payload({"body": "base"}) if options.on_payload else None)
         if options.on_response:
-            options.on_response({"status": 202, "headers": {"x-test": "yes"}})
+            await options.on_response({"status": 202, "headers": {"x-test": "yes"}})
         return create_faux_provider(lambda m, c: text_response_events(m, "done")).stream_simple(model, context, options)
 
     runner = ExtensionRunner()

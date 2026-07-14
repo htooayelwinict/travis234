@@ -63,7 +63,6 @@ The process attached to the terminal must be `python -m travis.cli` itself. Type
 - Print the exact prompt and visible final assistant response in the developer's test notes as each turn completes.
 - Run each scenario's external verifiers only after its turn finishes.
 - Type `/compact` after scenarios `4`, `8`, `12`, `16`, and `20`; wait for visible compaction completion and `Idle` before continuing.
-- Before scenario `10`, type `/allow package-install`; require the visible confirmation `Allowed package installation for 1 use` before its prompt.
 - After prompt `7`, type `/session`, record the session file and full ID, then type `/exit` and require exit code `0`. Relaunch the same command with `--continue`; require the same ID, restored history, selected model, and thinking level before prompt `8`.
 - After prompt `14`, type `/session`, record the same ID, then type `/exit` and require exit code `0`. Relaunch the same command with `--resume`, choose the recorded session in the visible picker, and require the same ID and restored history before prompt `15`.
 - Finish prompt `21` by typing `/session` and `/exit`; require the same ID and exit code `0`.

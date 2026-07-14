@@ -181,7 +181,20 @@ def test_agent_session_extension_register_provider_validates_model_auth_config(t
     except RuntimeError as error:
         assert str(error) == 'Provider proxy: "api" is required when registering streamSimple.'
 
-    runner.register_provider("proxy", {"baseUrl": "https://proxy.example.test", "api": "faux", "oauth": {}, "models": [model_config]})
+    runner.register_provider(
+        "proxy",
+        {
+            "baseUrl": "https://proxy.example.test",
+            "api": "faux",
+            "oauth": {
+                "name": "Proxy OAuth",
+                "login": lambda callbacks: {"access": "token", "expires": 4_102_444_800_000},
+                "refreshToken": lambda credentials: credentials,
+                "getApiKey": lambda credentials: credentials["access"],
+            },
+            "models": [model_config],
+        },
+    )
     assert session.model_registry.find("proxy", "proxy-model") is not None
 
 def test_agent_session_extension_provider_auth_status_tracks_api_key_and_oauth(tmp_path: Path, monkeypatch) -> None:
@@ -229,7 +242,12 @@ def test_agent_session_extension_provider_auth_status_tracks_api_key_and_oauth(t
         {
             "baseUrl": "https://sso.example.test",
             "api": "faux",
-            "oauth": {"name": "Corporate SSO", "getApiKey": lambda credentials: credentials["access"]},
+            "oauth": {
+                "name": "Corporate SSO",
+                "login": lambda callbacks: {"access": "sso-token", "expires": 4_102_444_800_000},
+                "refreshToken": lambda credentials: credentials,
+                "getApiKey": lambda credentials: credentials["access"],
+            },
             "models": [{**model_config, "id": "sso-model", "name": "SSO Model"}],
         },
     )
@@ -243,11 +261,11 @@ def test_agent_session_extension_provider_auth_status_tracks_api_key_and_oauth(t
     assert model_registry.has_configured_auth(sso_model) is True
     assert model_registry.get_provider_auth_status("sso") == {"configured": True, "source": "stored"}
     assert model_registry.get_api_key_for_provider("sso") == "sso-token"
-    assert model_registry.get_oauth_providers() == [{"id": "sso", "name": "Corporate SSO"}]
+    assert {"id": "sso", "name": "Corporate SSO"} in model_registry.get_oauth_providers()
 
     runner.unregister_provider("sso")
 
-    assert model_registry.get_oauth_providers() == []
+    assert all(provider["id"] != "sso" for provider in model_registry.get_oauth_providers())
 
 def test_agent_session_extension_provider_oauth_login_logout_and_refresh(tmp_path: Path) -> None:
     runner = ExtensionRunner()
@@ -299,7 +317,7 @@ def test_agent_session_extension_provider_oauth_login_logout_and_refresh(tmp_pat
 
     assert model_registry.get_provider_auth_status("sso") == {"configured": False}
     assert model_registry.get_api_key_for_provider("sso") is None
-    assert model_registry.get_oauth_providers() == [{"id": "sso", "name": "Corporate SSO"}]
+    assert {"id": "sso", "name": "Corporate SSO"} in model_registry.get_oauth_providers()
 
     try:
         model_registry.login_oauth_provider("missing", callbacks)
@@ -392,11 +410,25 @@ def test_agent_session_cycles_registered_models_without_scoped_models(tmp_path: 
     assert session.thinking_level == "high"
 
 def test_agent_session_cycle_includes_active_model_when_registry_does_not(tmp_path: Path) -> None:
-    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "unused")))
+    from travis.coding_agent import AuthStorage, ModelRegistry
+
     active = Model(id="env-model", name="Env", api="faux", provider="openrouter", base_url="http://localhost", reasoning=True)
     alternate = Model(id="registered-model", name="Registered", api="faux", provider="openrouter", base_url="http://localhost", reasoning=True)
-    register_model(alternate)
-    session = AgentSession(cwd=str(tmp_path), model=active, thinking_level="high")
+    registry = ModelRegistry.in_memory(AuthStorage.in_memory())
+    registry.runtime.clear_providers()
+    registry.runtime.set_provider(
+        create_faux_provider(
+            lambda model, context: text_response_events(model, "unused"),
+            provider_id="openrouter",
+            models=[alternate],
+        )
+    )
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=active,
+        thinking_level="high",
+        model_registry=registry,
+    )
 
     result = session.cycle_model()
 
@@ -407,10 +439,18 @@ def test_agent_session_cycle_includes_active_model_when_registry_does_not(tmp_pa
     assert session.model is alternate
 
 def test_agent_session_extension_model_registry_includes_active_model_without_registered_model(tmp_path: Path) -> None:
-    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "unused")))
+    from travis.coding_agent import AuthStorage, ModelRegistry
+
     runner = ExtensionRunner()
     active = Model(id="env-model", name="Env", api="faux", provider="openrouter", base_url="http://localhost", reasoning=True)
-    session = AgentSession(cwd=str(tmp_path), model=active, extension_runner=runner)
+    model_registry = ModelRegistry.in_memory(AuthStorage.in_memory())
+    model_registry.runtime.clear_providers()
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=active,
+        extension_runner=runner,
+        model_registry=model_registry,
+    )
 
     registry = runner.create_context().model_registry
 
@@ -418,7 +458,7 @@ def test_agent_session_extension_model_registry_includes_active_model_without_re
     assert registry.find("openrouter", "env-model") is active
     assert registry.get_all() == [active]
     assert registry.get_available() == [active]
-    assert registry.has_configured_auth(active) is False
+    assert registry.has_configured_auth(active) is True
     assert session.extension_runner is runner
 
 def test_agent_session_thinking_level_helpers_follow_model_capabilities(tmp_path: Path) -> None:
@@ -754,6 +794,83 @@ def test_session_store_build_context_recreates_compaction_summary_message(tmp_pa
     assert [message.role for message in snapshot.messages] == ["compactionSummary", "user"]
     assert snapshot.messages[0].summary == "Older work summary"
     assert snapshot.messages[0].tokens_before == 23456
+
+
+def test_session_store_persists_summary_model_provenance_outside_llm_context(tmp_path: Path) -> None:
+    store = SessionStore(str(tmp_path / "session.jsonl"), cwd=str(tmp_path))
+    first_id = store.append_message(UserMessage(content="kept", timestamp=now_ms()))
+    store.append_compaction(
+        "Older work summary",
+        first_id,
+        23456,
+        details={
+            "summaryModel": {
+                "requested": "openrouter/openai/gpt-5.6-luna-pro",
+                "used": "openrouter/xiaomi/mimo-v2.5",
+                "fallback": True,
+                "error": "temporary route failure",
+            }
+        },
+    )
+
+    entry = next(item for item in store.get_branch() if item["type"] == "compaction")
+    snapshot = store.build_context()
+
+    assert entry["details"]["summaryModel"] == {
+        "requested": "openrouter/openai/gpt-5.6-luna-pro",
+        "used": "openrouter/xiaomi/mimo-v2.5",
+        "fallback": True,
+        "error": "temporary route failure",
+    }
+    llm_text = _user_text(default_convert_to_llm(snapshot.messages)[0])
+    assert "gpt-5.6-luna-pro" not in llm_text
+    assert "temporary route failure" not in llm_text
+
+
+def test_compaction_adapter_persists_dedicated_summary_model_provenance(tmp_path: Path) -> None:
+    from travis.coding_agent.compaction_adapter import SessionCompactionAdapter
+    from travis.compaction import CompressionResult
+
+    store = SessionStore(str(tmp_path / "session.jsonl"), cwd=str(tmp_path))
+    source = [
+        UserMessage(content="older work", timestamp=now_ms()),
+        UserMessage(content="kept request", timestamp=now_ms()),
+    ]
+    for message in source:
+        store.append_message(message)
+    state = SimpleNamespace(messages=list(source), thinking_level="off")
+    adapter = SessionCompactionAdapter(
+        session_store=store,
+        state=state,
+        process_context=None,
+        emit=lambda _event: None,
+        set_session_name=lambda _name: None,
+    )
+    result = CompressionResult(
+        messages=[source[-1]],
+        compressed=True,
+        savings_pct=50.0,
+        summary="checkpoint",
+        tokens_before=100,
+        first_kept_message_index=1,
+        summary_model_requested="openrouter/openai/gpt-5.6-luna-pro",
+        summary_model_used="openrouter/openai/gpt-5.6-luna-pro",
+        summary_model_dedicated=True,
+    )
+
+    adapter.apply_result(
+        result.messages,
+        result,
+        source_messages=source,
+        source_indices=[0, 1],
+    )
+
+    entry = next(item for item in store.get_branch() if item["type"] == "compaction")
+    assert entry["details"]["summaryModel"] == {
+        "requested": "openrouter/openai/gpt-5.6-luna-pro",
+        "used": "openrouter/openai/gpt-5.6-luna-pro",
+        "fallback": False,
+    }
 
 def test_session_store_build_context_preserves_compaction_file_details_for_llm(tmp_path: Path) -> None:
     store = SessionStore(str(tmp_path / "session.jsonl"), cwd=str(tmp_path))

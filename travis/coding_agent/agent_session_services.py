@@ -10,7 +10,6 @@ from urllib.parse import urlparse
 
 from travis.agent.types import AgentMessage
 from travis.ai.model_resolver import find_initial_model
-from travis.ai.stream import clone_default_api_provider_registry
 from travis.ai.types import Context, ImageContent, Message, Model, SimpleStreamOptions, TextContent
 from travis.coding_agent.agent_session import AgentSession, default_convert_to_llm
 from travis.coding_agent.auth_storage import AuthStorage
@@ -18,7 +17,6 @@ from travis.coding_agent.extensions import ExtensionRunner
 from travis.coding_agent.model_registry import ModelRegistry
 from travis.coding_agent.object_utils import call_optional as _call_or_none
 from travis.coding_agent.object_utils import first_defined as _first_defined
-from travis.coding_agent.provider_control_plane import ProviderControlPlane
 from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.session_catalog import SessionCatalog
 from travis.coding_agent.session_store import SessionContextSnapshot, SessionStore
@@ -65,29 +63,17 @@ def create_agent_session_services(options: dict[str, Any]) -> dict[str, Any]:
             **resource_loader_options,
         )
         resource_loader.reload(options.get("resourceLoaderReloadOptions") or options.get("resource_loader_reload_options"))
-    provider_control_plane = options.get("providerControlPlane") or options.get("provider_control_plane")
-    if provider_control_plane is not None and not isinstance(provider_control_plane, ProviderControlPlane):
-        raise TypeError("providerControlPlane must be a ProviderControlPlane")
-    if provider_control_plane is None:
-        auth_storage = options.get("authStorage") or options.get("auth_storage") or AuthStorage.create(
-            str(Path(agent_dir) / "auth.json")
-        )
-        api_providers = clone_default_api_provider_registry()
-        model_registry = options.get("modelRegistry") or options.get("model_registry") or ModelRegistry(
-            auth_storage,
-            str(Path(agent_dir) / "models.json"),
-            api_providers,
-        )
-        if model_registry.auth_storage is not auth_storage:
-            raise ValueError("modelRegistry and authStorage must share the same AuthStorage")
-        provider_control_plane = ProviderControlPlane(
-            auth=auth_storage,
-            models=model_registry,
-            api_providers=model_registry.api_providers,
-        )
-    else:
-        auth_storage = provider_control_plane.auth
-        model_registry = provider_control_plane.models
+    auth_storage = options.get("authStorage") or options.get("auth_storage") or AuthStorage.create(
+        str(Path(agent_dir) / "auth.json")
+    )
+    model_registry = options.get("modelRegistry") or options.get("model_registry") or ModelRegistry.create(
+        auth_storage,
+        str(Path(agent_dir) / "models.json"),
+    )
+    if not isinstance(model_registry, ModelRegistry):
+        raise TypeError("modelRegistry must be a ModelRegistry")
+    if model_registry.auth_storage is not auth_storage:
+        raise ValueError("modelRegistry and authStorage must share the same AuthStorage")
     session_id = options.get("sessionId", options.get("session_id"))
     session_path = options.get("sessionPath", options.get("session_path"))
     if session_path is None:
@@ -112,7 +98,6 @@ def create_agent_session_services(options: dict[str, Any]) -> dict[str, Any]:
         "resourceLoader": resource_loader,
         "authStorage": auth_storage,
         "modelRegistry": model_registry,
-        "providerControlPlane": provider_control_plane,
         "sessionCatalog": session_catalog,
         "sessionPath": session_path,
         "sessionId": session_id,
@@ -222,9 +207,8 @@ def create_agent_session_from_services(options: dict[str, Any]) -> CreateAgentSe
         stream_fn=_stream_fn_for_sdk(
             services["modelRegistry"],
             services["settingsManager"],
-            services["providerControlPlane"],
         ),
-        provider_control_plane=services["providerControlPlane"],
+        model_registry=services["modelRegistry"],
         session_index=services["sessionCatalog"].index,
         session_path=session_path,
         parent_session_path=options.get("parentSession", options.get("parent_session_path")),
@@ -304,22 +288,10 @@ def _record_initial_session_state(session: AgentSession, model: Model, thinking_
 
 
 def _stream_fn_for_sdk(
-    model_registry: object,
+    model_registry: ModelRegistry,
     settings_manager: object,
-    provider_control_plane: ProviderControlPlane,
 ):
     def _stream(model: Model, context: Context, options: SimpleStreamOptions | None = None):
-        auth_method = getattr(model_registry, "getApiKeyAndHeaders", None) or getattr(
-            model_registry,
-            "get_api_key_and_headers",
-            None,
-        )
-        if not callable(auth_method):
-            raise RuntimeError("Model registry does not support request auth resolution.")
-        auth = auth_method(model)
-        if not isinstance(auth, dict) or auth.get("ok") is False:
-            raise RuntimeError(str(auth.get("error") if isinstance(auth, dict) else "Failed to resolve request auth"))
-
         provider_retry_settings = _call_or_none(
             settings_manager,
             "getProviderRetrySettings",
@@ -362,19 +334,17 @@ def _stream_fn_for_sdk(
             model,
             settings_manager,
             getattr(options, "session_id", None),
-            auth.get("headers"),
             getattr(options, "headers", None),
         )
         next_options = replace(
             options or SimpleStreamOptions(),
-            api_key=auth.get("apiKey"),
             timeout_ms=timeout_ms,
             websocket_connect_timeout_ms=websocket_connect_timeout_ms,
             max_retries=max_retries,
             max_retry_delay_ms=max_retry_delay_ms,
             headers=headers,
         )
-        return provider_control_plane.api_providers.require(model.api).stream_simple(model, context, next_options)
+        return model_registry.stream_simple(model, context, next_options)
 
     return _stream
 

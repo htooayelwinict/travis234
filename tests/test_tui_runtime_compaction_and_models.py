@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from tests._support_tui import *  # noqa: F403
+from travis.ai.providers._shared import blank_assistant_message
+from travis.compaction import SUMMARY_PREFIX
+from travis.compaction.compressor import estimate_tokens
 
 
 def test_interactive_mode_serializes_bang_bash_after_streaming_turn(tmp_path) -> None:
@@ -118,7 +121,10 @@ def test_interactive_mode_labels_post_response_compaction_after_reply(tmp_path) 
     assert compression_started.wait(timeout=2)
     assert _wait_until(lambda: "reply before compaction" in strip_ansi(terminal.output))
     assert _wait_until(lambda: mode.status._message == "Compressing")
-    assert "status: Running" not in strip_ansi(terminal.output).split("reply before compaction")[-1]
+    rendered = strip_ansi("\n".join(app.tui.render(120)))
+    assert "reply before compaction" in rendered
+    assert "status: Compressing" in rendered
+    assert "status: Running" not in rendered
 
     release_compression.set()
     allow_exit_input.set()
@@ -126,18 +132,165 @@ def test_interactive_mode_labels_post_response_compaction_after_reply(tmp_path) 
     assert not thread.is_alive()
 
 def test_interactive_mode_auto_compaction_notice_uses_actual_compaction_boundary_tokens(tmp_path) -> None:
-    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=FakeTerminal(columns=120), enable_tui=True)
+    from travis.compaction.compressor import CompressionResult
+
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=FakeTerminal(columns=180), enable_tui=True)
     mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
     app.compaction.compressor.compression_count = 1
     app.compaction.last_compression_before_tokens = 50_000
     app.compaction.last_compression_after_tokens = 12_000
+    app.compaction._last_compression_result = CompressionResult(
+        messages=[],
+        compressed=True,
+        savings_pct=76.0,
+        summary_model_requested="openrouter/openai/gpt-5.6-luna-pro",
+        summary_model_used="faux/faux-model",
+        summary_model_fallback=True,
+        summary_model_error="temporary route failure",
+    )
 
     mode.init()
     mode._render_auto_compaction_notice(before_compressions=0, before_tokens=8)
 
-    rendered = strip_ansi("\n".join(app.tui.render(120)))
+    rendered = strip_ansi("\n".join(app.tui.render(180)))
     assert "Context compacted: ~50,000 -> ~12,000 tokens" in rendered
     assert "Context compacted: ~8 ->" not in rendered
+    assert "Compression model 'openrouter/openai/gpt-5.6-luna-pro' failed" in rendered
+    assert "recovered with 'faux/faux-model'" in rendered
+
+
+def test_interactive_mode_surfaces_auto_compaction_abort_without_repeating(tmp_path) -> None:
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=FakeTerminal(columns=180), enable_tui=True)
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+    app.compaction.compressor._last_compress_aborted = True
+    app.compaction.compressor._last_summary_model_requested = "openrouter/openai/gpt-5.6-luna-pro"
+    app.compaction.compressor._last_summary_error = "provider timed out"
+
+    mode.init()
+    mode._render_auto_compaction_notice(before_compressions=0, before_tokens=50_000)
+    mode._render_auto_compaction_notice(before_compressions=0, before_tokens=50_000)
+
+    rendered = strip_ansi("\n".join(app.tui.render(180)))
+    assert rendered.count("Context compaction aborted") == 1
+    assert "conversation preserved unchanged" in rendered
+
+
+def test_interactive_mode_auto_compacts_21_plus_turns_and_resumes_after_reload(tmp_path) -> None:
+    anchor = "ANCHOR-TUI-CONTINUITY-7429"
+    main_model = Model(
+        id="main-model",
+        name="Main",
+        api="stress-main",
+        provider="main-provider",
+        base_url="",
+        context_window=4_000,
+        max_tokens=0,
+    )
+    summary_model = Model(
+        id="summary-model",
+        name="Summary",
+        api="stress-summary",
+        provider="summary-provider",
+        base_url="",
+        context_window=4_000,
+        max_tokens=2_000,
+    )
+    main_contexts: list[dict[str, object]] = []
+    summary_prompts: list[str] = []
+
+    def message_text(message) -> str:
+        content = getattr(message, "content", "")
+        if isinstance(content, str):
+            return content
+        return "\n".join(getattr(block, "text", "") for block in content)
+
+    def main_script(model, context):
+        transcript = "\n".join(message_text(message) for message in context.messages)
+        prompt_tokens = estimate_tokens(context.messages)
+        main_contexts.append(
+            {
+                "has_summary": SUMMARY_PREFIX in transcript,
+                "has_anchor": anchor in transcript,
+                "prompt_tokens": prompt_tokens,
+            }
+        )
+        text = f"continuity={anchor if anchor in transcript else 'MISSING'}\n" + ("work-product " * 48)
+        partial = blank_assistant_message(model)
+        partial.content = [TextContent(text=text)]
+        final = blank_assistant_message(model)
+        final.content = [TextContent(text=text)]
+        final.usage.input = prompt_tokens
+        final.usage.output = max(1, len(text) // 4)
+        final.usage.total_tokens = final.usage.input + final.usage.output
+        return [
+            StartEvent(partial=partial),
+            TextStartEvent(content_index=0, partial=partial),
+            TextDeltaEvent(content_index=0, delta=text, partial=partial),
+            TextEndEvent(content_index=0, content=text, partial=partial),
+            DoneEvent(reason="stop", message=final),
+        ]
+
+    def summary_script(model, context):
+        prompt = "\n".join(message_text(message) for message in context.messages)
+        summary_prompts.append(prompt)
+        return text_response_events(
+            model,
+            f"## Goal\nContinue the stress run.\n## Critical Context\nContinuity token: {anchor}.",
+        )
+
+    register_api_provider(create_faux_provider(main_script, api="stress-main"))
+    register_api_provider(create_faux_provider(summary_script, api="stress-summary"))
+    session_path = tmp_path / "stress-session.jsonl"
+    terminal = FakeTerminal(columns=140, rows=50)
+    app = CodingApp(
+        cwd=str(tmp_path),
+        session_path=str(session_path),
+        model=main_model,
+        compression_model=summary_model,
+        terminal=terminal,
+        enable_tui=True,
+    )
+    prompts = [
+        f"Task {index:02d}/24: continue independently and preserve {anchor}."
+        for index in range(1, 25)
+    ] + ["/exit"]
+    prompt_index = [0]
+    holder: dict[str, object] = {}
+
+    def input_fn(_prompt: str) -> str:
+        index = prompt_index[0]
+        if index:
+            mode = holder["mode"]
+            assert _wait_until(lambda: not mode._is_turn_active() and mode.status._message == "Idle", timeout=5)
+        value = prompts[index]
+        prompt_index[0] += 1
+        return value
+
+    mode = InteractiveMode(app, input_fn=input_fn)
+    holder["mode"] = mode
+
+    assert mode.run() == 0
+    assert len(main_contexts) == 24
+    assert summary_prompts
+    assert all(anchor in prompt for prompt in summary_prompts)
+    assert app.compressor.compression_count == len(summary_prompts)
+    assert "Context compacted:" in terminal.output
+    assert any(context["has_summary"] and context["has_anchor"] for context in main_contexts)
+    app.close()
+
+    reloaded = CodingApp(
+        cwd=str(tmp_path),
+        session_path=str(session_path),
+        model=main_model,
+        compression_model=summary_model,
+        terminal=FakeTerminal(),
+        enable_tui=False,
+    )
+    reloaded.run_turn(f"Task 25: resume after reload and preserve {anchor}.")
+    reloaded.close()
+
+    assert main_contexts[-1]["has_summary"] is True
+    assert main_contexts[-1]["has_anchor"] is True
 
 def test_interactive_mode_footer_marks_context_rough_while_awaiting_real_usage(tmp_path) -> None:
     app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=FakeTerminal(columns=120), enable_tui=True)
@@ -344,8 +497,6 @@ def test_slow_user_bash_extension_resolution_does_not_block_input(tmp_path) -> N
 
         assert time.monotonic() - started < 0.25
         assert entered.wait(timeout=1)
-        mode._run_allow_command("package-install", 1)
-        assert app.session._turn_capabilities.remaining("package_mutation") == 1
     finally:
         release.set()
         mode._user_commands.close()
@@ -684,7 +835,7 @@ def test_interactive_mode_login_logout_oauth_are_local_tui_commands(tmp_path) ->
             ],
         },
     )
-    inputs = iter(["/login", "1", "1", "/logout", "1", "/exit"])
+    inputs = iter(["/login", "1", "Corporate SSO", "/logout", "Corporate SSO", "/exit"])
     mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
 
     mode.run()
@@ -696,8 +847,8 @@ def test_interactive_mode_login_logout_oauth_are_local_tui_commands(tmp_path) ->
     assert "onPrompt" in calls[0][1]
     assert "Logged in to Corporate SSO" in rendered
     assert "Logged out of Corporate SSO" in rendered
-    assert get_provider_auth_status("sso") == {"configured": False}
-    assert get_api_key_for_provider("sso") is None
+    assert app.session.model_registry.get_provider_auth_status("sso") == {"configured": False}
+    assert app.session.model_registry.get_api_key_for_provider("sso") is None
     assert "model should not run" not in rendered
 
 def test_interactive_mode_login_api_key_is_local_tui_command(tmp_path, monkeypatch) -> None:
@@ -731,7 +882,7 @@ def test_interactive_mode_login_api_key_is_local_tui_command(tmp_path, monkeypat
             ],
         },
     )
-    inputs = iter(["/login", "2", "1", "typed-secret", "/logout", "1", "/exit"])
+    inputs = iter(["/login", "2", "Proxy AI", "typed-secret", "/logout", "Proxy AI", "/exit"])
     mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
 
     mode.run()
@@ -741,8 +892,8 @@ def test_interactive_mode_login_api_key_is_local_tui_command(tmp_path, monkeypat
     assert "Saved API key for Proxy AI" in rendered
     assert "Removed stored API key for Proxy AI" in rendered
     assert "typed-secret" not in rendered
-    assert get_provider_auth_status("proxy") == {"configured": False}
-    assert get_api_key_for_provider("proxy") is None
+    assert app.session.model_registry.get_provider_auth_status("proxy") == {"configured": False}
+    assert app.session.model_registry.get_api_key_for_provider("proxy") is None
     assert "model should not run" not in rendered
 
 def test_interactive_mode_login_api_key_offers_active_provider_without_registered_model(monkeypatch, tmp_path) -> None:
@@ -760,7 +911,7 @@ def test_interactive_mode_login_api_key_offers_active_provider_without_registere
         max_tokens=8192,
     )
     app = CodingApp(cwd=str(tmp_path), model=model, terminal=terminal, enable_tui=True)
-    inputs = iter(["/login", "2", "1", "typed-secret", "/exit"])
+    inputs = iter(["/login", "2", "OpenRouter", "typed-secret", "/exit"])
     mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
 
     mode.run()
@@ -831,9 +982,10 @@ def test_interactive_mode_model_command_switches_openrouter_without_model_turn(t
     assert "Switched model to openrouter/moonshotai/kimi-k2.6" in rendered
 
 def test_interactive_mode_model_command_selects_registered_alternate_without_model_turn(tmp_path, monkeypatch) -> None:
+    from tests._provider_runtime import current_registry
+
     register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    monkeypatch.setattr(interactive_model_auth, "get_live_openrouter_models", lambda **kwargs: [])
     terminal = FakeTerminal(columns=140)
     active = Model(
         id="qwen/qwen3.6-flash",
@@ -853,9 +1005,16 @@ def test_interactive_mode_model_command_selects_registered_alternate_without_mod
         context_window=128000,
         max_tokens=8192,
     )
-    register_model(alternate)
-    app = CodingApp(cwd=str(tmp_path), model=active, terminal=terminal, enable_tui=True)
-    inputs = iter(["/model", "1", "/exit"])
+    registry = current_registry()
+    registry.replace_all([alternate])
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=active,
+        terminal=terminal,
+        enable_tui=True,
+        model_registry=registry,
+    )
+    inputs = iter(["/model", "openrouter/moonshotai/kimi-k2.6", "/exit"])
     mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
 
     mode.run()
@@ -864,325 +1023,6 @@ def test_interactive_mode_model_command_selects_registered_alternate_without_mod
     assert app.session.model is alternate
     assert "Select model:" in rendered
     assert "Switched model to openrouter/moonshotai/kimi-k2.6" in rendered
-    assert "model should not run" not in rendered
-
-def test_interactive_mode_model_command_fetches_openrouter_catalog_for_picker(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
-    terminal = FakeTerminal(columns=140)
-    active = Model(
-        id="qwen/qwen3.6-flash",
-        name="qwen/qwen3.6-flash",
-        api="faux",
-        provider="openrouter",
-        base_url="https://openrouter.ai/api/v1",
-        context_window=128000,
-        max_tokens=8192,
-    )
-    fetched = {"count": 0}
-
-    def fake_live_models(*, base_model, force_refresh=False):
-        fetched["count"] += 1
-        items = [
-            {
-                "id": "moonshotai/kimi-k2.6",
-                "name": "Kimi K2.6",
-                "context_length": 262144,
-                "top_provider": {"max_completion_tokens": 16384},
-                "architecture": {"input_modalities": ["text"]},
-                "supported_parameters": ["reasoning"],
-            },
-            {
-                "id": "qwen/qwen3.6-flash",
-                "name": "Qwen Flash",
-                "context_length": 128000,
-                "top_provider": {"max_completion_tokens": 8192},
-                "architecture": {"input_modalities": ["text", "image"]},
-            },
-        ]
-        return [model for item in items if (model := openrouter_live_catalog_item_to_model(item, base_model)) is not None]
-
-    monkeypatch.setattr(interactive_model_auth, "get_live_openrouter_models", fake_live_models)
-    app = CodingApp(cwd=str(tmp_path), model=active, terminal=terminal, enable_tui=True)
-    inputs = iter(["/model", "1", "/exit"])
-    mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
-
-    mode.run()
-
-    rendered = strip_ansi("\n".join(app.tui.render(140)))
-    assert fetched["count"] == 1
-    assert app.session.model.provider == "openrouter"
-    assert app.session.model.id == "moonshotai/kimi-k2.6"
-    assert app.session.model.context_window == 262144
-    assert app.session.model.max_tokens == 16384
-    assert app.session.model.reasoning is True
-    assert "Select model:" in rendered
-    assert "openrouter/moonshotai/kimi-k2.6" in rendered
-    assert "model should not run" not in rendered
-
-def test_interactive_mode_model_command_caps_openrouter_full_context_output_limit(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
-    terminal = FakeTerminal(columns=140)
-    active = Model(
-        id="qwen/qwen3.6-flash",
-        name="qwen/qwen3.6-flash",
-        api="faux",
-        provider="openrouter",
-        base_url="https://openrouter.ai/api/v1",
-        context_window=128000,
-        max_tokens=8192,
-    )
-
-    def fake_live_models(*, base_model, force_refresh=False):
-        items = [
-            {
-                "id": "qwen/qwen3.6-35b-a3b",
-                "name": "Qwen 3.6 35B",
-                "context_length": 262144,
-                "top_provider": {"max_completion_tokens": 262144},
-                "supported_parameters": ["max_tokens", "tools"],
-            }
-        ]
-        return [model for item in items if (model := openrouter_live_catalog_item_to_model(item, base_model)) is not None]
-
-    monkeypatch.setattr(interactive_model_auth, "get_live_openrouter_models", fake_live_models)
-    app = CodingApp(cwd=str(tmp_path), model=active, terminal=terminal, enable_tui=True)
-    inputs = iter(["/model", "1", "/exit"])
-    mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
-
-    mode.run()
-
-    assert app.session.model.id == "qwen/qwen3.6-35b-a3b"
-    assert app.session.model.context_window == 262144
-    assert app.session.model.max_tokens == 16384
-    assert app.session.model.max_tokens < app.session.model.context_window
-
-def test_interactive_mode_openrouter_catalog_uses_shared_model_metadata_converter(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
-    terminal = FakeTerminal(columns=140)
-    active = Model(
-        id="openai/gpt-5.4-mini",
-        name="OpenAI: GPT-5.4 Mini",
-        api="faux",
-        provider="openrouter",
-        base_url="https://openrouter.ai/api/v1",
-        context_window=128000,
-        max_tokens=8192,
-    )
-
-    def fake_live_models(*, base_model, force_refresh=False):
-        items = [
-            {
-                "id": "openai/gpt-5.4-mini",
-                "name": "OpenAI: GPT-5.4 Mini",
-                "context_length": 400000,
-                "top_provider": {"max_completion_tokens": 128000},
-                "supported_parameters": ["tools", "tool_choice", "reasoning"],
-            }
-        ]
-        return [model for item in items if (model := openrouter_live_catalog_item_to_model(item, base_model)) is not None]
-
-    monkeypatch.setattr(interactive_model_auth, "get_live_openrouter_models", fake_live_models)
-    app = CodingApp(cwd=str(tmp_path), model=active, terminal=terminal, enable_tui=True)
-    inputs = iter(["/model", "1", "/exit"])
-    mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
-
-    mode.run()
-
-    assert app.session.model.id == "openai/gpt-5.4-mini"
-    assert app.session.model.context_window == 400000
-    assert app.session.model.max_tokens == 128000
-    assert app.session.model.reasoning is True
-
-def test_interactive_mode_model_command_uses_shared_openrouter_live_cache(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
-    terminal = FakeTerminal(columns=140)
-    active = Model(
-        id="openai/gpt-5.4-mini",
-        name="OpenAI: GPT-5.4 Mini",
-        api="faux",
-        provider="openrouter",
-        base_url="https://openrouter.ai/api/v1",
-        context_window=128000,
-        max_tokens=8192,
-    )
-    cached_model = Model(
-        id="openai/gpt-5.4-mini",
-        name="OpenAI: GPT-5.4 Mini",
-        api="faux",
-        provider="openrouter",
-        base_url="https://openrouter.ai/api/v1",
-        context_window=400000,
-        max_tokens=128000,
-        reasoning=True,
-    )
-    calls = {"count": 0}
-
-    def fake_live_models(*, base_model, force_refresh=False):
-        calls["count"] += 1
-        assert base_model is active
-        assert force_refresh is False
-        return [cached_model]
-
-    monkeypatch.setattr(interactive_model_auth, "get_live_openrouter_models", fake_live_models)
-    app = CodingApp(cwd=str(tmp_path), model=active, terminal=terminal, enable_tui=True)
-    inputs = iter(["/model", "1", "/exit"])
-    mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
-
-    mode.run()
-
-    assert calls["count"] == 1
-    assert app.session.model is cached_model
-
-def test_interactive_mode_model_command_filters_openrouter_catalog_without_huge_picker(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
-    terminal = FakeTerminal(columns=160)
-    active = Model(
-        id="qwen/qwen3.6-flash",
-        name="qwen/qwen3.6-flash",
-        api="faux",
-        provider="openrouter",
-        base_url="https://openrouter.ai/api/v1",
-        context_window=128000,
-        max_tokens=8192,
-    )
-
-    def fake_live_models(*, base_model, force_refresh=False):
-        items = [
-            {"id": f"acme/noise-{index}", "name": f"Noise {index}", "context_length": 4096}
-            for index in range(80)
-        ] + [
-            {"id": "moonshotai/kimi-k2.6", "name": "Kimi K2.6", "context_length": 262144},
-            {"id": "moonshotai/kimi-dev-72b", "name": "Kimi Dev", "context_length": 131072},
-        ]
-        return [model for item in items if (model := openrouter_live_catalog_item_to_model(item, base_model)) is not None]
-
-    monkeypatch.setattr(interactive_model_auth, "get_live_openrouter_models", fake_live_models)
-    app = CodingApp(cwd=str(tmp_path), model=active, terminal=terminal, enable_tui=True)
-    inputs = iter(["/model kimi", "2", "/exit"])
-    mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
-
-    mode.run()
-
-    rendered = strip_ansi("\n".join(app.tui.render(160)))
-    assert app.session.model.id == "moonshotai/kimi-dev-72b"
-    assert "openrouter/moonshotai/kimi-k2.6" in rendered
-    assert "openrouter/moonshotai/kimi-dev-72b" in rendered
-    assert "acme/noise-0" not in rendered
-    assert "model should not run" not in rendered
-
-def test_interactive_mode_model_list_does_not_block_on_remote_catalog(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "unused")))
-    release = threading.Event()
-    active = Model(
-        id="qwen/qwen3.6-flash",
-        name="Qwen Flash",
-        api="faux",
-        provider="openrouter",
-        base_url="https://openrouter.ai/api/v1",
-    )
-    remote = Model(
-        id="moonshotai/kimi-k2.6",
-        name="Kimi K2.6",
-        api=active.api,
-        provider=active.provider,
-        base_url=active.base_url,
-    )
-
-    def blocking_catalog(*, base_model, force_refresh=False):
-        release.wait(timeout=2)
-        return [remote]
-
-    monkeypatch.setattr(interactive_model_auth, "get_live_openrouter_models", blocking_catalog)
-    app = CodingApp(cwd=str(tmp_path), model=active, terminal=FakeTerminal(columns=140), enable_tui=True)
-    mode = InteractiveMode(app)
-    mode.init()
-    try:
-        started = time.monotonic()
-        mode._run_model_command("list", None)
-
-        assert time.monotonic() - started < 0.05
-        assert "Loading model catalog" in strip_ansi("\n".join(app.tui.render(140)))
-
-        release.set()
-
-        def loaded() -> bool:
-            app.tui.drain_dispatcher()
-            return "moonshotai/kimi-k2.6" in strip_ansi("\n".join(app.tui.render(140)))
-
-        assert _wait_until(loaded)
-    finally:
-        release.set()
-        if mode._model_loader is not None:
-            mode._model_loader.close()
-        mode.footer_data_provider.dispose()
-        app.tui.stop()
-
-def test_interactive_mode_model_command_warns_and_falls_back_when_openrouter_fetch_fails(tmp_path, monkeypatch) -> None:
-    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
-    terminal = FakeTerminal(columns=140)
-    active = Model(
-        id="qwen/qwen3.6-flash",
-        name="qwen/qwen3.6-flash",
-        api="faux",
-        provider="openrouter",
-        base_url="https://openrouter.ai/api/v1",
-        context_window=128000,
-        max_tokens=8192,
-    )
-
-    def fail_fetch(*, base_model, force_refresh=False):
-        raise RuntimeError("network down")
-
-    monkeypatch.setattr(interactive_model_auth, "get_live_openrouter_models", fail_fetch)
-    app = CodingApp(cwd=str(tmp_path), model=active, terminal=terminal, enable_tui=True)
-    inputs = iter(["/model", "1", "/exit"])
-    mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
-
-    mode.run()
-
-    rendered = strip_ansi("\n".join(app.tui.render(140)))
-    assert app.session.model is active
-    assert "Could not fetch OpenRouter models; showing local models only." in rendered
-    assert "openrouter/qwen/qwen3.6-flash (current)" in rendered
-    assert "model should not run" not in rendered
-
-def test_interactive_mode_model_command_warns_when_openrouter_catalog_fails_open(
-    tmp_path, monkeypatch
-) -> None:
-    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "model should not run")))
-    model_catalog.reset_cache()
-    monkeypatch.setenv("TRAVIS234_HOME", str(tmp_path / "app-home"))
-    terminal = FakeTerminal(columns=140)
-    active = Model(
-        id="qwen/qwen3.6-flash",
-        name="qwen/qwen3.6-flash",
-        api="faux",
-        provider="openrouter",
-        base_url="https://openrouter.ai/api/v1",
-        context_window=128000,
-        max_tokens=8192,
-    )
-
-    def fail_urlopen(request, timeout):
-        raise urllib.error.URLError("offline")
-
-    monkeypatch.setattr(model_catalog.urllib.request, "urlopen", fail_urlopen)
-    app = CodingApp(cwd=str(tmp_path), model=active, terminal=terminal, enable_tui=True)
-    inputs = iter(["/model", "1", "/exit"])
-    mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
-
-    mode.run()
-
-    rendered = strip_ansi("\n".join(app.tui.render(140)))
-    assert app.session.model is active
-    assert "Could not fetch OpenRouter models; showing local models only." in rendered
-    assert "openrouter/qwen/qwen3.6-flash (current)" in rendered
     assert "model should not run" not in rendered
 
 def test_interactive_mode_extension_select_uses_tui_input_when_interactive(tmp_path) -> None:

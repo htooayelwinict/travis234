@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import shlex
 import shutil
 import signal
 import subprocess
@@ -46,6 +48,7 @@ def run_continuous_scenarios(
     compact_after: set[int] | frozenset[int] = DEFAULT_COMPACT_AFTER,
     console_script: str | Path | None = None,
     verifier_python: str | Path | None = None,
+    verify_console_source: bool = False,
     driver_factory: Callable[..., object] = TuiDriver.start,
 ) -> list[ScenarioResult]:
     scenario_list = list(scenarios)
@@ -67,7 +70,7 @@ def run_continuous_scenarios(
 
     trace_path = output / "trace.jsonl"
     conversation_path = output / "conversation.jsonl"
-    _seed_acceptance_agent_resources()
+    _seed_acceptance_agent_resources(workspace)
     selected_console = (
         Path(console_script).expanduser().resolve()
         if console_script is not None
@@ -75,6 +78,12 @@ def run_continuous_scenarios(
     )
     if console_script is not None and not selected_console.is_file():
         raise RuntimeError(f"console script does not exist: {selected_console}")
+    if verify_console_source:
+        _preflight_console_runtime(
+            selected_console if selected_console.is_file() else None,
+            Path(__file__).resolve().parents[1] / "travis",
+            workspace,
+        )
     command = [
         str(selected_console) if selected_console.is_file() else sys.executable,
         *([] if selected_console.is_file() else ["-m", "travis.cli"]),
@@ -132,13 +141,7 @@ def run_continuous_scenarios(
             context_percent: float | None = None
             context_estimated: bool | None = None
             context_confidence: str | None = None
-            provider_blocked = False
             prompt = _prompt_for(scenario)
-            if scenario.allow_package_install:
-                driver.send_line("/allow package-install")
-                granted = driver.wait_for_event("capability_granted", 60)
-                if granted.get("status") != "ok":
-                    raise RuntimeError("package-install capability grant failed")
             driver.send_line(prompt)
             try:
                 turn_end = driver.wait_for_event("turn_end", turn_timeout)
@@ -174,7 +177,6 @@ def run_continuous_scenarios(
                         failure_tail = response or f"turn ended with status {recorded_status}"
                         failure_evidence = failure_tail
                         fault_domain = _fault_domain_for_turn_failure(failure_tail)
-                        provider_blocked = fault_domain.startswith("provider_")
             except TimeoutError:
                 failure_tail = "TimeoutError: timed out waiting for turn_end"
                 failure_evidence = failure_tail
@@ -256,7 +258,7 @@ def run_continuous_scenarios(
             os.chmod(result_path, 0o600)
             results.append(result)
 
-            if provider_blocked:
+            if status != "passed":
                 break
             if index == 11:
                 _exercise_ctrl_c_escalation(driver)
@@ -268,12 +270,8 @@ def run_continuous_scenarios(
     return results
 
 
-def _seed_acceptance_agent_resources() -> None:
-    configured = os.environ.get("TRAVIS234_CODING_AGENT_DIR")
-    if not configured:
-        return
-    agent_dir = Path(configured).expanduser().resolve()
-    skills_dir = agent_dir / "skills"
+def _seed_acceptance_agent_resources(workspace: Path) -> None:
+    skills_dir = workspace / ".travis234" / "skills"
     skills_dir.mkdir(parents=True, exist_ok=True)
     source_skill = Path(__file__).resolve().parents[1] / "skills" / "subagent-delegation"
     if source_skill.is_dir():
@@ -370,6 +368,76 @@ def _preflight_verifiers(
             missing.add(f"{scenario_id}:python -m {module}")
     if missing:
         raise RuntimeError(f"verifier preflight failed: {', '.join(sorted(missing))}")
+
+
+def _package_source_digest(package_root: Path) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    files = sorted(path for path in package_root.rglob("*.py") if "__pycache__" not in path.parts)
+    for path in files:
+        relative = path.relative_to(package_root).as_posix().encode("utf-8")
+        digest.update(relative)
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest(), len(files)
+
+
+def _console_python_command(console_script: Path | None) -> list[str]:
+    if console_script is None:
+        return [sys.executable]
+    try:
+        with console_script.open("r", encoding="utf-8") as handle:
+            first_line = handle.readline().strip()
+    except UnicodeDecodeError as error:
+        raise RuntimeError(f"console script has no Python shebang: {console_script}") from error
+    if not first_line.startswith("#!"):
+        raise RuntimeError(f"console script has no Python shebang: {console_script}")
+    command = shlex.split(first_line[2:].strip())
+    if not command:
+        raise RuntimeError(f"console script has an empty shebang: {console_script}")
+    return command
+
+
+def _preflight_console_runtime(
+    console_script: Path | None,
+    source_package: Path,
+    cwd: Path,
+) -> dict[str, object]:
+    expected_digest, expected_count = _package_source_digest(source_package)
+    probe = (
+        "import hashlib,json,travis\n"
+        "from pathlib import Path\n"
+        "root=Path(travis.__file__).resolve().parent\n"
+        "files=sorted(p for p in root.rglob('*.py') if '__pycache__' not in p.parts)\n"
+        "digest=hashlib.sha256()\n"
+        "for path in files:\n"
+        " relative=path.relative_to(root).as_posix().encode('utf-8')\n"
+        " digest.update(relative); digest.update(b'\\0'); digest.update(path.read_bytes()); digest.update(b'\\0')\n"
+        "print(json.dumps({'package_root':str(root),'digest':digest.hexdigest(),'file_count':len(files)}))\n"
+    )
+    completed = subprocess.run(
+        [*_console_python_command(console_script), "-c", probe],
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip().splitlines()[-1] if completed.stderr.strip() else "unknown error"
+        raise RuntimeError(f"console runtime provenance probe failed: {detail}")
+    try:
+        provenance = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("console runtime provenance probe returned invalid JSON") from error
+    if not isinstance(provenance, dict):
+        raise RuntimeError("console runtime provenance probe returned invalid metadata")
+    if provenance.get("digest") != expected_digest or provenance.get("file_count") != expected_count:
+        raise RuntimeError(
+            "stale console runtime: the selected console does not import the current Travis234 "
+            f"sources (runtime={provenance.get('package_root')}, source={source_package})"
+        )
+    return provenance
 
 
 def _conversation_record(path: Path, turn_id: str | None) -> dict[str, object] | None:
@@ -482,6 +550,7 @@ def main(argv: list[str] | None = None) -> int:
             temperature=args.temperature,
             console_script=args.console_script,
             verifier_python=args.verifier_python,
+            verify_console_source=True,
         )
         write_reports(
             results,

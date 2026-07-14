@@ -7,6 +7,9 @@ from collections.abc import Iterable
 from travis.agent.types import AgentMessage
 from travis.ai.types import AssistantMessage, ImageContent, TextContent
 
+BRANCH_SUMMARY_PREFIX = "The following is a summary of a branch that this conversation came back from:\n\n<summary>\n"
+BRANCH_SUMMARY_SUFFIX = "</summary>"
+
 
 def last_assistant_message(messages: Iterable[AgentMessage]) -> AssistantMessage | None:
     for message in reversed(list(messages)):
@@ -34,3 +37,7 @@ def bash_execution_text(message: object) -> str:
     if getattr(message, "truncated", False) and getattr(message, "full_output_path", None):
         text += f"\n\n[Output truncated. Full output: {message.full_output_path}]"
     return text
+
+
+def branch_summary_text(message: object) -> str:
+    return f"{BRANCH_SUMMARY_PREFIX}{getattr(message, 'summary', '')}{BRANCH_SUMMARY_SUFFIX}"

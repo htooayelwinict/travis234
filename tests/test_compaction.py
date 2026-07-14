@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import time
 from typing import Literal
 
 from travis.ai.providers.travis_env import convert_messages
@@ -140,6 +141,53 @@ def test_prune_preserves_write_path_and_metadata_while_removing_large_content_ar
     assert "[travis redacted tool argument" not in repr(arguments)
     assert "[travis omitted historical write content:" not in repr(arguments)
     assert "_truncated" not in arguments
+
+
+def test_compaction_keeps_retained_tool_arguments_verbatim_for_provider_replay() -> None:
+    large_replacement = "ORIGINAL-COMPACTION-EDIT\n" + ("Z" * 2_000)
+    messages = [
+        _user("apply the edit"),
+        _assistant(
+            tool_calls=[
+                ToolCall(
+                    id="edit-large",
+                    name="edit",
+                    arguments={
+                        "path": "src/example.py",
+                        "oldText": "before",
+                        "newText": large_replacement,
+                    },
+                )
+            ]
+        ),
+        _tool_result("Edit applied", name="edit", tool_call_id="edit-large"),
+    ]
+    for index in range(30):
+        messages.extend(
+            [
+                _user(f"later context {index} " + ("q" * 300)),
+                _assistant(f"later response {index} " + ("r" * 300)),
+            ]
+        )
+    compressor = ContextCompressor(
+        context_length=4_000,
+        protect_first_n=3,
+        protect_last_n=4,
+    )
+
+    result = compressor.compress(messages, summarizer=lambda _prompt: "## Goal\ncheckpoint")
+
+    assert result.compressed is True
+    replayed_call = next(
+        block
+        for message in result.messages
+        if getattr(message, "role", None) == "assistant"
+        for block in message.content
+        if isinstance(block, ToolCall) and block.id == "edit-large"
+    )
+    assert replayed_call.arguments["newText"] == large_replacement
+    assert isinstance(replayed_call.arguments["newText"], str)
+    assert "_travis_omitted_tool_argument" not in repr(result.messages)
 
 
 def test_compress_appends_travis234_file_operation_tags_to_summary() -> None:
@@ -315,9 +363,10 @@ def test_prune_summarizes_old_subagent_expansion_to_metadata_only() -> None:
 def test_should_compress_threshold_and_antithrash() -> None:
     compressor = ContextCompressor(context_length=1000, threshold_percent=0.5)
     assert compressor.should_compress(400) is False
-    assert compressor.should_compress(600) is True
+    assert compressor.should_compress(499) is False
+    assert compressor.should_compress(500) is True
     compressor._ineffective_compression_count = 2
-    assert compressor.should_compress(600) is False
+    assert compressor.should_compress(500) is False
 
 
 def test_context_compressor_defaults_match_travis_protection_and_ratio_bounds() -> None:
@@ -338,14 +387,41 @@ def test_summary_budget_matches_travis_minimum_and_context_ceiling() -> None:
 
     assert small_context.max_summary_tokens == 1600
     assert small_context._summary_budget(messages) == 2000
-    assert huge_context.max_summary_tokens == 12_000
-    assert huge_context._summary_budget(messages) == 12_000
+    assert huge_context.max_summary_tokens == 10_000
+    assert huge_context._summary_budget(messages) == 10_000
 
 
 def test_summary_prefix_matches_travis_latest_message_guardrail() -> None:
+    assert "REFERENCE ONLY" in SUMMARY_PREFIX
     assert "Respond ONLY to the latest user message" in SUMMARY_PREFIX
     assert "latest user message WINS" in SUMMARY_PREFIX
     assert "persistent memory" in SUMMARY_PREFIX
+
+
+def test_summary_prompt_scopes_constraints_and_requires_completion_evidence() -> None:
+    seen_prompts: list[str] = []
+    compressor = ContextCompressor()
+
+    compressor.generate_summary(
+        [
+            _user("Implement extension reload support"),
+            _assistant("Extension reload completed"),
+            _user("Verify managed process cancellation"),
+            _assistant("Cancellation verification completed"),
+        ],
+        summarizer=lambda prompt: seen_prompts.append(prompt) or "## Goal\ncheckpoint",
+    )
+
+    prompt = seen_prompts[0]
+    assert "Preserve distinct tasks" in prompt
+    assert "explicitly stated by the USER" in prompt
+    assert "Scope task-local instructions to their originating task or turn" in prompt
+    assert "Never infer a global preference from assistant behavior" in prompt
+    assert "explicit completion or verification evidence" in prompt
+    assert "no task is listed as both completed and in progress" in prompt
+    assert "## Historical In-Progress State" in prompt
+    assert "## Historical Remaining Work" in prompt
+    assert "## Next Steps" not in prompt
 
 
 def test_strip_summary_prefix_removes_historical_travis_prefix_variants() -> None:
@@ -367,6 +443,15 @@ def test_strip_summary_prefix_removes_historical_travis_prefix_variants() -> Non
     )
 
     assert stripped == "## Goal\nold"
+
+
+def test_strip_summary_prefix_removes_generic_travis_compatibility_variant() -> None:
+    generic = (
+        "The conversation history before this point was compacted into the following summary:\n\n"
+        "<summary>\n## Goal\nold\n\n</summary>"
+    )
+
+    assert ContextCompressor._strip_summary_prefix(generic) == "## Goal\nold"
 
 
 def test_tail_budget_counts_images_with_travis_fixed_estimate() -> None:
@@ -677,6 +762,8 @@ def test_summary_prompt_includes_redaction_and_temporal_anchoring_rules() -> Non
     assert "Sent the proposal email to John on 2026-06-07" in prompt
     assert "## Historical Task Snapshot" in prompt
     assert "## Historical Pending User Asks" in prompt
+    assert "## Historical Remaining Work" in prompt
+    assert "## Next Steps" not in prompt
     assert "## Critical Context" in prompt
     assert "TURNS TO SUMMARIZE:" in prompt
     assert prompt.count("TURNS TO SUMMARIZE:") == 1
@@ -822,6 +909,100 @@ def test_summary_redacts_secret_values_in_prompt_and_output() -> None:
     assert raw_secret not in summary
     assert "[REDACTED]" in seen_prompts[0]
     assert "[REDACTED]" in summary
+
+
+def test_secret_redaction_is_bounded_for_large_single_token_output() -> None:
+    from travis.compaction.compressor import _redact_sensitive_text
+
+    payload = ("x" * 60_000) + '\n{"apiKey":"ordinary-secret-value"}'
+    started = time.perf_counter()
+
+    redacted = _redact_sensitive_text(payload)
+
+    assert time.perf_counter() - started < 0.5
+    assert "ordinary-secret-value" not in redacted
+    assert '"apiKey":"[REDACTED]"' in redacted
+
+
+def test_large_deterministic_fallback_preserves_failure_provenance_tail() -> None:
+    fallback = ContextCompressor()._static_fallback_summary(
+        [
+            _user("inspect the large output"),
+            _tool_result("x" * 60_000),
+        ],
+        reason="summary model unavailable",
+    )
+
+    assert len(fallback) <= 8_000
+    assert "Summary generation was unavailable" in fallback
+    assert "summary model unavailable" in fallback
+
+
+def test_summary_excludes_inline_reasoning_from_prompt_and_persisted_output() -> None:
+    messages = [
+        _user("keep the verified result"),
+        _assistant("Visible result.\n<think>unverified scratch conclusion</think>\nStill visible."),
+    ]
+    seen_prompts: list[str] = []
+
+    def summarizer(prompt: str) -> str:
+        seen_prompts.append(prompt)
+        return "<reasoning>draft summary logic</reasoning>\n## Goal\nKeep the verified result."
+
+    summary = ContextCompressor().generate_summary(messages, summarizer=summarizer)
+
+    assert "unverified scratch conclusion" not in seen_prompts[0]
+    assert "Visible result." in seen_prompts[0]
+    assert "Still visible." in seen_prompts[0]
+    assert summary == "## Goal\nKeep the verified result."
+
+
+def test_empty_auxiliary_summary_falls_back_to_main_summarizer() -> None:
+    calls: list[str] = []
+
+    def auxiliary(_prompt: str) -> str:
+        calls.append("aux")
+        return "<think>reasoning without a summary body</think>"
+
+    def main(_prompt: str) -> str:
+        calls.append("main")
+        return "## Goal\nRecovered through the main model."
+
+    compressor = ContextCompressor(
+        model="main-model",
+        summary_model_override="aux-model",
+        summarizer=main,
+        summary_summarizer=auxiliary,
+    )
+
+    summary = compressor.generate_summary([_user("preserve this")], summarizer=main)
+
+    assert calls == ["aux", "main"]
+    assert summary == "## Goal\nRecovered through the main model."
+    assert compressor.summary_model == "aux-model"
+    assert compressor._last_aux_model_failure_model == "aux-model"
+    assert compressor._last_aux_model_failure_error == "Context compression LLM returned empty content"
+    assert compressor._last_summary_model_requested == "aux-model"
+    assert compressor._last_summary_model_used == "main-model"
+    assert compressor._last_summary_model_fallback_used is True
+
+
+def test_empty_main_summary_uses_deterministic_handoff_instead_of_blank_summary() -> None:
+    messages = [_user("first goal")]
+    for index in range(12):
+        messages.append(_assistant(f"assistant work {index} " * 20))
+        messages.append(_user(f"user followup {index} " * 20))
+    messages.append(_user("latest request"))
+    compressor = ContextCompressor(context_length=1400, protect_first_n=1, protect_last_n=2)
+
+    result = compressor.compress(messages, summarizer=lambda _prompt: "   ")
+
+    rendered = "\n".join(_content_text(message) for message in result.messages)
+    assert result.compressed is True
+    assert compressor._last_summary_fallback_used is True
+    assert compressor._last_summary_error == "Context compression LLM returned empty content"
+    assert "deterministic fallback" in rendered
+    assert SUMMARY_PREFIX in rendered
 
 
 def test_summary_failure_uses_deterministic_fallback_and_bookkeeping() -> None:
@@ -1051,14 +1232,97 @@ def test_summary_model_failure_falls_back_to_main_summarizer_and_records_aux_fai
 
     assert result.compressed is True
     assert calls == ["aux", "main"]
-    assert compressor.summary_model == ""
+    assert compressor.summary_model == "broken-aux-model"
     assert compressor._last_summary_fallback_used is False
     assert compressor._last_aux_model_failure_model == "broken-aux-model"
     assert compressor._last_aux_model_failure_error is not None
     assert "400" in compressor._last_aux_model_failure_error
+    assert result.summary_model_requested == "broken-aux-model"
+    assert result.summary_model_used == "main-model"
+    assert result.summary_model_fallback is True
+    assert result.summary_model_error == "400 provider rejected configured model"
     summary_text = "\n".join(_content_text(message) for message in result.messages)
     assert "summary via main model" in summary_text
     assert "deterministic fallback" not in summary_text
+
+
+def test_configured_summary_model_is_retried_after_recovered_failure() -> None:
+    auxiliary_calls = 0
+
+    def auxiliary(_prompt: str) -> str:
+        nonlocal auxiliary_calls
+        auxiliary_calls += 1
+        if auxiliary_calls == 1:
+            raise RuntimeError("temporary summary route failure")
+        return "## Historical Task Snapshot\nsummary via configured model"
+
+    compressor = ContextCompressor(
+        model="main-model",
+        summary_model_override="openrouter/openai/gpt-5.6-luna-pro",
+        summarizer=lambda _prompt: "## Historical Task Snapshot\nsummary via main model",
+        summary_summarizer=auxiliary,
+    )
+
+    first = compressor.generate_summary([_user("first checkpoint")], summarizer=compressor._summarizer)
+    second = compressor.generate_summary([_user("second checkpoint")], summarizer=compressor._summarizer)
+
+    assert "summary via main model" in first
+    assert "summary via configured model" in second
+    assert auxiliary_calls == 2
+    assert compressor.summary_model == "openrouter/openai/gpt-5.6-luna-pro"
+    assert compressor._last_summary_model_used == "openrouter/openai/gpt-5.6-luna-pro"
+
+
+def test_auth_failure_aborts_compaction_and_preserves_transcript_exactly() -> None:
+    messages = [_user("first goal")]
+    for index in range(12):
+        messages.append(_assistant(f"assistant work {index} " * 20))
+        messages.append(_user(f"user followup {index} " * 20))
+    messages.append(_user("latest request"))
+    compressor = ContextCompressor(context_length=1400, protect_first_n=1, protect_last_n=2)
+
+    result = compressor.compress(
+        messages,
+        summarizer=lambda _prompt: (_ for _ in ()).throw(
+            RuntimeError("401 unauthorized: invalid API key sk-proj-secret123456")
+        ),
+    )
+
+    assert result.compressed is False
+    assert result.messages is messages
+    assert result.savings_pct == 0.0
+    assert result.summary_model_error is not None
+    assert "sk-proj-secret123456" not in result.summary_model_error
+    assert compressor._last_compress_aborted is True
+    assert compressor._last_summary_auth_failure is True
+    assert compressor._last_summary_fallback_used is False
+    assert compressor._last_summary_dropped_count == 0
+
+
+def test_network_failure_aborts_until_a_forced_retry_succeeds() -> None:
+    messages = [_user("first goal")]
+    for index in range(12):
+        messages.append(_assistant(f"assistant work {index} " * 20))
+        messages.append(_user(f"user followup {index} " * 20))
+    messages.append(_user("latest request"))
+    compressor = ContextCompressor(context_length=1400, protect_first_n=1, protect_last_n=2)
+
+    failed = compressor.compress(
+        messages,
+        summarizer=lambda _prompt: (_ for _ in ()).throw(TimeoutError("provider timed out")),
+    )
+    recovered = compressor.compress(
+        messages,
+        summarizer=lambda _prompt: "## Historical Task Snapshot\nrecovered checkpoint",
+        force=True,
+    )
+
+    assert failed.compressed is False
+    assert failed.messages is messages
+    assert recovered.compressed is True
+    assert compressor._last_summary_auth_failure is False
+    assert compressor._last_summary_network_failure is False
+    assert compressor._last_compress_aborted is False
 
 
 def test_summary_failure_fallback_redacts_secrets_from_inserted_summary() -> None:

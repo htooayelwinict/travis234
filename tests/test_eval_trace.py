@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from travis.ai.models import reset_models
+from tests._provider_runtime import reset_models
 from travis.ai.providers.faux import create_faux_provider, faux_model, text_response_events
-from travis.ai.stream import register_api_provider, reset_api_providers
+from tests._provider_runtime import register_api_provider, reset_api_providers
 from travis.ai.types import AssistantMessage, ErrorEvent, TextContent, UserMessage, empty_usage, now_ms
 from travis.app import CodingApp
 from travis.coding_agent.eval_trace import ConversationLogWriter, EvalTraceWriter, SecretRedactor
@@ -56,7 +56,17 @@ def test_eval_trace_accepts_sanitized_feature_audit_metadata(tmp_path: Path) -> 
         {"session_id": "session-1", "session_path": "/tmp/session-1.jsonl", "provider": "openrouter", "model": "m"},
     )
     writer.write("tool_end", {"tool": "process", "action": "write", "status": "ok"})
-    writer.write("compaction_end", {"trigger": "threshold", "status": "ok", "compression_count": 1})
+    writer.write(
+        "compaction_end",
+        {
+            "trigger": "threshold",
+            "status": "ok",
+            "compression_count": 1,
+            "summary_model_requested": "openrouter/openai/gpt-5.6-luna-pro",
+            "summary_model_used": "openrouter/openai/gpt-5.6-luna-pro",
+            "summary_model_fallback": False,
+        },
+    )
     writer.write(
         "turn_ready",
         {

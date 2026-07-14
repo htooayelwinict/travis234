@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Callable, Mapping, Optional
 
 from travis.agent.agent import Agent
+from travis.agent.async_utils import resolve
 from travis.agent.types import AbortSignal
 from travis.agent.types import AfterToolCallResult
 from travis.agent.types import AgentContext
@@ -22,26 +23,6 @@ from travis.agent.types import AgentToolResult
 from travis.agent.types import AgentMessage
 from travis.agent.types import BeforeToolCallResult
 from travis.agent.types import MessageEndEvent, MessageStartEvent
-from travis.coding_agent.policies.tool_guardrails import (
-    ToolCallGuardrailConfig,
-    ToolCallGuardrailController,
-    ToolLoopPolicy,
-    append_toolguard_guidance,
-    classify_tool_failure,
-    toolguard_synthetic_result,
-)
-from travis.coding_agent.policies.iteration_limit import coding_iteration_limit_message
-from travis.coding_agent.policies.package_consent import PackageMutationPolicy
-from travis.coding_agent.policies.pipeline import PolicyPipeline
-from travis.coding_agent.policies.types import (
-    Allow,
-    Block,
-    CodingPolicyEvent,
-    CodingTurnContext,
-    RequireConsent,
-    ToolCallView,
-    TurnCapabilities,
-)
 from travis.ai.model_resolver import ScopedModel
 from travis.ai.models import (
     clamp_thinking_level,
@@ -61,7 +42,6 @@ from travis.coding_agent.compaction_coordinator import (
     CompactionCoordinator,
     CompactionTransactionCoordinator,
 )
-from travis.coding_agent.capabilities import CapabilityViolation, WorkspaceCapability
 from travis.coding_agent.config import get_packaged_context_paths
 from travis.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
 from travis.coding_agent.execution_backend import select_execution_backend
@@ -72,11 +52,9 @@ from travis.coding_agent.message_utils import (
     user_message_text as _text_from_user_message_content,
 )
 from travis.coding_agent.object_utils import settings_value as _settings_value
-from travis.coding_agent.process_context import ProcessContextResolver
 from travis.coding_agent.processes.local import create_local_process_transport
 from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import ProcessOwner
-from travis.coding_agent.provider_control_plane import ProviderControlPlane
 from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.session_index import SessionIndex
 from travis.coding_agent.session_store import (
@@ -111,7 +89,7 @@ from travis.coding_agent.session_persistence import _user_message
 from travis.coding_agent.session_policy_controller import (
     _is_internal_steering_user_message,
 )
-from travis.coding_agent.session_types import AutoRetryEndEvent, AutoRetryStartEvent, _MALFORMED_STREAMED_TOOL_ARGS_MARKER, _MALFORMED_STREAMED_TOOL_CALL_ARGUMENTS_CODE, _MALFORMED_STREAM_RECOVERY_PREFIX, _MAX_PARTIAL_STREAM_CONTINUATIONS, _NON_RETRYABLE_PROVIDER_LIMIT_MARKERS, _PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE, _PARTIAL_STREAM_STUB_ID, _RETRYABLE_ERROR_MARKERS, _SUBAGENT_TOOL_NAMES, _prompt_requests_subagent_tools
+from travis.coding_agent.session_types import AgentSettledEvent, AutoRetryEndEvent, AutoRetryStartEvent, _MALFORMED_STREAMED_TOOL_ARGS_MARKER, _MALFORMED_STREAMED_TOOL_CALL_ARGUMENTS_CODE, _MALFORMED_STREAM_RECOVERY_PREFIX, _MAX_PARTIAL_STREAM_CONTINUATIONS, _NON_RETRYABLE_PROVIDER_LIMIT_MARKERS, _PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE, _PARTIAL_STREAM_STUB_ID, _RETRYABLE_ERROR_MARKERS, _SUBAGENT_TOOL_NAMES, _prompt_requests_subagent_tools
 from travis.coding_agent.subagent_trace import _message_content_text
 
 def _wait_for_retry_abort(signal: AbortSignal, delay_ms: int) -> bool:
@@ -324,7 +302,15 @@ class SessionTurnController:
         self._model_subagent_spawn_signatures_this_turn.clear()
 
     def continue_(self, stream_fn=None) -> list[AgentMessage]:
-        return self.agent.continue_(stream_fn=stream_fn or self._stream_fn)
+        try:
+            return self.agent.continue_(stream_fn=stream_fn or self._stream_fn)
+        finally:
+            if not self._defer_agent_settled:
+                self.emit_agent_settled()
+
+    def emit_agent_settled(self) -> None:
+        self._extension_runner.emit({"type": "agent_settled"})
+        self._emit(AgentSettledEvent())
 
     def steer(self, text: str, images: list[ImageContent] | None = None) -> str:
         self._raise_if_extension_command(text)
@@ -440,32 +426,38 @@ class SessionTurnController:
             return [*prompt_message, *injected]
         return [prompt_message, *injected]
 
-    def _transform_context(self, messages: list[AgentMessage], signal: AbortSignal | None = None) -> list[AgentMessage]:
+    async def _transform_context(
+        self,
+        messages: list[AgentMessage],
+        signal: AbortSignal | None = None,
+    ) -> list[AgentMessage]:
         transformed = (
-            self._caller_transform_context(messages, signal)
+            await resolve(self._caller_transform_context(messages, signal))
             if self._caller_transform_context is not None
             else list(messages)
         )
         if transformed is None:
             transformed = list(messages)
-        overlay = self._process_context.overlay(transformed) if self._process_context is not None else None
-        if overlay is not None:
-            transformed = [*transformed, overlay]
         if self._extension_runner.has_handlers("context"):
-            return self._extension_runner.emit_context(transformed)
+            return await self._extension_runner.async_emit_context(transformed)
         return transformed
 
-    def _on_provider_payload(self, payload, model=None):
+    async def _on_provider_payload(self, payload, model=None):
         if not self._extension_runner.has_handlers("before_provider_request"):
             return payload
-        return self._extension_runner.emit_before_provider_request(payload)
+        return await self._extension_runner.async_emit_before_provider_request(payload)
 
-    def _on_provider_response(self, response, model=None) -> None:
+    async def _on_provider_headers(self, headers, model=None):
+        if not self._extension_runner.has_handlers("before_provider_headers"):
+            return headers
+        return await self._extension_runner.async_emit_before_provider_headers(headers)
+
+    async def _on_provider_response(self, response, model=None) -> None:
         if not self._extension_runner.has_handlers("after_provider_response"):
             return None
         status = response.get("status") if isinstance(response, dict) else getattr(response, "status", None)
         headers = response.get("headers") if isinstance(response, dict) else getattr(response, "headers", None)
-        self._extension_runner.emit(
+        await self._extension_runner.async_emit(
             {
                 "type": "after_provider_response",
                 "status": status,
@@ -539,15 +531,7 @@ class SessionTurnController:
 
     def _run_agent_prompt(self, prompt_message, stream_fn=None) -> list[AgentMessage]:
         self._flush_pending_bash_messages()
-        self._tool_guardrails.reset_for_turn()
-        self._tool_guardrail_halt_decision = None
-        self._tool_guardrail_halt_response_emitted = False
-        self._tool_loop_recovery_steered_keys = set()
-        self._process_limit_recovery_steered = False
-        self._process_limit_halt_message = None
-        self._process_limit_halt_response_emitted = False
         self._partial_stream_continue_retries = 0
-        self._policy_turn_number += 1
         active_stream_fn = stream_fn or self._stream_fn
         try:
             new_messages = list(self.agent.prompt(prompt_message, stream_fn=active_stream_fn))
@@ -571,8 +555,11 @@ class SessionTurnController:
                     break
             return new_messages
         finally:
-            self._flush_pending_bash_messages()
-            self._turn_capabilities.clear()
+            try:
+                self._flush_pending_bash_messages()
+            finally:
+                if not self._defer_agent_settled:
+                    self.emit_agent_settled()
 
     def _prepare_retry(self, message: AssistantMessage | None) -> bool:
         if not self._retry_enabled or message is None or message.stop_reason != "error":

@@ -137,27 +137,18 @@ def test_interactive_mode_collapses_subagent_tool_noise_but_keeps_lifecycle(tmp_
     )
     mode._handle_session_event(
         {
-            "type": "subagent_tool_guardrail",
-            "role": "explorer",
-            "toolName": "ls",
-            "status": "guardrail_halt",
-            "guardrailCode": "idempotent_no_progress_block",
-        }
-    )
-    mode._handle_session_event(
-        {
             "type": "subagent_stop",
             "child_role": "explorer",
             "child_subagent_id": "subagent-fixed",
             "status": "failed",
-            "child_summary": "guardrail summary",
+            "child_summary": "tool execution summary",
         }
     )
 
     rendered = "\n".join(mode.history.render(100))
     assert "subagent explorer started subagent-fixed" in rendered
     assert "subagent explorer failed subagent-fixed" in rendered
-    assert "guardrail idempotent_no_progress_block" in rendered
+    assert "tool execution summary" in rendered
     assert "NOISY RESULT" not in rendered
     assert "huge.md" not in rendered
 

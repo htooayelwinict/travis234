@@ -6,7 +6,6 @@ application, with no imports of external source packages.
 
 from __future__ import annotations
 
-import copy
 import json
 import os
 import time
@@ -14,10 +13,9 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Literal, Mapping, Optional
 
-from travis.ai.stream import complete_simple_sync
 from travis.ai.model_resolver import ScopedModel
 from travis.ai.overflow import is_context_overflow, parse_available_output_tokens_from_error
-from travis.ai.types import Context, Model, SimpleStreamOptions, TextContent, ToolResultMessage, UserMessage, now_ms
+from travis.ai.types import Context, Model, SimpleStreamOptions, TextContent, UserMessage, now_ms
 from travis.ai.types import AssistantMessage
 from travis.coding_agent.agent_session import AgentSession
 from travis.coding_agent.message_utils import last_assistant_message as _last_assistant_message
@@ -27,7 +25,8 @@ from travis.coding_agent.compaction_adapter import to_compressor_messages
 from travis.coding_agent.branch_summarization import SUMMARIZATION_SYSTEM_PROMPT
 from travis.coding_agent.config import get_agent_dir
 from travis.coding_agent.settings_manager import SettingsManager
-from travis.coding_agent.provider_control_plane import ProviderControlPlane
+from travis.coding_agent.auth_storage import AuthStorage
+from travis.coding_agent.model_registry import ModelRegistry
 from travis.coding_agent.processes.completions import ProcessCompletionStore
 from travis.coding_agent.processes.local import create_local_process_transport
 from travis.coding_agent.processes.service import ProcessSessionService
@@ -91,30 +90,43 @@ class CodingApp:
         terminal: Optional[Terminal] = None,
         context_length: int | None = None,
         summarizer=None,
+        compression_model: Model | None = None,
+        compression_api_key: str | None = None,
+        compression_timeout_seconds: float | None = None,
+        compression_generation_params: object | None = None,
         thinking_level: str = "off",
         scoped_models: list[ScopedModel] | None = None,
         enable_tui: bool = True,
         settings_manager: object | None = None,
-        max_iterations: int = 90,
-        tool_loop_guardrails: Mapping[str, object] | None = None,
         session_path: str | None = None,
         session_id: str | None = None,
         agent_dir: str | None = None,
-        provider_control_plane: ProviderControlPlane | None = None,
+        model_registry: ModelRegistry | None = None,
         event_trace=None,
         conversation_log=None,
     ) -> None:
         self.cwd = str(Path(cwd).expanduser().resolve())
         self.event_trace = event_trace
         self.conversation_log = conversation_log
-        self.provider_control_plane = provider_control_plane or ProviderControlPlane.create_default()
-        self.provider_control_plane.ensure_model(model)
+        self._agent_dir = str(Path(agent_dir or get_agent_dir()).expanduser().resolve())
+        self.model_registry = model_registry or ModelRegistry.create(
+            AuthStorage.create(Path(self._agent_dir) / "auth.json"),
+            Path(self._agent_dir) / "models.json",
+        )
+        self.model_registry.ensure_model(model)
+        if compression_model is not None:
+            self.model_registry.ensure_model(compression_model)
         self._settings_manager = settings_manager or SettingsManager.in_memory()
+        if thinking_level != "off":
+            set_default_thinking_level = getattr(
+                self._settings_manager,
+                "set_default_thinking_level",
+                None,
+            ) or getattr(self._settings_manager, "setDefaultThinkingLevel", None)
+            if callable(set_default_thinking_level):
+                set_default_thinking_level(thinking_level)
         self._retry_settings = _resolve_session_retry_settings(self._settings_manager)
         self._scoped_models = list(scoped_models or [])
-        self._max_iterations = max_iterations
-        self._tool_loop_guardrails = tool_loop_guardrails
-        self._agent_dir = str(Path(agent_dir or get_agent_dir()).expanduser().resolve())
         self._app_instance_id = uuid.uuid4().hex
         self.process_completion_store = ProcessCompletionStore(
             Path(self._agent_dir) / "process-results"
@@ -140,13 +152,30 @@ class CodingApp:
             summarizer = _model_summarizer(
                 lambda: self.session.model,
                 thinking_level=lambda: self.session.thinking_level,
-                complete_fn=lambda active_model, context, options: self.provider_control_plane.stream_simple(
+                complete_fn=lambda active_model, context, options: self.model_registry.stream_simple(
                     active_model,
                     context,
                     options,
                 ).result_sync(),
             )
         self._summarizer = summarizer
+        self._compression_model = compression_model
+        self._compression_summarizer = (
+            _model_summarizer(
+                compression_model,
+                thinking_level="off",
+                api_key=compression_api_key,
+                timeout_seconds=compression_timeout_seconds,
+                generation_params=compression_generation_params,
+                complete_fn=lambda active_model, context, options: self.model_registry.stream_simple(
+                    active_model,
+                    context,
+                    options,
+                ).result_sync(),
+            )
+            if compression_model is not None
+            else None
+        )
         initial_session = self._create_session(
             cwd=self.cwd,
             fallback_model=model,
@@ -182,7 +211,7 @@ class CodingApp:
     ) -> AgentSession:
         resolved_cwd = str(Path(cwd).expanduser().resolve())
         model = self._restored_session_model(session_path, resolved_cwd, fallback_model)
-        self.provider_control_plane.ensure_model(model)
+        self.model_registry.ensure_model(model)
         retry_enabled, max_retries, retry_delay_ms = self._retry_settings
         fresh_session = bool(
             session_path
@@ -198,16 +227,15 @@ class CodingApp:
             retry_enabled=retry_enabled,
             max_retries=max_retries,
             retry_delay_ms=retry_delay_ms,
-            max_iterations=self._max_iterations,
-            tool_loop_guardrails=self._tool_loop_guardrails,
             session_path=session_path,
             parent_session_path=parent_session_path,
             session_id=session_id,
             session_start_event=session_start_event,
             defer_session_start=defer_session_start,
+            defer_agent_settled=True,
             agent_dir=self._agent_dir,
             session_index=self.session_catalog.index,
-            provider_control_plane=self.provider_control_plane,
+            model_registry=self.model_registry,
             process_service=self.process_service,
             process_owner=self._process_owner_for(resolved_cwd),
             model_change_listener=self._handle_session_model_changed,
@@ -226,7 +254,7 @@ class CodingApp:
         snapshot = SessionStore(str(path), cwd=cwd).build_context()
         if not snapshot.model:
             return fallback
-        restored = self.provider_control_plane.models.find(
+        restored = self.model_registry.find(
             snapshot.model.get("provider", ""),
             snapshot.model.get("modelId", ""),
         )
@@ -241,7 +269,15 @@ class CodingApp:
         self.compressor = ContextCompressor(
             context_length=resolved_context_length,
             threshold_percent=threshold_percent,
+            max_tokens=self.session.model.max_tokens,
             summarizer=self._summarizer,
+            summary_summarizer=self._compression_summarizer,
+            model=_model_route(self.session.model),
+            summary_model_override=(
+                _model_route(self._compression_model)
+                if self._compression_model is not None
+                else None
+            ),
         )
         self.compaction = CompactionManager(
             self.compressor,
@@ -274,6 +310,8 @@ class CodingApp:
         self.compressor.update_context_window(
             resolved_context_length,
             threshold_percent=threshold_percent,
+            max_tokens=model.max_tokens,
+            model=_model_route(model),
         )
         self.compaction.deep_baseline_tokens = _estimate_static_prompt_tool_tokens(self.session)
 
@@ -457,6 +495,7 @@ class CodingApp:
             )
             raise
         finally:
+            self.session.emit_agent_settled()
             turn_messages = (
                 completed_turn_messages
                 if completed_turn_messages is not None
@@ -507,12 +546,22 @@ class CodingApp:
                 },
             )
         elif event_type == "compaction_end":
+            result = self.compaction.last_compression_result
+            if getattr(event, "error_message", None):
+                status = "error"
+            elif getattr(event, "aborted", False):
+                status = "aborted"
+            else:
+                status = "ok"
             self._trace(
                 "compaction_end",
                 {
-                    "status": "error" if getattr(event, "error_message", None) else "ok",
+                    "status": status,
                     "compression_count": self.compaction.compressor.compression_count,
                     "trigger": str(getattr(event, "reason", "")),
+                    "summary_model_requested": getattr(result, "summary_model_requested", None),
+                    "summary_model_used": getattr(result, "summary_model_used", None),
+                    "summary_model_fallback": bool(getattr(result, "summary_model_fallback", False)),
                 },
             )
 
@@ -557,28 +606,11 @@ class CodingApp:
         message = _last_assistant_message(self.session.messages)
         if message is None or message.stop_reason not in {"error", "aborted"}:
             return False
-        is_prompt_guardrail = message.stop_reason == "error" and _is_prompt_injection_guardrail_error(
-            message.error_message or ""
-        )
-
         # A provider error is not proof that the post-compaction request fit.
         # Clear Travis' "await real usage" gate so the next prompt can compact
         # instead of resending a failed large turn unchanged.
         if message.stop_reason == "error":
             self.compaction.awaiting_real_usage_after_compression = False
-        if is_prompt_guardrail:
-            retained = [
-                item
-                for item in self.session.messages
-                if item is not message
-            ]
-            retained = _elide_failed_turn_tool_results(retained)
-            self.session.compaction_transactions.compact_error_context(
-                retained,
-                force=True,
-                retain_source_suffix=False,
-            )
-            return True
         if skip_if_just_compacted:
             return False
 
@@ -590,7 +622,7 @@ class CodingApp:
         source_messages = list(self.session.messages)
         outcome = self.session.compaction_transactions.compact_error_context(
             source_messages,
-            force=False,
+            retain_source_suffix=False,
         )
         return outcome.compressed
 
@@ -623,13 +655,25 @@ def _model_summarizer(
     model: Model | Callable[[], Model],
     *,
     thinking_level: str | Callable[[], str] = "off",
-    complete_fn=complete_simple_sync,
+    api_key: str | None = None,
+    timeout_seconds: float | None = None,
+    generation_params: object | None = None,
+    complete_fn=None,
 ):
+    if complete_fn is None:
+        raise ValueError("summarization requires an injected model runtime")
     def summarize(prompt: str) -> str:
         active_model = model() if callable(model) else model
         active_thinking_level = thinking_level() if callable(thinking_level) else thinking_level
         options = SimpleStreamOptions(
-            max_tokens=_summarizer_max_tokens(active_model),
+            omit_max_tokens=True,
+            api_key=api_key,
+            timeout_ms=(
+                max(0, int(float(timeout_seconds) * 1000))
+                if timeout_seconds is not None
+                else None
+            ),
+            generation_params=generation_params,
             reasoning=(
                 active_thinking_level
                 if active_model.reasoning and active_thinking_level != "off"
@@ -651,10 +695,8 @@ def _model_summarizer(
     return summarize
 
 
-def _summarizer_max_tokens(model: Model) -> int:
-    if model.max_tokens and model.max_tokens > 0:
-        return min(model.max_tokens, 12_000)
-    return 2048
+def _model_route(model: Model) -> str:
+    return f"{model.provider}/{model.id}"
 
 
 def _assistant_text_after(messages, start_index: int) -> str | None:
@@ -708,46 +750,6 @@ def _safe_eval_tool_metadata(tool_name: str, args: object) -> dict[str, str]:
         if any(marker in lowered for marker in ("python -m build", "npm pack")):
             return {"operation": "package_build"}
     return {}
-
-
-_PROMPT_GUARDRAIL_ERROR_PATTERNS = (
-    "prompt-injection guardrail",
-    "prompt injection patterns detected",
-    "system_prefix_spoofing",
-)
-
-
-def _is_prompt_injection_guardrail_error(error_message: str) -> bool:
-    lowered = (error_message or "").lower()
-    return any(pattern in lowered for pattern in _PROMPT_GUARDRAIL_ERROR_PATTERNS)
-
-
-def _elide_failed_turn_tool_results(messages) -> list:
-    last_user_index = -1
-    for index, message in enumerate(messages):
-        if getattr(message, "role", None) == "user":
-            last_user_index = index
-    if last_user_index < 0:
-        return list(messages)
-
-    elided = list(messages)
-    for index in range(last_user_index + 1, len(elided)):
-        message = elided[index]
-        if not isinstance(message, ToolResultMessage):
-            continue
-        text = "".join(block.text for block in message.content if isinstance(block, TextContent))
-        clone = copy.copy(message)
-        clone.content = [TextContent(text=_tool_result_guardrail_placeholder(message, text))]
-        elided[index] = clone
-    return elided
-
-
-def _tool_result_guardrail_placeholder(message: ToolResultMessage, text: str) -> str:
-    line_count = text.count("\n") + 1 if text else 0
-    return (
-        f"[{message.tool_name}] result elided after provider prompt-injection guardrail "
-        f"({len(text)} chars, {line_count} lines). Use narrower reads or summarize code scans before retrying."
-    )
 
 
 def _resolve_compaction_window(

@@ -8,6 +8,7 @@ import inspect
 from dataclasses import dataclass
 from typing import Any
 
+from travis.agent.async_utils import resolve, run_sync
 from travis.coding_agent.source_info import SourceInfo, create_synthetic_source_info
 from travis.coding_agent.tools.types import ToolDefinition, wrap_tool_definition
 
@@ -75,7 +76,26 @@ def define_tool(tool: ToolDefinition) -> ToolDefinition:
 
 
 def wrap_registered_tool(registered_tool: RegisteredTool, runner: "ExtensionRunner"):
-    return wrap_tool_definition(registered_tool.definition, lambda: runner.create_context())
+    tool = wrap_tool_definition(registered_tool.definition, lambda: runner.create_context())
+    execute = tool.execute
+
+    async def _execute(tool_call_id, args, signal=None, on_update=None):
+        active_before = runner.get_active_tools()
+        result = execute(tool_call_id, args, signal, on_update)
+        if inspect.isawaitable(result):
+            result = await result
+        active_after = runner.get_active_tools()
+        if not all(name in active_after for name in active_before):
+            return result
+        before_names = set(active_before)
+        added_names = [name for name in active_after if name not in before_names]
+        if not added_names:
+            return result
+        result.added_tool_names = list(dict.fromkeys([*(result.added_tool_names or []), *added_names]))
+        return result
+
+    tool.execute = _execute
+    return tool
 
 
 def wrap_registered_tools(registered_tools: list[RegisteredTool], runner: "ExtensionRunner") -> list:
@@ -290,6 +310,7 @@ class ExtensionRunner:
         self._handlers: dict[str, list[ExtensionHandler]] = {}
         self._error_listeners: list[ExtensionErrorListener] = []
         self._pending_provider_registrations: list[tuple[str, dict[str, Any], str]] = []
+        self._loading_extension_path: str | None = None
         self._register_provider: Callable[[str, dict[str, Any]], None] | None = None
         self._unregister_provider: Callable[[str], None] | None = None
         self._ui_context: object | None = None
@@ -322,6 +343,11 @@ class ExtensionRunner:
         self._set_active_tools: Callable[[list[str]], object] = lambda tool_names: None
         self._refresh_tools: Callable[[], object] = lambda: None
         self._get_commands: Callable[[], object] = lambda: []
+        self._exec: Callable[[str, list[str], dict[str, object] | None], dict[str, object]] = (
+            lambda command, args, options=None: (_ for _ in ()).throw(
+                RuntimeError("extension execution is unavailable before the session is bound")
+            )
+        )
         self._set_model: Callable[[object], object] = lambda model: False
         self._get_thinking_level: Callable[[], object] = lambda: "off"
         self._set_thinking_level: Callable[[object], object] = lambda level: None
@@ -450,6 +476,7 @@ class ExtensionRunner:
         )
         self._refresh_tools = _callable_action(actions, "refreshTools", "refresh_tools") or (lambda: None)
         self._get_commands = _callable_action(actions, "getCommands", "get_commands") or (lambda: [])
+        self._exec = _callable_action(actions, "exec") or self._exec
         self._set_model = _callable_action(actions, "setModel", "set_model") or (lambda model: False)
         self._get_thinking_level = _callable_action(
             actions,
@@ -568,6 +595,15 @@ class ExtensionRunner:
         return self._get_commands()
 
 
+    def exec(
+        self,
+        command: str,
+        args: list[str],
+        options: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        return self._exec(command, list(args), dict(options) if options is not None else None)
+
+
     def set_model(self, model: object) -> object:
         return self._set_model(model)
 
@@ -622,6 +658,8 @@ class ExtensionRunner:
 
 
     def register_provider(self, name: str, config: dict[str, Any], extension_path: str = "<python-extension>") -> None:
+        if extension_path == "<python-extension>" and self._loading_extension_path is not None:
+            extension_path = self._loading_extension_path
         if self._register_provider is None:
             self._pending_provider_registrations.append((name, dict(config), extension_path))
             return
@@ -687,6 +725,9 @@ class ExtensionRunner:
 
 
     def emit(self, event: ExtensionEvent) -> object:
+        return run_sync(self.async_emit(event))
+
+    async def async_emit(self, event: ExtensionEvent) -> object:
         event_type = event.get("type")
         if not isinstance(event_type, str) or not event_type:
             raise ValueError("Extension event must include a string 'type'")
@@ -695,7 +736,7 @@ class ExtensionRunner:
         result: object = None
         for handler in list(self._handlers.get(event_type, [])):
             try:
-                handler_result = _call_extension_handler(handler, event, context)
+                handler_result = await _call_extension_handler_async(handler, event, context)
             except Exception as error:  # noqa: BLE001 - preserves the established extension error forwarding.
                 self.emit_error(
                     {
@@ -812,12 +853,19 @@ class ExtensionRunner:
 
 
     def emit_message_end(self, event: ExtensionEvent) -> object:
+        return run_sync(self.async_emit_message_end(event))
+
+    async def async_emit_message_end(self, event: ExtensionEvent) -> object:
         current_message = event.get("message")
         modified = False
         context = self.create_context()
         for handler in list(self._handlers.get("message_end", [])):
             try:
-                result = _call_extension_handler(handler, {**event, "message": current_message}, context)
+                result = await _call_extension_handler_async(
+                    handler,
+                    {**event, "message": current_message},
+                    context,
+                )
             except Exception as error:  # noqa: BLE001 - preserves the established extension error forwarding.
                 self.emit_error(
                     {
@@ -845,12 +893,15 @@ class ExtensionRunner:
 
 
     def emit_tool_result(self, event: ExtensionEvent) -> dict[str, object] | None:
+        return run_sync(self.async_emit_tool_result(event))
+
+    async def async_emit_tool_result(self, event: ExtensionEvent) -> dict[str, object] | None:
         current_event = dict(event)
         modified = False
         context = self.create_context()
         for handler in list(self._handlers.get("tool_result", [])):
             try:
-                result = _call_extension_handler(handler, dict(current_event), context)
+                result = await _call_extension_handler_async(handler, dict(current_event), context)
             except Exception as error:  # noqa: BLE001 - preserves the established extension error forwarding.
                 self.emit_error(
                     {
@@ -876,26 +927,44 @@ class ExtensionRunner:
 
 
     def emit_tool_call(self, event: ExtensionEvent) -> dict[str, object] | None:
+        return run_sync(self.async_emit_tool_call(event))
+
+    async def async_emit_tool_call(self, event: ExtensionEvent) -> dict[str, object] | None:
         result: dict[str, object] | None = None
         context = self.create_context()
         for handler in list(self._handlers.get("tool_call", [])):
-            try:
-                handler_result = _call_extension_handler(handler, event, context)
-            except Exception as error:  # noqa: BLE001 - preserves the established extension error forwarding.
-                self.emit_error(
-                    {
-                        "extensionPath": "<python-extension>",
-                        "event": "tool_call",
-                        "error": str(error),
-                    }
-                )
-                continue
+            handler_result = await _call_extension_handler_async(handler, event, context)
             if not isinstance(handler_result, dict):
                 continue
             result = handler_result
             if handler_result.get("block") is True:
                 return handler_result
         return result
+
+
+    def emit_before_provider_headers(self, headers: dict[str, object]) -> dict[str, object]:
+        return run_sync(self.async_emit_before_provider_headers(headers))
+
+    async def async_emit_before_provider_headers(self, headers: dict[str, object]) -> dict[str, object]:
+        context = self.create_context()
+        for handler in list(self._handlers.get("before_provider_headers", [])):
+            try:
+                # The shared object is the contract. Handler return values do
+                # not replace it; assigning None requests header deletion.
+                await _call_extension_handler_async(
+                    handler,
+                    {"type": "before_provider_headers", "headers": headers},
+                    context,
+                )
+            except Exception as error:  # noqa: BLE001 - header observers are fail-open.
+                self.emit_error(
+                    {
+                        "extensionPath": "<python-extension>",
+                        "event": "before_provider_headers",
+                        "error": str(error),
+                    }
+                )
+        return headers
 
 
     def emit_before_agent_start(
@@ -949,11 +1018,14 @@ class ExtensionRunner:
 
 
     def emit_context(self, messages: list[object]) -> list[object]:
+        return run_sync(self.async_emit_context(messages))
+
+    async def async_emit_context(self, messages: list[object]) -> list[object]:
         current_messages = copy.deepcopy(list(messages))
         context = self.create_context()
         for handler in list(self._handlers.get("context", [])):
             try:
-                result = _call_extension_handler(
+                result = await _call_extension_handler_async(
                     handler,
                     {"type": "context", "messages": current_messages},
                     context,
@@ -973,11 +1045,14 @@ class ExtensionRunner:
 
 
     def emit_before_provider_request(self, payload: object) -> object:
+        return run_sync(self.async_emit_before_provider_request(payload))
+
+    async def async_emit_before_provider_request(self, payload: object) -> object:
         current_payload = payload
         context = self.create_context()
         for handler in list(self._handlers.get("before_provider_request", [])):
             try:
-                result = _call_extension_handler(
+                result = await _call_extension_handler_async(
                     handler,
                     {"type": "before_provider_request", "payload": current_payload},
                     context,
@@ -997,11 +1072,12 @@ class ExtensionRunner:
 
 
     def register_tool(self, definition: ToolDefinition, source_info: SourceInfo | None = None) -> None:
+        extension_path = self._loading_extension_path or f"<extension:{definition.name}>"
         self._registered_tools[definition.name] = RegisteredTool(
             definition=definition,
             source_info=source_info
             or definition.source_info
-            or create_synthetic_source_info(f"<extension:{definition.name}>", source="extension"),
+            or create_synthetic_source_info(extension_path, source="extension"),
         )
 
 
@@ -1025,7 +1101,10 @@ class ExtensionRunner:
             name=name,
             description=str(options["description"]) if options.get("description") is not None else None,
             handler=handler,
-            source_info=create_synthetic_source_info(f"<extension-command:{name}>", source="extension"),
+            source_info=create_synthetic_source_info(
+                self._loading_extension_path or f"<extension-command:{name}>",
+                source="extension",
+            ),
             get_argument_completions=options.get("getArgumentCompletions")
             if callable(options.get("getArgumentCompletions"))
             else options.get("get_argument_completions")
@@ -1055,6 +1134,7 @@ class ExtensionRunner:
             type=flag_type,
             description=str(options["description"]) if options.get("description") is not None else None,
             default=options.get("default") if isinstance(options.get("default"), (bool, str)) else None,
+            extension_path=self._loading_extension_path or "<python-extension>",
         )
         self._registered_flags[name] = flag
         if flag.default is not None and name not in self._flag_values:
@@ -1100,6 +1180,7 @@ class ExtensionRunner:
             key=normalized,
             handler=handler,
             description=str(options["description"]) if options.get("description") is not None else None,
+            extension_path=self._loading_extension_path or "<python-extension>",
         )
 
 
@@ -1128,9 +1209,21 @@ def _callable_action(actions: object, *names: str) -> Callable[..., object] | No
 
 
 def _call_extension_handler(handler: ExtensionHandler, event: ExtensionEvent, context: ExtensionContextView) -> object:
+    return run_sync(_call_extension_handler_async(handler, event, context))
+
+
+async def _call_extension_handler_async(
+    handler: ExtensionHandler,
+    event: ExtensionEvent,
+    context: ExtensionContextView,
+) -> object:
     if _handler_accepts_context(handler):
-        return handler(event, context)
-    return handler(event)
+        result = handler(event, context)
+    else:
+        result = handler(event)
+    if inspect.isawaitable(result):
+        return await resolve(result)
+    return result
 
 
 def _handler_accepts_context(handler: Callable[..., object]) -> bool:

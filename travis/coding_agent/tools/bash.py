@@ -17,7 +17,7 @@ from typing import Callable
 
 from travis.agent.types import AgentTool, AgentToolResult
 from travis.ai.types import TextContent
-from travis.coding_agent.artifacts import ArtifactRegistry
+from travis.coding_agent.artifacts import ArtifactRegistry, artifact_read_instruction
 from travis.coding_agent.config import get_bin_dir
 from travis.coding_agent.execution_backend import ExecutionBackend, TrustedLocalBackend
 from travis.coding_agent.processes.service import ProcessSessionService, ProcessTransportFactory
@@ -299,18 +299,23 @@ def _format_output(output: OutputSpool, snapshot: OutputSnapshot, empty_text: st
         }
         start_line = truncation.total_lines - truncation.output_lines + 1
         end_line = truncation.total_lines
+        full_output = (
+            artifact_read_instruction(snapshot.artifact_id)
+            if snapshot.artifact_id
+            else f"Full output: {snapshot.full_output_path}"
+        )
         if truncation.last_line_partial:
             last_line_size = format_size(output.get_last_line_bytes())
             text += (
                 f"\n\n[Showing last {format_size(truncation.output_bytes)} of line {end_line} "
-                f"(line is {last_line_size}). Full output: {snapshot.full_output_path}]"
+                f"(line is {last_line_size}). {full_output}]"
             )
         elif truncation.truncated_by == "lines":
-            text += f"\n\n[Showing lines {start_line}-{end_line} of {truncation.total_lines}. Full output: {snapshot.full_output_path}]"
+            text += f"\n\n[Showing lines {start_line}-{end_line} of {truncation.total_lines}. {full_output}]"
         else:
             text += (
                 f"\n\n[Showing lines {start_line}-{end_line} of {truncation.total_lines} "
-                f"({format_size(DEFAULT_MAX_BYTES)} limit). Full output: {snapshot.full_output_path}]"
+                f"({format_size(DEFAULT_MAX_BYTES)} limit). {full_output}]"
             )
     return text, details
 
@@ -547,9 +552,14 @@ def _managed_bash_result(
             }
         )
         start_line = tail.total_lines - tail.output_lines + 1
+        full_output = (
+            artifact_read_instruction(artifact.id)
+            if artifact is not None
+            else f"Full output: {exported}"
+        )
         output = _append_status(
             output,
-            f"[Showing lines {start_line}-{tail.total_lines} of {tail.total_lines}. Full output: {exported}]",
+            f"[Showing lines {start_line}-{tail.total_lines} of {tail.total_lines}. {full_output}]",
         )
     if snapshot.state is ProcessState.EXITED:
         if snapshot.exit_code not in (None, 0):

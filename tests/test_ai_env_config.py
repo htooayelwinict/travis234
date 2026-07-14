@@ -6,6 +6,7 @@ from travis.ai.env_config import (
     DEFAULT_MODEL_PER_PROVIDER,
     find_env_keys,
     get_default_model_for_provider,
+    get_env_api_key,
     load_dotenv_values,
     load_model_config,
 )
@@ -96,6 +97,23 @@ def test_stepfun_env_metadata_is_registered(monkeypatch) -> None:
     assert find_env_keys("stepfun") is None
     monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
     assert find_env_keys("stepfun") == ["STEPFUN_API_KEY"]
+
+
+def test_vertex_ambient_auth_requires_credentials_project_and_location(tmp_path: Path, monkeypatch) -> None:
+    credentials = tmp_path / "application_default_credentials.json"
+    credentials.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(credentials))
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.delenv("GCLOUD_PROJECT", raising=False)
+    monkeypatch.delenv("GOOGLE_CLOUD_LOCATION", raising=False)
+    monkeypatch.delenv("GOOGLE_CLOUD_API_KEY", raising=False)
+
+    assert get_env_api_key("google-vertex") is None
+
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "project-1")
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+
+    assert get_env_api_key("google-vertex") == "<authenticated>"
 
 
 def test_explicit_provider_owns_its_model_key_url_and_context(tmp_path: Path, monkeypatch) -> None:

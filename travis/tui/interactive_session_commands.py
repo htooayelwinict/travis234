@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Callable
 
 from travis.ai.providers.capabilities import ProviderParamWarning
-from travis.ai.providers.model_catalog import get_last_openrouter_live_catalog_error, get_live_openrouter_models
 from travis.ai.providers.params import GenerationParams, compact_generation_params_display
 from travis.compaction import estimate_tokens
 from travis.coding_agent.session_types import BashResult
@@ -42,7 +41,6 @@ from travis.tui.interactive import (
     message_to_component,
     user_message_to_component,
 )
-from travis.tui.model_loader import ModelCatalogLoader
 from travis.tui.user_commands import (
     ResolvedUserCommand,
     UserCommandBinding,
@@ -190,7 +188,7 @@ class InteractiveSessionCommands:
             "/new - Start a new persistent session.",
             "/session - Show active session details.",
             "/processes - Inspect and control managed processes.",
-            "/allow package-install [uses] - Allow explicit package installation for this session.",
+            "/reload - Reload extensions, skills, prompts, and themes.",
             "/agents - List delegated subagents.",
             "/delegate <role> <task> - Spawn a subagent for explicit multi-agent work.",
             "/cancel-agent <task-id> [reason] - Cancel a delegated subagent.",

@@ -12,7 +12,6 @@ from travis.agent.agent_loop import (
     run_agent_loop_continue_async,
 )
 from travis.agent.async_utils import MaybeAwaitable, resolve, run_sync
-from travis.agent.iteration_budget import IterationBudget
 from travis.agent.run_lease import RunLease, RunLeaseToken
 from travis.agent.tool_coordinator import ToolCoordinator
 from travis.agent.types import (
@@ -28,7 +27,6 @@ from travis.agent.types import (
     AgentToolResult,
     BeforeToolCallContext,
     BeforeToolCallResult,
-    IterationLimitContext,
     ImmediateToolOutcome,
     PreparedToolCall,
     PrepareNextTurnContext,
@@ -52,8 +50,6 @@ __all__ = [
     "AgentToolResult",
     "BeforeToolCallContext",
     "BeforeToolCallResult",
-    "IterationBudget",
-    "IterationLimitContext",
     "ImmediateToolOutcome",
     "MaybeAwaitable",
     "PreparedToolCall",

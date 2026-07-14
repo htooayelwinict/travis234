@@ -14,7 +14,6 @@ from travis.agent.agent_loop import (
     run_agent_loop_continue_async,
 )
 from travis.agent.async_utils import resolve, run_sync
-from travis.agent.iteration_budget import IterationBudget
 from travis.agent.run_lease import RunLease, RunLeaseToken
 from travis.agent.types import (
     AbortSignal,
@@ -99,9 +98,9 @@ class Agent:
         transport: str = "auto",
         max_retry_delay_ms: int | None = None,
         on_payload=None,
+        on_headers=None,
         on_response=None,
-        max_iterations: int = 90,
-        on_iteration_limit=None,
+        stream_fn=None,
     ) -> None:
         self._state = AgentState(
             system_prompt=system_prompt,
@@ -123,9 +122,9 @@ class Agent:
         self.transport = transport
         self.max_retry_delay_ms = max_retry_delay_ms
         self.on_payload = on_payload
+        self.on_headers = on_headers
         self.on_response = on_response
-        self.max_iterations = max(1, int(max_iterations))
-        self._on_iteration_limit = on_iteration_limit
+        self._stream_fn = stream_fn
         self._listeners: list[Listener] = []
         self._signal = AbortSignal()
         self._run_state_lock = threading.Lock()
@@ -252,11 +251,9 @@ class Agent:
             thinking_budgets=self.thinking_budgets,
             max_retry_delay_ms=self.max_retry_delay_ms,
             on_payload=self.on_payload,
+            on_headers=self.on_headers,
             on_response=self.on_response,
             max_tokens=self._state.model.max_tokens or None,
-            max_iterations=self.max_iterations,
-            iteration_budget=IterationBudget(self.max_iterations),
-            on_iteration_limit=self._on_iteration_limit,
         )
 
     def _drain_steering(self) -> list[AgentMessage]:
@@ -300,7 +297,12 @@ class Agent:
             messages = [prompt]
         try:
             new_messages = await run_agent_loop_async(
-                messages, self._context(), self._build_config(), self._make_sink(), self._signal, stream_fn
+                messages,
+                self._context(),
+                self._build_config(),
+                self._make_sink(),
+                self._signal,
+                stream_fn or self._stream_fn,
             )
         except Exception as error:  # noqa: BLE001
             new_messages = await self._handle_run_failure(error, self._signal.aborted)
@@ -321,28 +323,42 @@ class Agent:
             if getattr(last_message, "role", None) == "assistant":
                 queued_steering = self._drain_steering()
                 if queued_steering:
-                    return await run_agent_loop_async(
-                        queued_steering,
+                    run_messages = queued_steering
+                    run_config = self._build_config(skip_initial_steering_poll=True)
+                    continue_existing = False
+                else:
+                    queued_follow_up = self._drain_follow_up()
+                    if not queued_follow_up:
+                        raise ValueError("Cannot continue from message role: assistant")
+                    run_messages = queued_follow_up
+                    run_config = self._build_config()
+                    continue_existing = False
+            else:
+                run_messages = []
+                run_config = self._build_config()
+                continue_existing = True
+
+            try:
+                if continue_existing:
+                    return await run_agent_loop_continue_async(
                         context,
-                        self._build_config(skip_initial_steering_poll=True),
+                        run_config,
                         self._make_sink(),
                         self._signal,
-                        stream_fn,
+                        stream_fn or self._stream_fn,
                     )
-                queued_follow_up = self._drain_follow_up()
-                if queued_follow_up:
-                    return await run_agent_loop_async(
-                        queued_follow_up, context, self._build_config(), self._make_sink(), self._signal, stream_fn
-                    )
-                raise ValueError("Cannot continue from message role: assistant")
-            new_messages = await run_agent_loop_continue_async(
-                context, self._build_config(), self._make_sink(), self._signal, stream_fn
-            )
-        except Exception as error:  # noqa: BLE001
-            new_messages = await self._handle_run_failure(error, self._signal.aborted)
+                return await run_agent_loop_async(
+                    run_messages,
+                    context,
+                    run_config,
+                    self._make_sink(),
+                    self._signal,
+                    stream_fn or self._stream_fn,
+                )
+            except Exception as error:  # noqa: BLE001
+                return await self._handle_run_failure(error, self._signal.aborted)
         finally:
             self._finish_run()
-        return new_messages
 
     async def _handle_run_failure(self, error: BaseException, aborted: bool) -> list[AgentMessage]:
         failure_message = AssistantMessage(

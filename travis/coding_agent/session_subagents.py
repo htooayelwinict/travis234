@@ -22,27 +22,6 @@ from travis.agent.types import AgentToolResult
 from travis.agent.types import AgentMessage
 from travis.agent.types import BeforeToolCallResult
 from travis.agent.types import MessageEndEvent, MessageStartEvent
-from travis.coding_agent.policies.tool_guardrails import (
-    ToolCallGuardrailConfig,
-    ToolCallGuardrailController,
-    ToolGuardrailDecision,
-    ToolLoopPolicy,
-    append_toolguard_guidance,
-    classify_tool_failure,
-    toolguard_synthetic_result,
-)
-from travis.coding_agent.policies.iteration_limit import coding_iteration_limit_message
-from travis.coding_agent.policies.package_consent import PackageMutationPolicy
-from travis.coding_agent.policies.pipeline import PolicyPipeline
-from travis.coding_agent.policies.types import (
-    Allow,
-    Block,
-    CodingPolicyEvent,
-    CodingTurnContext,
-    RequireConsent,
-    ToolCallView,
-    TurnCapabilities,
-)
 from travis.ai.model_resolver import ScopedModel
 from travis.ai.models import (
     clamp_thinking_level,
@@ -62,7 +41,6 @@ from travis.coding_agent.compaction_coordinator import (
     CompactionCoordinator,
     CompactionTransactionCoordinator,
 )
-from travis.coding_agent.capabilities import CapabilityViolation, WorkspaceCapability
 from travis.coding_agent.config import get_packaged_context_paths
 from travis.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
 from travis.coding_agent.execution_backend import select_execution_backend
@@ -77,7 +55,6 @@ from travis.coding_agent.process_context import ProcessContextResolver
 from travis.coding_agent.processes.local import create_local_process_transport
 from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import ProcessOwner
-from travis.coding_agent.provider_control_plane import ProviderControlPlane
 from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.session_index import SessionIndex
 from travis.coding_agent.session_store import (
@@ -283,7 +260,7 @@ class SessionSubagentController:
             }
             return self._subagent_tool_result(
                 "Subagents are read-only and cannot write, edit, create, delete, or save files. "
-                "If Lewis requested a written artifact, spawn the child for inspection only, then the parent should write "
+                "If the user requested a written artifact, spawn the child for inspection only, then the parent should write "
                 "the requested file from the child summary. "
                 "No subagent task was spawned and no taskId exists for wait_subagent, cancel_subagent, or expand_subagent_result.",
                 details,
@@ -455,8 +432,6 @@ class SessionSubagentController:
             allowed_tool_names=list(task.allowed_tools),
             thinking_level=self.thinking_level,
             stream_fn=self._stream_fn,
-            max_iterations=12,
-            tool_loop_guardrails=self._tool_guardrails.config,
         )
         child.agent.subscribe(self._subagent_tool_trace_listener(task, child, tool_trace, trace_by_call_id))
         child.agent._after_tool_call = self._subagent_after_tool_call_tracer(  # noqa: SLF001 - parent observes delegated child tools.
@@ -478,15 +453,8 @@ class SessionSubagentController:
                 trace_by_call_id,
             )
             summary = self._messages_to_summary(messages) or self._messages_to_summary(child_messages)
-            guardrail = child._tool_guardrail_halt_decision.to_metadata() if child._tool_guardrail_halt_decision else None
             errors = []
             status = "completed"
-            if guardrail:
-                status = "failed"
-                code = str(guardrail.get("code") or "tool_guardrail")
-                tool = str(guardrail.get("tool_name") or guardrail.get("toolName") or "tool")
-                errors.append(f"Subagent stopped by tool guardrail: {code} ({tool})")
-                self._mark_subagent_trace_guardrail(task, tool_trace, guardrail)
             ended = int(time.time() * 1000)
             result = SubagentResult(
                 task_id=task.id,
@@ -497,7 +465,6 @@ class SessionSubagentController:
                 final_response=summary,
                 errors=errors,
                 tool_trace=tool_trace,
-                guardrail=guardrail,
                 child_session_id=child.session_id,
                 started_at_ms=started,
                 ended_at_ms=ended,

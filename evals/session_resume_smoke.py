@@ -85,13 +85,12 @@ def _run_worker(
 def _worker(*, workspace: Path, agent_dir: Path, marker: str, continue_session: bool) -> int:
     import travis.cli as cli
     from travis.ai.providers.faux import create_faux_provider, faux_model, text_response_events
-    from travis.ai.stream import register_api_provider, reset_api_providers
     from travis.ai.types import TextContent
     from travis.app import CodingApp
+    from travis.coding_agent.model_registry import ModelRegistry
     from travis.tui.interactive_mode import InteractiveMode
     from travis.tui.terminal import FakeTerminal
 
-    reset_api_providers()
     model = faux_model()
 
     def message_text(message: object) -> str:
@@ -106,10 +105,19 @@ def _worker(*, workspace: Path, agent_dir: Path, marker: str, continue_session: 
         response = match.group(0) if match else "marker-not-found"
         return text_response_events(active_model, response)
 
-    register_api_provider(create_faux_provider(provider_script))
+    def create_registry(auth_storage, models_path, *, provider_config=None):
+        registry = ModelRegistry(
+            auth_storage,
+            models_path,
+            provider_config=provider_config,
+        )
+        registry.runtime.clear_providers()
+        registry.runtime.set_provider(create_faux_provider(provider_script))
+        return registry
+
     os.environ["TRAVIS234_CODING_AGENT_DIR"] = str(agent_dir)
     os.environ["TRAVIS234_MODEL_CATALOG_STARTUP_FETCH"] = "false"
-    cli.register_builtin_providers = lambda dotenv_path, config=None: None
+    cli.ModelRegistry.create = staticmethod(create_registry)
     cli._startup_model_from_env = lambda dotenv_path, **kwargs: cli._StartupModelSelection(model=model)
 
     captured: dict[str, object] = {}

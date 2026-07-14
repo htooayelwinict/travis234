@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import travis.coding_agent.system_prompt as system_prompt_module
+
 from tests._support_coding_agent import *  # noqa: F403
 
 
@@ -76,10 +78,7 @@ def test_builtin_tool_definitions_match_travis234_prompt_metadata(tmp_path: Path
         "ls": ("List directory contents", []),
         "write": (
             "Create or overwrite files",
-            [
-                "Use write only for new files or complete rewrites.",
-                "When the user asks for a summary, report, checklist, notes, or other deliverable in a file path, create or update that file with write before your final response.",
-            ],
+            ["Use write only for new files or complete rewrites."],
         ),
         "edit": (
             "Make precise file edits with exact text replacement, including multiple disjoint edits in one call",
@@ -130,39 +129,13 @@ def test_default_system_prompt_identifies_travis_and_prefers_file_tools(tmp_path
 
     assert "inside Travis234" in prompt
     assert "If an edit fails to apply, re-read the file" not in prompt
-    assert "Do not use bash heredocs, echo, printf, tee, cat >, or shell redirection" in prompt
+    assert "Do not use bash heredocs, echo, printf, tee, cat >, or shell redirection" not in prompt
     assert "stop after about three attempts on the same file" not in prompt
     assert "Explicit user process limits override tool-use persistence" not in prompt
     assert "If the user says to run something once, do not retry or work around it" not in prompt
     assert "treat a failing test as the requested behavior unless you can prove the test is invalid" not in prompt
     assert "Do not weaken requested tests to match current implementation behavior" not in prompt
     assert "after a failed test, inspect the failure and relevant source or test before editing again" not in prompt
-
-def test_system_prompt_prioritizes_latest_user_request_over_generated_context(tmp_path: Path) -> None:
-    prompt = build_system_prompt(BuildSystemPromptOptions(cwd=str(tmp_path)))
-
-    assert "latest user request is the active contract" in prompt
-    assert "generated reports, plans, summaries" in prompt
-    assert "If tests pass but encode the opposite" in prompt
-
-def test_system_prompt_preserves_test_contracts_and_runner_compatibility(tmp_path: Path) -> None:
-    prompt = build_system_prompt(BuildSystemPromptOptions(cwd=str(tmp_path)))
-
-    assert "Preserve existing passing tests as behavioral evidence" in prompt
-    assert "compatible with the project's declared test runner and dependencies" in prompt
-    assert "inspect the blocking condition before adding timeout wrappers" in prompt
-
-
-def test_system_prompt_owns_the_bounded_change_workflow(tmp_path: Path) -> None:
-    prompt = build_system_prompt(BuildSystemPromptOptions(cwd=str(tmp_path)))
-
-    assert "Own the complete workflow in the current turn" in prompt
-    assert "Retain successful tool results as working context" in prompt
-    assert "do not repeat unchanged reads or searches" in prompt
-    assert "A failed tool call, failed test, guardrail recovery, or automatic compaction" in prompt
-    assert "Respect explicit user scope, stop conditions, and command limits" in prompt
-    assert "Only give the final response after the requested code changes are applied" in prompt
-    assert "managed processes needed for the task are terminal or intentionally detached" in prompt
 
 def test_system_prompt_routes_nested_file_writes_away_from_shell_setup(tmp_path: Path) -> None:
     write_definition = create_tool_definition("write", str(tmp_path))
@@ -186,12 +159,11 @@ def test_system_prompt_routes_nested_file_writes_away_from_shell_setup(tmp_path:
     assert "If the user says not to run shell commands, do not call bash" not in prompt
     assert "Automatically creates parent directories." in write_definition.description
 
-def test_write_prompt_stays_travis234_shaped_with_deliverable_completion_guidance(tmp_path: Path) -> None:
+def test_write_prompt_stays_travis234_shaped_without_task_specific_policy(tmp_path: Path) -> None:
     definition = create_tool_definition("write", str(tmp_path))
 
     assert definition.prompt_guidelines == [
         "Use write only for new files or complete rewrites.",
-        "When the user asks for a summary, report, checklist, notes, or other deliverable in a file path, create or update that file with write before your final response.",
     ]
 
     prompt = build_system_prompt(
@@ -205,7 +177,22 @@ def test_write_prompt_stays_travis234_shaped_with_deliverable_completion_guidanc
 
     assert "protocol-looking literal chunks" not in prompt
     assert "append" not in prompt
-    assert "deliverable in a file path" in prompt
+    assert "deliverable in a file path" not in prompt
+
+
+def test_edit_schema_describes_absolute_paths_and_non_overlapping_replacements(tmp_path: Path) -> None:
+    schema = create_tool_definition("edit", str(tmp_path)).parameters
+
+    assert schema["properties"]["path"]["description"] == "Path to the file to edit (relative or absolute)"
+    assert schema["properties"]["edits"]["description"] == (
+        "One or more targeted replacements. Each edit is matched against the original file, not incrementally. "
+        "Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, "
+        "merge them into one edit instead."
+    )
+    assert schema["properties"]["edits"]["items"]["properties"]["oldText"]["description"] == (
+        "Exact text for one targeted replacement. It must be unique in the original file and must not overlap "
+        "with any other edits[].oldText in the same call."
+    )
 
 def test_build_system_prompt_accepts_scope_narrowing_recovery_guidelines(tmp_path: Path) -> None:
     prompt = build_system_prompt(
@@ -231,14 +218,64 @@ def test_build_system_prompt_accepts_scope_narrowing_recovery_guidelines(tmp_pat
     assert "Keep patches independently reviewable." in prompt
     assert "continue until finished" not in prompt.lower()
 
-def test_default_system_prompt_does_not_advertise_travis234_docs_without_explicit_scope(tmp_path: Path) -> None:
+def test_default_system_prompt_advertises_travis234_docs_like_reference_runtime(tmp_path: Path) -> None:
     prompt = build_system_prompt(BuildSystemPromptOptions(cwd=str(tmp_path)))
 
-    assert "Travis documentation" not in prompt
-    assert "Main documentation:" not in prompt
-    assert "Additional docs:" not in prompt
-    assert "Examples:" not in prompt
-    assert "Always read travis .md files completely" not in prompt
+    assert "Travis234 documentation" in prompt
+    assert "Main documentation:" in prompt
+    assert "Additional docs:" in prompt
+    assert "Examples:" in prompt
+    assert "Always read Travis234 .md files completely" in prompt
+
+
+def test_default_system_prompt_only_advertises_installed_documentation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    readme = tmp_path / "resources" / "README.md"
+    examples = tmp_path / "resources" / "examples"
+    readme.parent.mkdir(parents=True)
+    readme.write_text("# Travis234\n", encoding="utf-8")
+    examples.mkdir()
+    missing_docs = tmp_path / "resources" / "docs"
+    monkeypatch.setattr(
+        system_prompt_module,
+        "get_packaged_context_paths",
+        lambda: (str(readme), str(missing_docs), str(examples)),
+    )
+
+    prompt = build_system_prompt(BuildSystemPromptOptions(cwd=str(tmp_path)))
+
+    assert f"Main documentation: {readme}" in prompt
+    assert f"Examples: {examples}" in prompt
+    assert str(missing_docs) not in prompt
+    assert "Resolve docs/... under Additional docs" not in prompt
+
+
+def test_default_system_prompt_never_names_missing_documentation_files(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    resources = tmp_path / "resources"
+    readme = resources / "README.md"
+    docs = resources / "docs"
+    examples = resources / "examples"
+    docs.mkdir(parents=True)
+    examples.mkdir()
+    readme.write_text("# Travis234\n", encoding="utf-8")
+    (docs / "README.md").write_text("# Available docs\n", encoding="utf-8")
+    monkeypatch.setattr(
+        system_prompt_module,
+        "get_packaged_context_paths",
+        lambda: (str(readme), str(docs), str(examples)),
+    )
+
+    prompt = build_system_prompt(BuildSystemPromptOptions(cwd=str(tmp_path)))
+
+    assert f"Additional docs: {docs}" in prompt
+    assert "docs/README.md" in prompt
+    assert "docs/extensions.md" not in prompt
+    assert "docs/themes.md" not in prompt
 
 def test_custom_prompt_includes_skills_when_selected_tools_unset(tmp_path: Path) -> None:
     skill_path = tmp_path / "skills" / "audit" / "SKILL.md"
@@ -294,6 +331,32 @@ def test_default_resource_loader_discovers_context_and_system_prompt_files(tmp_p
     assert loader.get_append_system_prompt() == []
     assert project_loader.get_system_prompt() == "project system"
     assert project_loader.get_append_system_prompt() == ["project append"]
+
+
+def test_project_context_stops_at_the_nearest_git_worktree_root(tmp_path: Path) -> None:
+    from travis.coding_agent import load_project_context_files
+
+    agent_dir = tmp_path / "agent"
+    checkout = tmp_path / "checkout"
+    worktree = checkout / ".worktrees" / "feature"
+    child = worktree / "pkg"
+    agent_dir.mkdir()
+    (checkout / ".git").mkdir(parents=True)
+    child.mkdir(parents=True)
+    (worktree / ".git").write_text("gitdir: ../../../.git/worktrees/feature\n", encoding="utf-8")
+    (agent_dir / "AGENTS.md").write_text("global instructions", encoding="utf-8")
+    (checkout / "AGENTS.md").write_text("parent checkout instructions", encoding="utf-8")
+    (worktree / "AGENTS.md").write_text("worktree instructions", encoding="utf-8")
+    (child / "CLAUDE.md").write_text("child instructions", encoding="utf-8")
+
+    context_files = load_project_context_files(cwd=str(child), agent_dir=str(agent_dir))
+
+    assert [item["content"] for item in context_files] == [
+        "global instructions",
+        "worktree instructions",
+        "child instructions",
+    ]
+
 
 def test_agent_session_uses_resource_loader_and_rebuilds_after_reload(tmp_path: Path) -> None:
     from travis.coding_agent import DefaultResourceLoader
@@ -620,30 +683,36 @@ def test_agent_session_reload_emits_lifecycle_and_rediscover_resources(tmp_path:
     prompt_dir.mkdir(parents=True)
     (prompt_dir / "audit.md").write_text("---\ndescription: Audit\n---\nAudit $ARGUMENTS", encoding="utf-8")
 
-    runner = ExtensionRunner()
     events: list[tuple[str, str]] = []
     discover_reasons: list[str] = []
-    runner.register_flag("sticky", {"type": "boolean", "default": False})
-    runner.set_flag_value("sticky", True)
-    runner.on("session_start", lambda event: events.append(("start", event["reason"])))
-    runner.on("session_shutdown", lambda event: events.append(("shutdown", event["reason"])))
-    runner.on(
-        "resources_discover",
-        lambda event: discover_reasons.append(event["reason"]) or {"promptPaths": [str(prompt_dir)]},
-    )
 
-    loader = DefaultResourceLoader(cwd=str(project), agent_dir=str(agent_dir))
+    def extension_factory(runner: ExtensionRunner) -> None:
+        runner.register_flag("sticky", {"type": "boolean", "default": False})
+        runner.on("session_start", lambda event: events.append(("start", event["reason"])))
+        runner.on("session_shutdown", lambda event: events.append(("shutdown", event["reason"])))
+        runner.on(
+            "resources_discover",
+            lambda event: discover_reasons.append(event["reason"]) or {"promptPaths": [str(prompt_dir)]},
+        )
+
+    loader = DefaultResourceLoader(
+        cwd=str(project),
+        agent_dir=str(agent_dir),
+        extension_factories=[extension_factory],
+    )
     loader.reload()
+    runner = loader.get_extensions()["runtime"]
+    runner.set_flag_value("sticky", True)
     session = AgentSession(cwd=str(project), model=faux_model(), extension_runner=runner, resource_loader=loader)
-    assert "audit" in [template.name for template in session.prompt_templates]
 
     (prompt_dir / "review.md").write_text("---\ndescription: Review\n---\nReview $ARGUMENTS", encoding="utf-8")
     session.bind_extensions({})
+    assert "audit" in [template.name for template in session.prompt_templates]
     session.reload()
 
-    assert events == [("start", "startup"), ("start", "startup"), ("shutdown", "reload"), ("start", "reload")]
-    assert discover_reasons == ["startup", "startup", "reload"]
-    assert runner.get_flag("sticky") is True
+    assert events == [("start", "startup"), ("shutdown", "reload"), ("start", "reload")]
+    assert discover_reasons == ["startup", "reload"]
+    assert session.extension_runner.get_flag("sticky") is True
     assert {"audit", "review"} <= {template.name for template in session.prompt_templates}
 
 def test_agent_session_exposes_state_resource_loader_and_prompt_templates(tmp_path: Path) -> None:
@@ -959,19 +1028,16 @@ def test_auth_storage_create_persists_api_key_runtime_and_fallback(tmp_path: Pat
     auth = AuthStorage.create(str(auth_path))
     auth.set("stored", {"type": "api_key", "key": "stored-key"})
     auth.set_runtime_api_key("runtime", "runtime-key")
-    auth.set_fallback_resolver(lambda provider: "fallback-key" if provider == "fallback" else None)
     monkeypatch.setenv("OPENROUTER_API_KEY", "env-key")
 
     reloaded = AuthStorage.create(str(auth_path))
-    reloaded.set_fallback_resolver(lambda provider: "fallback-key" if provider == "fallback" else None)
 
     assert reloaded.get("stored") == {"type": "api_key", "key": "stored-key"}
     assert reloaded.list() == ["stored"]
     assert reloaded.get_api_key("stored") == "stored-key"
     assert auth.get_api_key("runtime") == "runtime-key"
     assert reloaded.get_api_key("openrouter") == "env-key"
-    assert reloaded.get_api_key("fallback") == "fallback-key"
-    assert reloaded.get_api_key("fallback", {"includeFallback": False}) is None
+    assert reloaded.get_api_key("openrouter", {"includeFallback": False}) is None
     assert reloaded.get_auth_status("stored") == {"configured": True, "source": "stored"}
 
     reloaded.remove("stored")
@@ -1000,6 +1066,21 @@ def test_model_registry_create_loads_models_json_and_resolves_travis234_request_
                                 "id": "fast",
                                 "name": "Fast",
                                 "headers": {"X-Model": "model"},
+                                "cost": {
+                                    "input": 1,
+                                    "output": 2,
+                                    "cacheRead": 0.1,
+                                    "cacheWrite": 1.25,
+                                    "tiers": [
+                                        {
+                                            "inputTokensAbove": 100000,
+                                            "input": 2,
+                                            "output": 4,
+                                            "cacheRead": 0.2,
+                                            "cacheWrite": 2.5,
+                                        }
+                                    ],
+                                },
                                 "contextWindow": 64000,
                                 "maxTokens": 4096,
                             }
@@ -1019,7 +1100,8 @@ def test_model_registry_create_loads_models_json_and_resolves_travis234_request_
     assert model.api == "faux"
     assert model.base_url == "https://proxy.example.test/v1"
     assert model.context_window == 64000
-    assert registry.get_provider_display_name("proxy") == "proxy"
+    assert [(tier.input_tokens_above, tier.input) for tier in model.cost.tiers] == [(100_000, 2.0)]
+    assert registry.get_provider_display_name("proxy") == "Proxy Provider"
     assert registry.has_configured_auth(model) is True
     assert registry.get_available() == [model]
     assert registry.get_api_key_for_provider("proxy") == "stored-proxy-key"
@@ -1107,7 +1189,7 @@ def test_create_agent_session_from_services_resolves_travis234_default_model(tmp
 
 def test_create_agent_session_streams_with_travis234_model_registry_auth_and_retry_settings(tmp_path: Path) -> None:
     from travis.ai.event_stream import create_assistant_message_event_stream
-    from travis.ai.stream import ApiProvider
+    from tests._provider_runtime import ApiProvider
     from travis.coding_agent import SettingsManager, create_agent_session
 
     captured: dict[str, object] = {}
@@ -1184,7 +1266,7 @@ def test_create_agent_session_streams_with_travis234_model_registry_auth_and_ret
 
 def test_create_agent_session_defaults_travis234_session_file_and_stream_session_id(tmp_path: Path) -> None:
     from travis.ai.event_stream import create_assistant_message_event_stream
-    from travis.ai.stream import ApiProvider
+    from tests._provider_runtime import ApiProvider
     from travis.coding_agent import SettingsManager, create_agent_session
 
     captured: dict[str, object] = {}
@@ -1668,179 +1750,6 @@ def test_internal_subagent_exposes_only_canonical_bash_tool(tmp_path: Path) -> N
         child_with_bash.shutdown()
         session.shutdown()
 
-def test_tool_loop_guardrail_warns_on_repeated_idempotent_no_progress() -> None:
-    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailConfig, ToolCallGuardrailController
-
-    controller = ToolCallGuardrailController(ToolCallGuardrailConfig(no_progress_warn_after=2))
-
-    first = controller.after_call("read", {"path": "a.txt"}, "same output", failed=False)
-    second = controller.after_call("read", {"path": "a.txt"}, "same output", failed=False)
-
-    assert first.action == "allow"
-    assert second.action == "warn"
-    assert second.code == "idempotent_no_progress_warning"
-    assert "returned the same result 2 times" in second.message
-
-def test_tool_failure_recovery_guidance_respects_user_process_limits() -> None:
-    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailConfig, ToolCallGuardrailController
-
-    controller = ToolCallGuardrailController(ToolCallGuardrailConfig(same_tool_failure_warn_after=2))
-
-    controller.after_call("bash", {"command": "python examples/basic_usage.py"}, "ModuleNotFoundError", failed=True)
-    second = controller.after_call("bash", {"command": "PYTHONPATH=. python examples/basic_usage.py"}, "ok", failed=True)
-
-    assert second.action == "warn"
-    assert "unless the user explicitly limited attempts, retries, or commands" in second.message
-
-
-def test_tool_loop_guardrail_allows_repeated_successful_same_path_mutations_without_warning() -> None:
-    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailController
-
-    controller = ToolCallGuardrailController()
-    first_args = {"path": "LOCAL_REVIEW.md", "content": "first draft"}
-    second_args = {"path": "./LOCAL_REVIEW.md", "content": "expanded draft"}
-    other_args = {"path": "OTHER_REVIEW.md", "content": "separate draft"}
-    edit_args = {"path": "LOCAL_REVIEW.md", "old": "first draft", "new": "first draft\n\nBoundary check"}
-
-    assert controller.before_call("write", first_args).action == "allow"
-    first = controller.after_call("write", first_args, "Successfully wrote 11 bytes to LOCAL_REVIEW.md", failed=False)
-    repeated = controller.before_call("write", second_args)
-    other = controller.before_call("write", other_args)
-
-    assert first.action == "allow"
-    assert repeated.action == "allow"
-    assert other.action == "allow"
-    second = controller.after_call("write", second_args, "Successfully wrote 14 bytes to LOCAL_REVIEW.md", failed=False)
-    assert second.action == "allow"
-    assert second.code == "allow"
-    assert second.message == ""
-
-    controller.after_call("read", {"path": "LOCAL_REVIEW.md"}, "first draft", failed=False)
-    after_read_edit = controller.before_call("edit", edit_args)
-    assert after_read_edit.action == "allow"
-
-def test_bash_mutation_classifier_detects_attached_redirects_and_absolute_mutators() -> None:
-    from travis.coding_agent.policies.bash_classification import BashMutationClass, classify_bash_mutation
-
-    for command in (
-        "echo hi > file",
-        "echo hi >file",
-        "cat <<EOF >out.txt\nx\nEOF",
-        "/bin/rm file",
-        "/usr/bin/touch file",
-    ):
-        assert classify_bash_mutation(command).classification is BashMutationClass.MUTATING
-
-def test_workspace_scope_violation_guardrail_counts_across_state_changes() -> None:
-    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailConfig, ToolCallGuardrailController
-
-    controller = ToolCallGuardrailController(ToolCallGuardrailConfig(blocking_enabled=True))
-    message = (
-        "Refusing bash outside the current working directory: /Users/example/.ledgerlite.json. "
-        "Current working directory is /tmp/work. Ask the user to name this exact absolute path if it is intentional."
-    )
-
-    first = controller.workspace_scope_violation_decision(
-        "bash",
-        {"command": "rm -f /Users/example/.ledgerlite.json && python -m pytest"},
-        "/Users/example/.ledgerlite.json",
-        message,
-    )
-    controller.after_call("write", {"path": "ledgerlite_cli.py", "content": "code"}, "ok", failed=False)
-    second = controller.workspace_scope_violation_decision(
-        "bash",
-        {"command": "cd /tmp/work && rm -f /Users/example/.ledgerlite.json && python -m pytest"},
-        "/Users/example/.ledgerlite.json",
-        message,
-    )
-    controller.after_call("write", {"path": "tests/test_ledgerlite_cli.py", "content": "tests"}, "ok", failed=False)
-    third = controller.workspace_scope_violation_decision(
-        "bash",
-        {"command": "rm -f /Users/example/.ledgerlite.json && true"},
-        "/Users/example/.ledgerlite.json",
-        message,
-    )
-
-    assert first.action == "block"
-    assert first.code == "workspace_scope_violation"
-    assert second.action == "warn"
-    assert second.code == "workspace_scope_repeated_warning"
-    assert third.action == "halt"
-    assert third.code == "workspace_scope_repeated_block"
-    assert "same out-of-workspace path 3 times" in third.message
-
-def test_tool_loop_guardrail_resets_exact_failure_after_successful_state_change() -> None:
-    from travis.coding_agent.policies.tool_guardrails import ToolCallGuardrailController
-
-    controller = ToolCallGuardrailController()
-    pytest_args = {"command": "cd /work/project && python -m pytest tests/ -v"}
-    install_args = {"command": "cd /work/project && python -m pip install -e . -q"}
-
-    first = controller.after_call(
-        "bash",
-        pytest_args,
-        "FAILED tests/test_cli.py::test_cli\n\nCommand exited with code 1",
-        failed=True,
-    )
-    state_change = controller.after_call("bash", install_args, "", failed=False)
-    retry = controller.after_call(
-        "bash",
-        pytest_args,
-        "FAILED tests/test_core.py::test_unicode\n\nCommand exited with code 1",
-        failed=True,
-    )
-
-    assert first.action == "allow"
-    assert state_change.action == "allow"
-    assert retry.action == "allow"
-    assert retry.code != "repeated_exact_failure_warning"
-
-def test_agent_session_appends_non_halting_guardrail_warnings_to_tool_result_text(tmp_path: Path) -> None:
-    from travis.coding_agent.agent_session import AgentSession
-
-    model = faux_model()
-    provider_calls = {"n": 0}
-
-    def execute(tool_call_id, args, signal=None, on_update=None, ctx=None):
-        return AgentToolResult(content=[TextContent(text="same output")], details={})
-
-    read_definition = ToolDefinition(
-        name="read",
-        label="read",
-        description="Read a file",
-        parameters={
-            "type": "object",
-            "properties": {"path": {"type": "string"}},
-            "required": ["path"],
-        },
-        execute=execute,
-    )
-
-    def script(m, c):
-        provider_calls["n"] += 1
-        if provider_calls["n"] <= 2:
-            return tool_call_response_events(
-                m,
-                "read",
-                {"path": "README.md"},
-                call_id=f"call_{provider_calls['n']}",
-            )
-        return text_response_events(m, "done")
-
-    register_api_provider(create_faux_provider(script))
-    session = AgentSession(cwd=str(tmp_path), model=model, tool_definitions=[read_definition])
-
-    session.prompt("read twice then stop")
-
-    tool_result_text = "\n".join(
-        _content_text(message.content)
-        for message in session.messages
-        if getattr(message, "role", None) == "toolResult"
-    )
-    assert provider_calls["n"] == 3
-    assert "Tool loop warning" in tool_result_text
-    assert "idempotent_no_progress_warning" in tool_result_text
-    assert "Use the result already provided" in tool_result_text
 
 def test_agent_session_allows_repeated_same_path_write_batch_then_recovers_with_read_edit(tmp_path: Path) -> None:
     model = faux_model()

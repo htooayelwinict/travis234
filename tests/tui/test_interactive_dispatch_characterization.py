@@ -6,7 +6,7 @@ from travis.tui.interactive_mode import (
     _is_help_command,
     _is_manual_compression_command,
     _is_processes_command,
-    _parse_allow_command,
+    _is_reload_command,
     _parse_auth_command,
     _parse_bash_command,
     _parse_model_command,
@@ -21,12 +21,12 @@ from travis.tui.interactive_mode import (
         ("/help", "help"),
         ("/resume", "session"),
         ("/processes", "processes"),
+        ("/reload", "reload"),
         ("!pwd", "bash"),
         ("/compact", "compact"),
         ("/login", "auth"),
         ("/model", "model"),
         ("/params", "params"),
-        ("/allow package_install 1", "allow"),
         ("implement", "agent-prompt"),
     ],
 )
@@ -35,12 +35,12 @@ def test_builtin_command_classification_is_stable(prompt: str, expected: str) ->
         ("help", _is_help_command(prompt)),
         ("session", _parse_session_command(prompt) is not None),
         ("processes", _is_processes_command(prompt)),
+        ("reload", _is_reload_command(prompt)),
         ("bash", _parse_bash_command(prompt) is not None),
         ("compact", _is_manual_compression_command(prompt)),
         ("auth", _parse_auth_command(prompt) is not None),
         ("model", _parse_model_command(prompt) is not None),
         ("params", _parse_params_command(prompt) is not None),
-        ("allow", _parse_allow_command(prompt) is not None),
     )
     observed = next((name for name, matched in checks if matched), "agent-prompt")
 

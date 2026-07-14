@@ -29,18 +29,26 @@ from travis.coding_agent.tools.types import ToolContext, ToolDefinition, wrap_to
 EDIT_SCHEMA = {
     "type": "object",
     "properties": {
-        "path": {"type": "string", "description": "Path to the file to edit"},
+        "path": {"type": "string", "description": "Path to the file to edit (relative or absolute)"},
         "edits": {
             "type": "array",
             "minItems": 1,
             "description": (
-                "One or more targeted replacements. Each edit is matched against the original file, not incrementally."
+                "One or more targeted replacements. Each edit is matched against the original file, not incrementally. "
+                "Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, "
+                "merge them into one edit instead."
             ),
             "items": {
                 "type": "object",
                 "properties": {
-                    "oldText": {"type": "string", "description": "Exact text for one targeted replacement"},
-                    "newText": {"type": "string", "description": "Replacement text for this targeted edit"},
+                    "oldText": {
+                        "type": "string",
+                        "description": (
+                            "Exact text for one targeted replacement. It must be unique in the original file and must "
+                            "not overlap with any other edits[].oldText in the same call."
+                        ),
+                    },
+                    "newText": {"type": "string", "description": "Replacement text for this targeted edit."},
                 },
                 "required": ["oldText", "newText"],
                 "additionalProperties": False,

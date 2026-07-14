@@ -8,6 +8,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+ARTIFACT_READ_BYTE_LIMIT = 50 * 1024
+
+
+def artifact_read_instruction(artifact_id: str) -> str:
+    return (
+        f"Full output artifact: {artifact_id}. Use read with path={artifact_id}, "
+        f"byte_offset=0, byte_limit={ARTIFACT_READ_BYTE_LIMIT}."
+    )
+
 
 @dataclass(frozen=True)
 class ArtifactRef:
@@ -91,6 +100,8 @@ class ArtifactRegistry:
 
 
 __all__ = [
+    "ARTIFACT_READ_BYTE_LIMIT",
     "ArtifactRef",
     "ArtifactRegistry",
+    "artifact_read_instruction",
 ]

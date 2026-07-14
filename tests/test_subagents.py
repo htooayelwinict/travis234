@@ -324,7 +324,6 @@ def test_subagent_task_prompt_contains_child_system_contract(tmp_path):
     assert "Allowed tools are the complete tool catalog for this child" in prompt
     assert "For file discovery, use find or ls" in prompt
     assert "glob" not in prompt.lower()
-    assert "After two failed attempts for the same path or unavailable tool, stop retrying" in prompt
 
 
 def test_subagent_task_prompt_requires_evidence_bound_claims(tmp_path):
@@ -1170,9 +1169,8 @@ def test_agent_session_spawn_subagent_tool_returns_bounded_parent_payload(tmp_pa
             status="failed",
             summary=noisy_summary,
             final_response=noisy_summary,
-            errors=["Subagent stopped by tool guardrail: idempotent_no_progress_block (ls)"],
+            errors=["Subagent tool execution failed while reading documentation."],
             tool_trace=tool_trace,
-            guardrail={"code": "idempotent_no_progress_block", "tool_name": "ls", "count": 3},
         )
 
     session = AgentSession(cwd=str(tmp_path), model=faux_model())

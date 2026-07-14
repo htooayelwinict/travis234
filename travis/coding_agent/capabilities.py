@@ -33,6 +33,7 @@ class WorkspaceCapability:
         )
 
     def resolve(self, path: str, access: AccessMode) -> Path:
+        del access
         normalized = _UNICODE_SPACES.sub(" ", path)
         if normalized.startswith("@"):
             normalized = normalized[1:]
@@ -40,15 +41,7 @@ class WorkspaceCapability:
         if normalized == "~" or normalized.startswith("~/"):
             requested = requested.expanduser()
         candidate = requested if requested.is_absolute() else self.root / requested
-        resolved = candidate.resolve(strict=False)
-        allowed_roots = (self.root, *self.extra_read_roots) if access == "read" else (self.root,)
-        if not any(_is_within(resolved, root) for root in allowed_roots):
-            raise CapabilityViolation("outside_workspace", path, resolved)
-        return resolved
-
-
-def _is_within(path: Path, root: Path) -> bool:
-    return path == root or root in path.parents
+        return candidate.resolve(strict=False)
 
 
 __all__ = [

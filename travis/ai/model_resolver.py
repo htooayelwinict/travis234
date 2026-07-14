@@ -14,7 +14,7 @@ from travis.ai.providers.catalog import get_provider_profile, list_provider_prof
 from travis.ai.types import Model
 
 DEFAULT_THINKING_LEVEL = "off"
-VALID_THINKING_LEVELS = {"off", "minimal", "low", "medium", "high", "xhigh"}
+VALID_THINKING_LEVELS = {"off", "minimal", "low", "medium", "high", "xhigh", "max"}
 
 
 class ModelRegistryLike(Protocol):

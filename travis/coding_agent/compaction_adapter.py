@@ -12,10 +12,12 @@ from travis.ai.types import AssistantMessage, TextContent, UserMessage, empty_us
 from travis.compaction.compressor import (
     COMPRESSED_SUMMARY_METADATA_KEY,
     LEGACY_SUMMARY_PREFIX,
+    NON_TURN_USER_METADATA_KEY,
     SUMMARY_END_MARKER,
     SUMMARY_PREFIX,
     estimate_tokens,
 )
+from travis.coding_agent.message_utils import bash_execution_text, branch_summary_text
 
 if TYPE_CHECKING:
     from travis.coding_agent.process_context import ProcessContextRecord
@@ -43,6 +45,12 @@ class CompactionEndEvent:
     type: str = "compaction_end"
 
 
+@dataclass(frozen=True)
+class CompressorContext:
+    messages: list[AgentMessage]
+    source_indices: list[int]
+
+
 
 
 class SessionCompactionAdapter:
@@ -67,6 +75,10 @@ class SessionCompactionAdapter:
     @property
     def is_running(self) -> bool:
         return self._running
+
+    @property
+    def is_persistent(self) -> bool:
+        return self._session_store is not None
 
     @property
     def messages(self) -> list[AgentMessage]:
@@ -98,13 +110,27 @@ class SessionCompactionAdapter:
         finally:
             self._running = False
 
-    def apply_manual_status(self, status, source_messages: Sequence[AgentMessage]):
+    def apply_manual_status(
+        self,
+        status,
+        source_messages: Sequence[AgentMessage],
+        *,
+        source_indices: Sequence[int] | None = None,
+    ):
         context_entry_ids = self._session_context_message_entry_ids()
         if self._session_store is not None and status.compressed:
-            first_kept = self._first_kept_entry_id(status, context_entry_ids, fallback_to_leaf=True)
+            first_kept = self._first_kept_entry_id(
+                status,
+                context_entry_ids,
+                source_indices=source_indices,
+                fallback_to_leaf=True,
+            )
             summary = status.summary or extract_compaction_summary(status.messages)
             tokens_before = status.tokens_before or estimate_tokens(list(source_messages))
-            details = self._merge_process_details(getattr(status, "details", None), source_messages)
+            details = merge_summary_model_compaction_details(
+                self._merge_process_details(getattr(status, "details", None), source_messages),
+                status,
+            )
             self._session_store.append_compaction(
                 summary,
                 first_kept,
@@ -123,6 +149,7 @@ class SessionCompactionAdapter:
         result: object,
         *,
         source_messages: Sequence[AgentMessage],
+        source_indices: Sequence[int] | None = None,
         retain_source_suffix: bool = True,
     ) -> list[AgentMessage]:
         compacted = list(compacted_messages)
@@ -134,12 +161,20 @@ class SessionCompactionAdapter:
         summary = getattr(result, "summary", None) or extract_compaction_summary(compacted)
         tokens_before = int(getattr(result, "tokens_before", 0) or estimate_tokens(source))
         first_kept = (
-            self._first_kept_entry_id(result, context_entry_ids, fallback_to_leaf=False)
+            self._first_kept_entry_id(
+                result,
+                context_entry_ids,
+                source_indices=source_indices,
+                fallback_to_leaf=False,
+            )
             if retain_source_suffix
             else ""
         )
         parent_id = self._compaction_parent_entry_id(source, context_entry_ids)
-        details = self._merge_process_details(getattr(result, "details", None), source)
+        details = merge_summary_model_compaction_details(
+            self._merge_process_details(getattr(result, "details", None), source),
+            result,
+        )
         self._session_store.append_compaction(
             summary,
             first_kept,
@@ -153,6 +188,43 @@ class SessionCompactionAdapter:
         replaced = list(messages)
         self._state.messages = replaced
         return replaced
+
+    def context_message_entry_ids(self) -> list[str]:
+        return self._session_context_message_entry_ids()
+
+    def latest_compaction_entry(self) -> dict[str, object] | None:
+        if self._session_store is None:
+            return None
+        for entry in reversed(self._session_store.get_branch()):
+            if entry.get("type") == "compaction":
+                return dict(entry)
+        return None
+
+    def apply_extension_compaction(
+        self,
+        compaction: Mapping[str, object],
+        *,
+        source_messages: Sequence[AgentMessage],
+    ) -> tuple[list[AgentMessage], dict[str, object]]:
+        if self._session_store is None:
+            raise RuntimeError("Extension-provided compaction requires a persistent session")
+        summary = str(compaction["summary"])
+        first_kept_entry_id = str(compaction.get("firstKeptEntryId") or "")
+        context_entry_ids = self._session_context_message_entry_ids()
+        if first_kept_entry_id and first_kept_entry_id not in context_entry_ids:
+            raise ValueError(f"Extension compaction returned unknown firstKeptEntryId: {first_kept_entry_id}")
+        tokens_before = int(compaction["tokensBefore"])
+        details = self._merge_process_details(compaction.get("details"), source_messages)
+        entry_id = self._session_store.append_compaction(
+            summary,
+            first_kept_entry_id,
+            tokens_before,
+            details=details,
+        )
+        entry = self._session_store.get_entry(entry_id)
+        if entry is None:
+            raise RuntimeError("Persisted extension compaction entry could not be read back")
+        return self._restore_persisted_context(), dict(entry)
 
     def _restore_persisted_context(self) -> list[AgentMessage]:
         assert self._session_store is not None
@@ -172,9 +244,12 @@ class SessionCompactionAdapter:
         result: object,
         context_entry_ids: list[str],
         *,
+        source_indices: Sequence[int] | None,
         fallback_to_leaf: bool,
     ) -> str:
         index = getattr(result, "first_kept_message_index", None)
+        if index is not None and source_indices is not None:
+            index = source_indices[index] if 0 <= index < len(source_indices) else None
         if index is not None and 0 <= index < len(context_entry_ids):
             return context_entry_ids[index]
         if fallback_to_leaf and self._session_store is not None:
@@ -276,18 +351,67 @@ def merge_process_compaction_details(
     return merged or None
 
 
-def to_compressor_messages(messages: Sequence[AgentMessage]) -> list[AgentMessage]:
+def merge_summary_model_compaction_details(details: object, result: object) -> dict[str, object] | None:
+    merged = dict(details) if isinstance(details, Mapping) else {}
+    if not bool(getattr(result, "summary_model_dedicated", False)):
+        return merged or None
+    provenance: dict[str, object] = {
+        "requested": getattr(result, "summary_model_requested", None),
+        "used": getattr(result, "summary_model_used", None),
+        "fallback": bool(getattr(result, "summary_model_fallback", False)),
+    }
+    error = getattr(result, "summary_model_error", None)
+    if error:
+        provenance["error"] = error
+    merged["summaryModel"] = provenance
+    return merged
+
+
+def to_compressor_context(messages: Sequence[AgentMessage]) -> CompressorContext:
     adapted: list[AgentMessage] = []
+    source_indices: list[int] = []
     for index, message in enumerate(messages):
-        if getattr(message, "role", None) != "compactionSummary":
+        role = getattr(message, "role", None)
+        timestamp = getattr(message, "timestamp", None) or now_ms()
+        if role == "bashExecution":
+            if getattr(message, "exclude_from_context", False):
+                continue
+            converted = UserMessage(
+                content=[TextContent(text=bash_execution_text(message))],
+                timestamp=timestamp,
+            )
+            setattr(converted, NON_TURN_USER_METADATA_KEY, True)
+            adapted.append(converted)
+            source_indices.append(index)
+            continue
+        if role == "custom":
+            content = getattr(message, "content", "")
+            converted = UserMessage(
+                content=[TextContent(text=content)] if isinstance(content, str) else content,
+                timestamp=timestamp,
+            )
+            setattr(converted, NON_TURN_USER_METADATA_KEY, True)
+            adapted.append(converted)
+            source_indices.append(index)
+            continue
+        if role == "branchSummary":
+            converted = UserMessage(
+                content=[TextContent(text=branch_summary_text(message))],
+                timestamp=timestamp,
+            )
+            setattr(converted, NON_TURN_USER_METADATA_KEY, True)
+            adapted.append(converted)
+            source_indices.append(index)
+            continue
+        if role != "compactionSummary":
             adapted.append(message)
+            source_indices.append(index)
             continue
         summary = compaction_summary_with_details(
             getattr(message, "summary", ""),
             getattr(message, "details", None),
         )
-        text = f"{SUMMARY_PREFIX}\n{summary.strip()}\n\n{SUMMARY_END_MARKER}"
-        timestamp = getattr(message, "timestamp", None) or now_ms()
+        text = f"{SUMMARY_PREFIX}\n{summary.strip()}\n\n{SUMMARY_END_MARKER}\n\n"
         if _next_ordinary_role(messages, index + 1) == "user":
             envelope: AgentMessage = AssistantMessage(
                 content=[TextContent(text=text)],
@@ -302,7 +426,15 @@ def to_compressor_messages(messages: Sequence[AgentMessage]) -> list[AgentMessag
             envelope = UserMessage(content=[TextContent(text=text)], timestamp=timestamp)
         setattr(envelope, COMPRESSED_SUMMARY_METADATA_KEY, True)
         adapted.append(envelope)
-    return adapted
+        source_indices.append(index)
+    return CompressorContext(
+        messages=adapted,
+        source_indices=source_indices,
+    )
+
+
+def to_compressor_messages(messages: Sequence[AgentMessage]) -> list[AgentMessage]:
+    return to_compressor_context(messages).messages
 
 
 def compaction_summary_with_details(summary: object, details: object) -> str:
@@ -398,5 +530,7 @@ __all__ = [
     "compaction_summary_with_details",
     "extract_compaction_summary",
     "merge_process_compaction_details",
+    "merge_summary_model_compaction_details",
     "to_compressor_messages",
+    "to_compressor_context",
 ]

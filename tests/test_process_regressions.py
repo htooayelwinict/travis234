@@ -10,7 +10,7 @@ from travis.ai.providers.faux import (
     text_response_events,
     tool_call_response_events,
 )
-from travis.ai.stream import register_api_provider, reset_api_providers
+from tests._provider_runtime import register_api_provider, reset_api_providers
 from travis.app import CodingApp
 from tests.test_coding_persistence_and_compaction import (
     test_agent_session_manual_compaction_persists_managed_process_ledger as _compaction_ledger,
@@ -19,7 +19,7 @@ from tests.test_coding_policy_and_extensions import (
     test_concurrent_external_steering_is_delivered_once_with_distinct_ids as _concurrent_steering,
 )
 from tests.test_process_context import (
-    test_provider_receives_transient_process_overlay_without_jsonl_append as _unavailable_overlay,
+    test_provider_context_is_not_displaced_by_managed_process_state as _provider_context_ordering,
 )
 from tests.test_process_output import (
     test_live_spool_budget_is_shared_and_released_exactly_once as _shared_spool_budget,
@@ -35,9 +35,6 @@ from tests.test_process_tools import (
     managed_tools,
     test_process_wait_collapses_large_output_to_bounded_borrowed_artifact as _large_artifact,
     test_process_wait_uses_terminal_wait_streams_updates_and_is_sequential as _sequential_wait,
-)
-from tests.test_tui_commands_and_extensions import (
-    test_allow_grants_during_active_turn_without_waiting_for_turn_executor as _allow_during_turn,
 )
 from tests.test_tui_runtime_compaction_and_models import (
     test_interactive_mode_serializes_bang_bash_after_streaming_turn as _bang_during_turn,
@@ -105,18 +102,16 @@ def test_terminal_output_recovers_after_live_ttl_and_new_app(tmp_path: Path, own
     _terminal_recovery(tmp_path, owner)
 
 
-def test_process_overlay_marks_unrecoverable_running_handle_unavailable(tmp_path: Path) -> None:
-    _unavailable_overlay(tmp_path)
+def test_managed_process_state_does_not_displace_provider_context(tmp_path: Path) -> None:
+    _provider_context_ordering(tmp_path)
 
 
 def test_compaction_round_trip_preserves_live_process_ledger(tmp_path: Path) -> None:
     _compaction_ledger(tmp_path)
 
 
-def test_bang_and_allow_complete_while_turn_waits(tmp_path: Path) -> None:
+def test_bang_completes_while_turn_waits(tmp_path: Path) -> None:
     _bang_during_turn(tmp_path)
-    reset_api_providers()
-    _allow_during_turn(tmp_path)
 
 
 def test_single_ctrl_c_routes_to_focused_operation(tmp_path: Path, monkeypatch) -> None:
