@@ -75,6 +75,16 @@ def test_container_smoke_prepares_linux_writable_workspace(tmp_path) -> None:
     assert package_json.stat().st_mode & 0o666 == 0o666
 
 
+def test_container_smoke_prepares_extension_flag_fixture(tmp_path: Path) -> None:
+    from evals.container_smoke import prepare_extension_flag_smoke
+
+    extension = prepare_extension_flag_smoke(tmp_path)
+
+    source = extension.read_text(encoding="utf-8")
+    assert "register_flag('profile'" in source
+    assert "'type': 'string'" in source
+
+
 def test_container_qualification_exercises_compaction_and_process_cleanup(tmp_path) -> None:
     from evals.container_qualification import run_container_qualification
 

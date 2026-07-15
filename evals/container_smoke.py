@@ -32,7 +32,27 @@ def run_container_smoke(image: str) -> None:
     with tempfile.TemporaryDirectory(prefix="travis-container-smoke-") as temporary:
         workspace = Path(temporary)
         prepare_npm_workspace(workspace)
+        prepare_extension_flag_smoke(workspace)
         mounted = f"{workspace}:/workspace"
+        extension_help = _run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--entrypoint",
+                CONSOLE_ENTRYPOINT,
+                "-v",
+                mounted,
+                "-w",
+                "/workspace",
+                image,
+                "--extension",
+                "/workspace/extension-flag-smoke.py",
+                "--help",
+            ]
+        )
+        if "--profile" not in extension_help or "Container extension profile" not in extension_help:
+            raise RuntimeError("container extension flag help is missing its registered schema")
         installed_modes = _run_mounted_python(
             image,
             Path(__file__).with_name("installed_modes_smoke.py"),
@@ -129,6 +149,19 @@ def prepare_npm_workspace(workspace: Path) -> None:
         encoding="utf-8",
     )
     package_json.chmod(0o666)
+
+
+def prepare_extension_flag_smoke(workspace: Path) -> Path:
+    workspace.mkdir(parents=True, exist_ok=True)
+    extension = workspace / "extension-flag-smoke.py"
+    extension.write_text(
+        "def extension(travis):\n"
+        "    travis.register_flag('profile', "
+        "{'type': 'string', 'description': 'Container extension profile'})\n",
+        encoding="utf-8",
+    )
+    extension.chmod(0o644)
+    return extension
 
 
 def _run(command: list[str], expected: str | None = None) -> str:

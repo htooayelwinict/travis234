@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from xml.etree import ElementTree
 
 
 CONTRACT_FILE = Path(__file__).resolve()
@@ -164,3 +165,30 @@ def test_only_travis234_state_contract_is_documented() -> None:
     assert "~/.travis234/agent/sessions/" in readme
     assert "/travis-home/agent/sessions/" in readme
     assert not any(pattern.search(readme) for pattern in FORBIDDEN_STATE_PATTERNS)
+
+
+def test_readme_uses_accessible_local_cybernetic_banner() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    banner_path = ROOT / "docs" / "assets" / "travis234-banner.svg"
+    banner = banner_path.read_text(encoding="utf-8")
+    root = ElementTree.fromstring(banner)
+    namespace = {"svg": "http://www.w3.org/2000/svg"}
+
+    assert 'src="docs/assets/travis234-banner.svg"' in readme
+    assert 'alt="Travis234 cybernetic terminal coding agent"' in readme
+    assert "TRAVIS234 // NEURAL TERMINAL ONLINE" in readme
+    assert "[AGENT:READY]" in readme
+    assert "[CONTEXT:COMPACT]" in readme
+    assert "[TOOLS:BOUNDED]" in readme
+    assert "[RUNTIME:PERSISTENT]" in readme
+    assert root.attrib["viewBox"] == "0 0 1400 420"
+    assert root.find("svg:title", namespace) is not None
+    assert root.find("svg:desc", namespace) is not None
+    assert root.find(".//svg:script", namespace) is None
+    assert root.find(".//svg:animate", namespace) is None
+    assert root.find(".//svg:animateTransform", namespace) is None
+    assert "NEURAL TERMINAL" in banner
+    assert "AGENT // READY" in banner
+    assert "CONTEXT // COMPACT" in banner
+    assert "https://" not in banner
+    assert "http://" not in banner.replace("http://www.w3.org/2000/svg", "")

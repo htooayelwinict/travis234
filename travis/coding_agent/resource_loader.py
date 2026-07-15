@@ -263,6 +263,14 @@ class DefaultResourceLoader:
         return self.extensions_result
 
     def reload(self, options: Mapping[str, object] | None = None) -> None:
+        self.complete_reload(options)
+
+    def complete_reload(
+        self,
+        options: Mapping[str, object] | None = None,
+        *,
+        pretrust_extensions: dict[str, object] | None = None,
+    ) -> None:
         resolved_options = dict(options or {})
         trust_override = _first_mapping_value(
             resolved_options,
@@ -274,9 +282,9 @@ class DefaultResourceLoader:
         if trust_override is None:
             trust_override = self._project_trust_override
 
-        pretrust_extensions: dict[str, object] | None = None
         if trust_override is None:
-            pretrust_extensions = self.load_project_trust_extensions()
+            if pretrust_extensions is None:
+                pretrust_extensions = self.load_project_trust_extensions()
             context = _first_mapping_value(
                 resolved_options,
                 "projectTrustContext",

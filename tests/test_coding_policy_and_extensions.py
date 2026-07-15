@@ -488,6 +488,51 @@ def test_extension_runner_flag_registration_defaults_and_values() -> None:
     assert runner.get_flag_values()["shared-flag"] is False
     assert runner.get_flag("missing") is None
 
+
+def test_extension_runner_records_cross_owner_flag_conflicts(tmp_path: Path) -> None:
+    from travis.coding_agent import DefaultResourceLoader
+    from travis.coding_agent.extensions import ExtensionFlagConflict
+
+    def first(runner: ExtensionRunner) -> None:
+        runner.register_flag("profile", {"type": "string", "description": "first"})
+
+    def second(runner: ExtensionRunner) -> None:
+        runner.register_flag("profile", {"type": "boolean", "description": "second"})
+
+    loader = DefaultResourceLoader(
+        cwd=str(tmp_path),
+        agent_dir=str(tmp_path / "agent"),
+        extension_factories=[first, second],
+    )
+    loader.reload({"projectTrustOverride": False})
+    runtime = loader.get_extensions()["runtime"]
+
+    assert runtime.get_flags()["profile"].description == "first"
+    assert runtime.get_flag_conflicts() == [
+        ExtensionFlagConflict(
+            name="profile",
+            first_extension_path="<inline:1>",
+            conflicting_extension_path="<inline:2>",
+        )
+    ]
+
+
+def test_shared_extension_flag_value_helper_preserves_sdk_semantics() -> None:
+    from travis.coding_agent.extensions import apply_extension_flag_values
+
+    runner = ExtensionRunner()
+    runner.register_flag("verbose", {"type": "boolean", "default": False})
+    runner.register_flag("profile", {"type": "string", "default": "safe"})
+
+    diagnostics = apply_extension_flag_values(
+        runner,
+        {"verbose": False, "profile": "security", "missing": True},
+    )
+
+    assert runner.get_flag("verbose") is True
+    assert runner.get_flag("profile") == "security"
+    assert diagnostics == [{"type": "error", "message": "Unknown option: --missing"}]
+
 def test_extension_runner_message_renderer_registration_and_lookup() -> None:
     runner = ExtensionRunner()
 

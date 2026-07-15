@@ -43,6 +43,20 @@ def _write_extension_tool(path: Path, name: str = "extension_tool") -> None:
     )
 
 
+def _write_extension_flags(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                "def extension(travis):",
+                "    travis.register_flag('profile', {'type': 'string'})",
+                "    travis.register_flag('verbose', {'type': 'boolean'})",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
 def _write_skill(path: Path, name: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -176,6 +190,76 @@ def test_coding_app_applies_allowlist_then_denylist_with_explicit_extension(
         }
         assert app.session.get_tool_definition("bash") is None
         assert app.session.agent.state.system_prompt == app.session.system_prompt
+    finally:
+        app.close()
+
+
+def test_coding_app_applies_extension_flags_to_initial_and_replacement_sessions(
+    tmp_path: Path,
+) -> None:
+    from travis.coding_agent.resource_loader import DefaultResourceLoader
+
+    project = tmp_path / "project"
+    project.mkdir()
+    extension = tmp_path / "operator" / "flags.py"
+    _write_extension_flags(extension)
+    loader = DefaultResourceLoader(
+        cwd=str(project),
+        agent_dir=str(tmp_path / "agent"),
+        additional_extension_paths=[str(extension)],
+    )
+    loader.reload({"projectTrustOverride": False})
+
+    app = CodingApp(
+        cwd=str(project),
+        agent_dir=str(tmp_path / "agent"),
+        model=faux_model(),
+        enable_tui=False,
+        project_trust_override=False,
+        additional_extension_paths=[str(extension)],
+        initial_resource_loader=loader,
+        extension_flag_values={"profile": "security", "verbose": True},
+    )
+    try:
+        assert app.session.extension_runner.get_flag("profile") == "security"
+        assert app.session.extension_runner.get_flag("verbose") is True
+
+        replacement = app._create_runtime_session({"cwd": str(project)})
+        try:
+            assert replacement.session.extension_runner.get_flag("profile") == "security"
+            assert replacement.session.extension_runner.get_flag("verbose") is True
+        finally:
+            replacement.session.dispose()
+    finally:
+        app.close()
+
+
+def test_replacement_missing_cli_flag_schema_keeps_current_session(tmp_path: Path) -> None:
+    from travis.coding_agent.extensions import ExtensionFlagValidationError
+    from travis.coding_agent.resource_loader import DefaultResourceLoader
+
+    loader = DefaultResourceLoader(
+        cwd=str(tmp_path),
+        agent_dir=str(tmp_path / "agent"),
+        extension_factories=[
+            lambda runner: runner.register_flag("profile", {"type": "string"})
+        ],
+    )
+    loader.reload({"projectTrustOverride": False})
+    app = CodingApp(
+        cwd=str(tmp_path),
+        agent_dir=str(tmp_path / "agent"),
+        model=faux_model(),
+        enable_tui=False,
+        project_trust_override=False,
+        initial_resource_loader=loader,
+        extension_flag_values={"profile": "security"},
+    )
+    current = app.session
+    try:
+        with pytest.raises(ExtensionFlagValidationError, match="Unknown option: --profile"):
+            app.new_session()
+        assert app.session is current
     finally:
         app.close()
 

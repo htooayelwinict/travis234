@@ -1652,6 +1652,52 @@ def test_default_resource_loader_ports_travis234_inline_extension_factories(tmp_
         )
     ]
 
+
+def test_staged_resource_reload_reuses_pretrust_runtime_without_reexecuting_factories(
+    tmp_path: Path,
+) -> None:
+    from travis.coding_agent import DefaultResourceLoader, ExtensionRunner
+
+    calls: list[str] = []
+
+    def extension_factory(runner: ExtensionRunner) -> None:
+        calls.append("factory")
+        runner.register_flag("profile", {"type": "string"})
+
+    loader = DefaultResourceLoader(
+        cwd=str(tmp_path),
+        agent_dir=str(tmp_path / "agent"),
+        extension_factories=[extension_factory],
+    )
+
+    pretrust = loader.load_project_trust_extensions()
+    pretrust_runtime = pretrust["runtime"]
+    loader.complete_reload(
+        {"projectTrustOverride": False},
+        pretrust_extensions=pretrust,
+    )
+
+    assert calls == ["factory"]
+    assert loader.get_extensions()["runtime"] is pretrust_runtime
+    assert "profile" in pretrust_runtime.get_flags()
+
+    ordinary_calls: list[str] = []
+
+    def ordinary_factory(runner: ExtensionRunner) -> None:
+        ordinary_calls.append("factory")
+        runner.register_flag("verbose", {"type": "boolean"})
+
+    ordinary_loader = DefaultResourceLoader(
+        cwd=str(tmp_path),
+        agent_dir=str(tmp_path / "ordinary-agent"),
+        extension_factories=[ordinary_factory],
+    )
+    ordinary_loader.reload({"projectTrustOverride": False})
+    ordinary_runtime = ordinary_loader.get_extensions()["runtime"]
+
+    assert ordinary_calls == ["factory"]
+    assert "verbose" in ordinary_runtime.get_flags()
+
 def test_create_agent_session_services_ports_travis234_provider_and_flag_diagnostics(tmp_path: Path) -> None:
     from travis.coding_agent import ExtensionRunner, create_agent_session_services
 

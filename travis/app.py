@@ -25,6 +25,11 @@ from travis.coding_agent.agent_session_runtime import AgentSessionRuntime, Creat
 from travis.coding_agent.compaction_adapter import to_compressor_messages
 from travis.coding_agent.branch_summarization import SUMMARIZATION_SYSTEM_PROMPT
 from travis.coding_agent.config import get_agent_dir
+from travis.coding_agent.extensions import (
+    ExtensionFlagValidationError,
+    ExtensionRunner,
+    apply_extension_flag_values,
+)
 from travis.coding_agent.settings_manager import SettingsManager
 from travis.coding_agent.auth_storage import AuthStorage
 from travis.coding_agent.model_registry import ModelRegistry
@@ -114,6 +119,8 @@ class CodingApp:
         additional_skill_paths: list[str] | None = None,
         additional_prompt_template_paths: list[str] | None = None,
         additional_theme_paths: list[str] | None = None,
+        initial_resource_loader: DefaultResourceLoader | None = None,
+        extension_flag_values: Mapping[str, bool | str] | None = None,
         offline: bool = False,
         event_trace=None,
         conversation_log=None,
@@ -141,6 +148,8 @@ class CodingApp:
         self._additional_skill_paths = list(additional_skill_paths or [])
         self._additional_prompt_template_paths = list(additional_prompt_template_paths or [])
         self._additional_theme_paths = list(additional_theme_paths or [])
+        self._initial_resource_loader = initial_resource_loader
+        self._extension_flag_values = dict(extension_flag_values or {})
         self._offline = bool(offline)
         if thinking_level != "off":
             set_default_thinking_level = getattr(
@@ -242,18 +251,37 @@ class CodingApp:
             session_path
             and (not Path(session_path).exists() or Path(session_path).stat().st_size == 0)
         )
-        resource_loader = DefaultResourceLoader(
-            cwd=resolved_cwd,
-            agent_dir=self._agent_dir,
-            settings_manager=self._settings_manager,
-            project_trusted=self._project_trust_override,
-            additional_extension_paths=self._additional_extension_paths,
-            additional_skill_paths=self._additional_skill_paths,
-            additional_prompt_template_paths=self._additional_prompt_template_paths,
-            additional_theme_paths=self._additional_theme_paths,
-            offline=self._offline,
+        resource_loader = self._initial_resource_loader
+        if resource_loader is not None:
+            self._initial_resource_loader = None
+            if str(Path(resource_loader.cwd).expanduser().resolve()) != resolved_cwd:
+                runtime = resource_loader.get_extensions().get("runtime")
+                if isinstance(runtime, ExtensionRunner):
+                    runtime.dispose()
+                raise ValueError("initial resource loader cwd does not match CodingApp cwd")
+        else:
+            resource_loader = DefaultResourceLoader(
+                cwd=resolved_cwd,
+                agent_dir=self._agent_dir,
+                settings_manager=self._settings_manager,
+                project_trusted=self._project_trust_override,
+                additional_extension_paths=self._additional_extension_paths,
+                additional_skill_paths=self._additional_skill_paths,
+                additional_prompt_template_paths=self._additional_prompt_template_paths,
+                additional_theme_paths=self._additional_theme_paths,
+                offline=self._offline,
+            )
+            resource_loader.reload({"projectTrustContext": self._project_trust_context})
+        runtime = resource_loader.get_extensions().get("runtime")
+        diagnostics = (
+            apply_extension_flag_values(runtime, self._extension_flag_values)
+            if isinstance(runtime, ExtensionRunner)
+            else []
         )
-        resource_loader.reload({"projectTrustContext": self._project_trust_context})
+        if diagnostics:
+            if isinstance(runtime, ExtensionRunner):
+                runtime.dispose()
+            raise ExtensionFlagValidationError(diagnostics)
         session = AgentSession(
             cwd=resolved_cwd,
             model=model,

@@ -228,6 +228,11 @@ PI_CONTRACTS = (
         "tests/test_cli_runtime_controls.py::test_cli_forwards_repeatable_tool_resource_and_offline_controls",
     ),
     _pi(
+        "extension_flags",
+        "cli",
+        "tests/test_cli_extension_flags.py::test_cli_parses_typed_extension_flags_once_and_preserves_prompt",
+    ),
+    _pi(
         "no_tools",
         "cli",
         "tests/test_cli_runtime_controls.py::test_cli_no_tools_disables_all_tools_by_default",

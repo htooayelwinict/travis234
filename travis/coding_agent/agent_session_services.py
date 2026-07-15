@@ -13,7 +13,7 @@ from travis.ai.model_resolver import find_initial_model
 from travis.ai.types import Context, ImageContent, Message, Model, SimpleStreamOptions, TextContent
 from travis.coding_agent.agent_session import AgentSession, default_convert_to_llm
 from travis.coding_agent.auth_storage import AuthStorage
-from travis.coding_agent.extensions import ExtensionRunner
+from travis.coding_agent.extensions import ExtensionRunner, apply_extension_flag_values
 from travis.coding_agent.model_registry import ModelRegistry
 from travis.coding_agent.object_utils import call_optional as _call_or_none
 from travis.coding_agent.object_utils import first_defined as _first_defined
@@ -101,7 +101,7 @@ def create_agent_session_services(options: dict[str, Any]) -> dict[str, Any]:
     if isinstance(runtime, ExtensionRunner):
         diagnostics.extend(_drain_pending_provider_registrations(runtime, model_registry))
         diagnostics.extend(
-            _apply_extension_flag_values(
+            apply_extension_flag_values(
                 runtime,
                 options.get("extensionFlagValues") or options.get("extension_flag_values"),
             )
@@ -551,41 +551,4 @@ def _drain_pending_provider_registrations(
                     "message": f'Extension "{extension_path}" error: {error}',
                 }
             )
-    return diagnostics
-
-
-def _apply_extension_flag_values(runtime: ExtensionRunner, raw_values: object) -> list[dict[str, object]]:
-    if raw_values is None:
-        return []
-    if isinstance(raw_values, dict):
-        items = list(raw_values.items())
-    elif hasattr(raw_values, "items"):
-        items = list(raw_values.items())
-    else:
-        try:
-            items = list(raw_values)  # type: ignore[arg-type]
-        except TypeError:
-            items = []
-
-    diagnostics: list[dict[str, object]] = []
-    registered_flags = runtime.get_flags()
-    unknown_flags: list[str] = []
-    for name, value in items:
-        flag_name = str(name)
-        flag = registered_flags.get(flag_name)
-        if flag is None:
-            unknown_flags.append(flag_name)
-            continue
-        if flag.type == "boolean":
-            runtime.set_flag_value(flag_name, True)
-            continue
-        if isinstance(value, str):
-            runtime.set_flag_value(flag_name, value)
-            continue
-        diagnostics.append({"type": "error", "message": f'Extension flag "--{flag_name}" requires a value'})
-
-    if unknown_flags:
-        label = "option" if len(unknown_flags) == 1 else "options"
-        names = ", ".join(f"--{name}" for name in unknown_flags)
-        diagnostics.append({"type": "error", "message": f"Unknown {label}: {names}"})
     return diagnostics

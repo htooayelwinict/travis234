@@ -1,78 +1,197 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1400" height="420" viewBox="0 0 1400 420" role="img" aria-labelledby="title description">
-  <title id="title">Travis234 terminal coding agent</title>
-  <desc id="description">A dark terminal-inspired banner with the Travis234 name and its core capabilities.</desc>
+  <title id="title">Travis234 cybernetic terminal coding agent</title>
+  <desc id="description">A neon neural terminal interface showing Travis234 online with bounded tools, compact context, persistent sessions, and a provider-neutral runtime.</desc>
   <defs>
-    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#07111f"/>
-      <stop offset="0.52" stop-color="#111c38"/>
-      <stop offset="1" stop-color="#25144a"/>
+    <linearGradient id="void" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#030711"/>
+      <stop offset="0.48" stop-color="#081326"/>
+      <stop offset="1" stop-color="#160a2b"/>
     </linearGradient>
-    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#39e6c7"/>
-      <stop offset="0.48" stop-color="#63a7ff"/>
-      <stop offset="1" stop-color="#bd6cff"/>
+    <linearGradient id="neon" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#38f8d4"/>
+      <stop offset="0.36" stop-color="#4ba3ff"/>
+      <stop offset="0.7" stop-color="#a86cff"/>
+      <stop offset="1" stop-color="#ff4fd8"/>
     </linearGradient>
-    <radialGradient id="glowA" cx="50%" cy="50%" r="50%">
-      <stop offset="0" stop-color="#36e3c4" stop-opacity="0.28"/>
-      <stop offset="1" stop-color="#36e3c4" stop-opacity="0"/>
+    <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#172643" stop-opacity="0.82"/>
+      <stop offset="1" stop-color="#080d1c" stop-opacity="0.62"/>
+    </linearGradient>
+    <linearGradient id="core" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#38f8d4" stop-opacity="0.2"/>
+      <stop offset="0.52" stop-color="#4ba3ff" stop-opacity="0.09"/>
+      <stop offset="1" stop-color="#ff4fd8" stop-opacity="0.2"/>
+    </linearGradient>
+    <radialGradient id="cyanAura" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#38f8d4" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#38f8d4" stop-opacity="0"/>
     </radialGradient>
-    <radialGradient id="glowB" cx="50%" cy="50%" r="50%">
-      <stop offset="0" stop-color="#a45cff" stop-opacity="0.25"/>
-      <stop offset="1" stop-color="#a45cff" stop-opacity="0"/>
+    <radialGradient id="violetAura" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#a86cff" stop-opacity="0.25"/>
+      <stop offset="1" stop-color="#a86cff" stop-opacity="0"/>
     </radialGradient>
-    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
-      <feGaussianBlur stdDeviation="12"/>
-    </filter>
-    <pattern id="grid" width="34" height="34" patternUnits="userSpaceOnUse">
-      <path d="M 34 0 L 0 0 0 34" fill="none" stroke="#b8c9ff" stroke-opacity="0.045" stroke-width="1"/>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#8db9ff" stroke-opacity="0.06" stroke-width="1"/>
+      <circle cx="0" cy="0" r="1.2" fill="#38f8d4" fill-opacity="0.14"/>
     </pattern>
+    <pattern id="scanlines" width="8" height="8" patternUnits="userSpaceOnUse">
+      <path d="M0 7.5H1400" stroke="#d6e5ff" stroke-opacity="0.025" stroke-width="1"/>
+    </pattern>
+    <filter id="glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="wideGlow" x="-40%" y="-80%" width="180%" height="260%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+    <clipPath id="canvasClip">
+      <rect x="0" y="0" width="1400" height="420" rx="24"/>
+    </clipPath>
   </defs>
 
-  <rect width="1400" height="420" rx="26" fill="url(#background)"/>
-  <rect width="1400" height="420" rx="26" fill="url(#grid)"/>
-  <ellipse cx="225" cy="85" rx="310" ry="260" fill="url(#glowA)" filter="url(#softGlow)"/>
-  <ellipse cx="1230" cy="355" rx="355" ry="280" fill="url(#glowB)" filter="url(#softGlow)"/>
+  <g clip-path="url(#canvasClip)">
+    <rect width="1400" height="420" fill="url(#void)"/>
+    <ellipse cx="165" cy="205" rx="330" ry="300" fill="url(#cyanAura)" filter="url(#wideGlow)"/>
+    <ellipse cx="1225" cy="225" rx="390" ry="310" fill="url(#violetAura)" filter="url(#wideGlow)"/>
+    <rect width="1400" height="420" fill="url(#grid)"/>
+    <rect width="1400" height="420" fill="url(#scanlines)"/>
 
-  <g opacity="0.9">
-    <rect x="72" y="71" width="94" height="94" rx="23" fill="#0b172b" stroke="#5ce8d0" stroke-opacity="0.5" stroke-width="2"/>
-    <path d="M101 104l22 17-22 17M130 139h17" fill="none" stroke="url(#accent)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <g stroke="#38f8d4" stroke-opacity="0.24" stroke-width="1.5">
+        <path d="M0 116H72L93 95H170"/>
+        <path d="M0 285H54L81 312H177"/>
+        <path d="M228 0V45L205 68V112"/>
+        <path d="M324 420V386L300 362V330"/>
+        <path d="M585 0V31L604 50V76"/>
+      </g>
+      <g stroke="#a86cff" stroke-opacity="0.22" stroke-width="1.5">
+        <path d="M1400 98H1338L1310 70H1226"/>
+        <path d="M1400 318H1354L1329 293H1265"/>
+        <path d="M1187 0V35L1164 58V86"/>
+        <path d="M1012 420V386L1034 364V335"/>
+        <path d="M860 0V32L839 53V77"/>
+      </g>
+      <g fill="#38f8d4" stroke="none" filter="url(#glow)">
+        <circle cx="93" cy="95" r="3"/>
+        <circle cx="81" cy="312" r="3"/>
+        <circle cx="205" cy="68" r="3"/>
+        <circle cx="604" cy="50" r="3"/>
+      </g>
+      <g fill="#ff4fd8" stroke="none" filter="url(#glow)">
+        <circle cx="1310" cy="70" r="3"/>
+        <circle cx="1329" cy="293" r="3"/>
+        <circle cx="1164" cy="58" r="3"/>
+        <circle cx="839" cy="53" r="3"/>
+      </g>
+    </g>
+
+    <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" letter-spacing="2">
+      <text x="54" y="39" fill="#7ea7c9">SYS://TRAVIS234</text>
+      <text x="230" y="39" fill="#38f8d4">LINK.STABLE</text>
+      <text x="1110" y="39" fill="#9fb4d8">NODE 02-03-04</text>
+      <text x="1286" y="39" fill="#ff70df">ONLINE</text>
+      <path d="M54 50H492" stroke="#38f8d4" stroke-opacity="0.28"/>
+      <path d="M908 50H1346" stroke="#a86cff" stroke-opacity="0.28"/>
+      <rect x="497" y="47" width="406" height="6" rx="3" fill="#0a1427"/>
+      <rect x="497" y="47" width="292" height="6" rx="3" fill="url(#neon)" opacity="0.78"/>
+    </g>
+
+    <g transform="translate(66 76)">
+      <path d="M103 0L192 51V153L103 204L14 153V51Z" fill="#050b18" fill-opacity="0.92" stroke="url(#neon)" stroke-width="2.5"/>
+      <path d="M103 16L178 59V145L103 188L28 145V59Z" fill="url(#core)" stroke="#7bbcfb" stroke-opacity="0.32"/>
+      <circle cx="103" cy="102" r="58" fill="none" stroke="#38f8d4" stroke-opacity="0.16" stroke-width="1.5" stroke-dasharray="5 8"/>
+      <circle cx="103" cy="102" r="42" fill="#071426" stroke="#4ba3ff" stroke-opacity="0.56" stroke-width="2"/>
+      <circle cx="103" cy="102" r="34" fill="none" stroke="#a86cff" stroke-opacity="0.28"/>
+      <path d="M83 78L110 101L83 124M116 125H139" fill="none" stroke="url(#neon)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/>
+      <g fill="#38f8d4" filter="url(#glow)">
+        <circle cx="103" cy="16" r="4"/>
+        <circle cx="28" cy="59" r="4"/>
+        <circle cx="28" cy="145" r="4"/>
+      </g>
+      <g fill="#ff4fd8" filter="url(#glow)">
+        <circle cx="178" cy="59" r="4"/>
+        <circle cx="178" cy="145" r="4"/>
+        <circle cx="103" cy="188" r="4"/>
+      </g>
+      <g fill="none" stroke-width="1.5">
+        <path d="M103 16V46M28 59L54 74M28 145L54 130" stroke="#38f8d4" stroke-opacity="0.58"/>
+        <path d="M178 59L152 74M178 145L152 130M103 188V158" stroke="#ff4fd8" stroke-opacity="0.58"/>
+      </g>
+      <text x="103" y="229" text-anchor="middle" fill="#9fb4d8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="700" letter-spacing="3">NEURAL CORE</text>
+      <text x="103" y="248" text-anchor="middle" fill="#38f8d4" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" letter-spacing="2">SYNAPSE // LOCKED</text>
+    </g>
+
+    <g transform="translate(320 87)">
+      <text x="4" y="21" fill="#38f8d4" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16" font-weight="700" letter-spacing="4">NEURAL TERMINAL // CODING AGENT</text>
+      <rect x="4" y="35" width="610" height="2" fill="url(#neon)" opacity="0.72"/>
+      <path d="M0 35H4V29M614 35H620V29" fill="none" stroke="#cbd9ff" stroke-opacity="0.42"/>
+      <text x="0" y="132" fill="#f4f8ff" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="86" font-weight="900" letter-spacing="-3">TRAVIS</text>
+      <text x="304" y="132" fill="url(#neon)" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="86" font-weight="900" letter-spacing="-3">234</text>
+      <text x="5" y="170" fill="#b6c8e8" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="20" font-weight="500" letter-spacing="0.4">Persistent intelligence for real development work.</text>
+      <g transform="translate(4 194)" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="700" letter-spacing="1.5">
+        <path d="M0 0H168L180 12L168 24H0Z" fill="#0c2730" stroke="#38f8d4" stroke-opacity="0.48"/>
+        <circle cx="16" cy="12" r="3.5" fill="#38f8d4" filter="url(#glow)"/>
+        <text x="29" y="16" fill="#d8fff8">AGENT LOOP // LIVE</text>
+        <path d="M194 0H384L396 12L384 24H194L182 12Z" fill="#101f3d" stroke="#4ba3ff" stroke-opacity="0.48"/>
+        <circle cx="210" cy="12" r="3.5" fill="#4ba3ff" filter="url(#glow)"/>
+        <text x="223" y="16" fill="#e0edff">CONTEXT // DURABLE</text>
+        <path d="M410 0H586L598 12L586 24H410L398 12Z" fill="#24163b" stroke="#ff4fd8" stroke-opacity="0.48"/>
+        <circle cx="426" cy="12" r="3.5" fill="#ff4fd8" filter="url(#glow)"/>
+        <text x="439" y="16" fill="#ffe1f8">EXTENSIONS // HOT</text>
+      </g>
+    </g>
+
+    <g transform="translate(1062 77)" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+      <path d="M16 0H258L274 16V213L258 229H16L0 213V16Z" fill="url(#glass)" stroke="#a86cff" stroke-opacity="0.48" stroke-width="1.5"/>
+      <path d="M16 0H83M191 0H258M274 16V61M274 168V213M258 229H207M67 229H16M0 213V168M0 61V16" fill="none" stroke="url(#neon)" stroke-width="2.5"/>
+      <text x="20" y="30" fill="#9fb4d8" font-size="10" letter-spacing="2.5">RUNTIME TELEMETRY</text>
+      <circle cx="237" cy="26" r="4" fill="#38f8d4" filter="url(#glow)"/>
+      <text x="248" y="30" fill="#38f8d4" font-size="9" letter-spacing="1">LIVE</text>
+      <path d="M20 43H254" stroke="#8ca8d8" stroke-opacity="0.22"/>
+
+      <text x="20" y="71" fill="#6f88ad" font-size="9" letter-spacing="2">01 // EXECUTION</text>
+      <text x="20" y="94" fill="#f4f8ff" font-size="15" font-weight="700" letter-spacing="1.4">AGENT // READY</text>
+      <rect x="20" y="105" width="234" height="5" rx="2.5" fill="#101a2d"/>
+      <rect x="20" y="105" width="219" height="5" rx="2.5" fill="#38f8d4" opacity="0.82" filter="url(#glow)"/>
+
+      <text x="20" y="137" fill="#6f88ad" font-size="9" letter-spacing="2">02 // MEMORY</text>
+      <text x="20" y="160" fill="#f4f8ff" font-size="15" font-weight="700" letter-spacing="1.2">CONTEXT // COMPACT</text>
+      <rect x="20" y="171" width="234" height="5" rx="2.5" fill="#101a2d"/>
+      <rect x="20" y="171" width="176" height="5" rx="2.5" fill="url(#neon)" opacity="0.88" filter="url(#glow)"/>
+
+      <text x="20" y="205" fill="#9fb4d8" font-size="10" letter-spacing="1.2">BUS:04</text>
+      <text x="85" y="205" fill="#4ba3ff" font-size="10" letter-spacing="1.2">TOOLS:BOUND</text>
+      <text x="194" y="205" fill="#ff70df" font-size="10" letter-spacing="1.2">I/O:SYNC</text>
+    </g>
+
+    <g transform="translate(320 333)" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="700" letter-spacing="1.5">
+      <path d="M0 0H1015L1030 15L1015 30H0L-15 15Z" fill="#070d19" fill-opacity="0.88" stroke="#6b8bc2" stroke-opacity="0.25"/>
+      <g>
+        <circle cx="18" cy="15" r="3.5" fill="#38f8d4" filter="url(#glow)"/>
+        <text x="31" y="19" fill="#d8fff8">BOUNDED TOOLS</text>
+        <path d="M170 7V23" stroke="#476487"/>
+        <circle cx="193" cy="15" r="3.5" fill="#4ba3ff" filter="url(#glow)"/>
+        <text x="206" y="19" fill="#e2eeff">PERSISTENT SESSIONS</text>
+        <path d="M395 7V23" stroke="#476487"/>
+        <circle cx="418" cy="15" r="3.5" fill="#a86cff" filter="url(#glow)"/>
+        <text x="431" y="19" fill="#eee5ff">EXTENSION BUS</text>
+        <path d="M586 7V23" stroke="#476487"/>
+        <circle cx="609" cy="15" r="3.5" fill="#ff4fd8" filter="url(#glow)"/>
+        <text x="622" y="19" fill="#ffe3fa">PROVIDER NEUTRAL</text>
+        <path d="M807 7V23" stroke="#476487"/>
+        <text x="830" y="19" fill="#9fb4d8">STATUS</text>
+        <text x="888" y="19" fill="#38f8d4">// ONLINE</text>
+      </g>
+    </g>
+
+    <g fill="none" stroke-linecap="square">
+      <path d="M24 72V24H72M1328 24H1376V72M24 348V396H72M1328 396H1376V348" stroke="url(#neon)" stroke-width="3"/>
+      <path d="M37 86V37H86M1314 37H1363V86M37 334V383H86M1314 383H1363V334" stroke="#9eb8e9" stroke-opacity="0.22"/>
+    </g>
   </g>
 
-  <text x="194" y="115" fill="#89f4e3" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17" font-weight="700" letter-spacing="4">TERMINAL CODING AGENT</text>
-  <text x="188" y="222" fill="#f4f7ff" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="94" font-weight="800" letter-spacing="-4">Travis</text>
-  <text x="493" y="222" fill="url(#accent)" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="94" font-weight="800" letter-spacing="-4">234</text>
-  <text x="194" y="269" fill="#bec9e7" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="24" font-weight="500">Persistent sessions. Provider-neutral runtime. Context that stays useful.</text>
-
-  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" font-weight="600">
-    <rect x="194" y="310" width="182" height="40" rx="20" fill="#10243a" stroke="#48dbc5" stroke-opacity="0.42"/>
-    <circle cx="218" cy="330" r="5" fill="#48dbc5"/>
-    <text x="234" y="336" fill="#d7fff8">bounded tools</text>
-
-    <rect x="392" y="310" width="182" height="40" rx="20" fill="#13213f" stroke="#67a9ff" stroke-opacity="0.42"/>
-    <circle cx="416" cy="330" r="5" fill="#67a9ff"/>
-    <text x="432" y="336" fill="#e4efff">compaction</text>
-
-    <rect x="590" y="310" width="170" height="40" rx="20" fill="#1c1d43" stroke="#9a7cff" stroke-opacity="0.42"/>
-    <circle cx="614" cy="330" r="5" fill="#9a7cff"/>
-    <text x="630" y="336" fill="#eee8ff">extensions</text>
-
-    <rect x="776" y="310" width="216" height="40" rx="20" fill="#261b43" stroke="#c373ff" stroke-opacity="0.42"/>
-    <circle cx="800" cy="330" r="5" fill="#c373ff"/>
-    <text x="816" y="336" fill="#f5e7ff">managed processes</text>
-  </g>
-
-  <g transform="translate(1090 78)" opacity="0.78" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
-    <rect width="238" height="205" rx="18" fill="#091322" stroke="#8aa6e8" stroke-opacity="0.28"/>
-    <circle cx="24" cy="22" r="5" fill="#ff6d7a"/>
-    <circle cx="42" cy="22" r="5" fill="#ffd166"/>
-    <circle cx="60" cy="22" r="5" fill="#47d7a8"/>
-    <path d="M0 42h238" stroke="#8aa6e8" stroke-opacity="0.2"/>
-    <text x="20" y="75" fill="#5ce8d0" font-size="14">$ travis234</text>
-    <text x="20" y="105" fill="#aab9db" font-size="13">session  ready</text>
-    <text x="20" y="133" fill="#aab9db" font-size="13">model    selected</text>
-    <text x="20" y="161" fill="#aab9db" font-size="13">context  healthy</text>
-    <rect x="20" y="179" width="128" height="4" rx="2" fill="url(#accent)"/>
-  </g>
-
-  <rect x="1" y="1" width="1398" height="418" rx="25" fill="none" stroke="url(#accent)" stroke-opacity="0.24" stroke-width="2"/>
+  <rect x="1.5" y="1.5" width="1397" height="417" rx="22.5" fill="none" stroke="url(#neon)" stroke-opacity="0.5" stroke-width="3"/>
 </svg>

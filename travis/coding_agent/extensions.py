@@ -91,6 +91,61 @@ class ExtensionFlag:
     extension_path: str = "<python-extension>"
 
 
+@dataclass(frozen=True)
+class ExtensionFlagConflict:
+    name: str
+    first_extension_path: str
+    conflicting_extension_path: str
+
+
+class ExtensionFlagValidationError(ValueError):
+    def __init__(self, diagnostics: list[dict[str, object]]) -> None:
+        self.diagnostics = [dict(item) for item in diagnostics]
+        super().__init__(
+            "; ".join(str(item.get("message", "invalid extension flag")) for item in diagnostics)
+        )
+
+
+def apply_extension_flag_values(
+    runtime: ExtensionRunner,
+    raw_values: object,
+) -> list[dict[str, object]]:
+    if raw_values is None:
+        return []
+    if isinstance(raw_values, dict):
+        items = list(raw_values.items())
+    elif hasattr(raw_values, "items"):
+        items = list(raw_values.items())
+    else:
+        try:
+            items = list(raw_values)  # type: ignore[arg-type]
+        except TypeError:
+            items = []
+
+    diagnostics: list[dict[str, object]] = []
+    registered_flags = runtime.get_flags()
+    unknown_flags: list[str] = []
+    for name, value in items:
+        flag_name = str(name)
+        flag = registered_flags.get(flag_name)
+        if flag is None:
+            unknown_flags.append(flag_name)
+            continue
+        if flag.type == "boolean":
+            runtime.set_flag_value(flag_name, True)
+            continue
+        if isinstance(value, str):
+            runtime.set_flag_value(flag_name, value)
+            continue
+        diagnostics.append({"type": "error", "message": f'Extension flag "--{flag_name}" requires a value'})
+
+    if unknown_flags:
+        label = "option" if len(unknown_flags) == 1 else "options"
+        names = ", ".join(f"--{name}" for name in unknown_flags)
+        diagnostics.append({"type": "error", "message": f"Unknown {label}: {names}"})
+    return diagnostics
+
+
 
 @dataclass(frozen=True)
 class ExtensionShortcut:
@@ -343,6 +398,7 @@ class ExtensionRunner:
         self._registered_tools: dict[str, RegisteredTool] = {}
         self._registered_commands: dict[str, RegisteredCommand] = {}
         self._registered_flags: dict[str, ExtensionFlag] = {}
+        self._flag_conflicts: list[ExtensionFlagConflict] = []
         self._flag_values: dict[str, bool | str] = {}
         self._message_renderers: dict[str, Callable[..., object]] = {}
         self._shortcuts: dict[str, ExtensionShortcut] = {}
@@ -1214,7 +1270,13 @@ class ExtensionRunner:
 
 
     def register_flag(self, name: str, options: dict[str, object]) -> None:
-        if name in self._registered_flags:
+        existing = self._registered_flags.get(name)
+        if existing is not None:
+            conflicting_path = self._loading_extension_path or "<python-extension>"
+            if existing.extension_path != conflicting_path:
+                conflict = ExtensionFlagConflict(name, existing.extension_path, conflicting_path)
+                if conflict not in self._flag_conflicts:
+                    self._flag_conflicts.append(conflict)
             return
         flag_type = str(options.get("type", "boolean"))
         flag = ExtensionFlag(
@@ -1231,6 +1293,10 @@ class ExtensionRunner:
 
     def get_flags(self) -> dict[str, ExtensionFlag]:
         return dict(self._registered_flags)
+
+
+    def get_flag_conflicts(self) -> list[ExtensionFlagConflict]:
+        return list(self._flag_conflicts)
 
 
     def set_flag_value(self, name: str, value: bool | str) -> None:

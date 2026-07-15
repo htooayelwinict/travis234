@@ -1,6 +1,11 @@
 <p align="center">
-  <img src="docs/assets/travis234-banner.svg" alt="Travis234 — terminal coding agent" width="100%" />
+  <img src="docs/assets/travis234-banner.svg" alt="Travis234 cybernetic terminal coding agent" width="100%" />
 </p>
+
+```text
+TRAVIS234 // NEURAL TERMINAL ONLINE
+[AGENT:READY] [CONTEXT:COMPACT] [TOOLS:BOUNDED] [RUNTIME:PERSISTENT]
+```
 
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-39e6c7?style=for-the-badge&labelColor=10182b"></a>
@@ -233,6 +238,24 @@ travis234 --install-extension hypa
 
 The installer never overwrites an existing extension directory. Run `/reload` after adding or changing extension code; the TUI process does not need to restart.
 
+Extensions can register typed, long-form CLI flags:
+
+```python
+def extension(travis):
+    travis.register_flag("verbose", {"type": "boolean", "description": "Verbose output"})
+    travis.register_flag("profile", {"type": "string", "description": "Select a profile"})
+```
+
+Load an explicitly trusted extension and pass its flags before the prompt:
+
+```bash
+travis234 --extension ./trusted-extension.py --profile security --verbose "inspect this repository"
+```
+
+Authorized extension flags appear in `--help`. Boolean flags never consume the following prompt; string flags require a value, and a repeated string flag uses the last value. Use `--` to keep option-shaped text in the prompt instead of parsing it as a flag.
+
+Flag values are process-local, are reapplied when the app replaces its active session, and are not written to settings or session history. Project-only flag schemas require explicit or saved trust before they become valid CLI options. Registering a flag adds no core context-envelope tokens; context grows only if the extension uses that value to enable prompt text, tools, or another context-bearing resource.
+
 Extensions execute with Travis234's permissions, so install only trusted code. Unknown workspaces fail closed: project settings, extensions, skills, prompts, themes, and project system-prompt files stay disabled until trust is resolved. Use `--approve` or `--no-approve` for a process-only CLI decision, or `/trust` to save a folder/parent decision; `/trust` never executes project code by itself. Global resources under `~/.travis234/agent/` remain available during trust resolution. Travis JavaScript extensions do not run directly in the Python runtime and require a Python adapter. See [the extension guide](travis/resources/docs/extensions.md) for the supported lifecycle and APIs.
 
 Resource files use safe YAML frontmatter. Discovery merges `.gitignore`, `.ignore`, and `.fdignore`; an explicitly named file remains an operator-selected exception. Leading `/template` prompts expand shell-quoted `$ARGUMENTS`, `$1`, and related Pi placeholders before provider submission. When `enableSkillCommands` is enabled, `/skill:<name>` injects only the selected skill. Discovered themes are reloadable, and extension UI code can select them with `setTheme`.
@@ -297,7 +320,7 @@ python -m build
 .venv/bin/python scripts/verify_acceptance.py --parity-json
 ```
 
-The parity report maps 77 pinned Pi behaviors—including all 33 extension events—and 11 Hermes compaction behaviors to concrete tests, with intentional Travis safety divergences called out explicitly. The repository also carries focused architecture, provider, compaction, process-ownership, cancellation, extension, installed-wheel, container, and release-contract tests. See the [full verification record](docs/verification/full-suite.md).
+The parity report maps 78 pinned Pi behaviors—including all 33 extension events—and 11 Hermes compaction behaviors to concrete tests, with intentional Travis safety divergences called out explicitly. The repository also carries focused architecture, provider, compaction, process-ownership, cancellation, extension, installed-wheel, container, and release-contract tests. See the [full verification record](docs/verification/full-suite.md).
 
 ### Manual 21-prompt TUI acceptance
 
