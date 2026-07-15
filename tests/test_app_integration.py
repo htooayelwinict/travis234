@@ -10,6 +10,8 @@ import pytest
 
 from travis.agent.types import AgentTool, AgentToolResult
 from travis.app import CodingApp
+from travis.app import _assistant_prompt_tokens
+from travis.ai.context_estimate import estimate_context_tokens
 from travis.ai.event_stream import create_assistant_message_event_stream
 from travis.ai.types import (
     AssistantMessage,
@@ -573,7 +575,7 @@ def test_coding_app_wires_compaction_transform(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("context_window", [32_000, 128_000, 256_000, 400_000])
-def test_coding_app_uses_configured_compaction_threshold_for_small_contexts(
+def test_coding_app_uses_hermes_compaction_threshold_for_small_contexts(
     tmp_path: Path,
     context_window: int,
 ) -> None:
@@ -584,9 +586,13 @@ def test_coding_app_uses_configured_compaction_threshold_for_small_contexts(
     app = CodingApp(cwd=str(tmp_path), model=model, terminal=FakeTerminal())
 
     assert app.compressor.context_length == context_window
-    assert app.compressor.threshold_percent == 0.5
+    assert app.compressor.threshold_percent == 0.75
     effective_window = context_window - model.max_tokens
-    expected = max(1, min(int(effective_window * 0.5), effective_window - 1))
+    expected = (
+        int(effective_window * 0.85)
+        if effective_window <= 64_000
+        else int(effective_window * 0.75)
+    )
     assert app.compressor.threshold_tokens == expected
 
 
@@ -602,7 +608,7 @@ def test_coding_app_recalibrates_compaction_window_after_model_switch(tmp_path: 
 
     assert app.compressor.context_length == 256_000
     effective_window = selected_model.context_window - (selected_model.max_tokens or 0)
-    assert app.compressor.threshold_tokens == int(effective_window * 0.5)
+    assert app.compressor.threshold_tokens == int(effective_window * 0.75)
 
 
 def test_coding_app_keeps_explicit_compaction_window_after_model_switch(tmp_path: Path) -> None:
@@ -622,7 +628,7 @@ def test_coding_app_keeps_explicit_compaction_window_after_model_switch(tmp_path
 
     assert app.compressor.context_length == 96_000
     effective_window = 96_000 - (selected_model.max_tokens or 0)
-    assert app.compressor.threshold_tokens == int(effective_window * 0.5)
+    assert app.compressor.threshold_tokens == int(effective_window * 0.75)
 
 
 def test_coding_app_forwards_initial_thinking_level_to_session(tmp_path: Path) -> None:
@@ -669,6 +675,7 @@ def test_coding_app_runs_travis_post_response_compaction(tmp_path: Path) -> None
 
     def script(m, c):
         events = text_response_events(m, "ok")
+        events[-1].message.usage.input = 200_000
         events[-1].message.usage.total_tokens = 200_000
         return events
 
@@ -698,6 +705,7 @@ def test_coding_app_emits_travis234_auto_compaction_events_and_running_state(tmp
 
     def script(m, c):
         events = text_response_events(m, "ok")
+        events[-1].message.usage.input = 200_000
         events[-1].message.usage.total_tokens = 200_000
         return events
 
@@ -1452,3 +1460,59 @@ def test_coding_app_compacts_failed_large_turn_without_replaying_raw_poison(tmp_
     assert "failed scan compacted" in context_text
     assert "analyze the codebase and read all files" not in context_text
     assert "read packages/ai/src/index.ts" not in context_text
+def test_app_compaction_pressure_excludes_generated_output_tokens() -> None:
+    usage = empty_usage()
+    usage.input = 2_000
+    usage.output = 7_000
+    usage.total_tokens = 9_000
+    message = AssistantMessage(
+        content=[TextContent(text="reply")],
+        api="faux",
+        provider="faux",
+        model="faux-model",
+        usage=usage,
+        stop_reason="stop",
+    )
+
+    assert _assistant_prompt_tokens(message) == 2_000
+
+
+def test_post_compaction_estimate_and_next_prompt_share_full_envelope(tmp_path: Path) -> None:
+    seen_prompt_tokens: list[int] = []
+
+    def provider(model, context):
+        prompt_tokens = estimate_context_tokens(context).tokens
+        seen_prompt_tokens.append(prompt_tokens)
+        events = text_response_events(model, "ok")
+        events[-1].message.usage.input = prompt_tokens
+        events[-1].message.usage.total_tokens = prompt_tokens + events[-1].message.usage.output
+        return events
+
+    register_api_provider(create_faux_provider(provider))
+    model = faux_model()
+    model.context_window = 128_000
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=model,
+        enable_tui=False,
+        context_length=128_000,
+        summarizer=lambda prompt: "## Historical Task Snapshot\ncompact baseline",
+    )
+    app.session.agent.state.messages = [
+        UserMessage(content=f"old context {index} " * 500, timestamp=now_ms())
+        for index in range(30)
+    ]
+
+    status = app.session.compact()
+    before = app.session.get_context_usage()
+    app.run_turn("ok")
+    after = app.session.get_context_usage()
+    app.close()
+
+    assert status.compressed is True
+    assert before is not None and after is not None
+    assert before["confidence"] == "estimated_after_compaction_full_request"
+    assert before["tokens"] == before["systemTokens"] + before["toolTokens"] + before["messageTokens"]
+    assert after["confidence"] == "provider_real"
+    assert seen_prompt_tokens[-1] == after["tokens"]
+    assert abs(after["tokens"] - before["tokens"]) < 5_000

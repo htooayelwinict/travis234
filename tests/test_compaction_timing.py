@@ -311,14 +311,41 @@ def test_manual_force_clears_cooldown() -> None:
     out = manager.maybe_compress_preflight(messages)
     assert len(out) < len(messages)
     assert compressor._last_summary_fallback_used is True
-    assert manager._in_cooldown() is False
+    assert manager._in_cooldown() is True
 
     # manual force still bypasses and clears an existing cooldown.
-    manager._summary_failure_cooldown_until = fake_time["t"] + 600
+    compressor._summary_failure_cooldown_until = fake_time["t"] + 600
     manager._summarizer = _summarizer
     forced = manager.compress_manual(messages)
     assert len(forced) < len(messages)
     assert manager._in_cooldown() is False
+
+
+def test_automatic_compaction_does_not_rewrite_during_summary_cooldown() -> None:
+    fake_time = {"t": 100.0}
+    compressor = ContextCompressor(
+        context_length=2_000,
+        protect_first_n=1,
+        protect_last_n=4,
+        clock=lambda: fake_time["t"],
+    )
+    calls = {"count": 0}
+
+    def failing_summarizer(_prompt: str) -> str:
+        calls["count"] += 1
+        raise RuntimeError("summary model down")
+
+    manager = CompactionManager(compressor, summarizer=failing_summarizer)
+    first = manager.maybe_compress_preflight(_big_messages())
+    manager.awaiting_real_usage_after_compression = False
+    before_count = compressor.compression_count
+
+    second = manager.maybe_compress_preflight(first)
+
+    assert second is first
+    assert compressor.compression_count == before_count
+    assert calls["count"] == 1
+    assert manager.compression_ledger[-1].stop_reason == "cooldown"
 
 
 def test_network_failed_compaction_ledger_records_abort_without_context_loss() -> None:
@@ -357,7 +384,8 @@ def test_summary_failure_sets_compressor_cooldown_and_skips_retry() -> None:
     second = compressor.compress(messages, summarizer=failing_summarizer)
 
     assert first.compressed is True
-    assert second.compressed is True
+    assert second.compressed is False
+    assert second.messages is messages
     assert calls["count"] == 1
     assert compressor._summary_failure_cooldown_until == fake_time["t"] + 600.0
     assert compressor._last_summary_fallback_used is True
@@ -382,7 +410,7 @@ def test_manager_level_summary_failure_uses_travis_long_cooldown() -> None:
     out = manager.maybe_compress_preflight(messages)
 
     assert out is messages
-    assert manager._summary_failure_cooldown_until == fake_time["t"] + 600.0
+    assert compressor._summary_failure_cooldown_until == fake_time["t"] + 600.0
 
 
 def test_manual_compression_force_clears_compressor_cooldown() -> None:

@@ -35,6 +35,7 @@ def resolve_provider_auth(
     *,
     api_key: str | None = None,
     env: dict[str, str] | None = None,
+    offline: bool = False,
 ) -> AuthResult | None:
     request_context = _OverlayAuthContext(context, env or {})
     if api_key is not None and provider_auth.api_key is not None:
@@ -54,7 +55,13 @@ def resolve_provider_auth(
     if stored is not None:
         credential_type = stored.get("type")
         if credential_type == "oauth" and provider_auth.oauth is not None:
-            return _resolve_oauth(provider_id, provider_auth, credentials, stored)
+            return _resolve_oauth(
+                provider_id,
+                provider_auth,
+                credentials,
+                stored,
+                offline=offline,
+            )
         if credential_type == "api_key" and provider_auth.api_key is not None:
             credential = dict(stored)
             if env:
@@ -80,12 +87,19 @@ def _resolve_oauth(
     provider_auth: ProviderAuth,
     credentials: CredentialStore,
     stored: Credential,
+    *,
+    offline: bool = False,
 ) -> AuthResult | None:
     oauth = provider_auth.oauth
     assert oauth is not None
     credential = dict(stored)
     expires = _expiry_ms(credential)
     if expires is not None and int(time.time() * 1000) >= expires:
+        if offline:
+            raise ModelsError(
+                "offline",
+                f"OAuth credentials for {provider_id} are expired and cannot refresh in offline mode",
+            )
         try:
             committed = credentials.modify(
                 provider_id,

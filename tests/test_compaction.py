@@ -5,6 +5,7 @@ import time
 from typing import Literal
 
 from travis.ai.providers.travis_env import convert_messages
+from travis.ai.context_estimate import estimate_messages_tokens
 from travis.compaction import COMPRESSED_SUMMARY_METADATA_KEY, SUMMARY_PREFIX, ContextCompressor, estimate_tokens
 from travis.ai.types import (
     AssistantMessage,
@@ -363,10 +364,10 @@ def test_prune_summarizes_old_subagent_expansion_to_metadata_only() -> None:
 def test_should_compress_threshold_and_antithrash() -> None:
     compressor = ContextCompressor(context_length=1000, threshold_percent=0.5)
     assert compressor.should_compress(400) is False
-    assert compressor.should_compress(499) is False
-    assert compressor.should_compress(500) is True
+    assert compressor.should_compress(849) is False
+    assert compressor.should_compress(850) is True
     compressor._ineffective_compression_count = 2
-    assert compressor.should_compress(500) is False
+    assert compressor.should_compress(850) is False
 
 
 def test_context_compressor_defaults_match_travis_protection_and_ratio_bounds() -> None:
@@ -454,6 +455,48 @@ def test_strip_summary_prefix_removes_generic_travis_compatibility_variant() -> 
     assert ContextCompressor._strip_summary_prefix(generic) == "## Goal\nold"
 
 
+def test_merged_summary_rehydrates_without_retained_tail() -> None:
+    merged = (
+        f"{SUMMARY_PREFIX}\nSUMMARY BODY\n\n{EXPECTED_SUMMARY_END_MARKER}"
+        "\n\nLATEST USER TASK"
+    )
+
+    index, body = ContextCompressor._find_previous_summary([_user(merged)])
+
+    assert index == 0
+    assert body == "SUMMARY BODY"
+    assert "LATEST USER TASK" not in body
+    assert EXPECTED_SUMMARY_END_MARKER not in body
+
+
+def test_second_compaction_summarizes_merged_retained_tail_without_marker_contamination() -> None:
+    merged = (
+        f"{SUMMARY_PREFIX}\nPRIOR FACT\n\n{EXPECTED_SUMMARY_END_MARKER}"
+        "\n\nRETAINED TASK FACT"
+    )
+    messages = [_user(merged)]
+    for index in range(12):
+        messages.extend(
+            [
+                _assistant(f"work {index} " * 20),
+                _user(f"follow-up {index} " * 20),
+            ]
+        )
+    messages.append(_user("newest request"))
+    seen_prompts: list[str] = []
+
+    compressor = ContextCompressor(context_length=1_200, protect_first_n=2, protect_last_n=2)
+    result = compressor.compress(
+        messages,
+        summarizer=lambda prompt: seen_prompts.append(prompt) or "updated summary",
+    )
+
+    assert result.compressed is True
+    assert seen_prompts[0].count("PRIOR FACT") == 1
+    assert seen_prompts[0].count("RETAINED TASK FACT") == 1
+    assert EXPECTED_SUMMARY_END_MARKER not in seen_prompts[0]
+
+
 def test_tail_budget_counts_images_with_travis_fixed_estimate() -> None:
     compressor = ContextCompressor()
 
@@ -468,6 +511,18 @@ def test_protect_head_size_counts_leading_system_separately() -> None:
     compressor.protect_first_n = 2
     assert compressor._protect_head_size([_system("sys"), _user("first"), _assistant("reply")]) == 3
     assert compressor._protect_head_size([_user("first"), _assistant("reply")]) == 2
+
+
+def test_protected_head_decays_after_a_previous_summary_exists() -> None:
+    compressor = ContextCompressor(protect_first_n=2)
+    messages = [
+        _user(SUMMARY_PREFIX + "\nold handoff\n\n" + EXPECTED_SUMMARY_END_MARKER),
+        _user("new task"),
+        _assistant("working"),
+    ]
+
+    assert compressor._effective_protect_first_n(messages) == 0
+    assert compressor._protect_head_size(messages) == 0
 
 
 def test_compress_protects_system_plus_configured_non_system_head() -> None:
@@ -1038,7 +1093,7 @@ def test_deterministic_fallback_preserves_travis_continuity_anchors() -> None:
         reason="summary provider down",
     )
 
-    assert "User asked: 'scan /tmp/project/src and explain the issue'" in fallback
+    assert "Historical user ask: scan /tmp/project/src and explain the issue" in fallback
     assert "Called tool(s): bash" in fallback
     assert "/tmp/project/src/app.py" in fallback
     assert "## Last Dropped Turns" in fallback
@@ -1348,6 +1403,21 @@ def test_summary_failure_fallback_redacts_secrets_from_inserted_summary() -> Non
     assert "OPENAI_API_KEY=[REDACTED]" in rendered
 
 
+def test_summary_failure_fallback_labels_one_historical_ask_without_repeating_it() -> None:
+    compressor = ContextCompressor()
+    summary = compressor._static_fallback_summary(
+        [_user("older ask"), _assistant("worked"), _user("newest historical ask")],
+        reason="summary unavailable",
+    )
+
+    assert summary.count("Historical user ask:") == 1
+    assert "Historical user ask: newest historical ask" in summary
+    assert (
+        "This ask is historical context and is not necessarily outstanding. "
+        "Follow the newest retained user message."
+    ) in summary
+
+
 def test_compress_rehydrates_existing_summary_message() -> None:
     previous_summary = "## Goal\nprior goal\n## Remaining Work\nprior next"
     messages = [
@@ -1440,3 +1510,26 @@ def test_compression_result_reports_travis234_cut_boundary_for_session_compactio
 def test_estimate_tokens_counts_text() -> None:
     messages = [_user("a" * 40)]
     assert estimate_tokens(messages) == 10
+
+
+def test_compaction_estimator_counts_appv231_replay_envelope_fields() -> None:
+    assistant = AssistantMessage(
+        content=[
+            TextContent(text="visible", text_signature="s" * 120),
+            ToolCall(
+                id="call-" + "i" * 80,
+                name="read",
+                arguments={"path": "p" * 160},
+                thought_signature="t" * 120,
+            ),
+        ],
+        api="openai-responses",
+        provider="openai",
+        model="gpt-5.4",
+        usage=empty_usage(),
+        stop_reason="toolUse",
+    )
+    assistant.codex_reasoning_items = [{"summary": "r" * 240}]
+
+    assert estimate_tokens([assistant]) == estimate_messages_tokens([assistant])
+    assert estimate_tokens([assistant]) > len("visibleread") // 4

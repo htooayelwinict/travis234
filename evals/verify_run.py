@@ -126,11 +126,15 @@ def verify_run(
     ]
     if missing_context:
         errors.append(f"{len(missing_context)} results lack footer context telemetry")
+    if any(not result.get("context_confidence") for result in results):
+        errors.append("one or more results lack context confidence")
     if any(
         event.get("context_window") is None or "context_percent" not in event
         for event in ready
     ):
         errors.append("one or more turn_ready events lack footer context telemetry")
+    if any(not event.get("context_confidence") for event in ready):
+        errors.append("one or more turn_ready events lack context confidence")
 
     shutdowns = [
         event

@@ -14,6 +14,7 @@ from travis.coding_agent.agent_session import AgentSession
 from travis.coding_agent.extensions import emit_session_shutdown_event
 from travis.coding_agent.object_utils import call_optional as _call_optional
 from travis.coding_agent.session_catalog import SessionCatalog
+from travis.coding_agent.session_store import serialized_content_text
 
 
 @dataclass
@@ -44,6 +45,13 @@ class SessionImportFileNotFoundError(FileNotFoundError):
     def __init__(self, file_path: str) -> None:
         super().__init__(f"File not found: {file_path}")
         self.file_path = file_path
+
+
+class InvalidSessionImportError(ValueError):
+    def __init__(self, file_path: str, detail: str) -> None:
+        super().__init__(f"Session import {file_path} is invalid: {detail}")
+        self.file_path = file_path
+        self.detail = detail
 
 
 class MissingSessionCwdError(RuntimeError):
@@ -184,7 +192,7 @@ class AgentSessionRuntime:
             if selected_entry.get("type") != "message" or selected_entry.get("message", {}).get("role") != "user":
                 raise ValueError("Invalid entry ID for forking")
             target_leaf_id = selected_entry.get("parentId")
-            selected_text = _extract_user_message_text(selected_entry.get("message", {}).get("content"))
+            selected_text = serialized_content_text(selected_entry.get("message", {}).get("content"))
         else:
             raise ValueError("position must be 'before' or 'at'")
 
@@ -219,14 +227,32 @@ class AgentSessionRuntime:
             result["selectedText"] = selected_text
         return result
 
+    def clone(self, options: dict[str, Any] | None = None) -> dict[str, object]:
+        """Fork the complete active branch, matching Pi's `/clone` behavior."""
+
+        leaf_id = self._session.get_session_leaf_id()
+        if leaf_id is None:
+            raise ValueError("Nothing to clone yet")
+        clone_options = dict(options or {})
+        clone_options["position"] = "at"
+        return self.fork(leaf_id, clone_options)
+
     def import_from_jsonl(self, input_path: str, cwd_override: str | None = None) -> dict[str, bool]:
         resolved_path = Path(input_path).expanduser().resolve()
         if not resolved_path.exists():
             raise SessionImportFileNotFoundError(str(resolved_path))
 
+        header = _validate_session_jsonl(resolved_path)
+        stored_cwd = str(header.get("cwd") or "") or None
+        if cwd_override is None:
+            assert_session_cwd_exists(str(resolved_path), stored_cwd, self.cwd)
+        next_cwd = cwd_override or stored_cwd or self.cwd
+
         session_dir = self._session_dir()
         session_dir.mkdir(parents=True, exist_ok=True)
         destination_path = session_dir / resolved_path.name
+        if destination_path.exists() and destination_path.resolve() != resolved_path:
+            destination_path = _collision_safe_import_path(destination_path)
         destination = str(destination_path)
         before_result = self._emit_before_switch("resume", destination)
         if before_result["cancelled"]:
@@ -236,10 +262,6 @@ class AgentSessionRuntime:
         if destination_path.resolve() != resolved_path:
             shutil.copyfile(resolved_path, destination_path)
 
-        stored_cwd = _session_cwd(destination_path)
-        if cwd_override is None:
-            assert_session_cwd_exists(destination, stored_cwd, self.cwd)
-        next_cwd = cwd_override or stored_cwd or self.cwd
         replacement = self._create_runtime(
             {
                 "cwd": next_cwd,
@@ -438,18 +460,6 @@ def _is_cancelled(result: object) -> bool:
     return getattr(result, "cancel", False) is True or getattr(result, "cancelled", False) is True
 
 
-def _extract_user_message_text(content: object) -> str:
-    if isinstance(content, str):
-        return content
-    if not isinstance(content, list):
-        return ""
-    parts: list[str] = []
-    for block in content:
-        if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str):
-            parts.append(block["text"])
-    return "".join(parts)
-
-
 def _session_cwd(path: Path) -> str | None:
     try:
         for raw_line in path.read_text(encoding="utf-8").splitlines():
@@ -462,6 +472,61 @@ def _session_cwd(path: Path) -> str | None:
     except (OSError, json.JSONDecodeError):
         return None
     return None
+
+
+def _validate_session_jsonl(path: Path) -> dict[str, Any]:
+    header: dict[str, Any] | None = None
+    known_ids: set[str] = set()
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line_number, raw_line in enumerate(handle, start=1):
+                if not raw_line.strip():
+                    continue
+                try:
+                    entry = json.loads(raw_line)
+                except json.JSONDecodeError as error:
+                    raise InvalidSessionImportError(str(path), f"invalid JSON on line {line_number}") from error
+                if not isinstance(entry, dict):
+                    raise InvalidSessionImportError(str(path), f"line {line_number} is not an object")
+                if header is None:
+                    if entry.get("type") != "session":
+                        raise InvalidSessionImportError(str(path), "first record must be a session header")
+                    if entry.get("version") != 3:
+                        raise InvalidSessionImportError(str(path), "session header must use JSONL version 3")
+                    if not isinstance(entry.get("id"), str) or not entry.get("id"):
+                        raise InvalidSessionImportError(str(path), "session header id must be non-empty")
+                    if not isinstance(entry.get("cwd"), str) or not entry.get("cwd"):
+                        raise InvalidSessionImportError(str(path), "session header cwd must be non-empty")
+                    header = entry
+                    continue
+                if entry.get("type") == "session":
+                    raise InvalidSessionImportError(str(path), f"duplicate session header on line {line_number}")
+                entry_id = entry.get("id")
+                if not isinstance(entry_id, str) or not entry_id:
+                    raise InvalidSessionImportError(str(path), f"entry on line {line_number} has no id")
+                if entry_id in known_ids:
+                    raise InvalidSessionImportError(str(path), f"duplicate entry id {entry_id!r}")
+                parent_id = entry.get("parentId")
+                if parent_id is not None and parent_id not in known_ids:
+                    raise InvalidSessionImportError(
+                        str(path),
+                        f"entry {entry_id!r} references unknown parent {parent_id!r}",
+                    )
+                known_ids.add(entry_id)
+    except UnicodeDecodeError as error:
+        raise InvalidSessionImportError(str(path), "file is not UTF-8 JSONL") from error
+    except OSError as error:
+        raise InvalidSessionImportError(str(path), str(error)) from error
+    if header is None:
+        raise InvalidSessionImportError(str(path), "file has no session header")
+    return header
+
+
+def _collision_safe_import_path(path: Path) -> Path:
+    while True:
+        candidate = path.with_name(f"{path.stem}-import-{uuid.uuid4().hex[:8]}{path.suffix}")
+        if not candidate.exists():
+            return candidate
 
 
 def _session_source_file_and_cwd(options: dict[str, Any]) -> tuple[str | None, str | None]:

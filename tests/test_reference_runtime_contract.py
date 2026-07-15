@@ -53,7 +53,11 @@ from travis.ai.providers.transports import (
     UnsupportedTransport,
     get_transport,
 )
-from travis.ai.context_estimate import estimate_context_tokens, estimate_text_tokens
+from travis.ai.context_estimate import (
+    estimate_context_tokens,
+    estimate_message_tokens,
+    estimate_text_tokens,
+)
 from travis.compaction.compressor import ContextCompressor
 from travis.coding_agent.extensions import ExtensionRunner
 from travis.coding_agent.agent_session import AgentSession
@@ -206,36 +210,37 @@ def test_failed_provider_response_keeps_completed_tool_work_in_replay() -> None:
     assert messages[3]["content"] == "new active task"
 
 
-def test_small_context_compaction_uses_configured_input_threshold() -> None:
+def test_sub_512k_context_compaction_uses_hermes_threshold_band() -> None:
     compressor = ContextCompressor(context_length=262_144, threshold_percent=0.50)
 
-    assert compressor.threshold_percent == 0.50
-    assert compressor.threshold_tokens == 131_072
+    assert compressor.threshold_percent == 0.75
+    assert compressor.threshold_tokens == 196_608
     assert compressor.should_compress(60_000) is False
 
 
-def test_32k_context_honors_configured_threshold_after_output_reservation() -> None:
+def test_32k_context_uses_reachable_fallback_after_output_reservation() -> None:
     compressor = ContextCompressor(
         context_length=32_000,
         threshold_percent=0.50,
         max_tokens=4_096,
     )
 
-    assert compressor.threshold_tokens == 13_952
-    assert compressor.should_compress(13_951) is False
-    assert compressor.should_compress(13_952) is True
+    assert compressor.threshold_tokens == int((32_000 - 4_096) * 0.85)
+    assert compressor.should_compress(compressor.threshold_tokens - 1) is False
+    assert compressor.should_compress(compressor.threshold_tokens) is True
 
 
-def test_64k_context_honors_configured_threshold() -> None:
+def test_64k_context_uses_reachable_fallback_when_floor_reaches_window() -> None:
     compressor = ContextCompressor(context_length=64_000, threshold_percent=0.50)
 
-    assert compressor.threshold_tokens == 32_000
-    assert compressor.should_compress(31_999) is False
-    assert compressor.should_compress(32_000) is True
+    assert compressor.threshold_tokens == int(64_000 * 0.85)
+    assert compressor.should_compress(compressor.threshold_tokens - 1) is False
+    assert compressor.should_compress(compressor.threshold_tokens) is True
 
 
 def test_context_estimate_counts_tools_loaded_after_last_provider_usage() -> None:
     usage = empty_usage()
+    usage.input = 100
     usage.total_tokens = 100
     assistant = AssistantMessage(
         content=[TextContent(text="done")],
@@ -267,8 +272,8 @@ def test_context_estimate_counts_tools_loaded_after_last_provider_usage() -> Non
     added_tool_tokens = estimate_text_tokens(
         json.dumps([loaded_tool], default=lambda item: item.__dict__, separators=(",", ":"))
     )
-    assert estimate.tokens == 100 + estimate_text_tokens("loaded") + added_tool_tokens
-    assert estimate.trailing_tokens == estimate_text_tokens("loaded") + added_tool_tokens
+    assert estimate.tokens == 100 + estimate_message_tokens(result) + added_tool_tokens
+    assert estimate.trailing_tokens == estimate_message_tokens(result) + added_tool_tokens
 
 
 def test_runtime_has_no_model_steering_policy_modules() -> None:
@@ -277,6 +282,20 @@ def test_runtime_has_no_model_steering_policy_modules() -> None:
     assert not (policy_dir / "tool_guardrails.py").exists()
     assert not (policy_dir / "bash_classification.py").exists()
     assert not (policy_dir / "package_consent.py").exists()
+
+
+def test_reference_oracles_are_present_but_outside_the_runtime_tree() -> None:
+    root = Path(__file__).parents[1]
+
+    assert (root / "pi").is_dir()
+    assert (root / "hermes-agent").is_dir()
+    assert (root / "appv231").is_dir()
+    assert (root / "PI_HERMES_TRAVIS_CROSS_CHECK_REPORT.md").is_file()
+    assert all(not path.is_relative_to(root / "travis") for path in (
+        root / "pi",
+        root / "hermes-agent",
+        root / "appv231",
+    ))
 
 
 def test_travis_runtime_has_no_artificial_iteration_halt() -> None:
@@ -339,14 +358,14 @@ def test_env_model_selection_preserves_generated_catalog_contract() -> None:
     assert selected.compat == {"supportsDeveloperRole": False, "thinkingFormat": "openrouter"}
 
 
-def test_openrouter_mimo_v25_uses_model_level_context_capacity() -> None:
+def test_openrouter_mimo_v25_uses_route_specific_context_capacity() -> None:
     mimo = next(
         model
         for model in load_builtin_models()
         if model.provider == "openrouter" and model.id == "xiaomi/mimo-v2.5"
     )
 
-    assert mimo.context_window == 1_048_576
+    assert mimo.context_window == 32_000
     assert mimo.max_tokens == 4_096
 
     compressor = ContextCompressor(
@@ -354,7 +373,7 @@ def test_openrouter_mimo_v25_uses_model_level_context_capacity() -> None:
         threshold_percent=0.5,
         max_tokens=mimo.max_tokens,
     )
-    assert compressor.threshold_tokens == 522_240
+    assert compressor.threshold_tokens == int((32_000 - 4_096) * 0.85)
 
 
 def test_compression_model_resolves_luna_pro_from_generated_catalog() -> None:

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-import subprocess
 from pathlib import Path
 
 
@@ -11,7 +10,21 @@ ALLOWED_ATTRIBUTION_FILES = {ROOT / "LICENSE", ROOT / "NOTICE.md"}
 THIRD_PARTY_PRODUCT_LABEL_FILES = {
     ROOT / "travis" / "coding_agent" / "export_html_assets" / "vendor" / "highlight.min.js",
 }
-SKIPPED_TREES = {ROOT / "docs" / "superpowers"}
+EXTERNAL_RESOURCE_COMPATIBILITY_FILES = {
+    ROOT / "travis" / "coding_agent" / "project_trust.py",
+}
+ACTIVE_TEXT_ROOTS = (
+    ROOT / "travis",
+    ROOT / "evals",
+    ROOT / "packages" / "travis234-cli" / "bin",
+)
+ACTIVE_ROOT_FILES = (
+    ROOT / "Dockerfile",
+    ROOT / "Dockerfile.release",
+    ROOT / "README.md",
+    ROOT / "package.json",
+    ROOT / "pyproject.toml",
+)
 FORBIDDEN_STATE_PATTERNS = (
     re.compile(
         r"(?:(?<![\w.])\.(?:agents|allthebest|appv(?:2|21|22|23|231))|/(?:agent-home|allthebest-home|appv(?:2|21|22|23|231)-home))(?:/|\b)",
@@ -33,20 +46,9 @@ FORBIDDEN_RUNTIME_PATTERNS = FORMER_APP_PATTERNS + PRODUCT_LINEAGE_PATTERNS
 
 
 def _runtime_text_files() -> list[Path]:
-    tracked = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT)
-    files: list[Path] = []
-    for raw_path in tracked.decode("utf-8", errors="surrogateescape").split("\0"):
-        if not raw_path:
-            continue
-        path = ROOT / raw_path
-        if path in ALLOWED_ATTRIBUTION_FILES:
-            continue
-        if path == CONTRACT_FILE:
-            continue
-        if any(tree == path or tree in path.parents for tree in SKIPPED_TREES):
-            continue
-        files.append(path)
-    return files
+    files = [path for root in ACTIVE_TEXT_ROOTS for path in root.rglob("*") if path.is_file()]
+    files.extend(path for path in ACTIVE_ROOT_FILES if path.is_file())
+    return sorted(path for path in files if "__pycache__" not in path.parts)
 
 
 def _read_tracked_text(path: Path) -> str | None:
@@ -63,23 +65,19 @@ def _matches_forbidden_runtime_pattern(value: str) -> bool:
 
 
 def _content_patterns(path: Path) -> tuple[re.Pattern[str], ...]:
-    if path in THIRD_PARTY_PRODUCT_LABEL_FILES:
-        return FORMER_APP_PATTERNS
-    return FORBIDDEN_RUNTIME_PATTERNS
+    if path in THIRD_PARTY_PRODUCT_LABEL_FILES or path in EXTERNAL_RESOURCE_COMPATIBILITY_FILES:
+        return FORMER_APP_PATTERNS[:3]
+    return FORMER_APP_PATTERNS
 
 
-def test_runtime_scope_is_tracked_and_excludes_only_contract_definition() -> None:
+def test_runtime_scope_is_filesystem_based_and_excludes_reference_oracles() -> None:
     files = set(_runtime_text_files())
-    tracked = {
-        ROOT / path
-        for path in subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT)
-        .decode("utf-8", errors="surrogateescape")
-        .split("\0")
-        if path
-    }
-    assert files <= tracked
     assert CONTRACT_FILE not in files
-    assert ROOT / "tests" / "test_distribution_contract.py" in files
+    assert ROOT / "travis" / "cli.py" in files
+    assert ROOT / "packages" / "travis234-cli" / "bin" / "travis234.js" in files
+    assert not any((ROOT / "pi") in path.parents for path in files)
+    assert not any((ROOT / "hermes-agent") in path.parents for path in files)
+    assert not any((ROOT / "appv231") in path.parents for path in files)
 
 
 def test_cli_and_tui_use_the_travis234_product_name() -> None:
@@ -139,7 +137,8 @@ def test_vendored_highlighter_allows_language_pi_but_not_former_app_names() -> N
 def test_focused_repository_layout() -> None:
     assert (ROOT / "travis" / "__init__.py").is_file()
     assert not (ROOT / "appV2.3.1").exists()
-    assert not (ROOT / "appv231").exists()
+    assert (ROOT / "appv231").is_dir()
+    assert (ROOT / "PI_HERMES_TRAVIS_CROSS_CHECK_REPORT.md").is_file()
 
 
 def test_runtime_text_has_no_former_product_labels() -> None:

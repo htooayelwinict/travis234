@@ -8,6 +8,11 @@ from travis.compaction.compressor import (
     ContextCompressor,
     estimate_tokens,
 )
+from travis.compaction.policy import (
+    CompactionBudget,
+    CompactionPolicyInput,
+    calculate_compaction_budget,
+)
 from travis.compaction.timing import (
     CompactionManager,
     ManualCompressionStatus,
@@ -22,6 +27,8 @@ __all__ = [
     "SUMMARY_END_MARKER",
     "COMPRESSED_SUMMARY_METADATA_KEY",
     "CompactionManager",
+    "CompactionBudget",
+    "CompactionPolicyInput",
     "CompressionResult",
     "ContextCompressor",
     "ManualCompressionStatus",
@@ -29,5 +36,6 @@ __all__ = [
     "SessionLineageStore",
     "SessionRecord",
     "estimate_tokens",
+    "calculate_compaction_budget",
     "summarize_manual_compression",
 ]

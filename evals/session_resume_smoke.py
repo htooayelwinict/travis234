@@ -32,6 +32,15 @@ def run_smoke(*, workspace: Path, agent_dir: Path, marker: str) -> dict[str, obj
         "continued_session_id": continued["session_id"],
         "jsonl_count": len(jsonl_files),
         "restored_marker": continued["assistant_text"],
+        "pre_compaction_tokens": first["pre_compaction_usage"]["tokens"],
+        "post_compaction_tokens": first["post_compaction_usage"]["tokens"],
+        "post_compaction_confidence": first["post_compaction_usage"]["confidence"],
+        "next_prompt_tokens": continued["context_usage"]["tokens"],
+        "next_prompt_confidence": continued["context_usage"]["confidence"],
+        "follow_up_delta": abs(
+            continued["context_usage"]["tokens"]
+            - first["post_compaction_usage"]["tokens"]
+        ),
     }
 
 
@@ -85,13 +94,16 @@ def _run_worker(
 def _worker(*, workspace: Path, agent_dir: Path, marker: str, continue_session: bool) -> int:
     import travis.cli as cli
     from travis.ai.providers.faux import create_faux_provider, faux_model, text_response_events
-    from travis.ai.types import TextContent
+    from travis.ai.context_estimate import estimate_full_context_tokens
+    from travis.ai.types import TextContent, UserMessage, now_ms
     from travis.app import CodingApp
     from travis.coding_agent.model_registry import ModelRegistry
     from travis.tui.interactive_mode import InteractiveMode
     from travis.tui.terminal import FakeTerminal
 
     model = faux_model()
+    model.context_window = 128_000
+    model.max_tokens = 8_192
 
     def message_text(message: object) -> str:
         content = getattr(message, "content", "")
@@ -103,7 +115,13 @@ def _worker(*, workspace: Path, agent_dir: Path, marker: str, continue_session: 
         transcript = "\n".join(message_text(message) for message in context.messages)
         match = re.search(r"remember-[a-zA-Z0-9-]+", transcript)
         response = match.group(0) if match else "marker-not-found"
-        return text_response_events(active_model, response)
+        events = text_response_events(active_model, response)
+        prompt_tokens = estimate_full_context_tokens(context).tokens
+        events[-1].message.usage.input = prompt_tokens
+        events[-1].message.usage.total_tokens = (
+            prompt_tokens + events[-1].message.usage.output
+        )
+        return events
 
     def create_registry(auth_storage, models_path, *, provider_config=None):
         registry = ModelRegistry(
@@ -124,12 +142,44 @@ def _worker(*, workspace: Path, agent_dir: Path, marker: str, continue_session: 
 
     def app_factory(**kwargs):
         app = CodingApp(terminal=FakeTerminal(columns=140, rows=40), **kwargs)
+        app.session.model.context_window = model.context_window
+        app.session.model.max_tokens = model.max_tokens
+        app.compressor.update_context_window(
+            model.context_window,
+            max_tokens=model.max_tokens,
+            model=f"{model.provider}/{model.id}",
+        )
         captured["app"] = app
+        if not continue_session:
+            seed_messages = [
+                UserMessage(
+                    content=f"historical seed {index} " + ("x" * 2_000),
+                    timestamp=now_ms() + index,
+                )
+                for index in range(80)
+            ]
+            app.session.agent.state.messages.extend(seed_messages)
+            if app.session._session_store is not None:
+                for message in seed_messages:
+                    app.session._session_store.append_message(message)
+            original_compact = app.session.compact
+
+            def tracked_compact(*args, **compact_kwargs):
+                captured["pre_compaction_usage"] = app.session.get_context_usage()
+                status = original_compact(*args, **compact_kwargs)
+                captured["post_compaction_usage"] = app.session.get_context_usage()
+                return status
+
+            app.session.compact = tracked_compact
         return app
 
     first_prompt = f"Remember this token for later: {marker}. Confirm once."
     continued_prompt = "What token did I ask you to remember earlier? Reply with only the token."
-    inputs = iter([continued_prompt if continue_session else first_prompt, "/session", "/exit"])
+    inputs = iter(
+        [continued_prompt, "/session", "/exit"]
+        if continue_session
+        else [first_prompt, "/compact", "/session", "/exit"]
+    )
 
     def mode_factory(app, **kwargs):
         return InteractiveMode(app, input_fn=lambda _prompt: next(inputs), **kwargs)
@@ -153,7 +203,11 @@ def _worker(*, workspace: Path, agent_dir: Path, marker: str, continue_session: 
         "session_path": app.session.session_path,
         "session_id": app.session.session_id,
         "assistant_text": assistant_text,
+        "context_usage": app.session.get_context_usage(),
     }
+    if not continue_session:
+        result["pre_compaction_usage"] = captured.get("pre_compaction_usage")
+        result["post_compaction_usage"] = captured.get("post_compaction_usage")
     print(f"{_RESULT_PREFIX}{json.dumps(result, separators=(',', ':'))}")
     return int(exit_code)
 

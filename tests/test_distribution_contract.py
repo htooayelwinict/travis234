@@ -39,3 +39,9 @@ def test_pytest_only_discovers_the_product_test_tree() -> None:
     config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert config["tool"]["pytest"]["ini_options"]["testpaths"] == ["tests"]
+
+
+def test_release_build_context_excludes_reference_oracles_and_plans() -> None:
+    ignored = set((ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines())
+
+    assert {"pi", "hermes-agent", "appv231", "docs/superpowers", "PI_HERMES_TRAVIS_CROSS_CHECK_REPORT.md"} <= ignored

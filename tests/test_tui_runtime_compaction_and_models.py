@@ -84,6 +84,7 @@ def test_interactive_mode_labels_post_response_compaction_after_reply(tmp_path) 
 
     def script(model, context):
         events = text_response_events(model, "reply before compaction")
+        events[-1].message.usage.input = 200_000
         events[-1].message.usage.total_tokens = 200_000
         return events
 

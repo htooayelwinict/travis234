@@ -195,9 +195,11 @@ class Models:
         *,
         credentials: CredentialStore | None = None,
         auth_context: AuthContext | None = None,
+        offline: bool = False,
     ) -> None:
         self.credentials = credentials or InMemoryCredentialStore()
         self.auth_context = auth_context or default_auth_context()
+        self.offline = bool(offline)
         self._providers: dict[str, Provider] = {}
         self._lock = threading.RLock()
 
@@ -241,7 +243,18 @@ class Models:
     def get_model(self, provider: str, model_id: str) -> Model | None:
         return next((model for model in self.get_models(provider) if model.id == model_id), None)
 
+    def async_api(self) -> "AsyncModels":
+        return AsyncModels(self)
+
     def refresh(self, provider: str | None = None) -> None:
+        if _has_running_event_loop():
+            raise ModelsError(
+                "async_context",
+                "Synchronous model refresh cannot run on an active event loop; "
+                "use await models.async_api().refresh(...)",
+            )
+        if self.offline:
+            return
         if provider is not None:
             entry = self.get_provider(provider)
             if entry is None:
@@ -276,6 +289,7 @@ class Models:
             model,
             self.credentials,
             self.auth_context,
+            offline=self.offline,
         )
 
     def stream(
@@ -367,6 +381,7 @@ class Models:
             self.auth_context,
             api_key=explicit_api_key,
             env=explicit_env,
+            offline=self.offline,
         )
         auth = resolution.auth if resolution is not None else None
         request_model = replace(model, base_url=auth.base_url) if auth and auth.base_url else model
@@ -396,12 +411,37 @@ class Models:
         )
 
 
+class AsyncModels:
+    """Async facade over the provider-owned model collection."""
+
+    def __init__(self, owner: Models) -> None:
+        self._owner = owner
+
+    async def refresh(self, provider: str | None = None) -> tuple[Model, ...]:
+        if not self._owner.offline:
+            await asyncio.to_thread(self._owner.refresh, provider)
+        return self._owner.get_models(provider)
+
+    async def find(self, provider: str, model_id: str) -> Model | None:
+        if (
+            not self._owner.offline
+            and self._owner.get_provider(provider) is not None
+            and not self._owner.get_models(provider)
+        ):
+            await self.refresh(provider)
+        return self._owner.get_model(provider, model_id)
+
+    async def get_models(self, provider: str | None = None) -> tuple[Model, ...]:
+        return self._owner.get_models(provider)
+
+
 def create_models(
     *,
     credentials: CredentialStore | None = None,
     auth_context: AuthContext | None = None,
+    offline: bool = False,
 ) -> Models:
-    return Models(credentials=credentials, auth_context=auth_context)
+    return Models(credentials=credentials, auth_context=auth_context, offline=offline)
 
 
 def create_provider(**kwargs: Any) -> Provider:
@@ -484,7 +524,16 @@ def _settle_runtime_value(value: Any) -> Any:
     return asyncio.run(value) if inspect.isawaitable(value) else value
 
 
+def _has_running_event_loop() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
 __all__ = [
+    "AsyncModels",
     "Models",
     "Provider",
     "ProviderStreams",

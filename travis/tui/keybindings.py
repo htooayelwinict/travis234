@@ -8,6 +8,10 @@ from travis.tui.keys import matches_key
 
 
 TUI_KEYBINDINGS: dict[str, dict[str, object]] = {
+    "app.session.new": {"defaultKeys": [], "description": "Start a new session"},
+    "app.session.tree": {"defaultKeys": [], "description": "Open session tree"},
+    "app.session.fork": {"defaultKeys": [], "description": "Fork current session"},
+    "app.session.resume": {"defaultKeys": [], "description": "Resume a session"},
     "tui.editor.cursorUp": {"defaultKeys": "up", "description": "Move cursor up"},
     "tui.editor.cursorDown": {"defaultKeys": "down", "description": "Move cursor down"},
     "tui.editor.cursorLeft": {"defaultKeys": ["left", "ctrl+b"], "description": "Move cursor left"},

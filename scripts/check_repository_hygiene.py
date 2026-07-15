@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import ast
 import dataclasses
+import json
 import re
 import sys
 import tomllib
@@ -22,6 +23,8 @@ REPORT_FIELDS = (
     "duplicate_groups",
     "oversized_tests",
     "forbidden_compatibility",
+    "reference_coupling",
+    "distribution_leaks",
 )
 _CAMEL_SYMBOL = re.compile(r"^[a-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*$")
 _DISTRIBUTION_NAME = re.compile(r"^[A-Za-z0-9_.-]+")
@@ -33,9 +36,12 @@ _DISTRIBUTION_IMPORT_ROOTS = {
     "openrouter": frozenset({"openrouter"}),
     "psutil": frozenset({"psutil"}),
     "pydantic": frozenset({"pydantic"}),
+    "pyyaml": frozenset({"yaml"}),
 }
 _COMPATIBILITY_MODULE_NAMES = frozenset({"compat.py", "compatibility.py"})
 _FORBIDDEN_RUNTIME_SYMBOLS = frozenset({"_PROCESS_ARGUMENT_ALIASES", "_install_subagent_tool_aliases"})
+_REFERENCE_IMPORT_ROOTS = frozenset({"pi", "hermes_agent", "appv231"})
+_REFERENCE_DISTRIBUTION_MARKERS = ("pi/", "hermes-agent", "appv231", "PI_HERMES_TRAVIS_CROSS_CHECK_REPORT")
 
 
 @dataclass(frozen=True)
@@ -45,6 +51,8 @@ class HygieneReport:
     duplicate_groups: tuple[tuple[str, ...], ...]
     oversized_tests: tuple[str, ...]
     forbidden_compatibility: tuple[str, ...]
+    reference_coupling: tuple[str, ...]
+    distribution_leaks: tuple[str, ...]
 
     @property
     def clean(self) -> bool:
@@ -66,6 +74,8 @@ def inspect_repository(root: Path = ROOT) -> HygieneReport:
         duplicate_groups=_duplicate_groups(root, parsed_runtime),
         oversized_tests=_oversized_tests(root),
         forbidden_compatibility=_forbidden_compatibility(root, parsed_runtime),
+        reference_coupling=_reference_coupling(root, parsed_runtime),
+        distribution_leaks=_distribution_leaks(root),
     )
 
 
@@ -287,6 +297,46 @@ def _forbidden_compatibility(
                 results.add(f"{relative}:{getattr(node, 'lineno', 1)}:{name}")
             if isinstance(node, ast.Call) and _is_legacy_run_tool_definition(node):
                 results.add(f"{relative}:{node.lineno}:subagent run tool alias")
+    return tuple(sorted(results))
+
+
+def _reference_coupling(
+    root: Path,
+    parsed_runtime: Sequence[tuple[Path, ast.Module]],
+) -> tuple[str, ...]:
+    results: set[str] = set()
+    for path, tree in parsed_runtime:
+        relative = path.relative_to(root).as_posix()
+        for node in ast.walk(tree):
+            names: tuple[str, ...] = ()
+            if isinstance(node, ast.Import):
+                names = tuple(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names = (node.module,)
+            for name in names:
+                if name.partition(".")[0] in _REFERENCE_IMPORT_ROOTS:
+                    results.add(f"{relative}:{node.lineno}:{name}")
+    return tuple(sorted(results))
+
+
+def _distribution_leaks(root: Path) -> tuple[str, ...]:
+    results: set[str] = set()
+    metadata = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    package_find = metadata.get("tool", {}).get("setuptools", {}).get("packages", {}).get("find", {})
+    if package_find.get("include") != ["travis*"]:
+        results.add("pyproject.toml:setuptools package include is not restricted to travis*")
+    package_data = metadata.get("tool", {}).get("setuptools", {}).get("package-data", {})
+    for owner, patterns in package_data.items():
+        for pattern in patterns:
+            value = f"{owner}/{pattern}"
+            if any(marker.lower() in value.lower() for marker in _REFERENCE_DISTRIBUTION_MARKERS):
+                results.add(f"pyproject.toml:reference package data:{value}")
+
+    npm_path = root / "packages" / "travis234-cli" / "package.json"
+    npm = json.loads(npm_path.read_text(encoding="utf-8"))
+    for entry in npm.get("files", ()):
+        if any(marker.lower() in str(entry).lower() for marker in _REFERENCE_DISTRIBUTION_MARKERS):
+            results.add(f"packages/travis234-cli/package.json:reference file:{entry}")
     return tuple(sorted(results))
 
 

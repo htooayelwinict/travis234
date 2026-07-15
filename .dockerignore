@@ -9,4 +9,9 @@ __pycache__
 *.egg-info
 build
 dist
+pi
+hermes-agent
+appv231
+docs/superpowers
+PI_HERMES_TRAVIS_CROSS_CHECK_REPORT.md
 .DS_Store

@@ -6,6 +6,7 @@ import asyncio
 import inspect
 from collections import defaultdict
 from collections.abc import Callable
+from contextlib import contextmanager
 from typing import Any
 
 
@@ -14,10 +15,11 @@ EventHandler = Callable[[Any], object]
 
 class EventBusController:
     def __init__(self) -> None:
-        self._handlers: dict[str, list[EventHandler]] = defaultdict(list)
+        self._handlers: dict[str, list[tuple[EventHandler, object | None]]] = defaultdict(list)
+        self._active_owners: list[object] = []
 
     def emit(self, channel: str, data: Any) -> None:
-        for handler in list(self._handlers.get(channel, [])):
+        for handler, _owner in list(self._handlers.get(channel, [])):
             try:
                 result = handler(data)
                 if inspect.isawaitable(result):
@@ -26,18 +28,36 @@ class EventBusController:
                 print(f"Event handler error ({channel}): {error}")
 
     def on(self, channel: str, handler: EventHandler) -> Callable[[], None]:
-        self._handlers[channel].append(handler)
+        owner = self._active_owners[-1] if self._active_owners else None
+        registered = (handler, owner)
+        self._handlers[channel].append(registered)
 
         def unsubscribe() -> None:
             handlers = self._handlers.get(channel)
             if not handlers:
                 return
             try:
-                handlers.remove(handler)
+                handlers.remove(registered)
             except ValueError:
                 return
 
         return unsubscribe
+
+    @contextmanager
+    def owner(self, owner: object):
+        self._active_owners.append(owner)
+        try:
+            yield self
+        finally:
+            self._active_owners.pop()
+
+    def clear_owner(self, owner: object) -> None:
+        for channel in tuple(self._handlers):
+            remaining = [item for item in self._handlers[channel] if item[1] is not owner]
+            if remaining:
+                self._handlers[channel] = remaining
+            else:
+                self._handlers.pop(channel, None)
 
     def clear(self) -> None:
         self._handlers.clear()

@@ -121,6 +121,13 @@ class ModelRegistry:
         self.load_models()
         self.runtime.refresh()
 
+    def set_offline(self, enabled: bool) -> None:
+        self.runtime.offline = bool(enabled)
+
+    @property
+    def offline(self) -> bool:
+        return self.runtime.offline
+
     def load_models(self) -> None:
         with self._lock:
             fresh = builtin_models(

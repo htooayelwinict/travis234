@@ -77,6 +77,10 @@ def _is_reload_command(prompt: str) -> bool:
     return prompt == "/reload"
 
 
+def _is_trust_command(prompt: str) -> bool:
+    return prompt == "/trust"
+
+
 def _parse_session_command(prompt: str) -> str | None:
     if prompt == "/resume":
         return "resume"
@@ -84,6 +88,24 @@ def _parse_session_command(prompt: str) -> str | None:
         return "new"
     if prompt == "/session":
         return "session"
+    if prompt == "/name" or prompt.startswith("/name "):
+        return "name"
+    if prompt == "/fork":
+        return "fork"
+    if prompt == "/clone":
+        return "clone"
+    if prompt == "/tree":
+        return "tree"
+    if prompt == "/export" or prompt.startswith("/export "):
+        return "export"
+    if prompt == "/import" or prompt.startswith("/import "):
+        return "import"
+    if prompt == "/copy":
+        return "copy"
+    if prompt == "/share":
+        return "share"
+    if prompt == "/theme" or prompt.startswith("/theme "):
+        return "theme"
     return None
 
 
@@ -219,11 +241,43 @@ class InteractiveCommandDispatcher:
                 if session_command == "session":
                     self._run_session_info_command()
                     continue
+                if session_command == "name":
+                    self._run_name_command(prompt)
+                    continue
+                if session_command == "fork":
+                    self._run_fork_command()
+                    continue
+                if session_command == "clone":
+                    self._run_clone_command()
+                    continue
+                if session_command == "tree":
+                    self._run_tree_command()
+                    continue
+                if session_command == "export":
+                    self._run_export_command(prompt)
+                    continue
+                if session_command == "import":
+                    self._run_import_command(prompt)
+                    continue
+                if session_command == "copy":
+                    self._run_copy_command()
+                    continue
+                if session_command == "share":
+                    self._run_share_command()
+                    continue
+                if session_command == "theme":
+                    self._run_theme_command(prompt)
+                    continue
                 if _is_processes_command(prompt):
                     self._run_processes_command()
                     continue
                 if _is_reload_command(prompt):
                     self._run_reload_command()
+                    continue
+                if _is_trust_command(prompt):
+                    self._run_trust_command()
+                    continue
+                if self._run_package_command(prompt):
                     continue
                 bash_command = _parse_bash_command(prompt)
                 if bash_command:
@@ -308,6 +362,7 @@ __all__ = (
     '_is_openrouter_model',
     '_is_processes_command',
     '_is_reload_command',
+    '_is_trust_command',
     '_is_prompt_level_skill_trigger',
     '_parse_auth_command',
     '_parse_bash_command',

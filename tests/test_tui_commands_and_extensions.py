@@ -1,6 +1,44 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from tests._support_tui import *  # noqa: F403
+from travis.coding_agent.project_trust import ProjectTrustStore
+from travis.coding_agent.settings_manager import SettingsManager
+
+
+def test_interactive_trust_command_persists_without_executing_project_code(tmp_path) -> None:
+    agent_dir = tmp_path / "agent"
+    sentinel = tmp_path / "executed"
+    extension_path = tmp_path / ".travis234" / "extensions" / "unsafe.py"
+    extension_path.parent.mkdir(parents=True)
+    extension_path.write_text(
+        "from pathlib import Path\n"
+        f"Path({str(sentinel)!r}).write_text('executed', encoding='utf-8')\n"
+        "def extension(travis):\n"
+        "    return None\n",
+        encoding="utf-8",
+    )
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=100, rows=30),
+        enable_tui=True,
+        agent_dir=str(agent_dir),
+    )
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+    mode.prompt_extension_select = lambda title, choices, options=None, **kwargs: "Trust"
+
+    try:
+        mode._run_trust_command()
+
+        assert ProjectTrustStore(agent_dir).get(tmp_path) is True
+        assert sentinel.exists() is False
+        history = strip_ansi("\n".join(mode.history.render(500)))
+        assert "Run /reload or restart" in history
+    finally:
+        mode.footer_data_provider.dispose()
+        app.close()
 
 
 def test_interactive_mode_binds_extension_ui_before_session_start(tmp_path) -> None:
@@ -19,6 +57,7 @@ def test_interactive_mode_binds_extension_ui_before_session_start(tmp_path) -> N
         terminal=FakeTerminal(columns=100, rows=30),
         enable_tui=True,
         agent_dir=str(tmp_path / "agent"),
+        project_trust_override=True,
     )
     mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
 
@@ -49,6 +88,7 @@ def test_interactive_reload_clears_old_extension_ui_before_new_session_start(tmp
         terminal=terminal,
         enable_tui=True,
         agent_dir=str(tmp_path / "agent"),
+        project_trust_override=True,
     )
     mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
     mode.init()
@@ -93,6 +133,7 @@ def test_interactive_mode_reload_refreshes_extension_code_without_model_turn(tmp
         terminal=FakeTerminal(columns=100, rows=30),
         enable_tui=True,
         agent_dir=str(tmp_path / "agent"),
+        project_trust_override=True,
     )
     extension_path.write_text(
         "def extension(travis):\n"
@@ -110,6 +151,148 @@ def test_interactive_mode_reload_refreshes_extension_code_without_model_turn(tmp
     assert command.description == "two"
     assert calls["model"] == 0
     assert "Extensions reloaded" in history
+
+
+def test_interactive_theme_registry_connects_set_theme_and_falls_back_on_reload(tmp_path) -> None:
+    themes = tmp_path / "themes"
+    extensions = tmp_path / "extensions"
+    themes.mkdir()
+    extensions.mkdir()
+    night = themes / "night.json"
+    day = themes / "day.json"
+    night.write_text(
+        json.dumps({"name": "night", "colors": {"accent": "blue"}}),
+        encoding="utf-8",
+    )
+    day.write_text(
+        json.dumps({"name": "day", "colors": {"accent": "yellow"}}),
+        encoding="utf-8",
+    )
+    (extensions / "theme_extension.py").write_text(
+        "def extension(travis):\n"
+        "    def started(event, ctx):\n"
+        "        result = ctx.ui.setTheme('night')\n"
+        "        ctx.ui.set_status('theme-selected', str(result['success']).lower())\n"
+        "    travis.on('session_start', started)\n",
+        encoding="utf-8",
+    )
+    settings = SettingsManager.in_memory()
+    settings.set_theme_paths([str(themes)])
+    settings.set_extension_paths([str(extensions)])
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=100, rows=30),
+        enable_tui=True,
+        agent_dir=str(tmp_path / "agent"),
+        settings_manager=settings,
+        project_trust_override=True,
+    )
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+
+    try:
+        mode.init()
+        assert mode.theme_registry.active_name == "night"
+        assert mode.extension_statuses["theme-selected"] == "true"
+
+        night.unlink()
+        mode._run_reload_command()
+
+        history = strip_ansi("\n".join(mode.history.render(1_000)))
+        assert mode.theme_registry.active_name == "day"
+        assert 'Theme "night" was removed' in history
+        assert "Extensions reloaded (extensions: 0; skills: 0; prompts: 0; themes: 0)" in history
+    finally:
+        mode.footer_data_provider.dispose()
+        app.close()
+
+
+def test_interactive_package_commands_confirm_mutate_and_refresh_resources(tmp_path) -> None:
+    package = tmp_path / "package"
+    prompts = package / "prompts"
+    prompts.mkdir(parents=True)
+    (prompts / "audit.md").write_text(
+        "---\ndescription: Audit files\n---\nAudit $ARGUMENTS",
+        encoding="utf-8",
+    )
+    (package / "package.json").write_text(
+        json.dumps(
+            {
+                "name": "audit-package",
+                "travis": {"prompts": ["prompts/audit.md"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings = SettingsManager.in_memory()
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=100, rows=30),
+        enable_tui=True,
+        agent_dir=str(tmp_path / "agent"),
+        settings_manager=settings,
+        project_trust_override=True,
+    )
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+    confirmations: list[tuple[str, str]] = []
+    mode.prompt_extension_confirm = (
+        lambda title, message, options=None, **kwargs: confirmations.append((title, message)) or True
+    )
+
+    try:
+        mode.init()
+        assert mode._run_package_command(f'/install "{package}"') is True
+        assert [prompt.name for prompt in app.session.prompt_templates] == ["audit"]
+        assert settings.global_settings["packages"] == [str(package)]
+
+        assert mode._run_package_command("/packages") is True
+        assert mode._run_package_command(f'/remove "{package}"') is True
+        assert app.session.prompt_templates == []
+        assert settings.global_settings["packages"] == []
+
+        history = strip_ansi("\n".join(mode.history.render(2_000)))
+        assert [title for title, _message in confirmations] == [
+            "Install package",
+            "Remove package",
+        ]
+        assert "Installed package" in history
+        assert str(package) in history
+        assert "Removed package" in history
+    finally:
+        mode.footer_data_provider.dispose()
+        app.close()
+
+
+def test_interactive_package_cancel_does_not_mutate_or_reload(tmp_path) -> None:
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "package.json").write_text(
+        json.dumps({"name": "cancelled", "travis": {"extensions": []}}),
+        encoding="utf-8",
+    )
+    settings = SettingsManager.in_memory()
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=100, rows=30),
+        enable_tui=True,
+        agent_dir=str(tmp_path / "agent"),
+        settings_manager=settings,
+        project_trust_override=True,
+    )
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+    mode.prompt_extension_confirm = lambda *args, **kwargs: False
+
+    try:
+        assert mode._run_package_command(f'/install "{package}"') is True
+        assert "packages" not in settings.global_settings
+        history = strip_ansi("\n".join(mode.history.render(500)))
+        assert "Package install cancelled" in history
+        assert "Extensions reloaded" not in history
+    finally:
+        mode.footer_data_provider.dispose()
+        app.close()
 
 
 def test_interactive_mode_resume_rebinds_history_footer_and_session_subscription(tmp_path) -> None:
@@ -243,6 +426,13 @@ def test_interactive_mode_help_and_autocomplete_include_session_commands(tmp_pat
     assert "/resume - Switch to a previous session." in rendered
     assert "/new - Start a new persistent session." in rendered
     assert "/session - Show active session details." in rendered
+    assert "/name <name> - Name the active session." in rendered
+    assert "/fork - Fork before a selected user message." in rendered
+    assert "/clone - Clone the complete active branch." in rendered
+    assert "/tree - Navigate the active session tree." in rendered
+    assert "/export [path] - Export HTML or JSONL." in rendered
+    assert "/import <path.jsonl> - Import and switch session." in rendered
+    assert "/theme [name] - Select a discovered theme." in rendered
     assert "/processes - Inspect and control managed processes." in rendered
     suggestions = mode.create_base_autocomplete_provider().get_suggestions(
         ["/se"],
@@ -252,6 +442,16 @@ def test_interactive_mode_help_and_autocomplete_include_session_commands(tmp_pat
     )
     labels = [item["label"] for item in suggestions["items"]]
     assert "session" in labels
+    session_parity_labels = {
+        item["label"]
+        for item in mode.create_base_autocomplete_provider().get_suggestions(
+            ["/"],
+            0,
+            1,
+            {"signal": None, "force": False},
+        )["items"]
+    }
+    assert {"name", "fork", "clone", "tree", "export", "import", "theme"} <= session_parity_labels
     process_suggestions = mode.create_base_autocomplete_provider().get_suggestions(
         ["/pro"],
         0,
@@ -259,6 +459,105 @@ def test_interactive_mode_help_and_autocomplete_include_session_commands(tmp_pat
         {"signal": None, "force": False},
     )
     assert "processes" in [item["label"] for item in process_suggestions["items"]]
+
+
+def test_interactive_session_parity_commands_use_runtime_owners_without_model_turns(tmp_path) -> None:
+    calls = {"model": 0}
+
+    def script(model, context):
+        calls["model"] += 1
+        return text_response_events(model, f"reply-{calls['model']}")
+
+    register_api_provider(create_faux_provider(script))
+    agent_dir = tmp_path / "agent"
+    catalog = SessionCatalog(str(agent_dir))
+    session_path, session_id = catalog.new_session_path(str(tmp_path), "parity")
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=160, rows=40),
+        enable_tui=True,
+        session_path=session_path,
+        session_id=session_id,
+        agent_dir=str(agent_dir),
+    )
+    app.run_turn("first")
+    app.run_turn("second")
+    assert calls["model"] == 2
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+    mode.init()
+
+    try:
+        mode._run_name_command("/name Release repair")
+        assert app.session.session_name == "Release repair"
+        assert catalog.list_for_cwd(str(tmp_path))[0].name == "Release repair"
+        assert "Session name set: Release repair" in strip_ansi("\n".join(mode.history.render(2_000)))
+
+        tree_choices: list[str] = []
+
+        def choose_tree(title, choices, options=None, **kwargs):
+            tree_choices.extend(choices)
+            return next(choice for choice in choices if "user: second" in choice)
+
+        mode.prompt_extension_select = choose_tree
+        mode._run_tree_command()
+        assert mode.editor_text == "second"
+        assert "Navigated to selected point" in strip_ansi("\n".join(mode.history.render(2_000)))
+
+        source_path = Path(app.session.session_path)
+        source_bytes = source_path.read_bytes()
+        mode._run_clone_command()
+        assert Path(app.session.session_path) != source_path
+        assert source_path.read_bytes() == source_bytes
+
+        export_path = tmp_path / "exported.jsonl"
+        mode._run_export_command(f"/export {export_path}")
+        assert export_path.exists()
+        assert calls["model"] == 2
+
+        rendered = strip_ansi("\n".join(mode.history.render(2_000)))
+        assert "Cloned to new session" in rendered
+        assert f"Session exported to: {export_path}" in rendered
+        assert tree_choices
+    finally:
+        mode.footer_data_provider.dispose()
+        app.close()
+
+
+@pytest.mark.parametrize("busy_state", ["turn", "compaction"])
+def test_interactive_mutable_session_commands_fail_closed_while_busy(
+    tmp_path,
+    busy_state,
+) -> None:
+    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "reply")))
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=120, rows=30),
+        enable_tui=True,
+        session_path=str(tmp_path / "busy.jsonl"),
+        agent_dir=str(tmp_path / "agent"),
+    )
+    app.run_turn("seed")
+    original_path = app.session.session_path
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+    mode.init()
+    if busy_state == "turn":
+        app.session.agent.state.is_streaming = True
+    else:
+        app.session._compaction_adapter._running = True  # noqa: SLF001 - precise busy-state fixture.
+
+    try:
+        mode._run_clone_command()
+
+        assert app.session.session_path == original_path
+        rendered = strip_ansi("\n".join(mode.history.render(1_000)))
+        assert f"session command unavailable while {busy_state} is active" in rendered
+    finally:
+        app.session.agent.state.is_streaming = False
+        app.session._compaction_adapter._running = False  # noqa: SLF001
+        mode.footer_data_provider.dispose()
+        app.close()
 
 def test_interactive_mode_process_completion_uses_dispatcher_without_model_turn(tmp_path) -> None:
     app = CodingApp(
@@ -1610,7 +1909,14 @@ def test_interactive_mode_extension_shortcut_can_add_autocomplete_provider(tmp_p
     slash_suggestions = mode.get_autocomplete_suggestions(["/rev"], 0, len("/rev"))
     assert slash_suggestions == {
         "prefix": "/rev",
-        "items": [{"value": "review", "label": "review", "description": "Review files"}],
+        "items": [
+            {"value": "review", "label": "review", "description": "Review files"},
+            {
+                "value": "remove",
+                "label": "remove",
+                "description": "Remove an installed resource package",
+            },
+        ],
     }
     argument_suggestions = mode.get_autocomplete_suggestions(["/deploy st"], 0, len("/deploy st"))
     assert argument_suggestions == {

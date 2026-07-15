@@ -2,142 +2,45 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 import hashlib
 import inspect
+from contextlib import nullcontext
 import json
 import sys
 from types import ModuleType
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from travis.agent.async_utils import resolve, run_sync
 from travis.coding_agent.event_bus import EventBusController, create_event_bus
 from travis.coding_agent.extensions import ExtensionRunner
 from travis.coding_agent.object_utils import settings_value as _settings_value
+from travis.coding_agent.package_manager import (
+    DefaultPackageManager,
+    ResolvedPaths,
+    ResolvedResource,
+)
+from travis.coding_agent.prompt_templates import (
+    load_prompt_templates as _load_prompt_templates_runtime,
+)
+from travis.coding_agent.project_trust import (
+    ProjectTrustContext,
+    ProjectTrustStore,
+    resolve_project_trust,
+)
 from travis.coding_agent.settings_manager import SettingsManager
+from travis.coding_agent.resource_discovery import collect_resource_files
+from travis.coding_agent.skills import (
+    ResourceDiagnostic,
+    Skill,
+    format_skills_for_prompt as _format_skills_for_prompt_runtime,
+    load_skills as _load_skills_runtime,
+)
 from travis.coding_agent.source_info import SourceInfo, create_synthetic_source_info
+from travis.coding_agent.themes import Theme
 
 CONFIG_DIR_NAME = ".travis234"
 _CONTEXT_FILE_NAMES = ("AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD")
-_RESOURCE_TYPES = ("extensions", "skills", "prompts", "themes")
-
-
-@dataclass
-class ResourceDiagnostic:
-    type: str
-    message: str
-    path: str
-    collision: dict[str, object] | None = None
-
-
-@dataclass
-class ResolvedResource:
-    path: str
-    enabled: bool
-    metadata: dict[str, object]
-
-
-@dataclass
-class ResolvedPaths:
-    extensions: list[ResolvedResource] = field(default_factory=list)
-    skills: list[ResolvedResource] = field(default_factory=list)
-    prompts: list[ResolvedResource] = field(default_factory=list)
-    themes: list[ResolvedResource] = field(default_factory=list)
-
-
-@dataclass
-class Skill:
-    name: str
-    description: str
-    file_path: str
-    base_dir: str
-    source_info: SourceInfo
-    disable_model_invocation: bool = False
-    allowed_tools: tuple[str, ...] = ()
-
-
-
-
-
-
-
-@dataclass
-class PromptTemplate:
-    name: str
-    description: str
-    content: str
-    source_info: SourceInfo
-    file_path: str
-    argument_hint: str | None = None
-
-
-
-
-
-@dataclass
-class Theme:
-    name: str
-    colors: dict[str, object]
-    vars: dict[str, object]
-    source_path: str
-    source_info: SourceInfo
-
-
-
-
-class DefaultPackageManager:
-    """Local package/resource resolver subset of the runtime's DefaultPackageManager."""
-
-    def __init__(
-        self,
-        *,
-        cwd: str,
-        agent_dir: str,
-        package_paths: list[str] | None = None,
-        project_trusted: bool = True,
-    ) -> None:
-        self.cwd = str(Path(cwd).expanduser().resolve())
-        self.agent_dir = str(Path(agent_dir).expanduser().resolve())
-        self.package_paths = list(package_paths or [])
-        self.project_trusted = project_trusted
-
-    def resolve(self) -> ResolvedPaths:
-        resolved = ResolvedPaths()
-        for package_path in self.package_paths:
-            package_root = _resolve_path(package_path, self.cwd)
-            if package_root.exists():
-                self._collect_package_resources(package_root, resolved)
-        self._add_auto_discovered_resources(resolved)
-        return resolved
-
-    def _collect_package_resources(self, package_root: Path, resolved: ResolvedPaths) -> None:
-        manifest = _read_package_manifest(package_root)
-        metadata = {"source": "local", "scope": "temporary", "origin": "package", "baseDir": str(package_root)}
-        for resource_type in _RESOURCE_TYPES:
-            entries = manifest.get(resource_type) if manifest else None
-            if entries is not None:
-                paths = _collect_manifest_entries(package_root, entries, resource_type)
-            else:
-                paths = _collect_resource_files(package_root / resource_type, resource_type)
-            target = getattr(resolved, resource_type)
-            for path in paths:
-                target.append(ResolvedResource(path=str(path), enabled=True, metadata=metadata))
-
-    def _add_auto_discovered_resources(self, resolved: ResolvedPaths) -> None:
-        global_base = Path(self.agent_dir)
-        project_base = Path(self.cwd) / CONFIG_DIR_NAME
-        pairs: list[tuple[Path, str, str]] = [(global_base, "user", "auto")]
-        if self.project_trusted:
-            pairs.append((project_base, "project", "auto"))
-        for base, scope, source in pairs:
-            metadata = {"source": source, "scope": scope, "origin": "top-level", "baseDir": str(base)}
-            for resource_type in _RESOURCE_TYPES:
-                paths = _collect_resource_files(base / resource_type, resource_type)
-                target = getattr(resolved, resource_type)
-                for path in paths:
-                    target.append(ResolvedResource(path=str(path), enabled=True, metadata=metadata))
 
 def load_context_file_from_dir(directory: str | Path) -> dict[str, str] | None:
     base = Path(directory).expanduser().resolve()
@@ -220,6 +123,7 @@ class DefaultResourceLoader:
         no_skills: bool = False,
         no_prompt_templates: bool = False,
         no_themes: bool = False,
+        offline: bool = False,
         agents_files_override: Callable[[dict[str, list[dict[str, str]]]], dict[str, list[dict[str, str]]]]
         | None = None,
         skills_override: Callable[[dict[str, list[object]]], dict[str, list[object]]] | None = None,
@@ -233,12 +137,14 @@ class DefaultResourceLoader:
         self.settings_manager = settings_manager or SettingsManager.create(self.cwd, self.agent_dir)
         self.event_bus = event_bus or create_event_bus()
         self.no_context_files = no_context_files
-        self.project_trusted = (
-            _settings_value(self.settings_manager, "is_project_trusted")
-            if project_trusted is None
-            else project_trusted
+        settings_project_trusted = _settings_value(self.settings_manager, "is_project_trusted")
+        settings_trust_resolved = bool(getattr(self.settings_manager, "project_trust_resolved", False))
+        self._project_trust_override = (
+            project_trusted
+            if project_trusted is not None
+            else bool(settings_project_trusted) if settings_trust_resolved else None
         )
-        self.project_trusted = True if self.project_trusted is None else bool(self.project_trusted)
+        self.project_trusted = bool(self._project_trust_override)
         self.system_prompt_source = system_prompt
         self.append_system_prompt_source = append_system_prompt
         self._explicit_extension_paths = list(additional_extension_paths or [])
@@ -266,6 +172,7 @@ class DefaultResourceLoader:
         self.no_skills = no_skills
         self.no_prompt_templates = no_prompt_templates
         self.no_themes = no_themes
+        self.offline = bool(offline)
         self.agents_files_override = agents_files_override
         self.skills_override = skills_override
         self.prompts_override = prompts_override
@@ -277,9 +184,16 @@ class DefaultResourceLoader:
             agent_dir=self.agent_dir,
             package_paths=self.package_paths,
             project_trusted=self.project_trusted,
+            settings_manager=self.settings_manager,
+            offline=self.offline,
         )
+        self.package_diagnostics: list[object] = []
 
-        self.extensions_result: dict[str, object] = {"extensions": [], "errors": [], "runtime": ExtensionRunner(cwd=self.cwd)}
+        self.extensions_result: dict[str, object] = {
+            "extensions": [],
+            "errors": [],
+            "runtime": ExtensionRunner(cwd=self.cwd, event_bus=self.event_bus),
+        }
         self.skills_result: dict[str, list[object]] = {"skills": [], "diagnostics": []}
         self.prompts_result: dict[str, list[object]] = {"prompts": [], "diagnostics": []}
         self.themes_result: dict[str, list[object]] = {"themes": [], "diagnostics": []}
@@ -320,6 +234,10 @@ class DefaultResourceLoader:
         return self.append_system_prompt
 
 
+    def get_package_diagnostics(self) -> list[object]:
+        return list(self.package_diagnostics)
+
+
     def extend_resources(self, paths: dict[str, list[dict[str, object]]]) -> None:
         self.last_skill_paths = _merge_paths(self.cwd, self.last_skill_paths, _resource_paths(paths.get("skillPaths", [])))
         self.last_prompt_paths = _merge_paths(
@@ -333,8 +251,71 @@ class DefaultResourceLoader:
         self._update_themes_from_paths(self.last_theme_paths)
 
 
-    def reload(self, options: object | None = None) -> None:
-        del options
+    def load_project_trust_extensions(self) -> dict[str, object]:
+        """Load only resources allowed to participate in trust resolution."""
+
+        self._set_project_trusted(False)
+        self._reload_settings_and_configured_paths()
+        resolved_paths = self.package_manager.resolve()
+        self.package_diagnostics = list(resolved_paths.diagnostics)
+        extension_paths = [resource.path for resource in resolved_paths.extensions if resource.enabled]
+        self._update_extensions(extension_paths, apply_override=False)
+        return self.extensions_result
+
+    def reload(self, options: Mapping[str, object] | None = None) -> None:
+        resolved_options = dict(options or {})
+        trust_override = _first_mapping_value(
+            resolved_options,
+            "projectTrustOverride",
+            "project_trust_override",
+        )
+        if trust_override is not None and not isinstance(trust_override, bool):
+            raise TypeError("project trust override must be true, false, or null")
+        if trust_override is None:
+            trust_override = self._project_trust_override
+
+        pretrust_extensions: dict[str, object] | None = None
+        if trust_override is None:
+            pretrust_extensions = self.load_project_trust_extensions()
+            context = _first_mapping_value(
+                resolved_options,
+                "projectTrustContext",
+                "project_trust_context",
+            )
+            if context is None:
+                context = ProjectTrustContext(has_ui=False, select=None)
+            if not isinstance(context, ProjectTrustContext):
+                raise TypeError("project trust context must be a ProjectTrustContext")
+            trust_store = _first_mapping_value(resolved_options, "trustStore", "trust_store")
+            if trust_store is None:
+                trust_store = ProjectTrustStore(self.agent_dir)
+            if not isinstance(trust_store, ProjectTrustStore):
+                raise TypeError("trust store must be a ProjectTrustStore")
+            get_default_project_trust = getattr(self.settings_manager, "get_default_project_trust", None)
+            default_project_trust = get_default_project_trust() if callable(get_default_project_trust) else "ask"
+            trusted = run_sync(
+                resolve_project_trust(
+                    cwd=self.cwd,
+                    trust_store=trust_store,
+                    context=context,
+                    default_project_trust=default_project_trust,
+                    extension_runner=pretrust_extensions.get("runtime"),
+                )
+            )
+        else:
+            trusted = trust_override
+
+        self._set_project_trusted(bool(trusted))
+        self._reload_all_resources(pretrust_extensions=pretrust_extensions)
+
+    def _set_project_trusted(self, trusted: bool) -> None:
+        self.project_trusted = trusted
+        set_project_trusted = getattr(self.settings_manager, "set_project_trusted", None)
+        if callable(set_project_trusted):
+            set_project_trusted(trusted)
+        self.package_manager.project_trusted = trusted
+
+    def _reload_settings_and_configured_paths(self) -> None:
         reload_settings = getattr(self.settings_manager, "reload", None)
         if callable(reload_settings):
             reload_settings()
@@ -356,7 +337,11 @@ class DefaultResourceLoader:
             "get_theme_paths",
         ) + self._explicit_theme_paths
         self.package_manager.package_paths = list(self.package_paths)
+
+    def _reload_all_resources(self, *, pretrust_extensions: dict[str, object] | None = None) -> None:
+        self._reload_settings_and_configured_paths()
         resolved_paths = self.package_manager.resolve()
+        self.package_diagnostics = list(resolved_paths.diagnostics)
         skill_paths = [resource.path for resource in resolved_paths.skills if resource.enabled]
         prompt_paths = [resource.path for resource in resolved_paths.prompts if resource.enabled]
         theme_paths = [resource.path for resource in resolved_paths.themes if resource.enabled]
@@ -366,7 +351,7 @@ class DefaultResourceLoader:
             for resource in resources
         }
         extension_paths = [resource.path for resource in resolved_paths.extensions if resource.enabled]
-        self._update_extensions(extension_paths)
+        self._update_extensions(extension_paths, preloaded_result=pretrust_extensions)
         self.last_skill_paths = _merge_paths(self.cwd, skill_paths, self.additional_skill_paths)
         self.last_prompt_paths = _merge_paths(self.cwd, prompt_paths, self.additional_prompt_template_paths)
         self.last_theme_paths = _merge_paths(self.cwd, theme_paths, self.additional_theme_paths)
@@ -401,14 +386,47 @@ class DefaultResourceLoader:
             self.append_system_prompt_override(base_append) if self.append_system_prompt_override else base_append
         )
 
-    def _update_extensions(self, discovered_paths: list[str] | None = None) -> None:
-        runtime = ExtensionRunner(cwd=self.cwd)
-        errors: list[dict[str, str]] = []
-        loaded: list[dict[str, str]] = []
-        for module_name in self._extension_module_names:
-            sys.modules.pop(module_name, None)
-        self._extension_module_names = []
-        self._extension_reload_generation += 1
+    def _update_extensions(
+        self,
+        discovered_paths: list[str] | None = None,
+        *,
+        preloaded_result: dict[str, object] | None = None,
+        apply_override: bool = True,
+    ) -> None:
+        if preloaded_result is None:
+            previous_runtime = self.extensions_result.get("runtime")
+            if isinstance(previous_runtime, ExtensionRunner):
+                previous_runtime.dispose()
+            runtime = ExtensionRunner(cwd=self.cwd, event_bus=self.event_bus)
+            errors: list[dict[str, str]] = []
+            loaded_by_path: dict[str, dict[str, str]] = {}
+            inline_loaded: list[dict[str, str]] = []
+            failed_paths: set[str] = set()
+            for module_name in self._extension_module_names:
+                sys.modules.pop(module_name, None)
+            self._extension_module_names = []
+            self._extension_reload_generation += 1
+        else:
+            runtime = preloaded_result.get("runtime")
+            if not isinstance(runtime, ExtensionRunner):
+                raise RuntimeError("Pre-trust extension load did not produce an extension runtime")
+            errors = [dict(error) for error in preloaded_result.get("errors", []) if isinstance(error, dict)]
+            preloaded = [entry for entry in preloaded_result.get("extensions", []) if isinstance(entry, dict)]
+            loaded_by_path = {
+                str(entry["path"]): dict(entry)
+                for entry in preloaded
+                if isinstance(entry.get("path"), str) and not str(entry["path"]).startswith("<inline:")
+            }
+            inline_loaded = [
+                dict(entry)
+                for entry in preloaded
+                if isinstance(entry.get("path"), str) and str(entry["path"]).startswith("<inline:")
+            ]
+            failed_paths = {
+                str(error["path"])
+                for error in errors
+                if isinstance(error.get("path"), str)
+            }
 
         extension_files: list[Path] = []
         if not self.no_extensions:
@@ -416,9 +434,11 @@ class DefaultResourceLoader:
             for path_text in [*(discovered_paths or []), *self.additional_extension_paths]:
                 path = _resolve_path(path_text, self.cwd)
                 if not path.exists():
-                    errors.append({"path": str(path), "error": f"Extension path does not exist: {path}"})
+                    if str(path) not in failed_paths:
+                        errors.append({"path": str(path), "error": f"Extension path does not exist: {path}"})
+                        failed_paths.add(str(path))
                     continue
-                for extension_file in _collect_resource_files(path, "extensions"):
+                for extension_file in collect_resource_files(path, "extensions"):
                     resolved = str(extension_file.resolve())
                     if resolved not in seen:
                         seen.add(resolved)
@@ -426,26 +446,36 @@ class DefaultResourceLoader:
 
         for extension_file in extension_files:
             extension_path = str(extension_file)
+            if extension_path in loaded_by_path or extension_path in failed_paths:
+                continue
             try:
                 module = self._load_extension_module(extension_file)
                 factory = getattr(module, "extension", None)
                 if not callable(factory):
                     raise RuntimeError("Extension module must export callable extension(travis)")
                 self._run_extension_factory(runtime, factory, extension_path)
-                loaded.append({"path": extension_path})
+                loaded_by_path[extension_path] = {"path": extension_path}
             except Exception as error:  # noqa: BLE001 - extension load failures are diagnostics.
                 errors.append({"path": extension_path, "error": str(error)})
+                failed_paths.add(extension_path)
 
-        factories = [] if self.no_extensions else self.extension_factories
-        for index, factory in enumerate(factories, start=1):
-            extension_path = f"<inline:{index}>"
-            try:
-                self._run_extension_factory(runtime, factory, extension_path)
-                loaded.append({"path": extension_path})
-            except Exception as error:  # noqa: BLE001 - Travis records extension load errors as diagnostics.
-                errors.append({"path": extension_path, "error": str(error)})
+        if preloaded_result is None:
+            factories = [] if self.no_extensions else self.extension_factories
+            for index, factory in enumerate(factories, start=1):
+                extension_path = f"<inline:{index}>"
+                try:
+                    self._run_extension_factory(runtime, factory, extension_path)
+                    inline_loaded.append({"path": extension_path})
+                except Exception as error:  # noqa: BLE001 - extension failures become diagnostics.
+                    errors.append({"path": extension_path, "error": str(error)})
+        loaded = [loaded_by_path[str(path)] for path in extension_files if str(path) in loaded_by_path]
+        loaded.extend(inline_loaded)
         result = {"extensions": loaded, "errors": errors, "runtime": runtime}
-        self.extensions_result = self.extensions_override(result) if self.extensions_override else result
+        self.extensions_result = (
+            self.extensions_override(result)
+            if apply_override and self.extensions_override
+            else result
+        )
 
     def _load_extension_module(self, path: Path) -> ModuleType:
         digest = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:16]
@@ -469,9 +499,12 @@ class DefaultResourceLoader:
         pending_start = len(runtime.pending_provider_registrations)
         runtime._loading_extension_path = extension_path  # noqa: SLF001
         try:
-            result = factory(runtime)
-            if inspect.isawaitable(result):
-                run_sync(resolve(result))
+            owner_scope = getattr(runtime.events, "owner", None)
+            scope = owner_scope(runtime._event_bus_owner) if callable(owner_scope) else nullcontext()  # noqa: SLF001
+            with scope:
+                result = factory(runtime)
+                if inspect.isawaitable(result):
+                    run_sync(resolve(result))
         finally:
             runtime._loading_extension_path = None  # noqa: SLF001
         for pending_index in range(pending_start, len(runtime._pending_provider_registrations)):  # noqa: SLF001
@@ -552,6 +585,13 @@ def _resource_paths(entries: list[dict[str, object]]) -> list[str]:
     return paths
 
 
+def _first_mapping_value(options: Mapping[str, object], *names: str) -> object | None:
+    for name in names:
+        if name in options:
+            return options[name]
+    return None
+
+
 def _settings_list(settings_manager: object, *names: str) -> list[str]:
     value = _settings_value(settings_manager, *names)
     if not isinstance(value, list):
@@ -587,103 +627,11 @@ def _merge_paths(cwd: str, primary: list[str], additional: list[str]) -> list[st
     return merged
 
 
-def load_skills(
-    skill_paths: list[str],
-    *,
-    cwd: str,
-    metadata_by_path: dict[str, dict[str, object]] | None = None,
-) -> dict[str, list[object]]:
-    skills_by_name: dict[str, Skill] = {}
-    diagnostics: list[ResourceDiagnostic] = []
-    seen_real_paths: set[str] = set()
-    for path_text in skill_paths:
-        path = _resolve_path(path_text, cwd)
-        paths = _collect_resource_files(path, "skills") if path.is_dir() else [path]
-        if not path.exists():
-            diagnostics.append(ResourceDiagnostic(type="warning", message="skill path does not exist", path=str(path)))
-            continue
-        for skill_file in paths:
-            skill, skill_diagnostics = _load_skill_from_file(skill_file, metadata_by_path)
-            diagnostics.extend(skill_diagnostics)
-            if skill is None:
-                continue
-            real_path = str(skill_file.resolve())
-            if real_path in seen_real_paths:
-                continue
-            existing = skills_by_name.get(skill.name)
-            if existing:
-                diagnostics.append(
-                    ResourceDiagnostic(
-                        type="collision",
-                        message=f'name "{skill.name}" collision',
-                        path=str(skill_file),
-                        collision={
-                            "resourceType": "skill",
-                            "name": skill.name,
-                            "winnerPath": existing.file_path,
-                            "loserPath": str(skill_file),
-                        },
-                    )
-                )
-                continue
-            skills_by_name[skill.name] = skill
-            seen_real_paths.add(real_path)
-    return {"skills": list(skills_by_name.values()), "diagnostics": diagnostics}
-
-
 def load_skills_from_dir(options: dict[str, object]) -> dict[str, list[object]]:
     directory = str(options.get("dir") or options.get("path") or "")
     cwd = str(options.get("cwd") or Path(directory).parent or ".")
     metadata_by_path = options.get("metadataByPath") or options.get("metadata_by_path")
     return load_skills([directory], cwd=cwd, metadata_by_path=metadata_by_path if isinstance(metadata_by_path, dict) else None)
-
-
-
-
-def load_prompt_templates(
-    prompt_paths: list[str],
-    *,
-    cwd: str,
-    metadata_by_path: dict[str, dict[str, object]] | None = None,
-) -> dict[str, list[object]]:
-    prompts: list[PromptTemplate] = []
-    diagnostics: list[ResourceDiagnostic] = []
-    seen_names: set[str] = set()
-    for path_text in prompt_paths:
-        path = _resolve_path(path_text, cwd)
-        paths = _collect_resource_files(path, "prompts") if path.is_dir() else [path]
-        for prompt_file in paths:
-            if not prompt_file.exists() or prompt_file.suffix != ".md":
-                continue
-            try:
-                raw = prompt_file.read_text(encoding="utf-8")
-                frontmatter, body = _parse_frontmatter(raw)
-                name = prompt_file.stem
-                description = str(frontmatter.get("description") or "")
-                if not description:
-                    first_line = next((line.strip() for line in body.splitlines() if line.strip()), "")
-                    description = first_line[:60] + ("..." if len(first_line) > 60 else "")
-                if name in seen_names:
-                    diagnostics.append(
-                        ResourceDiagnostic(type="collision", message=f'name "{name}" collision', path=str(prompt_file))
-                    )
-                    continue
-                seen_names.add(name)
-                prompts.append(
-                    PromptTemplate(
-                        name=name,
-                        description=description,
-                        argument_hint=frontmatter.get("argument-hint"),
-                        content=body,
-                        source_info=_source_info_for_path(prompt_file, metadata_by_path),
-                        file_path=str(prompt_file),
-                    )
-                )
-            except OSError as error:
-                diagnostics.append(ResourceDiagnostic(type="warning", message=str(error), path=str(prompt_file)))
-    return {"prompts": prompts, "diagnostics": diagnostics}
-
-
 def load_themes(
     theme_paths: list[str],
     *,
@@ -695,7 +643,7 @@ def load_themes(
     seen_names: set[str] = set()
     for path_text in theme_paths:
         path = _resolve_path(path_text, cwd)
-        paths = _collect_resource_files(path, "themes") if path.is_dir() else [path]
+        paths = collect_resource_files(path, "themes") if path.is_dir() else [path]
         for theme_file in paths:
             if not theme_file.exists() or theme_file.suffix != ".json":
                 continue
@@ -720,188 +668,6 @@ def load_themes(
             except (OSError, json.JSONDecodeError) as error:
                 diagnostics.append(ResourceDiagnostic(type="warning", message=str(error), path=str(theme_file)))
     return {"themes": themes, "diagnostics": diagnostics}
-
-
-def _load_skill_from_file(
-    file_path: Path,
-    metadata_by_path: dict[str, dict[str, object]] | None,
-) -> tuple[Skill | None, list[ResourceDiagnostic]]:
-    diagnostics: list[ResourceDiagnostic] = []
-    try:
-        raw = file_path.read_text(encoding="utf-8")
-    except OSError as error:
-        return None, [ResourceDiagnostic(type="warning", message=str(error), path=str(file_path))]
-    frontmatter, _body = _parse_frontmatter(raw)
-    name = str(frontmatter.get("name") or file_path.parent.name)
-    description = str(frontmatter.get("description") or "")
-    if not description.strip():
-        diagnostics.append(ResourceDiagnostic(type="warning", message="description is required", path=str(file_path)))
-        return None, diagnostics
-    if not _valid_skill_name(name):
-        diagnostics.append(
-            ResourceDiagnostic(
-                type="warning",
-                message="name contains invalid characters (must be lowercase a-z, 0-9, hyphens only)",
-                path=str(file_path),
-            )
-        )
-    return (
-        Skill(
-            name=name,
-            description=description,
-            file_path=str(file_path),
-            base_dir=str(file_path.parent),
-            source_info=_source_info_for_path(file_path, metadata_by_path),
-            disable_model_invocation=frontmatter.get("disable-model-invocation") is True,
-            allowed_tools=_parse_allowed_tools(frontmatter.get("allowed-tools")),
-        ),
-        diagnostics,
-    )
-
-
-def _parse_allowed_tools(value: object) -> tuple[str, ...]:
-    if isinstance(value, str):
-        raw_tools = value.replace(",", " ").split()
-    elif isinstance(value, list):
-        raw_tools = [item for item in value if isinstance(item, str)]
-    else:
-        return ()
-    allowed_tools: list[str] = []
-    seen: set[str] = set()
-    for raw_tool in raw_tools:
-        tool = raw_tool.strip()
-        if not tool or tool in seen:
-            continue
-        seen.add(tool)
-        allowed_tools.append(tool)
-    return tuple(allowed_tools)
-
-
-def format_skills_for_prompt(skills: list[Skill]) -> str:
-    visible_skills = [skill for skill in skills if not skill.disable_model_invocation]
-    if not visible_skills:
-        return ""
-    lines = [
-        "",
-        "",
-        "The following skills provide specialized instructions for specific tasks.",
-        "Use the read tool to load a skill's file when the task matches its description.",
-        "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
-        "",
-        "<available_skills>",
-    ]
-    for skill in visible_skills:
-        lines.extend(
-            [
-                "  <skill>",
-                f"    <name>{_escape_xml(skill.name)}</name>",
-                f"    <description>{_escape_xml(skill.description)}</description>",
-                f"    <location>{_escape_xml(skill.file_path)}</location>",
-                "  </skill>",
-            ]
-        )
-    lines.append("</available_skills>")
-    return "\n".join(lines)
-
-
-
-
-def _parse_frontmatter(raw: str) -> tuple[dict[str, Any], str]:
-    if not raw.startswith("---"):
-        return {}, raw
-    lines = raw.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return {}, raw
-    end_index = None
-    for index, line in enumerate(lines[1:], start=1):
-        if line.strip() == "---":
-            end_index = index
-            break
-    if end_index is None:
-        return {}, raw
-    data: dict[str, Any] = {}
-    for line in lines[1:end_index]:
-        if ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        value = value.strip().strip('"').strip("'")
-        if value.lower() == "true":
-            parsed: Any = True
-        elif value.lower() == "false":
-            parsed = False
-        else:
-            parsed = value
-        data[key.strip()] = parsed
-    return data, "\n".join(lines[end_index + 1 :]).lstrip("\r\n").rstrip("\n")
-
-
-def _read_package_manifest(package_root: Path) -> dict[str, list[str]] | None:
-    package_json = package_root / "package.json"
-    if not package_json.exists():
-        return None
-    try:
-        data = json.loads(package_json.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    manifest = data.get("travis")
-    return manifest if isinstance(manifest, dict) else None
-
-
-def _collect_manifest_entries(package_root: Path, entries: list[str], resource_type: str) -> list[Path]:
-    paths: list[Path] = []
-    for entry in entries:
-        if not isinstance(entry, str) or entry.startswith("!"):
-            continue
-        paths.extend(_collect_resource_files(package_root / entry, resource_type))
-    return paths
-
-
-def _collect_resource_files(path: Path, resource_type: str) -> list[Path]:
-    if not path.exists():
-        return []
-    if path.is_file():
-        if resource_type == "extensions" and path.suffix == ".py":
-            return [path.resolve()]
-        if resource_type == "skills" and path.suffix == ".md":
-            return [path.resolve()]
-        if resource_type == "prompts" and path.suffix == ".md":
-            return [path.resolve()]
-        if resource_type == "themes" and path.suffix == ".json":
-            return [path.resolve()]
-        return []
-    if resource_type == "extensions":
-        package_entry = path / "__init__.py"
-        if package_entry.is_file():
-            return [package_entry.resolve()]
-        index_entry = path / "index.py"
-        if index_entry.is_file():
-            return [index_entry.resolve()]
-        extension_paths: list[Path] = []
-        for child in sorted(path.iterdir(), key=lambda item: item.name):
-            if child.name.startswith(".") or child.name in {"__pycache__", "node_modules"}:
-                continue
-            if child.is_file() and child.suffix == ".py":
-                extension_paths.append(child.resolve())
-            elif child.is_dir():
-                extension_paths.extend(_collect_resource_files(child, resource_type))
-        return extension_paths
-    if resource_type == "skills":
-        skill_file = path / "SKILL.md"
-        if skill_file.is_file():
-            return [skill_file.resolve()]
-        paths: list[Path] = []
-        for child in sorted(path.iterdir(), key=lambda item: item.name):
-            if child.name.startswith(".") or child.name == "node_modules":
-                continue
-            if child.is_dir():
-                paths.extend(_collect_resource_files(child, resource_type))
-            elif child.suffix == ".md":
-                paths.append(child.resolve())
-        return paths
-    suffix = ".md" if resource_type == "prompts" else ".json"
-    return [child.resolve() for child in sorted(path.rglob(f"*{suffix}")) if child.is_file()]
-
-
 def _resolve_path(path: str, cwd: str) -> Path:
     resolved = Path(path).expanduser()
     if not resolved.is_absolute():
@@ -930,19 +696,8 @@ def _source_info_for_path(path: Path, metadata_by_path: dict[str, dict[str, obje
             base_dir=metadata.get("baseDir") if isinstance(metadata.get("baseDir"), str) else None,
         )
     return create_synthetic_source_info(str(path), source="local", base_dir=str(path.parent))
-
-
-def _valid_skill_name(name: str) -> bool:
-    if len(name) > 64 or name.startswith("-") or name.endswith("-") or "--" in name:
-        return False
-    return bool(name) and all(ch.islower() or ch.isdigit() or ch == "-" for ch in name)
-
-
-def _escape_xml(text: str) -> str:
-    return (
-        text.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-        .replace("'", "&apos;")
-    )
+# Compatibility imports: callers keep the historical resource_loader surface,
+# while focused modules own parsing, validation, and ignored traversal.
+load_skills = _load_skills_runtime
+load_prompt_templates = _load_prompt_templates_runtime
+format_skills_for_prompt = _format_skills_for_prompt_runtime

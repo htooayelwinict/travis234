@@ -20,6 +20,11 @@ DEFAULT_OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default=DEFAULT_OPENROUTER_MODELS_URL)
+    parser.add_argument(
+        "--capacity-fixture",
+        type=Path,
+        help="Use a normalized {model: {contextWindow, maxTokens}} fixture instead of the network",
+    )
     parser.add_argument("--timeout", type=float, default=8.0)
     parser.add_argument(
         "--catalog",
@@ -28,12 +33,30 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    request = urllib.request.Request(
-        args.url,
-        headers={"Accept": "application/json", "User-Agent": "travis234-catalog-generator"},
-    )
-    with urllib.request.urlopen(request, timeout=args.timeout) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+    if args.capacity_fixture is not None:
+        fixture = json.loads(args.capacity_fixture.read_text(encoding="utf-8"))
+        if not isinstance(fixture, dict):
+            raise ValueError("capacity fixture must contain an object")
+        payload = {
+            "data": [
+                {
+                    "id": model_id,
+                    "top_provider": {
+                        "context_length": values.get("contextWindow"),
+                        "max_completion_tokens": values.get("maxTokens"),
+                    },
+                }
+                for model_id, values in fixture.items()
+                if isinstance(model_id, str) and isinstance(values, dict)
+            ]
+        }
+    else:
+        request = urllib.request.Request(
+            args.url,
+            headers={"Accept": "application/json", "User-Agent": "travis234-catalog-generator"},
+        )
+        with urllib.request.urlopen(request, timeout=args.timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
 
     catalog = json.loads(args.catalog.read_text(encoding="utf-8"))
     refreshed, changed = apply_openrouter_capabilities(catalog, payload)

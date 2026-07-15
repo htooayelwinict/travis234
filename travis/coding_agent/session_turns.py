@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable, Mapping, Optional
+from typing import Callable, Mapping, Optional, Sequence
 
 from travis.agent.agent import Agent
 from travis.agent.async_utils import resolve
@@ -90,6 +90,9 @@ from travis.coding_agent.session_policy_controller import (
     _is_internal_steering_user_message,
 )
 from travis.coding_agent.session_types import AgentSettledEvent, AutoRetryEndEvent, AutoRetryStartEvent, _MALFORMED_STREAMED_TOOL_ARGS_MARKER, _MALFORMED_STREAMED_TOOL_CALL_ARGUMENTS_CODE, _MALFORMED_STREAM_RECOVERY_PREFIX, _MAX_PARTIAL_STREAM_CONTINUATIONS, _NON_RETRYABLE_PROVIDER_LIMIT_MARKERS, _PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE, _PARTIAL_STREAM_STUB_ID, _RETRYABLE_ERROR_MARKERS, _SUBAGENT_TOOL_NAMES, _prompt_requests_subagent_tools
+from travis.coding_agent.prompt_templates import expand_prompt_template
+from travis.coding_agent.input_expansion import InputExpansionError, expand_user_input
+from travis.coding_agent.skills import format_skill_invocation
 from travis.coding_agent.subagent_trace import _message_content_text
 
 def _wait_for_retry_abort(signal: AbortSignal, delay_ms: int) -> bool:
@@ -224,15 +227,22 @@ class SessionTurnController:
         streaming_behavior: str | None = None,
         preflight_result: Callable[[bool], None] | None = None,
         images: list[ImageContent] | None = None,
+        image_paths: Sequence[str] | None = None,
+        expand_prompt_templates: bool = True,
     ) -> list[AgentMessage]:
         current_text = text
         current_images = images
-        if current_text.startswith("/"):
-            command_result = self._try_execute_extension_command(current_text)
-            if command_result is not None:
+        if expand_prompt_templates and current_text.startswith("/"):
+            parsed_command = self._parse_extension_command(current_text)
+            command_is_skill = (
+                parsed_command is not None
+                and getattr(parsed_command[0].source_info, "source", None) == "skill"
+            )
+            command_result = None if command_is_skill else self._try_execute_extension_command(current_text)
+            if parsed_command is not None and not command_is_skill:
                 if preflight_result:
                     preflight_result(True)
-                return command_result
+                return command_result or []
         if self._extension_runner.has_handlers("input"):
             input_result = self._extension_runner.emit_input(
                 current_text,
@@ -248,6 +258,31 @@ class SessionTurnController:
                 current_text = str(input_result.get("text", current_text))
                 current_images = input_result.get("images", current_images)
 
+        if expand_prompt_templates:
+            parsed_command = self._parse_extension_command(current_text)
+            if (
+                parsed_command is not None
+                and getattr(parsed_command[0].source_info, "source", None) == "skill"
+            ):
+                skill_name = parsed_command[0].registration_name.removeprefix("skill:")
+                skill = next(
+                    (
+                        item
+                        for item in self._resource_loader.get_skills()["skills"]
+                        if getattr(item, "name", None) == skill_name
+                    ),
+                    None,
+                )
+                if skill is not None:
+                    current_text = format_skill_invocation(skill, parsed_command[1])
+            current_text = expand_prompt_template(current_text, self.prompt_templates)
+
+        current_text, current_images = self._expand_user_references(
+            current_text,
+            current_images,
+            image_paths=image_paths,
+        )
+
         if self.is_streaming:
             try:
                 if not streaming_behavior:
@@ -255,9 +290,9 @@ class SessionTurnController:
                         "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message."
                     )
                 if streaming_behavior == "followUp" or streaming_behavior == "follow_up":
-                    self.follow_up(current_text, current_images)
+                    self._queue_turn_input("follow_up", current_text, current_images)
                 elif streaming_behavior == "steer":
-                    self.steer(current_text, current_images)
+                    self._queue_turn_input("steering", current_text, current_images)
                 else:
                     raise ValueError("streaming_behavior must be 'steer' or 'followUp'")
             except Exception:
@@ -314,19 +349,47 @@ class SessionTurnController:
 
     def steer(self, text: str, images: list[ImageContent] | None = None) -> str:
         self._raise_if_extension_command(text)
-        queued = self._turn_mailbox.enqueue("steering", text, images)
-        if not self.agent.state.is_streaming:
-            self._flush_turn_mailbox_kind("steering")
-        self._emit_queue_update()
-        return queued.id
+        expanded_text, expanded_images = self._expand_user_references(text, images)
+        return self._queue_turn_input("steering", expanded_text, expanded_images)
 
     def follow_up(self, text: str, images: list[ImageContent] | None = None) -> str:
         self._raise_if_extension_command(text)
-        queued = self._turn_mailbox.enqueue("follow_up", text, images)
+        expanded_text, expanded_images = self._expand_user_references(text, images)
+        return self._queue_turn_input("follow_up", expanded_text, expanded_images)
+
+    def _queue_turn_input(
+        self,
+        kind: str,
+        text: str,
+        images: list[ImageContent] | None,
+    ) -> str:
+        queued = self._turn_mailbox.enqueue(kind, text, images)
         if not self.agent.state.is_streaming:
-            self._flush_turn_mailbox_kind("follow_up")
+            self._flush_turn_mailbox_kind(kind)
         self._emit_queue_update()
         return queued.id
+
+    def _expand_user_references(
+        self,
+        text: str,
+        images: list[ImageContent] | None,
+        *,
+        image_paths: Sequence[str] | None = None,
+    ) -> tuple[str, list[ImageContent] | None]:
+        expanded = expand_user_input(
+            text,
+            cwd=self.cwd,
+            images=image_paths or (),
+        )
+        referenced_images = [
+            block for block in expanded.content if isinstance(block, ImageContent)
+        ]
+        if referenced_images and "image" not in self.model.input:
+            raise InputExpansionError(
+                f"Model {self.model.provider}/{self.model.id} does not support image input"
+            )
+        merged_images = [*(images or []), *referenced_images]
+        return expanded.text, merged_images or None
 
     def _flush_turn_mailbox(self) -> None:
         self._flush_turn_mailbox_kind("steering")

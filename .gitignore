@@ -50,3 +50,5 @@ uv.lock
 .superpowers/
 .travis234/
 artifacts/
+pi/
+hermes-agent/

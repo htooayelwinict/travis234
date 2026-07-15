@@ -60,6 +60,24 @@ def test_verify_run_rejects_tui_session_identity_drift(tmp_path: Path) -> None:
     assert "tui_ready session identity does not match scenario results" in verification.errors
 
 
+def test_verify_run_requires_context_confidence_after_compaction(tmp_path: Path) -> None:
+    _write_complete_run(tmp_path)
+    result_path = sorted((tmp_path / "runs").glob("*/result.json"))[0]
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    result.pop("context_confidence")
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+    trace_path = tmp_path / "trace.jsonl"
+    events = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+    next(event for event in events if event.get("event") == "turn_ready").pop("context_confidence")
+    trace_path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
+
+    verification = verify_run(tmp_path)
+
+    assert verification.passed is False
+    assert "one or more results lack context confidence" in verification.errors
+    assert "one or more turn_ready events lack context confidence" in verification.errors
+
+
 def _write_complete_run(root: Path) -> None:
     scenarios = load_scenarios()
     conversation: list[dict[str, object]] = []

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from argparse import Namespace
 from pathlib import Path
@@ -25,6 +26,9 @@ from tests._provider_runtime import (
 )
 from travis.coding_agent.session_catalog import SessionCatalog
 from travis.coding_agent.session_store import SessionStore
+from travis.coding_agent.project_trust import ProjectTrustContext
+from travis.coding_agent.project_trust import ProjectTrustStore
+from travis.coding_agent.settings_manager import FileSettingsStorage, SettingsManager
 
 
 def setup_function() -> None:
@@ -69,6 +73,145 @@ def test_cli_extension_install_refuses_to_replace_existing_user_code(monkeypatch
     assert exit_code == 1
     assert marker.read_text(encoding="utf-8") == "# user-owned\n"
     assert "already exists" in capsys.readouterr().err
+
+
+def test_package_install_dispatches_before_agent_start_and_preserves_source(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    project = tmp_path / "repo"
+    package = tmp_path / "package"
+    agent_dir = tmp_path / "agent"
+    project.mkdir()
+    package.mkdir()
+    (package / "package.json").write_text(
+        json.dumps({"name": "demo", "travis": {"extensions": []}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(ENV_AGENT_DIR, str(agent_dir))
+    monkeypatch.setattr(cli, "CodingApp", lambda **kwargs: (_ for _ in ()).throw(AssertionError("agent started")))
+
+    exit_code = cli.main(["install", str(package), "--cwd", str(project)])
+
+    assert exit_code == 0
+    settings = json.loads((agent_dir / "settings.json").read_text(encoding="utf-8"))
+    assert settings["packages"] == [str(package)]
+    assert "Installed" in capsys.readouterr().out
+
+
+def test_project_package_install_requires_explicit_or_saved_trust(monkeypatch, tmp_path, capsys) -> None:
+    project = tmp_path / "repo"
+    package = tmp_path / "package"
+    agent_dir = tmp_path / "agent"
+    project.mkdir()
+    package.mkdir()
+    (package / "package.json").write_text(
+        json.dumps({"name": "demo", "travis": {"extensions": []}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(ENV_AGENT_DIR, str(agent_dir))
+
+    denied = cli.main(
+        ["install", str(package), "--local", "--no-approve", "--cwd", str(project)]
+    )
+    approved = cli.main(
+        ["install", str(package), "--local", "--approve", "--cwd", str(project)]
+    )
+
+    assert denied == 1
+    assert approved == 0
+    project_settings = json.loads(
+        (project / ".travis234" / "settings.json").read_text(encoding="utf-8")
+    )
+    assert project_settings["packages"] == [str(package)]
+    assert "trusted project" in capsys.readouterr().err
+
+
+def test_project_package_update_uses_saved_trust_without_prompt(monkeypatch, tmp_path, capsys) -> None:
+    project = tmp_path / "repo"
+    package = tmp_path / "package"
+    agent_dir = tmp_path / "agent"
+    project.mkdir()
+    package.mkdir()
+    manifest = package / "package.json"
+    manifest.write_text(
+        json.dumps({"name": "demo", "version": "1", "travis": {"extensions": []}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(ENV_AGENT_DIR, str(agent_dir))
+    ProjectTrustStore(agent_dir).set(project, True)
+    assert cli.main(["install", str(package), "--local", "--cwd", str(project)]) == 0
+    manifest.write_text(
+        json.dumps({"name": "demo", "version": "2", "travis": {"extensions": []}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("builtins.input", lambda *_args: (_ for _ in ()).throw(AssertionError("prompted")))
+
+    exit_code = cli.main(["update", "--local", "--cwd", str(project)])
+
+    assert exit_code == 0
+    assert "Updated 1 package" in capsys.readouterr().out
+
+
+def test_cli_json_mode_dispatches_to_machine_transport_without_tui(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeApp:
+        def __init__(self, **kwargs):
+            captured["enable_tui"] = kwargs["enable_tui"]
+
+        def close(self):
+            captured["closed"] = True
+
+    monkeypatch.setattr(cli, "CodingApp", FakeApp)
+    monkeypatch.setattr(
+        cli,
+        "run_json_mode",
+        lambda app, prompt, output: captured.update(prompt=prompt, output=output) or 19,
+    )
+
+    exit_code = cli.main(
+        ["--cwd", str(tmp_path), "--no-session", "--mode", "json", "inspect"]
+    )
+
+    assert exit_code == 19
+    assert captured["prompt"] == "inspect"
+    assert captured["enable_tui"] is False
+    assert captured["closed"] is True
+
+
+def test_cli_mode_and_plain_alias_are_mutually_exclusive(tmp_path) -> None:
+    with pytest.raises(SystemExit, match="2"):
+        cli.main(["--cwd", str(tmp_path), "--mode", "print", "--plain", "inspect"])
+
+
+def test_cli_rpc_mode_dispatches_stdio_without_interactive_trust(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeApp:
+        def __init__(self, **kwargs):
+            captured["trust_context"] = kwargs["project_trust_context"]
+            captured["enable_tui"] = kwargs["enable_tui"]
+
+        def close(self):
+            pass
+
+    class FakeRpcServer:
+        def __init__(self, app, input, output):
+            captured.update(app=app, input=input, output=output)
+
+        def run(self):
+            return 29
+
+    monkeypatch.setattr(cli, "CodingApp", FakeApp)
+    monkeypatch.setattr(cli, "RpcServer", FakeRpcServer)
+
+    exit_code = cli.main(["--cwd", str(tmp_path), "--no-session", "--mode", "rpc"])
+
+    assert exit_code == 29
+    assert captured["enable_tui"] is False
+    assert captured["trust_context"].has_ui is False
 
 
 def test_readmes_document_optional_extension_install_and_reload() -> None:
@@ -191,6 +334,37 @@ def _seed_cli_session(agent_dir: Path, cwd: Path, *, session_id: str = "saved") 
     store = SessionStore(path, cwd=str(cwd.resolve()), session_id=resolved_id)
     store.append_message(UserMessage(content=f"marker-{session_id}", timestamp=now_ms()))
     return Path(path)
+
+
+def test_cli_trust_flags_are_mutually_exclusive() -> None:
+    with pytest.raises(SystemExit, match="2"):
+        cli.main(["--approve", "--no-approve", "--no-session", "prompt"])
+
+
+@pytest.mark.parametrize(
+    ("flag", "expected"),
+    [("--approve", True), ("--no-approve", False)],
+)
+def test_cli_forwards_trust_override_and_file_backed_settings(
+    monkeypatch,
+    tmp_path,
+    flag: str,
+    expected: bool,
+) -> None:
+    captured: dict[str, object] = {}
+    agent_dir = tmp_path / "agent"
+    monkeypatch.setenv(ENV_AGENT_DIR, str(agent_dir))
+    _install_session_cli_fakes(monkeypatch, captured)
+
+    exit_code = cli.main(["--cwd", str(tmp_path), flag, "--no-session", "inspect"])
+
+    app_kwargs = captured["app_kwargs"]
+    assert exit_code == 0
+    assert app_kwargs["project_trust_override"] is expected
+    assert isinstance(app_kwargs["project_trust_context"], ProjectTrustContext)
+    assert app_kwargs["project_trust_context"].has_ui is False
+    assert isinstance(app_kwargs["settings_manager"], SettingsManager)
+    assert isinstance(app_kwargs["settings_manager"].storage, FileSettingsStorage)
 
 
 def test_cli_continue_uses_latest_workspace_session_without_creating_another(monkeypatch, tmp_path) -> None:

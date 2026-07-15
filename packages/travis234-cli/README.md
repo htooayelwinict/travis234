@@ -51,7 +51,7 @@ Travis234 discovers global extensions from `~/.travis234/agent/extensions/` and 
 travis234 --cwd . -- --install-extension hypa
 ```
 
-The installer refuses to replace existing code. Use `/reload` in a running TUI after adding or changing an extension. Extensions execute with Travis234's permissions; install only trusted code. Travis JavaScript extensions do not run directly in the Python extension runtime and require a Python adapter.
+The installer refuses to replace existing code. Use `/reload` in a running TUI after adding or changing an extension. Extensions execute with Travis234's permissions; install only trusted code. Unknown workspaces do not load project settings or executable resources until trust is resolved. Use `--approve` or `--no-approve` for a process-only decision, or `/trust` and then `/reload` for a saved decision. Travis JavaScript extensions do not run directly in the Python extension runtime and require a Python adapter.
 
 ## Sessions
 

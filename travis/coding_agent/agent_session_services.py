@@ -62,7 +62,22 @@ def create_agent_session_services(options: dict[str, Any]) -> dict[str, Any]:
             settings_manager=settings_manager,
             **resource_loader_options,
         )
-        resource_loader.reload(options.get("resourceLoaderReloadOptions") or options.get("resource_loader_reload_options"))
+        reload_options = dict(
+            options.get("resourceLoaderReloadOptions")
+            or options.get("resource_loader_reload_options")
+            or {}
+        )
+        for camel_name, snake_name in (
+            ("projectTrustOverride", "project_trust_override"),
+            ("projectTrustContext", "project_trust_context"),
+            ("trustStore", "trust_store"),
+        ):
+            if camel_name not in reload_options and snake_name not in reload_options:
+                if camel_name in options:
+                    reload_options[camel_name] = options[camel_name]
+                elif snake_name in options:
+                    reload_options[snake_name] = options[snake_name]
+        resource_loader.reload(reload_options)
     auth_storage = options.get("authStorage") or options.get("auth_storage") or AuthStorage.create(
         str(Path(agent_dir) / "auth.json")
     )

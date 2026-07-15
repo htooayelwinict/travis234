@@ -130,13 +130,12 @@ class CompactionManager:
         self.last_compression_after_tokens = 0
         self.awaiting_real_usage_after_compression = False
         self.overflow_attempts = 0
-        self._summary_failure_cooldown_until = 0.0
         self._last_compression_error: str | None = None
         self._last_compression_result = None
         self._compression_ledger: list[CompactionLedgerEntry] = []
 
     def _in_cooldown(self) -> bool:
-        return self._clock() < self._summary_failure_cooldown_until
+        return self.compressor._summary_failure_in_cooldown()  # noqa: SLF001 - one cooldown owner
 
     @property
     def compression_ledger(self) -> list[CompactionLedgerEntry]:
@@ -289,8 +288,10 @@ class CompactionManager:
                 kwargs["summary_only"] = True
             result = self.compressor.compress(messages, **kwargs)
         except Exception as error:  # noqa: BLE001 - summary failure => cooldown, no crash
-            self._summary_failure_cooldown_until = self._clock() + SUMMARY_FAILURE_COOLDOWN_SECONDS
             self._last_compression_error = str(error) or error.__class__.__name__
+            self.compressor._arm_summary_failure_cooldown(  # noqa: SLF001 - manager records boundary failure
+                self._last_compression_error
+            )
             self._record_compression_ledger(
                 trigger=trigger,
                 tokens_before=before_tokens,
@@ -302,8 +303,6 @@ class CompactionManager:
             )
             return messages, False
         self._last_compression_result = result
-        if force:
-            self._summary_failure_cooldown_until = 0.0
         after_tokens = estimate_tokens(result.messages)
         tolerated_growth = max(
             CONTEXT_GROWTH_TOLERANCE_TOKENS,
@@ -357,6 +356,16 @@ class CompactionManager:
         if self.awaiting_real_usage_after_compression:
             return messages
         tokens = estimate_tokens(messages)
+        if tokens >= self.compressor.threshold_tokens and self._in_cooldown():
+            self._record_compression_ledger(
+                trigger="preflight",
+                tokens_before=tokens,
+                tokens_after=tokens,
+                compressed=False,
+                estimated_after=False,
+                stop_reason="cooldown",
+            )
+            return messages
         if self.compressor.should_defer_preflight_to_real_usage(tokens):
             return messages
         if self.compressor.last_prompt_tokens >= 0 and tokens > self.compressor.last_prompt_tokens:
@@ -390,6 +399,16 @@ class CompactionManager:
             "completion_tokens": 0,
             "total_tokens": real_tokens,
         })
+        if real_tokens >= self.compressor.threshold_tokens and self._in_cooldown():
+            self._record_compression_ledger(
+                trigger="post_response",
+                tokens_before=real_tokens,
+                tokens_after=real_tokens,
+                compressed=False,
+                estimated_after=False,
+                stop_reason="cooldown",
+            )
+            return messages
         if not self.compressor.should_compress(real_tokens):
             return messages
         new_messages, compressed = self._run_compress(
@@ -415,6 +434,16 @@ class CompactionManager:
         retain_recent: bool = True,
     ) -> list[Message]:
         tokens = estimate_tokens(messages)
+        if tokens >= self.compressor.threshold_tokens and self._in_cooldown():
+            self._record_compression_ledger(
+                trigger="error_context",
+                tokens_before=tokens,
+                tokens_after=tokens,
+                compressed=False,
+                estimated_after=False,
+                stop_reason="cooldown",
+            )
+            return messages
         if not self.compressor.should_compress(tokens):
             return messages
         new_messages, compressed = self._run_compress(

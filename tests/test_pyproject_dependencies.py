@@ -21,6 +21,7 @@ def test_direct_runtime_dependencies_match_imported_owners() -> None:
         "httpx",
         "jsonschema",
         "psutil",
+        "PyYAML",
         "websockets",
         "zstandard",
     }

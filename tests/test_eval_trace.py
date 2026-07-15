@@ -116,6 +116,17 @@ def test_interactive_trace_emits_ordered_safe_lifecycle(tmp_path: Path) -> None:
     turn_ready = next(event for event in events if event["event"] == "turn_ready")
     assert "context_window" in turn_ready
     assert "context_percent" in turn_ready
+    assert turn_ready["context_tokens"] == (
+        turn_ready["context_system_tokens"]
+        + turn_ready["context_tool_tokens"]
+        + turn_ready["context_message_tokens"]
+    )
+    assert turn_ready["context_confidence"] in {
+        "provider_real",
+        "estimated_trailing",
+        "estimated_full_request",
+        "estimated_after_compaction_full_request",
+    }
     assert turn_ready["compression_count"] == 0
     ready = next(event for event in events if event["event"] == "tui_ready")
     assert ready["session_id"] == app.session.session_id
@@ -186,6 +197,7 @@ def test_post_response_compaction_preserves_conversation_log_response(tmp_path: 
 
     def script(model, _context):
         events = text_response_events(model, "Implemented and tested before compaction")
+        events[-1].message.usage.input = 200_000
         events[-1].message.usage.total_tokens = 200_000
         return events
 

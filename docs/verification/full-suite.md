@@ -1,14 +1,14 @@
 # Travis234 verification record
 
-Verification date: 2026-07-14 (Asia/Yangon)
+Verification date: 2026-07-15 (Asia/Yangon)
 
-Runtime tree verified through commit `9198bc9`. Evidence-only documentation changes are followed by another full-suite run before publication.
+The current working tree is verified directly from the filesystem. The qualification workflow does not depend on Git metadata or invoke Git commands.
 
 ## Rebrand
 
 - The active product is `Travis234`; distribution and command are `travis234`; the Python package is `travis`.
 - App-owned state, AGENTS, skills, sessions, sandbox home, image, and environment paths use the Travis234 contract.
-- The local upstream reference checkouts are intentionally retained as ignored design references and are not distributed runtime trees.
+- The local Pi, Hermes, and appv231 reference checkouts are retained as read-only design oracles and are excluded from Python/npm distributions and the Docker build context.
 - Focused brand, distribution, metadata, release, and architecture contracts passed.
 
 ## Process ownership
@@ -45,8 +45,8 @@ Compaction adapter, coordinator, timing, persistence, model-switch recalibration
 The two local upstream implementations were used as design references:
 
 - The loop reference keeps tool-result messages in assistant source order while tool completion events may reflect completion order; Travis234 preserves both invariants.
-- The loop reference triggers compaction close to the context ceiling. Travis234 deliberately retains the earlier compression-derived 50% threshold so mixed providers have recovery headroom.
-- The compression reference verifies effectiveness using the next real provider prompt count and clears stale model-bound calibration on model switches; Travis234 implements those safeguards without copying its provider ownership.
+- Hermes-aligned policy triggers at 75% of effective input below 512K, 50% at or above 512K, and a reachable 85% fallback when the 64K floor would consume a small route.
+- Effectiveness is verified using the next real provider prompt count; stale model-bound calibration clears on model switches, and post-compaction estimates include system, tools, messages, images, and replay metadata immediately.
 
 ## Policy
 
@@ -62,6 +62,8 @@ camel_symbols: 0
 duplicate_groups: 0
 oversized_tests: 0
 forbidden_compatibility: 0
+reference_coupling: 0
+distribution_leaks: 0
 ```
 
 Plain root-level pytest discovery is constrained to `tests/`; generated evaluation fixtures under `artifacts/` are not collected.
@@ -76,13 +78,13 @@ The combined process, cancellation, provider, session, and policy owner suites p
 
 ## Green zone
 
-- Full source suite: 1,501 passed in 43.12 seconds.
+- Full source suite: 1,534 passed in 103.92 seconds.
 - npm launcher: 20 passed.
-- npm pack dry-run: exactly six declared files.
+- npm pack dry-run: exactly five declared files.
 - Python compileall: passed.
 - Wheel/sdist build and clean installed-entry smoke: passed.
 - No-cache `Dockerfile.release` build: passed.
-- Production container smoke: passed as unprivileged user `travis`, with `travis234`, Python/pytest, Node/npm/npx, workspace npm installation, faux-provider TUI turn, manual compaction, and clean exit.
+- Production container smoke: passed as unprivileged user `travis`, with isolated `/travis-home`, no provider credential forwarding, `travis234`, Python/pytest, Node/npm/npx, workspace npm installation, print/JSON/RPC and TUI faux turns, untrusted project suppression, manual and automatic compaction, managed-process reaping, and clean exit.
 - The container smoke exposed and regressed two previously untested defects: a stale `travis` executable name in the smoke harness and a missing Python test runner in the release image.
 
-The actual provider-backed 21-prompt acceptance remains blocked by external credentials/billing and is recorded separately. This record does not claim production readiness until that row passes.
+The offline/company-wide safety and parity qualification is complete. The actual provider-backed 21-prompt acceptance remains blocked by external credentials/billing and is recorded separately; no paid-provider result is represented as passed.

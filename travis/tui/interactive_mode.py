@@ -21,6 +21,7 @@ from travis.compaction import estimate_tokens
 from travis.coding_agent.agent_session import BashResult
 from travis.coding_agent.session_catalog import SessionInfo
 from travis.coding_agent.session_commands import SessionCommandExecutor
+from travis.coding_agent.themes import Theme, ThemeRegistry
 from travis.coding_agent.processes.types import ProcessEvent, ProcessSnapshot, ProcessState
 from travis.coding_agent.tools.bash import BashExecOptions, get_shell_env
 from travis.coding_agent.tools.output_spool import OutputSpool
@@ -95,6 +96,20 @@ class _InteractiveRuntime(
         self.input_fn = input_fn or input
         self._line_input_mode = input_fn is not None
         self.prompt_label = prompt_label
+        self.theme_registry = ThemeRegistry()
+        resource_loader = getattr(app.session, "resource_loader", None)
+        discovered_themes = (
+            resource_loader.get_themes().get("themes", [])
+            if resource_loader is not None
+            else []
+        )
+        self.theme_registry.register_many(
+            [
+                theme
+                for theme in discovered_themes
+                if isinstance(theme, Theme)
+            ]
+        )
         self.history = Container()
         self.status = StatusLine("Idle")
         self.default_working_message = "Idle"

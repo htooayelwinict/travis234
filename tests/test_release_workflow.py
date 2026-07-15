@@ -73,3 +73,14 @@ def test_container_smoke_prepares_linux_writable_workspace(tmp_path) -> None:
     package_json = tmp_path / "package.json"
     assert package_json.is_file()
     assert package_json.stat().st_mode & 0o666 == 0o666
+
+
+def test_container_qualification_exercises_compaction_and_process_cleanup(tmp_path) -> None:
+    from evals.container_qualification import run_container_qualification
+
+    result = run_container_qualification(tmp_path, require_container=False)
+
+    assert result.manual_compaction is True
+    assert result.automatic_compaction is True
+    assert result.managed_process_reaped is True
+    assert result.credential_env_absent is True

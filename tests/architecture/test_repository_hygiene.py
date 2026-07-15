@@ -17,6 +17,8 @@ def test_repository_hygiene_is_clean() -> None:
     assert report.duplicate_groups == ()
     assert report.oversized_tests == ()
     assert report.forbidden_compatibility == ()
+    assert report.reference_coupling == ()
+    assert report.distribution_leaks == ()
 
 
 def test_public_package_exports_are_unique_and_resolvable() -> None:

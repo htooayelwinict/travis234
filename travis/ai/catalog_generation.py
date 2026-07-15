@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+import warnings
 
 
 def apply_openrouter_capabilities(
@@ -28,11 +29,26 @@ def apply_openrouter_capabilities(
         item = live_by_id.get(str(model_id))
         if not isinstance(raw_model, dict) or item is None:
             continue
-        context_window = _positive_int(item.get("context_length", item.get("contextLength")))
         top_provider = item.get("top_provider") if isinstance(item.get("top_provider"), dict) else {}
+        context_window = _positive_int(
+            top_provider.get("context_length", top_provider.get("contextLength"))
+        ) or _positive_int(item.get("context_length", item.get("contextLength")))
         max_tokens = _positive_int(
             top_provider.get("max_completion_tokens", top_provider.get("maxCompletionTokens"))
         )
+        if max_tokens is not None and context_window is not None and max_tokens >= context_window:
+            warnings.warn(
+                f"OpenRouter model {model_id} advertised output limit {max_tokens} "
+                f"at or above route context window {context_window}; retaining catalog maxTokens",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            existing_max_tokens = _positive_int(raw_model.get("maxTokens"))
+            max_tokens = (
+                None
+                if existing_max_tokens is not None and existing_max_tokens < context_window
+                else min(4_096, context_window - 1)
+            )
         next_model = dict(raw_model)
         if context_window is not None:
             next_model["contextWindow"] = context_window

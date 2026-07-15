@@ -22,6 +22,7 @@ SAFE_FIELDS = {
     "picker_query", "action", "operation", "reason_code", "trigger", "session_id", "session_path",
     "process_id", "process_state", "origin", "interrupt_count",
     "context_tokens", "context_window", "context_percent", "context_estimated", "context_confidence",
+    "context_system_tokens", "context_tool_tokens", "context_message_tokens",
     "summary_model_requested", "summary_model_used", "summary_model_fallback",
 }
 _SECRET_SHAPE = re.compile(r"(?:sk-[A-Za-z0-9_-]{8,}|Bearer\s+\S+)", re.IGNORECASE)

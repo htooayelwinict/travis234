@@ -6,6 +6,8 @@ import inspect
 import json
 import os
 import queue
+import shlex
+import shutil
 import signal as signal_module
 import subprocess
 import threading
@@ -22,6 +24,7 @@ from travis.coding_agent.session_types import BashResult
 from travis.coding_agent.session_catalog import SessionInfo
 from travis.coding_agent.session_commands import SessionCommandExecutor
 from travis.coding_agent.processes.types import ProcessEvent, ProcessSnapshot, ProcessState
+from travis.coding_agent.project_trust import ProjectTrustStore, get_project_trust_options
 from travis.coding_agent.tools.bash import BashExecOptions, get_shell_env
 from travis.coding_agent.tools.output_spool import OutputSpool
 from travis.tui.components import (
@@ -60,6 +63,15 @@ class InteractiveSessionCommands:
         return self._session_commands
 
     def _run_session_command(self, name: str, callback: Callable[[], object]):
+        if name != "compact":
+            turn_active = bool(
+                getattr(self.app.session, "is_streaming", False)
+                or (callable(getattr(self, "_is_turn_active", None)) and self._is_turn_active())
+            )
+            if turn_active:
+                raise RuntimeError("session command unavailable while turn is active")
+            if self.app.session.is_compacting:
+                raise RuntimeError("session command unavailable while compaction is active")
         executor = self._command_executor()
         if executor.is_owner_thread():
             return callback()
@@ -173,6 +185,227 @@ class InteractiveSessionCommands:
         self._refresh_footer()
         self.tui.request_render()
 
+    def _run_name_command(self, prompt: str) -> None:
+        name = prompt.removeprefix("/name").strip()
+        if not name:
+            if self.app.session.session_name:
+                self.history.add(Text(f"Session name: {self.app.session.session_name}"))
+            else:
+                self.history.add(StatusLine("Usage: /name <name>", kind="warning"))
+        else:
+            try:
+                self._run_session_command("name-session", lambda: self.app.rename_session(name))
+                self.history.add(StatusLine(f"Session name set: {name}", kind="session"))
+            except Exception as error:  # noqa: BLE001 - naming failures do not end the TUI.
+                self.history.add(StatusLine(f"Could not name session: {error}", kind="error"))
+        self.status.set_message("Idle")
+        self._refresh_footer()
+        self.tui.request_render()
+
+    def _run_fork_command(self) -> None:
+        messages = self.app.session.get_user_messages_for_forking()
+        if not messages:
+            self.history.add(StatusLine("No messages to fork from.", kind="warning"))
+            self.tui.request_render()
+            return
+        labels = [
+            f"{item['text'].replace(chr(10), ' ')[:120]} [{item['entryId'][:8]}]"
+            for item in messages
+        ]
+        selected = self.prompt_extension_select("Fork before user message", labels, kind="session")
+        if selected is None:
+            self.history.add(StatusLine("Fork cancelled.", kind="session"))
+            return
+        selected_message = messages[labels.index(selected)]
+        try:
+            result = self._run_session_command(
+                "fork-session",
+                lambda: self.app.fork_session(selected_message["entryId"]),
+            )
+            if result.get("cancelled"):
+                self.history.add(StatusLine("Fork cancelled.", kind="session"))
+                return
+            if self.tui.dispatcher.is_owner_thread():
+                self.tui.drain_dispatcher()
+            self.editor_text = str(result.get("selectedText") or "")
+            self.history.add(StatusLine("Forked to new session.", kind="session"))
+        except Exception as error:  # noqa: BLE001 - session remains active on fork failure.
+            self.history.add(StatusLine(f"Could not fork session: {error}", kind="error"))
+        finally:
+            self.status.set_message("Idle")
+            self._refresh_footer()
+            self.tui.request_render()
+
+    def _run_clone_command(self) -> None:
+        try:
+            result = self._run_session_command("clone-session", self.app.clone_session)
+            if result.get("cancelled"):
+                self.history.add(StatusLine("Clone cancelled.", kind="session"))
+                return
+            if self.tui.dispatcher.is_owner_thread():
+                self.tui.drain_dispatcher()
+            self.editor_text = ""
+            self.history.add(StatusLine("Cloned to new session.", kind="session"))
+        except Exception as error:  # noqa: BLE001 - session remains active on clone failure.
+            self.history.add(StatusLine(f"Could not clone session: {error}", kind="error"))
+        finally:
+            self.status.set_message("Idle")
+            self._refresh_footer()
+            self.tui.request_render()
+
+    def _run_tree_command(self) -> None:
+        tree = self.app.session_tree()
+        if not tree:
+            self.history.add(StatusLine("No entries in session.", kind="warning"))
+            self.tui.request_render()
+            return
+        labels = [
+            f"{'*' if node['active'] else ' '} {'  ' * int(node['depth'])}{node['summary']} "
+            f"[{node['type']} {node['id'][:8]}]"
+            for node in tree
+        ]
+        selected = self.prompt_extension_select("Session tree", labels, kind="session")
+        if selected is None:
+            self.history.add(StatusLine("Tree navigation cancelled.", kind="session"))
+            return
+        target = tree[labels.index(selected)]
+        if target.get("active"):
+            self.history.add(StatusLine("Already at this point.", kind="session"))
+            return
+        try:
+            result = self._run_session_command(
+                "navigate-session-tree",
+                lambda: self.app.navigate_session_tree(str(target["id"])),
+            )
+            if result.get("cancelled"):
+                self.history.add(StatusLine("Tree navigation cancelled.", kind="session"))
+                return
+            if result.get("editorText") is not None:
+                self.editor_text = str(result["editorText"])
+            self._rebind_session_ui()
+            self.history.add(StatusLine("Navigated to selected point.", kind="session"))
+        except Exception as error:  # noqa: BLE001 - navigation errors leave the old branch selected.
+            self.history.add(StatusLine(f"Could not navigate session tree: {error}", kind="error"))
+        finally:
+            self.status.set_message("Idle")
+            self._refresh_footer()
+            self.tui.request_render()
+
+    @staticmethod
+    def _session_path_argument(prompt: str, command: str) -> str | None:
+        raw = prompt.removeprefix(command).strip()
+        if not raw:
+            return None
+        try:
+            arguments = shlex.split(raw)
+        except ValueError:
+            return None
+        return arguments[0] if arguments else None
+
+    def _run_export_command(self, prompt: str) -> None:
+        output_path = self._session_path_argument(prompt, "/export")
+        try:
+            if output_path and output_path.lower().endswith(".jsonl"):
+                exported = self.app.export_session_jsonl(output_path)
+            else:
+                exported = self.app.session.export_to_html(output_path)
+            self.history.add(StatusLine(f"Session exported to: {exported}", kind="session"))
+        except Exception as error:  # noqa: BLE001 - export errors are local and recoverable.
+            self.history.add(StatusLine(f"Could not export session: {error}", kind="error"))
+        self.status.set_message("Idle")
+        self._refresh_footer()
+        self.tui.request_render()
+
+    def _run_import_command(self, prompt: str) -> None:
+        input_path = self._session_path_argument(prompt, "/import")
+        if not input_path:
+            self.history.add(StatusLine("Usage: /import <path.jsonl>", kind="warning"))
+            self.tui.request_render()
+            return
+        selected = self.prompt_extension_select(
+            f"Replace the active session with {input_path}?",
+            ["Import", "Cancel"],
+            kind="session",
+        )
+        if selected != "Import":
+            self.history.add(StatusLine("Import cancelled.", kind="session"))
+            return
+        try:
+            result = self._run_session_command(
+                "import-session",
+                lambda: self.app.import_session(input_path),
+            )
+            if result.get("cancelled"):
+                self.history.add(StatusLine("Import cancelled.", kind="session"))
+                return
+            if self.tui.dispatcher.is_owner_thread():
+                self.tui.drain_dispatcher()
+            self.history.add(StatusLine(f"Session imported from: {input_path}", kind="session"))
+        except Exception as error:  # noqa: BLE001 - import validation and cwd errors remain visible.
+            self.history.add(StatusLine(f"Could not import session: {error}", kind="error"))
+        finally:
+            self.status.set_message("Idle")
+            self._refresh_footer()
+            self.tui.request_render()
+
+    def _run_copy_command(self) -> None:
+        text = self.app.session.get_last_assistant_text()
+        if not text:
+            self.history.add(StatusLine("No agent message to copy yet.", kind="warning"))
+            self.tui.request_render()
+            return
+        commands = (
+            ("pbcopy",),
+            ("wl-copy",),
+            ("xclip", "-selection", "clipboard"),
+            ("clip",),
+        )
+        command = next((candidate for candidate in commands if shutil.which(candidate[0])), None)
+        if command is None:
+            self.history.add(StatusLine("Clipboard is unavailable on this platform.", kind="warning"))
+            self.tui.request_render()
+            return
+        try:
+            subprocess.run(command, input=text, text=True, check=True, capture_output=True, timeout=3)
+            self.history.add(StatusLine("Copied last agent message to clipboard.", kind="session"))
+        except (OSError, subprocess.SubprocessError) as error:
+            self.history.add(StatusLine(f"Could not copy message: {error}", kind="error"))
+        self.tui.request_render()
+
+    def _run_share_command(self) -> None:
+        self.history.add(
+            StatusLine(
+                "Remote sharing is not configured; use /export to create a local shareable file.",
+                kind="warning",
+            )
+        )
+        self.tui.request_render()
+
+    def _run_theme_command(self, prompt: str) -> None:
+        requested = prompt.removeprefix("/theme").strip()
+        themes = list(self.theme_registry.list())
+        if not requested:
+            if not themes:
+                self.history.add(StatusLine("No discovered themes are available.", kind="warning"))
+                self.tui.request_render()
+                return
+            selected = self.prompt_extension_select(
+                "Theme",
+                [theme.name for theme in themes],
+                kind="theme",
+            )
+            if selected is None:
+                self.history.add(StatusLine("Theme unchanged.", kind="session"))
+                return
+            requested = selected
+        try:
+            self.theme_registry.select(requested)
+            self.app.session.settings_manager.set_theme(requested)
+            self.history.add(StatusLine(f"Theme selected: {requested}", kind="session"))
+        except ValueError as error:
+            self.history.add(StatusLine(str(error), kind="error"))
+        self.tui.request_render()
+
     def _run_help_command(self) -> None:
         self.history.add(StatusLine("TUI commands", kind="help"))
         for line in (
@@ -187,8 +420,22 @@ class InteractiveSessionCommands:
             "/resume - Switch to a previous session.",
             "/new - Start a new persistent session.",
             "/session - Show active session details.",
+            "/name <name> - Name the active session.",
+            "/fork - Fork before a selected user message.",
+            "/clone - Clone the complete active branch.",
+            "/tree - Navigate the active session tree.",
+            "/export [path] - Export HTML or JSONL.",
+            "/import <path.jsonl> - Import and switch session.",
+            "/copy - Copy the last agent message when a clipboard adapter is available.",
+            "/share - Report configured sharing support.",
+            "/theme [name] - Select a discovered theme.",
+            "/trust - View or change the project trust decision.",
             "/processes - Inspect and control managed processes.",
             "/reload - Reload extensions, skills, prompts, and themes.",
+            "/install <source> [--local] - Install a resource package.",
+            "/remove <source> [--local] - Remove a resource package.",
+            "/update [source] [--local] - Update resource packages.",
+            "/packages [--local] - List installed resource packages.",
             "/agents - List delegated subagents.",
             "/delegate <role> <task> - Spawn a subagent for explicit multi-agent work.",
             "/cancel-agent <task-id> [reason] - Cancel a delegated subagent.",
@@ -196,6 +443,56 @@ class InteractiveSessionCommands:
             "!<command> - Run a shell command outside model context.",
         ):
             self.history.add(Text(line))
+        self.status.set_message("Idle")
+        self._refresh_footer()
+        self.tui.request_render()
+
+    def _run_trust_command(self) -> None:
+        cwd = Path(self.app.cwd).expanduser().resolve()
+        loader = self.app.session.resource_loader
+        store = ProjectTrustStore(loader.agent_dir)
+        try:
+            entry = store.get_entry(cwd)
+        except Exception as error:  # noqa: BLE001 - trust-store errors render and fail closed.
+            self.history.add(StatusLine(f"Could not read project trust: {error}", kind="error"))
+            self.status.set_message("Idle")
+            self._refresh_footer()
+            self.tui.request_render()
+            return
+
+        active = "trusted" if loader.project_trusted else "untrusted"
+        if entry is None:
+            saved_status = "No saved decision"
+        elif Path(entry.path) == cwd:
+            saved_status = f"Saved for this folder: {'trusted' if entry.decision else 'untrusted'}"
+        else:
+            saved_status = (
+                f"Inherited from {entry.path}: "
+                f"{'trusted' if entry.decision else 'untrusted'}"
+            )
+        options = get_project_trust_options(cwd, include_session_only=True)
+        selected = self.prompt_extension_select(
+            f"Project trust ({active})\n{saved_status}",
+            [option.label for option in options],
+        )
+        choice = next((option for option in options if option.label == selected), None)
+        if choice is None:
+            self.history.add(StatusLine("Project trust unchanged.", kind="warning"))
+        else:
+            try:
+                if choice.updates:
+                    store.set_many(choice.updates)
+                    self.app._project_trust_override = None  # noqa: SLF001 - session trust control.
+                    loader._project_trust_override = None  # noqa: SLF001 - applied on explicit reload.
+                else:
+                    self.app._project_trust_override = choice.trusted  # noqa: SLF001
+                    loader._project_trust_override = choice.trusted  # noqa: SLF001
+            except Exception as error:  # noqa: BLE001 - trust-store errors render and fail closed.
+                self.history.add(StatusLine(f"Could not update project trust: {error}", kind="error"))
+            else:
+                decision = "trusted" if choice.trusted else "untrusted"
+                self.history.add(StatusLine(f"Project marked {decision}.", kind="success"))
+                self.history.add(Text("Run /reload or restart before the new trust decision takes effect."))
         self.status.set_message("Idle")
         self._refresh_footer()
         self.tui.request_render()

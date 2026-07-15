@@ -27,7 +27,12 @@ from travis.ai.models import (
     clamp_thinking_level,
     get_supported_thinking_levels,
 )
-from travis.ai.types import AssistantMessage, Cost, ImageContent, Message, Model, TextContent, UserMessage, now_ms
+from travis.ai.context_estimate import (
+    calculate_prompt_tokens,
+    estimate_context_tokens,
+    estimate_full_context_tokens,
+)
+from travis.ai.types import AssistantMessage, Context, Cost, ImageContent, Message, Model, TextContent, Tool, UserMessage, now_ms
 from travis.ai.types import ToolCall, ToolResultMessage, Usage
 from travis.compaction.compressor import LEGACY_SUMMARY_PREFIX, SUMMARY_END_MARKER, SUMMARY_PREFIX, estimate_tokens
 from travis.compaction.timing import CompactionManager
@@ -104,37 +109,9 @@ def _assistant_usage(message: AgentMessage) -> Usage | None:
         return None
     if message.stop_reason in ("aborted", "error"):
         return None
-    if _calculate_context_tokens(message.usage) <= 0:
+    if calculate_prompt_tokens(message.usage) <= 0:
         return None
     return message.usage
-
-
-def _calculate_context_tokens(usage: Usage) -> int:
-    return usage.total_tokens or usage.input + usage.output + usage.cache_read + usage.cache_write
-
-
-def _estimate_context_tokens(messages: list[AgentMessage]) -> int:
-    usage_index: int | None = None
-    usage: Usage | None = None
-    for index in range(len(messages) - 1, -1, -1):
-        candidate = _assistant_usage(messages[index])
-        if candidate is not None:
-            usage_index = index
-            usage = candidate
-            break
-
-    if usage is None or usage_index is None:
-        return estimate_tokens(messages)
-
-    trailing_tokens = estimate_tokens(messages[usage_index + 1 :])
-    return _calculate_context_tokens(usage) + trailing_tokens
-
-
-def _context_usage_confidence(messages: list[AgentMessage]) -> str:
-    for message in reversed(messages):
-        if _assistant_usage(message) is not None:
-            return "provider_real"
-    return "estimated_no_provider_usage"
 
 
 def _collect_entries_for_branch_summary(
@@ -206,6 +183,12 @@ class SessionPersistence:
 
     def set_compaction_manager(self, manager: CompactionManager | None) -> None:
         self._compaction_manager = manager
+        if manager is not None and self._session_store is not None:
+            latest_compaction = _latest_compaction_entry(self._session_store.get_branch())
+            if latest_compaction is not None:
+                manager.compressor.restore_summary_cooldown(
+                    latest_compaction.get("details")
+                )
         self._compaction_transactions = (
             CompactionTransactionCoordinator(
                 manager=manager,
@@ -240,6 +223,14 @@ class SessionPersistence:
 
     def get_session_entry(self, entry_id: str) -> dict | None:
         return self._session_store.get_entry(entry_id) if self._session_store else None
+
+    def get_session_leaf_id(self) -> str | None:
+        return self._session_store.get_leaf_id() if self._session_store else None
+
+    def session_tree(self) -> list[dict]:
+        if self._session_store is None:
+            return []
+        return self._session_store.session_tree()
 
     def create_branched_session(self, leaf_id: str, path: str | None = None) -> str:
         if self._session_store is None:
@@ -489,6 +480,10 @@ class SessionPersistence:
 
         branch_entries = self._session_store.get_branch() if self._session_store else []
         latest_compaction = _latest_compaction_entry(branch_entries)
+        needs_full_post_compaction_estimate = bool(
+            self._compaction_manager is not None
+            and self._compaction_manager.awaiting_real_usage_after_compression
+        )
         if latest_compaction is not None:
             compaction_index = branch_entries.index(latest_compaction)
             has_post_compaction_usage = False
@@ -500,39 +495,60 @@ class SessionPersistence:
                     continue
                 assistant = self._session_store and self._session_store.get_entry(entry["id"])
                 assistant_message = _entry_to_assistant_message(assistant or entry)
-                if assistant_message is not None and _calculate_context_tokens(assistant_message.usage) > 0:
+                if assistant_message is not None and calculate_prompt_tokens(assistant_message.usage) > 0:
                     has_post_compaction_usage = True
                 break
-            if not has_post_compaction_usage:
-                tokens = estimate_tokens(self.messages)
-                return {
-                    "tokens": tokens,
-                    "contextWindow": context_window,
-                    "percent": (tokens / context_window) * 100,
-                    "estimated": True,
-                    "confidence": "estimated_after_compaction",
-                }
+            needs_full_post_compaction_estimate = not has_post_compaction_usage
+        if needs_full_post_compaction_estimate:
+            estimate = self._current_context_usage_estimate(force_full=True)
+            tokens = estimate.tokens
+            return {
+                "tokens": tokens,
+                "contextWindow": context_window,
+                "percent": (tokens / context_window) * 100,
+                "estimated": True,
+                "confidence": "estimated_after_compaction_full_request",
+                "systemTokens": estimate.system_tokens,
+                "toolTokens": estimate.tool_tokens,
+                "messageTokens": estimate.message_tokens,
+            }
 
-        tokens = _estimate_context_tokens(self.messages)
-        confidence = _context_usage_confidence(self.messages)
+        estimate = self._current_context_usage_estimate()
+        tokens = estimate.tokens
+        confidence = estimate.confidence
         usage = {
             "tokens": tokens,
             "contextWindow": context_window,
             "percent": (tokens / context_window) * 100,
             "confidence": confidence,
+            "systemTokens": estimate.system_tokens,
+            "toolTokens": estimate.tool_tokens,
+            "messageTokens": estimate.message_tokens,
         }
         if confidence != "provider_real":
             usage["estimated"] = True
         return usage
 
+    def _current_context_usage_estimate(self, *, force_full: bool = False):
+        converted_messages = self._convert_to_llm(list(self.messages))
+        if not isinstance(converted_messages, list):
+            converted_messages = list(converted_messages or [])
+        tools = [
+            Tool(name=tool.name, description=tool.description, parameters=tool.parameters)
+            for tool in (self.agent.state.tools or [])
+        ]
+        context = Context(
+            system_prompt=self.system_prompt,
+            messages=converted_messages,
+            tools=tools,
+        )
+        return estimate_full_context_tokens(context) if force_full else estimate_context_tokens(context)
+
 __all__ = (
     'SessionPersistence',
     '_assistant_usage',
-    '_calculate_context_tokens',
     '_collect_entries_for_branch_summary',
-    '_context_usage_confidence',
     '_entry_to_assistant_message',
-    '_estimate_context_tokens',
     '_extract_custom_message_entry_text',
     '_extract_user_entry_text',
     '_get_user_message_text',

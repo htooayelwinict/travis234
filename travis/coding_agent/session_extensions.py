@@ -7,21 +7,15 @@ import os
 import re
 import subprocess
 import time
-from dataclasses import dataclass
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Mapping, Optional
 
 from travis.agent.agent import Agent
-from travis.agent.types import AbortSignal
-from travis.agent.types import AfterToolCallResult
-from travis.agent.types import AgentContext
-from travis.agent.types import AgentLoopTurnUpdate
-from travis.agent.types import AgentTool
-from travis.agent.types import AgentToolResult
-from travis.agent.types import AgentMessage
-from travis.agent.types import BeforeToolCallResult
-from travis.agent.types import MessageEndEvent, MessageStartEvent
+from travis.agent.types import (
+    AbortSignal, AfterToolCallResult, AgentContext, AgentLoopTurnUpdate, AgentMessage,
+    AgentTool, AgentToolResult, BeforeToolCallResult, MessageEndEvent, MessageStartEvent,
+)
 from travis.ai.model_resolver import ScopedModel
 from travis.ai.model_cost import cost_from_mapping
 from travis.ai.models import (
@@ -88,6 +82,7 @@ from travis.coding_agent.tools.types import (
 
 from travis.coding_agent.session_types import ExtensionCommandContext, ExtensionCompactionResult
 from travis.coding_agent.subagent_trace import _message_content_text, _public_subagent_result_details
+from travis.coding_agent.skills import Skill, format_skill_invocation
 
 def _extract_compaction_result_summary(messages: list[Message]) -> str:
     for message in messages:
@@ -409,6 +404,29 @@ class SessionExtensionController:
                 "handler": self._cancel_agent_command,
             },
         )
+        enable_skill_commands = _settings_value(
+            self.settings_manager,
+            "getEnableSkillCommands",
+            "get_enable_skill_commands",
+            "enableSkillCommands",
+            "enable_skill_commands",
+        )
+        if enable_skill_commands is False:
+            return
+        for skill in self._resource_loader.get_skills()["skills"]:
+            if not isinstance(skill, Skill):
+                continue
+            self._extension_runner.register_command(
+                f"skill:{skill.name}",
+                {
+                    "description": skill.description,
+                    "sourceInfo": replace(skill.source_info, source="skill"),
+                    "handler": lambda args, _ctx=None, selected=skill: self.prompt(
+                        format_skill_invocation(selected, args),
+                        expand_prompt_templates=False,
+                    ),
+                },
+            )
 
     def _agents_command(self, args: str = "", _ctx: object | None = None) -> list[AgentMessage]:
         tasks = self.subagents.list_tasks()
@@ -517,7 +535,9 @@ class SessionExtensionController:
             {
                 "getModel": lambda: self.model,
                 "isIdle": lambda: not self.is_streaming,
-                "isProjectTrusted": lambda: True,
+                "isProjectTrusted": lambda: bool(
+                    _settings_value(self.settings_manager, "is_project_trusted")
+                ),
                 "getSignal": self._current_abort_signal,
                 "abort": self._extension_abort,
                 "hasPendingMessages": lambda: self.pending_message_count > 0,

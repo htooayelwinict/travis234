@@ -279,6 +279,15 @@ class SessionToolController:
             for definition in self._tool_definition_by_name.values()
         ]
 
+    def get_known_tool_names(self) -> list[str]:
+        """Return the unfiltered registry used to validate CLI selections."""
+
+        names = list(self._base_definition_by_name)
+        for registered in self._extension_runner.get_all_registered_tools():
+            if registered.definition.name not in names:
+                names.append(registered.definition.name)
+        return names
+
     def get_tool_definition(self, name: str) -> ToolDefinition | None:
         return self._tool_definition_by_name.get(name)
 

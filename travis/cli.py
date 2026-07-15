@@ -22,11 +22,16 @@ from travis.ai.providers.params import GenerationParams, merge_generation_params
 from travis.ai.types import Model
 from travis.app import CodingApp
 from travis.coding_agent.auth_storage import AuthStorage
+from travis.coding_agent.automation import run_json_mode, run_print_mode
 from travis.coding_agent.config import get_agent_dir, get_auth_path, get_models_path
 from travis.coding_agent.export_html import export_from_file
 from travis.coding_agent.eval_trace import ConversationLogWriter, EvalTraceWriter, SecretRedactor
 from travis.coding_agent.model_registry import ModelRegistry
+from travis.coding_agent.package_cli import is_package_cli_invocation, run_package_cli
+from travis.coding_agent.rpc import RpcServer
+from travis.coding_agent.project_trust import ProjectTrustContext
 from travis.coding_agent.session_catalog import SessionCatalog, SessionCatalogError
+from travis.coding_agent.settings_manager import SettingsManager
 from travis.tui.interactive_mode import InteractiveMode
 
 
@@ -41,6 +46,43 @@ def _positive_int_arg(value: str) -> int:
     if parsed <= 0:
         raise argparse.ArgumentTypeError("must be a positive integer")
     return parsed
+
+
+def _split_repeatable_csv(values: list[str] | None) -> list[str]:
+    result: list[str] = []
+    for value in values or []:
+        for item in value.split(","):
+            name = item.strip()
+            if name and name not in result:
+                result.append(name)
+    return result
+
+
+def _resolve_explicit_resource_paths(
+    values: list[str] | None,
+    *,
+    cwd: Path,
+    label: str,
+) -> list[str]:
+    paths: list[str] = []
+    for value in values or []:
+        candidate = Path(value).expanduser()
+        resolved = (candidate if candidate.is_absolute() else cwd / candidate).resolve()
+        if not resolved.exists():
+            raise ValueError(f"{label} path does not exist: {resolved}")
+        resolved_text = str(resolved)
+        if resolved_text not in paths:
+            paths.append(resolved_text)
+    return paths
+
+
+def _unknown_cli_tool_names(app: object, requested: list[str]) -> list[str]:
+    session = getattr(app, "session", None)
+    get_known_tool_names = getattr(session, "get_known_tool_names", None)
+    if not callable(get_known_tool_names):
+        return []
+    known = set(get_known_tool_names())
+    return [name for name in requested if name not in known]
 
 
 def _resolve_dotenv_path(dotenv_arg: str | None, *, search_start: Path | None = None) -> Path:
@@ -288,7 +330,27 @@ def _install_first_party_extension(name: str, agent_dir: str) -> Path:
     return destination
 
 
+def _select_project_trust_option(prompt: str, choices: list[str] | tuple[str, ...]) -> str | None:
+    print(prompt)
+    for index, choice in enumerate(choices, start=1):
+        print(f"  {index}. {choice}")
+    try:
+        selected = input("Select trust option (blank to cancel): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return None
+    if not selected:
+        return None
+    try:
+        index = int(selected)
+    except ValueError:
+        return selected if selected in choices else None
+    return choices[index - 1] if 1 <= index <= len(choices) else None
+
+
 def main(argv: list[str] | None = None) -> int:
+    resolved_argv = list(sys.argv[1:] if argv is None else argv)
+    if is_package_cli_invocation(resolved_argv):
+        return run_package_cli(resolved_argv, agent_dir=get_agent_dir())
     parser = argparse.ArgumentParser(description="Run the Travis234 terminal coding agent")
     parser.add_argument("prompt", nargs="*", help="Prompt to run. If omitted, starts the interactive TUI.")
     parser.add_argument("--cwd", default=None, help="Working directory for tools")
@@ -310,6 +372,66 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout-seconds", help="Override provider request timeout")
     parser.add_argument("--provider-sort", help="Override provider routing sort preference where supported")
     parser.add_argument("--stop", help="Comma-separated or JSON-array stop sequences")
+    parser.add_argument(
+        "-t",
+        "--tools",
+        action="append",
+        metavar="NAMES",
+        help="Comma-separated tool allowlist; may be repeated",
+    )
+    parser.add_argument(
+        "-nt",
+        "--no-tools",
+        action="store_true",
+        help="Disable all tools unless --tools supplies an explicit allowlist",
+    )
+    parser.add_argument(
+        "-xt",
+        "--exclude-tools",
+        action="append",
+        metavar="NAMES",
+        help="Comma-separated tools to subtract from the active set; may be repeated",
+    )
+    parser.add_argument(
+        "--extension",
+        dest="extension_paths",
+        action="append",
+        metavar="PATH",
+        help="Load an operator-authorized extension path; may be repeated",
+    )
+    parser.add_argument(
+        "--skill",
+        dest="skill_paths",
+        action="append",
+        metavar="PATH",
+        help="Load an operator-authorized skill path; may be repeated",
+    )
+    parser.add_argument(
+        "--prompt-template",
+        dest="prompt_template_paths",
+        action="append",
+        metavar="PATH",
+        help="Load an operator-authorized prompt-template path; may be repeated",
+    )
+    parser.add_argument(
+        "--theme",
+        dest="theme_paths",
+        action="append",
+        metavar="PATH",
+        help="Load an operator-authorized theme path; may be repeated",
+    )
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Disable startup network refreshes and network package acquisition",
+    )
+    parser.add_argument(
+        "--image",
+        dest="image_paths",
+        action="append",
+        metavar="PATH",
+        help="Attach an operator-selected image path; may be repeated",
+    )
     session_group = parser.add_mutually_exclusive_group()
     session_group.add_argument(
         "-c",
@@ -327,8 +449,36 @@ def main(argv: list[str] | None = None) -> int:
     )
     session_group.add_argument("--session", dest="session_target", help="Open a session path or ID")
     session_group.add_argument("--no-session", action="store_true", help="Run without session persistence")
+    trust_group = parser.add_mutually_exclusive_group()
+    trust_group.add_argument(
+        "-a",
+        "--approve",
+        dest="project_trust_override",
+        action="store_const",
+        const=True,
+        default=None,
+        help="Trust project-local configuration and executable resources for this process",
+    )
+    trust_group.add_argument(
+        "-na",
+        "--no-approve",
+        dest="project_trust_override",
+        action="store_const",
+        const=False,
+        help="Do not load project-local configuration or executable resources",
+    )
     parser.add_argument("--tui", action="store_true", help="Render live agent events with the ported differential TUI")
-    parser.add_argument("--plain", action="store_true", help="Use the plain stdin loop instead of the interactive TUI")
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        "--mode",
+        choices=("interactive", "print", "json", "rpc"),
+        help="Select interactive, final-text, JSON Lines, or RPC transport",
+    )
+    mode_group.add_argument(
+        "--plain",
+        action="store_true",
+        help="Compatibility alias for the interactive stdin loop; planned for removal in 3.0",
+    )
     parser.add_argument("--export", help="Export a session JSONL file to standalone HTML and exit")
     parser.add_argument("--event-trace", help="Write a sanitized evaluation lifecycle JSONL trace")
     parser.add_argument("--conversation-log", help="Write an authorized, secret-redacted turn transcript")
@@ -337,7 +487,10 @@ def main(argv: list[str] | None = None) -> int:
         choices=("hypa",),
         help="Install an optional first-party extension into the Travis234 agent directory and exit",
     )
-    args = parser.parse_args(argv)
+    args = parser.parse_args(resolved_argv)
+    selected_mode = _resolved_cli_mode(args)
+    if selected_mode in {"print", "json"} and not args.prompt:
+        parser.error(f"--mode {selected_mode} requires a prompt")
 
     if args.install_extension:
         try:
@@ -367,6 +520,44 @@ def main(argv: list[str] | None = None) -> int:
     if not cwd_path.is_dir():
         print(f"Error: working directory is not a directory: {cwd_path}", file=sys.stderr)
         return 1
+    try:
+        extension_paths = _resolve_explicit_resource_paths(
+            args.extension_paths,
+            cwd=cwd_path,
+            label="extension",
+        )
+        skill_paths = _resolve_explicit_resource_paths(
+            args.skill_paths,
+            cwd=cwd_path,
+            label="skill",
+        )
+        prompt_template_paths = _resolve_explicit_resource_paths(
+            args.prompt_template_paths,
+            cwd=cwd_path,
+            label="prompt-template",
+        )
+        theme_paths = _resolve_explicit_resource_paths(
+            args.theme_paths,
+            cwd=cwd_path,
+            label="theme",
+        )
+        image_paths = _resolve_explicit_resource_paths(
+            args.image_paths,
+            cwd=cwd_path,
+            label="image",
+        )
+    except ValueError as error:
+        parser.error(str(error))
+    args.image_paths = image_paths
+    selected_tool_names = _split_repeatable_csv(args.tools)
+    excluded_tool_names = _split_repeatable_csv(args.exclude_tools)
+    allowed_tool_names = (
+        selected_tool_names
+        if args.tools is not None
+        else []
+        if args.no_tools
+        else None
+    )
 
     if args.thinking and args.thinking not in _VALID_THINKING_LEVELS:
         print(
@@ -389,6 +580,12 @@ def main(argv: list[str] | None = None) -> int:
     except (SessionCatalogError, ValueError) as error:
         parser.error(str(error))
     cwd_path = startup_session.cwd
+    settings_manager = SettingsManager.create(str(cwd_path), agent_dir)
+    trust_has_ui = selected_mode == "interactive" and not args.plain
+    project_trust_context = ProjectTrustContext(
+        has_ui=trust_has_ui,
+        select=_select_project_trust_option if trust_has_ui else None,
+    )
 
     dotenv_path = _resolve_dotenv_path(args.dotenv, search_start=cwd_path)
     try:
@@ -402,6 +599,7 @@ def main(argv: list[str] | None = None) -> int:
         get_models_path(),
         provider_config=config,
     )
+    model_registry.set_offline(args.offline)
     provider_dotenv_secrets = _register_dotenv_provider_credentials(model_registry, dotenv_path)
     if args.list_providers:
         _print_provider_list(model_registry)
@@ -451,11 +649,24 @@ def main(argv: list[str] | None = None) -> int:
         model=startup.model,
         thinking_level=startup.thinking_level or "off",
         scoped_models=startup.scoped_models,
-        enable_tui=args.tui or not args.prompt and not args.plain,
+        enable_tui=(
+            selected_mode == "interactive" and not args.plain
+            or args.tui and selected_mode not in {"json", "rpc"}
+        ),
         session_path=startup_session.session_path,
         session_id=startup_session.session_id,
         agent_dir=agent_dir,
+        settings_manager=settings_manager,
+        project_trust_override=args.project_trust_override,
+        project_trust_context=project_trust_context,
         model_registry=model_registry,
+        allowed_tool_names=allowed_tool_names,
+        excluded_tool_names=excluded_tool_names,
+        additional_extension_paths=extension_paths,
+        additional_skill_paths=skill_paths,
+        additional_prompt_template_paths=prompt_template_paths,
+        additional_theme_paths=theme_paths,
+        offline=args.offline,
         event_trace=(
             EvalTraceWriter(args.event_trace, redactor=evaluation_redactor)
             if args.event_trace
@@ -469,6 +680,13 @@ def main(argv: list[str] | None = None) -> int:
         **runtime_options,
     )
     try:
+        unknown_tool_names = _unknown_cli_tool_names(
+            app,
+            [*selected_tool_names, *excluded_tool_names],
+        )
+        if unknown_tool_names:
+            noun = "name" if len(unknown_tool_names) == 1 else "names"
+            parser.error(f"unknown tool {noun}: {', '.join(unknown_tool_names)}")
         return _run_configured_app(
             app,
             args,
@@ -491,10 +709,27 @@ def _run_configured_app(
     open_resume_picker: bool,
 ) -> int:
     prompt = " ".join(args.prompt).strip()
+    selected_mode = _resolved_cli_mode(args)
+    if selected_mode == "print":
+        return (
+            run_print_mode(app, prompt, sys.stdout, image_paths=args.image_paths)
+            if args.image_paths
+            else run_print_mode(app, prompt, sys.stdout)
+        )
+    if selected_mode == "json":
+        return (
+            run_json_mode(app, prompt, sys.stdout, image_paths=args.image_paths)
+            if args.image_paths
+            else run_json_mode(app, prompt, sys.stdout)
+        )
+    if selected_mode == "rpc":
+        return RpcServer(app, sys.stdin, sys.stdout).run()
     if prompt:
-        app.run_turn(prompt)
-        _print_last_assistant(app)
-        return 0
+        return (
+            run_print_mode(app, prompt, sys.stdout, image_paths=args.image_paths)
+            if args.image_paths
+            else run_print_mode(app, prompt, sys.stdout)
+        )
 
     if not args.plain:
         return InteractiveMode(
@@ -515,6 +750,15 @@ def _run_configured_app(
             continue
         app.run_turn(prompt)
         _print_last_assistant(app)
+
+
+def _resolved_cli_mode(args: argparse.Namespace) -> str:
+    configured = getattr(args, "mode", None)
+    if configured:
+        return str(configured)
+    if getattr(args, "prompt", None):
+        return "print"
+    return "interactive"
 
 
 def _split_models_arg(value: str | None) -> list[str] | None:

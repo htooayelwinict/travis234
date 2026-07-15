@@ -78,6 +78,34 @@ python3.13 -m venv .venv
 
 Inside the TUI, use `/login` to authenticate, `/model` to select a model, and `/help` to see the complete command set.
 
+### Automation and controlled startup
+
+All transports use the same `CodingApp`, `AgentSession`, persistence, trust, tool, and compaction owners:
+
+```bash
+# Final assistant text only
+.venv/bin/travis234 --cwd . --mode print "Inspect the failing test"
+
+# Versioned JSON Lines lifecycle stream
+.venv/bin/travis234 --cwd . --mode json "Inspect the failing test"
+
+# Newline-delimited request/response RPC on stdin/stdout
+.venv/bin/travis234 --cwd . --mode rpc
+```
+
+Machine modes never prompt for project trust. Unknown projects remain untrusted unless `--approve`, `--no-approve`, or a saved policy decides them. `--offline` disables catalog refresh, OAuth refresh that requires a network, and non-local package acquisition while retaining cached models, stored credentials, and local resources.
+
+Tool and resource controls are applied before the system prompt and context envelope are built:
+
+```bash
+.venv/bin/travis234 --cwd . --tools read,grep,find --exclude-tools bash \
+  --extension ./trusted-extension.py --skill ./skills/review/SKILL.md \
+  --prompt-template ./prompts/audit.md --theme ./themes/night.json \
+  --mode print '@README.md review this file'
+```
+
+`--tools` and `--exclude-tools` are repeatable comma-separated lists; `--no-tools` disables every tool unless an explicit allowlist adds one back. Explicit resource paths are operator-authorized for that process and are validated without fallback searching. `@file`, quoted `@"path with spaces"`, and repeatable `--image PATH` inputs are expanded with read-tool size bounds before provider submission. The legacy `--plain` interactive alias remains for compatibility and is planned for removal in 3.0.
+
 Browser-development support is optional:
 
 ```bash
@@ -102,13 +130,20 @@ The npm package exposes only the `travis234` command and launches the release co
 | `/login` | Authenticate with a supported provider |
 | `/model` | Search and select the active model |
 | `/session` | Inspect the current persistent session and context usage |
+| `/name`, `/fork`, `/clone`, `/tree` | Name, branch, clone, or navigate the JSONL v3 session tree |
+| `/resume`, `/new` | Switch to another indexed session or start a new one |
+| `/export`, `/import`, `/copy`, `/share` | Move or present session data through explicit local/platform adapters |
 | `/compact` | Compact the current conversation immediately |
 | `/reload` | Reload project and global extensions without restarting |
+| `/theme` | Select a discovered theme |
+| `/trust` | View or change project trust; reload before newly trusted code runs |
+| `/packages` | List installed resource packages (`--local` selects project scope) |
+| `/install`, `/remove`, `/update` | Confirm and manage local, Git, or Python resource packages |
 | `/processes` | Inspect managed and user-command processes |
 | `/help` | Show available commands and shortcuts |
 | `/exit` | Shut down cleanly and terminate owned work |
 
-Use `!command` for an asynchronous operator command whose output is added to context. Use `!!command` when the output should remain outside model context.
+User `!command` and `!!command` run asynchronously. Output from `!command` is added to context; `!!command` output remains outside model context.
 
 ## Inside the runtime
 
@@ -133,6 +168,21 @@ flowchart LR
 
 The core iteration loop owns ordering and bounded execution. Provider adapters translate model protocols without owning session policy. Extensions add commands, tools, hooks, providers, and subagents through explicit session-owned registrations. Compaction and persistence remain separate context owners.
 
+### Python SDK surfaces
+
+`AgentHarness` is the async composition root for applications that need the same session, resource, tool, and compaction owners without a TUI. `Models.async_api()` provides event-loop-safe model discovery, `stream_proxy()` provides ordered transform/callback forwarding, and the optional image registry remains separate from chat-model selection.
+
+```python
+from travis import AgentHarness, AgentHarnessConfig
+
+async with AgentHarness.create(
+    AgentHarnessConfig(cwd=".", model=model, trust_override=False)
+) as harness:
+    message = await harness.prompt("Inspect the failing test")
+```
+
+Image APIs are exported from `travis.ai`: `ImageModel`, `ImageGenerationOptions`, `generate_images`, and `register_image_provider`. They do not load an image provider or add image-model schemas to ordinary chat requests unless explicitly invoked.
+
 ## Providers and credentials
 
 Provider credentials should be configured through `/login` or the provider's standard environment variable. Credentials loaded from `--dotenv` are registered only for the provider that declares them; switching models cannot reuse another provider's key.
@@ -151,7 +201,7 @@ Model-driven subprocesses do not inherit provider credentials by default. A trus
 
 ## Context and compaction
 
-Travis234 supports both manual compaction with `/compact` and automatic compaction at the configured context threshold. The default threshold is 50% of the effective model window, leaving recovery headroom across providers.
+Travis234 supports both manual compaction with `/compact` and automatic compaction against the effective input window (the selected route's context window minus its reserved output). The Hermes-aligned default triggers at 75% for routes below 512K and 50% for larger routes. Routes below 64K use a reachable 85% fallback instead of an impossible fixed floor.
 
 An auxiliary summarizer can compact context without changing the active coding model:
 
@@ -162,7 +212,9 @@ TRAVIS234_COMPRESSION_LLM_MODEL=openai/gpt-5.6-luna-pro
 TRAVIS234_COMPRESSION_LLM_TIMEOUT_SECONDS=120
 ```
 
-When required, add `TRAVIS234_COMPRESSION_LLM_BASE_URL` and `TRAVIS234_COMPRESSION_LLM_API_KEY`. Without an auxiliary route, compaction uses the active model. After compaction, Travis234 verifies effectiveness against the next real provider prompt instead of trusting only a local token estimate.
+When required, add `TRAVIS234_COMPRESSION_LLM_BASE_URL` and `TRAVIS234_COMPRESSION_LLM_API_KEY`. Without an auxiliary route, compaction uses the active model. A smaller auxiliary route lowers the live trigger so its summary request fits before the main route overflows. After compaction, Travis234 publishes a full-request estimate (system prompt, active tool schemas, messages, images, and provider replay metadata), then verifies it against the next real provider prompt.
+
+Context pressure counts provider input plus cache-read/cache-write input; generated output is retained for billing statistics but does not make the next prompt larger. This is why a large answer no longer causes premature compaction. Existing JSONL sessions require no migration: summaries, route changes, and the new confidence/component telemetry are re-derived when a session is resumed.
 
 ## Extensions
 
@@ -181,7 +233,11 @@ travis234 --install-extension hypa
 
 The installer never overwrites an existing extension directory. Run `/reload` after adding or changing extension code; the TUI process does not need to restart.
 
-Extensions execute with Travis234's permissions, so install only trusted code. JavaScript extensions do not execute directly in the Python runtime and require a Python adapter. See [the extension guide](travis/resources/docs/extensions.md) for the supported lifecycle and APIs.
+Extensions execute with Travis234's permissions, so install only trusted code. Unknown workspaces fail closed: project settings, extensions, skills, prompts, themes, and project system-prompt files stay disabled until trust is resolved. Use `--approve` or `--no-approve` for a process-only CLI decision, or `/trust` to save a folder/parent decision; `/trust` never executes project code by itself. Global resources under `~/.travis234/agent/` remain available during trust resolution. Travis JavaScript extensions do not run directly in the Python runtime and require a Python adapter. See [the extension guide](travis/resources/docs/extensions.md) for the supported lifecycle and APIs.
+
+Resource files use safe YAML frontmatter. Discovery merges `.gitignore`, `.ignore`, and `.fdignore`; an explicitly named file remains an operator-selected exception. Leading `/template` prompts expand shell-quoted `$ARGUMENTS`, `$1`, and related Pi placeholders before provider submission. When `enableSkillCommands` is enabled, `/skill:<name>` injects only the selected skill. Discovered themes are reloadable, and extension UI code can select them with `setTheme`.
+
+Packages can be local directories, `git+https://...@revision` sources, or pinned Python requirements. Global commands use `travis234 install|remove|update|list`; add `--local` for trusted project scope. Installs replace atomically, ordinary startup never auto-updates packages, and package subprocesses do not receive model-provider, worker, compression, OAuth, or ambient token credentials.
 
 ## Skills and state
 
@@ -213,11 +269,11 @@ Useful overrides:
 
 Long-running shell work can return a process handle instead of blocking the agent. The process API supports polling, acknowledged stdin writes, interrupts, and terminal-state recovery.
 
-- `process.wait` waits for terminal state without changing the command timeout.
-- A wait deadline does not kill the process; a later wait continues from the returned cursor.
+- `process.wait` waits for terminal state and does not change the command timeout.
+- If a wait deadline expires, the command is not killed; a later wait continues from the returned cursor.
 - Live output is bounded to 64 MiB per process and reports `output_limit` when crossed.
 - Completed metadata is retained for bounded recovery.
-- Running processes cannot be reattached after an application restart.
+- Travis234 cannot reattach a running process after an application restart.
 
 ## Production sandbox
 
@@ -238,9 +294,10 @@ PYTHONPATH=. .venv/bin/python -m pytest tests -q
 npm --prefix packages/travis234-cli test
 npm --prefix packages/travis234-cli run pack:dry-run
 python -m build
+.venv/bin/python scripts/verify_acceptance.py --parity-json
 ```
 
-The repository also carries focused architecture, provider, compaction, process-ownership, cancellation, extension, installed-wheel, container, and release-contract tests. See the [full verification record](docs/verification/full-suite.md).
+The parity report maps 77 pinned Pi behaviors—including all 33 extension events—and 11 Hermes compaction behaviors to concrete tests, with intentional Travis safety divergences called out explicitly. The repository also carries focused architecture, provider, compaction, process-ownership, cancellation, extension, installed-wheel, container, and release-contract tests. See the [full verification record](docs/verification/full-suite.md).
 
 ### Manual 21-prompt TUI acceptance
 

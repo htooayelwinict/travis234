@@ -9,6 +9,11 @@ import subprocess
 from pathlib import Path
 from typing import NamedTuple
 
+try:
+    from scripts.parity_contracts import build_parity_report
+except ModuleNotFoundError:  # Direct execution places scripts/ on sys.path.
+    from parity_contracts import build_parity_report
+
 
 REQUIRED_IDS = {
     "rebrand",
@@ -28,6 +33,12 @@ REQUIRED_IDS = {
     "green-zone-package",
     "live-21-prompt-tui",
     "public-repository",
+    "production-project-trust",
+    "openrouter-route-capacity",
+    "canonical-context-envelope",
+    "python-native-pi-resource-parity",
+    "pi-cli-tui-session-parity",
+    "pi-sdk-production-qualification",
 }
 VALID_STATUSES = {"pending", "passed", "failed", "blocked"}
 
@@ -114,6 +125,18 @@ def verify_current_commit(evidence_path: str | Path, *, root: str | Path) -> dic
     return payload
 
 
+def verify_parity_contracts(*, root: str | Path) -> dict[str, object]:
+    report = build_parity_report(root=Path(root).resolve())
+    invalid = {
+        source: values["invalid"]
+        for source, values in report["summary"].items()
+        if values["invalid"]
+    }
+    if invalid:
+        raise AcceptanceMatrixError(f"parity contract evidence is invalid: {invalid}")
+    return report
+
+
 def main(argv: list[str] | None = None) -> int:
     root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
@@ -126,15 +149,29 @@ def main(argv: list[str] | None = None) -> int:
         default=str(root / "docs/verification/acceptance-evidence.json"),
     )
     parser.add_argument("--require-current-commit", action="store_true")
+    parser.add_argument(
+        "--parity-json",
+        action="store_true",
+        help="Print the validated Pi/Hermes contract report as JSON.",
+    )
     args = parser.parse_args(argv)
     try:
         rows = load_acceptance_matrix(args.matrix)
+        parity_report = verify_parity_contracts(root=root)
         if args.require_current_commit:
             verify_current_commit(args.evidence, root=root)
     except (AcceptanceMatrixError, AcceptanceEvidenceError, subprocess.CalledProcessError) as error:
         print(f"acceptance verification failed: {error}")
         return 1
-    print(f"acceptance matrix: {len(rows)} required rows")
+    if args.parity_json:
+        print(json.dumps(parity_report, sort_keys=True))
+    else:
+        print(f"acceptance matrix: {len(rows)} required rows")
+        print(
+            "parity contracts: "
+            f"pi={parity_report['summary']['pi']['total']} "
+            f"hermes={parity_report['summary']['hermes']['total']}"
+        )
     return 0
 
 

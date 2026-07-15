@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Optional
 
+from travis.ai.context_estimate import estimate_messages_tokens
 from travis.ai.types import (
     AssistantMessage,
     ImageContent,
@@ -28,6 +29,11 @@ from travis.ai.types import (
     UserMessage,
     empty_usage,
     now_ms,
+)
+from travis.compaction.policy import (
+    CompactionBudget,
+    CompactionPolicyInput,
+    calculate_compaction_budget,
 )
 
 CHARS_PER_TOKEN = 4
@@ -251,7 +257,7 @@ def _sanitize_tool_argument_value(value, field: str | None = None):
 
 
 def estimate_tokens(messages: list[Message]) -> int:
-    return sum(len(_message_text(m)) for m in messages) // CHARS_PER_TOKEN
+    return estimate_messages_tokens(messages)
 
 
 def _message_text(message: Message) -> str:
@@ -499,7 +505,10 @@ class ContextCompressor:
         summary_model_override: str | None = None,
         abort_on_summary_failure: bool = False,
         max_tokens: int | None = None,
+        summarizer_context_window: int | None = None,
+        summarizer_max_tokens: int | None = None,
         clock: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], float] = time.time,
     ) -> None:
         self.model = model
         self.summary_model = summary_model_override or ""
@@ -507,18 +516,24 @@ class ContextCompressor:
         self._configured_threshold_percent = float(threshold_percent)
         self.threshold_percent = self._configured_threshold_percent
         self.max_tokens = self._coerce_max_tokens(max_tokens)
+        self.summarizer_context_window = self._coerce_max_tokens(summarizer_context_window)
+        self.summarizer_max_tokens = self._coerce_max_tokens(summarizer_max_tokens)
         self.protect_first_n = protect_first_n
         self.protect_last_n = protect_last_n
         self.summary_target_ratio = max(0.10, min(summary_target_ratio, 0.80))
-        self.max_summary_tokens = min(int(context_length * 0.05), _SUMMARY_TOKENS_CEILING)
+        self.active_budget = self._calculate_active_budget()
+        self.threshold_percent = self.active_budget.threshold_ratio
+        self.max_summary_tokens = self.active_budget.summary_max_tokens
         self._summarizer = summarizer
         self._summary_summarizer = summary_summarizer
         self.abort_on_summary_failure = abort_on_summary_failure
         self._clock = clock
+        self._wall_clock = wall_clock
         self._previous_summary: str | None = None
         self._ineffective_compression_count = 0
         self._verify_compaction_cleared_threshold = False
         self._summary_failure_cooldown_until = 0.0
+        self._summary_failure_cooldown_until_wall = 0.0
         self._last_summary_error: str | None = None
         self._last_summary_dropped_count = 0
         self._last_summary_fallback_used = False
@@ -544,18 +559,16 @@ class ContextCompressor:
 
     @property
     def threshold_tokens(self) -> int:
-        return self._compute_threshold_tokens(
-            self.context_length,
-            self.threshold_percent,
-            self.max_tokens,
-        )
+        return self.active_budget.trigger_tokens
 
     @property
     def tail_token_budget(self) -> int:
-        return int(self.threshold_tokens * self.summary_target_ratio)
+        return self.active_budget.tail_target_tokens
 
     def should_compress(self, tokens: int) -> bool:
         if tokens < self.threshold_tokens:
+            return False
+        if self._summary_failure_in_cooldown():
             return False
         if self._ineffective_compression_count >= 2:
             return False
@@ -568,6 +581,8 @@ class ContextCompressor:
         threshold_percent: float | None = None,
         max_tokens: int | None = None,
         model: str | None = None,
+        summarizer_context_window: int | None = None,
+        summarizer_max_tokens: int | None = None,
     ) -> None:
         """Recalibrate model-owned limits without discarding session compaction history."""
 
@@ -577,12 +592,17 @@ class ContextCompressor:
         self.context_length = resolved_length
         if threshold_percent is not None:
             self._configured_threshold_percent = float(threshold_percent)
-        self.threshold_percent = self._configured_threshold_percent
         if max_tokens is not None:
             self.max_tokens = self._coerce_max_tokens(max_tokens)
+        if summarizer_context_window is not None:
+            self.summarizer_context_window = self._coerce_max_tokens(summarizer_context_window)
+        if summarizer_max_tokens is not None:
+            self.summarizer_max_tokens = self._coerce_max_tokens(summarizer_max_tokens)
         if model is not None:
             self.model = model
-        self.max_summary_tokens = min(int(resolved_length * 0.05), _SUMMARY_TOKENS_CEILING)
+        self.active_budget = self._calculate_active_budget()
+        self.threshold_percent = self.active_budget.threshold_ratio
+        self.max_summary_tokens = self.active_budget.summary_max_tokens
 
         # Provider usage and anti-thrash calibration describe the previous
         # model's window. Preserve summaries and the durable ledger, but make
@@ -613,11 +633,26 @@ class ContextCompressor:
         threshold_percent: float,
         max_tokens: int | None = None,
     ) -> int:
-        effective_window = context_length - (max_tokens or 0)
-        if effective_window <= 0:
-            effective_window = context_length
-        percentage_value = int(effective_window * threshold_percent)
-        return max(1, min(percentage_value, effective_window - 1))
+        return calculate_compaction_budget(
+            CompactionPolicyInput(
+                context_window=context_length,
+                max_output_tokens=max_tokens or 0,
+                threshold_ratio=threshold_percent,
+            )
+        ).trigger_tokens
+
+    def _calculate_active_budget(self) -> CompactionBudget:
+        return calculate_compaction_budget(
+            CompactionPolicyInput(
+                context_window=self.context_length,
+                max_output_tokens=self.max_tokens or 0,
+                model_id=self.model,
+                threshold_ratio=self._configured_threshold_percent,
+                summary_target_ratio=self.summary_target_ratio,
+                summarizer_context_window=self.summarizer_context_window,
+                summarizer_max_output_tokens=self.summarizer_max_tokens or 0,
+            )
+        )
 
     def update_from_response(self, usage: dict) -> None:
         self.last_prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
@@ -669,6 +704,32 @@ class ContextCompressor:
 
     def _summary_failure_in_cooldown(self) -> bool:
         return self._clock() < self._summary_failure_cooldown_until
+
+    def _arm_summary_failure_cooldown(self, error: str | None = None) -> None:
+        self._summary_failure_cooldown_until = self._clock() + _SUMMARY_FAILURE_COOLDOWN_SECONDS
+        self._summary_failure_cooldown_until_wall = (
+            self._wall_clock() + _SUMMARY_FAILURE_COOLDOWN_SECONDS
+        )
+        if error:
+            self._last_summary_error = _redact_sensitive_text(str(error))
+
+    def _clear_summary_failure_cooldown(self) -> None:
+        self._summary_failure_cooldown_until = 0.0
+        self._summary_failure_cooldown_until_wall = 0.0
+
+    def restore_summary_cooldown(self, details: object) -> None:
+        if not isinstance(details, dict):
+            return
+        error = details.get("lastSummaryError")
+        self._last_summary_error = str(error) if error else None
+        self._last_summary_fallback_used = bool(details.get("summaryFallback", False))
+        try:
+            wall_until = float(details.get("summaryCooldownUntil") or 0.0)
+        except (TypeError, ValueError):
+            wall_until = 0.0
+        remaining = max(0.0, wall_until - self._wall_clock())
+        self._summary_failure_cooldown_until_wall = wall_until if remaining else 0.0
+        self._summary_failure_cooldown_until = self._clock() + remaining if remaining else 0.0
 
     # --- Pass 1: deterministic prune ---
 
@@ -876,7 +937,13 @@ class ContextCompressor:
 
     def _protect_head_size(self, messages: list[Message]) -> int:
         system_head = 1 if messages and getattr(messages[0], "role", None) == "system" else 0
-        return min(len(messages), system_head + self.protect_first_n)
+        return min(len(messages), system_head + self._effective_protect_first_n(messages))
+
+    def _effective_protect_first_n(self, messages: list[Message]) -> int:
+        summary_index, _summary = self._find_previous_summary(messages)
+        if summary_index >= 0 or self.compression_count >= 1 or self._previous_summary:
+            return 0
+        return self.protect_first_n
 
     @staticmethod
     def _content_has_images(content) -> bool:
@@ -1025,11 +1092,36 @@ class ContextCompressor:
             if text.startswith(prefix):
                 text = text[len(prefix):].lstrip()
                 break
-        for marker in (SUMMARY_END_MARKER, *_HISTORICAL_SUMMARY_END_MARKERS):
-            if text.endswith(marker):
-                text = text[: -len(marker)].rstrip()
-                break
+        marker_positions = [
+            position
+            for marker in (SUMMARY_END_MARKER, *_HISTORICAL_SUMMARY_END_MARKERS)
+            if (position := text.find(marker)) >= 0
+        ]
+        if marker_positions:
+            text = text[: min(marker_positions)].rstrip()
         return text
+
+    @staticmethod
+    def _retained_tail_after_summary(summary: str) -> str:
+        text = summary or ""
+        candidates: list[tuple[int, str]] = []
+        for marker in (SUMMARY_END_MARKER, *_HISTORICAL_SUMMARY_END_MARKERS):
+            position = text.find(marker)
+            if position >= 0:
+                candidates.append((position, marker))
+        if not candidates:
+            return ""
+        position, marker = min(candidates, key=lambda item: item[0])
+        return text[position + len(marker) :].strip()
+
+    @staticmethod
+    def _message_with_replacement_text(message: Message, text: str) -> Message:
+        clone = copy.copy(message)
+        if getattr(message, "role", None) == "assistant":
+            clone.content = [TextContent(text=text)]
+        else:
+            clone.content = text
+        return clone
 
     @classmethod
     def _is_context_summary_message(cls, message: Message) -> bool:
@@ -1046,6 +1138,11 @@ class ContextCompressor:
             if cls._is_context_summary_message(messages[index]):
                 return index, cls._strip_summary_prefix(_message_text(messages[index]))
         return None, ""
+
+    @classmethod
+    def _find_previous_summary(cls, messages: list[Message]) -> tuple[int, str]:
+        index, summary = cls._find_latest_context_summary(messages, 0, len(messages))
+        return (-1 if index is None else index), summary
 
     # --- Pass 2: LLM structured summary ---
 
@@ -1151,13 +1248,12 @@ FOCUS TOPIC: "{safe_focus}"
 This compaction should PRIORITISE preserving all information related to the focus topic above. For content related to "{safe_focus}", include full detail — exact values, file paths, command outputs, error messages, and decisions. For content NOT related to the focus topic, summarise more aggressively (brief one-liners or omit if truly irrelevant). The focus topic sections should receive roughly 60-70% of the summary token budget. Even for the focus topic, NEVER preserve API keys, tokens, passwords, or credentials — use [REDACTED]."""
         summary = self._run_summary_summarizer(prompt, summarizer)
         if summary is not None:
-            self._summary_failure_cooldown_until = 0.0
+            self._clear_summary_failure_cooldown()
             self._last_summary_error = None
             self._last_summary_auth_failure = False
             self._last_summary_network_failure = False
             return _redact_sensitive_text(summary)
-        self._summary_failure_cooldown_until = self._clock() + _SUMMARY_FAILURE_COOLDOWN_SECONDS
-        self._last_summary_error = _NO_SUMMARY_PROVIDER_ERROR
+        self._arm_summary_failure_cooldown(_NO_SUMMARY_PROVIDER_ERROR)
         return None
 
     def _summary_budget(self, middle: list[Message]) -> int:
@@ -1327,7 +1423,13 @@ Write only the summary body. Do not include any preamble or prefix."""
             args = args[: cls._SUMMARY_TOOL_ARGS_HEAD] + "..."
         return args
 
-    def _static_fallback_summary(self, middle: list[Message], *, reason: str | None = None) -> str:
+    def _static_fallback_summary(
+        self,
+        middle: list[Message],
+        *,
+        reason: str | None = None,
+        recent_user_focus: str | None = None,
+    ) -> str:
         user_asks: list[str] = []
         assistant_actions: list[str] = []
         tool_actions: list[str] = []
@@ -1410,10 +1512,17 @@ Write only the summary body. Do not include any preamble or prefix."""
             f"{idx}. {item}"
             for idx, item in enumerate((assistant_actions + tool_actions)[:12], start=1)
         ]
-        active_task = f"User asked: {user_asks[-1]!r}" if user_asks else "Unknown from deterministic fallback."
+        historical_ask = user_asks[-1] if user_asks else "Unknown from deterministic fallback."
+        active_task = f"Historical user ask: {historical_ask}"
+        historical_warning = (
+            "This ask is historical context and is not necessarily outstanding. "
+            "Follow the newest retained user message."
+        )
+        retained_focus = recent_user_focus or "Use the newest retained user message after this summary."
         reason_text = f" Summary failure reason: {reason}." if reason else ""
         body = f"""{HISTORICAL_TASK_HEADING}
 {active_task}
+{historical_warning}
 
 ## Goal
 Recovered from a deterministic fallback because the LLM context summarizer was unavailable. Continue from the protected recent messages after this summary and use current file/system state for exact details.
@@ -1437,7 +1546,7 @@ Recovered from a deterministic fallback because the LLM context summarizer was u
 	Unknown from deterministic fallback. Inspect current repository/session state if needed.
 
 {HISTORICAL_IN_PROGRESS_HEADING}
-{active_task}
+Unknown from deterministic fallback. Current work is defined by the protected retained tail.
 
 ## Blocked
 {bullets(blockers, limit=5)}
@@ -1449,13 +1558,13 @@ None recoverable from deterministic fallback.
 None recoverable from deterministic fallback.
 
 {HISTORICAL_PENDING_ASKS_HEADING}
-{active_task}
+None inferred. Historical asks are not automatically outstanding.
 
 ## Relevant Files
 {bullets(relevant_files, limit=12)}
 
 {HISTORICAL_REMAINING_WORK_HEADING}
-Continue from the most recent unfulfilled user ask and protected tail messages. Inspect relevant state only when needed for that ask.
+{retained_focus}
 
 ## Last Dropped Turns
 {bullets(last_dropped_turns, limit=8)}
@@ -1489,6 +1598,35 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         summarizer = summarizer or self._summarizer
         before = estimate_tokens(messages)
         self._last_noop_reason = None
+        if force and self._summary_failure_cooldown_until > 0.0:
+            self._clear_summary_failure_cooldown()
+        elif not force and self._summary_failure_in_cooldown():
+            self._last_noop_reason = "cooldown"
+            return CompressionResult(
+                messages=messages,
+                compressed=False,
+                savings_pct=0.0,
+                tokens_before=before,
+            )
+        existing_summary_index, _existing_summary = self._find_previous_summary(messages)
+        if (
+            existing_summary_index >= 0
+            and not summary_only
+            and not focus_topic
+            and getattr(
+                messages[existing_summary_index],
+                "_compressed_context_message_count",
+                None,
+            )
+            == len(messages)
+        ):
+            self._last_noop_reason = "protected_recent_context"
+            return CompressionResult(
+                messages=messages,
+                compressed=False,
+                savings_pct=0.0,
+                tokens_before=before,
+            )
         self._last_summary_error = None
         self._last_summary_dropped_count = 0
         self._last_summary_fallback_used = False
@@ -1499,9 +1637,6 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         self._last_summary_model_used = None
         self._last_summary_model_fallback_used = False
         self._summary_model_fallen_back = False
-        if force and self._summary_failure_cooldown_until > 0.0:
-            self._summary_failure_cooldown_until = 0.0
-
         pruned = self.prune_old_tool_results(messages)
         # Lossy pruning is input preparation for the summarizer only. Any head
         # or tail retained for provider replay must come from the raw transcript;
@@ -1538,11 +1673,30 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             head_end, tail_start = emergency_window
 
         middle = pruned[head_end:tail_start]
-        summary_index, summary_body = self._find_latest_context_summary(pruned, 0, tail_start)
+        summary_index, summary_body = self._find_latest_context_summary(
+            pruned,
+            0,
+            min(len(pruned), tail_start + 1),
+        )
         if summary_index is not None:
             if summary_body and not self._previous_summary:
                 self._previous_summary = summary_body
             middle = pruned[max(head_end, summary_index + 1):tail_start]
+            retained_tail = self._retained_tail_after_summary(
+                _message_text(pruned[summary_index])
+            )
+            if (
+                retained_tail
+                and head_end <= summary_index
+                and summary_index + 1 < tail_start
+            ):
+                middle.insert(
+                    0,
+                    self._message_with_replacement_text(
+                        pruned[summary_index],
+                        retained_tail,
+                    ),
+                )
             if not middle:
                 self.last_compression_savings_pct = 0.0
                 self._ineffective_compression_count += 1
@@ -1558,7 +1712,7 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
                 self._last_summary_auth_failure = True
             if _is_summary_network_failure(exc):
                 self._last_summary_network_failure = True
-            self._summary_failure_cooldown_until = self._clock() + _SUMMARY_FAILURE_COOLDOWN_SECONDS
+            self._arm_summary_failure_cooldown(self._last_summary_error)
             summary_text = None
         if summary_text is None:
             if (
@@ -1582,14 +1736,40 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
                 )
             self._last_summary_dropped_count = len(middle)
             self._last_summary_fallback_used = True
+            recent_user_focus = next(
+                (
+                    _sanitize_summary_source_text(_message_text(message)).strip()
+                    for message in reversed(messages[tail_start:])
+                    if getattr(message, "role", None) == "user"
+                    and not self._is_context_summary_message(message)
+                    and _message_text(message).strip()
+                ),
+                None,
+            )
             summary_text = _redact_sensitive_text(
-                self._static_fallback_summary(middle, reason=self._last_summary_error)
+                self._static_fallback_summary(
+                    middle,
+                    reason=self._last_summary_error,
+                    recent_user_focus=(
+                        f"Newest retained user focus: {recent_user_focus}"
+                        if recent_user_focus
+                        else None
+                    ),
+                )
             )
         read_files, modified_files = self._file_operations_for_summary(middle)
         formatted_file_operations = _format_file_operations(read_files, modified_files)
         if formatted_file_operations:
             summary_text = _strip_file_operation_tags(summary_text) + formatted_file_operations
         details: dict[str, object] = {"readFiles": read_files, "modifiedFiles": modified_files}
+        if self._last_summary_error or self._last_summary_fallback_used:
+            details.update(
+                {
+                    "summaryCooldownUntil": self._summary_failure_cooldown_until_wall,
+                    "lastSummaryError": self._last_summary_error,
+                    "summaryFallback": self._last_summary_fallback_used,
+                }
+            )
         result = self._assemble_compressed_messages(
             messages,
             head_end,
@@ -1598,6 +1778,10 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         )
         result = self._sanitize_tool_pairs(result)
         result = self._strip_historical_media(result)
+        for message in result:
+            if self._is_context_summary_message(message):
+                setattr(message, "_compressed_context_message_count", len(result))
+                break
 
         after = estimate_tokens(result)
         savings = _savings(before, after)

@@ -274,6 +274,58 @@ class SessionStore:
                 label = value if value else None
         return label
 
+    def session_tree(self) -> list[dict[str, Any]]:
+        """Return the complete session tree in stable depth-first order."""
+
+        entries = self.entries
+        known_ids = {
+            str(entry["id"])
+            for entry in entries
+            if isinstance(entry.get("id"), str) and entry.get("id")
+        }
+        children: dict[str | None, list[dict[str, Any]]] = {}
+        for entry in entries:
+            entry_id = entry.get("id")
+            if not isinstance(entry_id, str) or not entry_id:
+                continue
+            parent_id = entry.get("parentId")
+            if not isinstance(parent_id, str) or parent_id not in known_ids:
+                parent_id = None
+            children.setdefault(parent_id, []).append(entry)
+
+        active_ids = {str(entry["id"]) for entry in self.get_branch()}
+        nodes: list[dict[str, Any]] = []
+        visited: set[str] = set()
+
+        def visit(entry: dict[str, Any], depth: int) -> None:
+            entry_id = str(entry["id"])
+            if entry_id in visited:
+                return
+            visited.add(entry_id)
+            nodes.append(
+                {
+                    "id": entry_id,
+                    "parentId": entry.get("parentId"),
+                    "type": str(entry.get("type") or "unknown"),
+                    "depth": depth,
+                    "active": entry_id == self.leaf_id,
+                    "inActiveBranch": entry_id in active_ids,
+                    "label": self.get_label(entry_id),
+                    "summary": _tree_entry_summary(entry),
+                    "entry": entry,
+                }
+            )
+            for child in children.get(entry_id, []):
+                visit(child, depth + 1)
+
+        for root in children.get(None, []):
+            visit(root, 0)
+        for entry in entries:
+            entry_id = entry.get("id")
+            if isinstance(entry_id, str) and entry_id not in visited:
+                visit(entry, 0)
+        return nodes
+
 
     def append_message(self, message: AgentMessage) -> str:
         return self._append_entry({"type": "message", "message": serialize_message(message)}, durable=True)
@@ -402,10 +454,44 @@ class SessionStore:
         copied_entries: list[dict[str, Any]] = []
         parent_id: str | None = None
         for entry in branch_entries:
+            if entry.get("type") == "label":
+                continue
             copied = json.loads(json.dumps(entry))
             copied["parentId"] = parent_id
             copied_entries.append(copied)
             parent_id = copied["id"]
+
+        resolved_labels: dict[str, dict[str, Any]] = {}
+        for entry in self.file_entries:
+            if entry.get("type") != "label" or not isinstance(entry.get("targetId"), str):
+                continue
+            target_id = str(entry["targetId"])
+            if entry.get("label"):
+                resolved_labels[target_id] = entry
+            else:
+                resolved_labels.pop(target_id, None)
+
+        retained_ids = {str(entry["id"]) for entry in copied_entries}
+        for entry in list(copied_entries):
+            target_id = str(entry["id"])
+            source_label = resolved_labels.get(target_id)
+            if source_label is None:
+                continue
+            label_id = uuid.uuid4().hex
+            while label_id in retained_ids:
+                label_id = uuid.uuid4().hex
+            retained_ids.add(label_id)
+            copied_entries.append(
+                {
+                    "type": "label",
+                    "id": label_id,
+                    "parentId": parent_id,
+                    "timestamp": source_label.get("timestamp") or _timestamp(),
+                    "targetId": target_id,
+                    "label": source_label.get("label"),
+                }
+            )
+            parent_id = label_id
 
         payload = "".join(
             json.dumps(entry, separators=(",", ":")) + "\n" for entry in [header, *copied_entries]
@@ -597,6 +683,55 @@ def _atomic_write(path: Path, payload: bytes) -> None:
 
 def _record_payload(entry: dict[str, Any]) -> bytes:
     return (json.dumps(entry, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def _tree_entry_summary(entry: dict[str, Any], limit: int = 120) -> str:
+    entry_type = str(entry.get("type") or "unknown")
+    if entry_type == "message":
+        message = entry.get("message")
+        if isinstance(message, dict):
+            role = str(message.get("role") or "message")
+            text = serialized_content_text(message.get("content"))
+            return _bounded_tree_text(f"{role}: {text}" if text else role, limit)
+    if entry_type == "custom_message":
+        custom_type = str(entry.get("customType") or "custom")
+        text = serialized_content_text(entry.get("content"))
+        return _bounded_tree_text(f"{custom_type}: {text}" if text else custom_type, limit)
+    if entry_type == "model_change":
+        return _bounded_tree_text(
+            f"model: {entry.get('provider', '')}/{entry.get('modelId', '')}",
+            limit,
+        )
+    if entry_type == "thinking_level_change":
+        return _bounded_tree_text(f"thinking: {entry.get('thinkingLevel', '')}", limit)
+    if entry_type == "session_info":
+        return _bounded_tree_text(f"session: {entry.get('name') or '(unnamed)'}", limit)
+    if entry_type == "label":
+        return _bounded_tree_text(f"label: {entry.get('label') or '(cleared)'}", limit)
+    if entry_type in {"compaction", "branch_summary"}:
+        return _bounded_tree_text(f"{entry_type}: {entry.get('summary') or ''}", limit)
+    if entry_type == "custom":
+        return _bounded_tree_text(f"custom: {entry.get('customType') or ''}", limit)
+    return _bounded_tree_text(entry_type, limit)
+
+
+def serialized_content_text(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str):
+            parts.append(block["text"])
+    return "".join(parts)
+
+
+def _bounded_tree_text(text: str, limit: int) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: max(0, limit - 3)].rstrip() + "..."
 
 
 def _disk_signature(path: Path) -> tuple[int, int]:

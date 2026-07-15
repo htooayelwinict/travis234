@@ -180,6 +180,17 @@ class InteractiveTurnController:
             return
         usage = self.app.session.get_context_usage()
         confidence = usage.get("confidence") if isinstance(usage, dict) else None
+        system_tokens = usage.get("systemTokens", 0) if isinstance(usage, dict) else 0
+        tool_tokens = usage.get("toolTokens", 0) if isinstance(usage, dict) else 0
+        message_tokens = usage.get("messageTokens", 0) if isinstance(usage, dict) else 0
+        component_total = int(system_tokens or 0) + int(tool_tokens or 0) + int(message_tokens or 0)
+        if component_total != self.footer.context_tokens:
+            message_tokens = max(
+                0,
+                self.footer.context_tokens - int(system_tokens or 0) - int(tool_tokens or 0),
+            )
+        if confidence is None:
+            confidence = "estimated_full_request"
         self.app.event_trace.write(
             "turn_ready",
             {
@@ -188,7 +199,10 @@ class InteractiveTurnController:
                 "context_window": self.footer.context_window,
                 "context_percent": self.footer.context_percent,
                 "context_estimated": self.footer.context_estimate_rough,
-                "context_confidence": str(confidence) if confidence else "unknown",
+                "context_confidence": str(confidence),
+                "context_system_tokens": int(system_tokens or 0),
+                "context_tool_tokens": int(tool_tokens or 0),
+                "context_message_tokens": int(message_tokens or 0),
                 "compression_count": self.footer.compression_count,
             },
         )

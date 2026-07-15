@@ -7,6 +7,7 @@ import json
 import os
 import queue
 import signal as signal_module
+import shlex
 import subprocess
 import threading
 import time
@@ -57,6 +58,23 @@ class _ExtensionShortcutUI:
 
     def show_error(self, message: str) -> None:
         self._mode.history.add(Text(f"error: {message}"))
+
+    def set_theme(self, name: str) -> dict[str, object]:
+        try:
+            self._mode.theme_registry.select(str(name))
+        except ValueError as error:
+            return {"success": False, "error": str(error)}
+        settings = getattr(self._mode.app.session, "settings_manager", None)
+        persist = getattr(settings, "set_theme", None) or getattr(settings, "setTheme", None)
+        if callable(persist):
+            persist(str(name))
+        self._mode.tui.request_render()
+        return {"success": True}
+
+    def __getattr__(self, name: str) -> object:
+        if name == "setTheme":  # Pi extension API spelling.
+            return self.set_theme
+        raise AttributeError(name)
 
 
     def set_status(self, key: str, text: str | None) -> None:
@@ -320,16 +338,131 @@ class InteractiveExtensions:
             self._refresh_footer()
             self.tui.request_render()
             return
-        errors = self.app.session.resource_loader.get_extensions().get("errors", [])
-        if errors:
-            self.history.add(StatusLine(f"Extensions reloaded with {len(errors)} error(s)", kind="error"))
-            for error in errors:
-                self.history.add(Text(f"{error.get('path', '<extension>')}: {error.get('error', 'unknown error')}"))
-        else:
-            self.history.add(StatusLine("Extensions reloaded", kind="success"))
+        loader = self.app.session.resource_loader
+        theme_fallback = self.theme_registry.reload(
+            [theme for theme in loader.get_themes()["themes"] if hasattr(theme, "name")]
+        )
+        if theme_fallback:
+            self.history.add(StatusLine(theme_fallback, kind="warning"))
+
+        extension_errors = list(loader.get_extensions().get("errors", []))
+        diagnostics_by_kind = {
+            "skills": list(loader.get_skills().get("diagnostics", [])),
+            "prompts": list(loader.get_prompts().get("diagnostics", [])),
+            "themes": list(loader.get_themes().get("diagnostics", [])),
+        }
+        counts = {
+            "extensions": len(extension_errors),
+            **{kind: len(diagnostics) for kind, diagnostics in diagnostics_by_kind.items()},
+        }
+        total_diagnostics = sum(counts.values())
+        status_kind = "warning" if total_diagnostics else "success"
+        self.history.add(
+            StatusLine(
+                "Extensions reloaded "
+                f"(extensions: {counts['extensions']}; skills: {counts['skills']}; "
+                f"prompts: {counts['prompts']}; themes: {counts['themes']})",
+                kind=status_kind,
+            )
+        )
+        for error in extension_errors:
+            self.history.add(Text(f"extension: {error.get('path', '<extension>')}: {error.get('error', 'unknown error')}"))
+        for kind, diagnostics in diagnostics_by_kind.items():
+            for diagnostic in diagnostics:
+                self.history.add(
+                    Text(
+                        f"{kind[:-1]}: {getattr(diagnostic, 'path', '<resource>')}: "
+                        f"{getattr(diagnostic, 'message', 'unknown diagnostic')}"
+                    )
+                )
         self.status.set_message("Idle")
         self._refresh_footer()
         self.tui.request_render()
+
+    def _run_package_command(self, prompt: str) -> bool:
+        try:
+            parts = shlex.split(prompt)
+        except ValueError as error:
+            self.history.add(StatusLine(f"Invalid package command: {error}", kind="error"))
+            return True
+        if not parts or parts[0] not in {"/install", "/remove", "/update", "/packages"}:
+            return False
+        action = parts[0][1:]
+        local = "--local" in parts[1:]
+        arguments = [part for part in parts[1:] if part != "--local"]
+        scope = "project" if local else "global"
+        manager = self.app.session.resource_loader.package_manager
+
+        if action == "packages":
+            if arguments:
+                self.history.add(StatusLine("Usage: /packages [--local]", kind="error"))
+                return True
+            installed = manager.list_installed(scope=scope)
+            if not installed:
+                self.history.add(StatusLine(f"No {scope} packages installed.", kind="warning"))
+            else:
+                self.history.add(StatusLine(f"Installed {scope} packages", kind="success"))
+                for item in installed:
+                    version = f" ({item.version})" if item.version else ""
+                    self.history.add(Text(f"{item.source.raw}{version}: {item.install_path}"))
+            self.tui.request_render()
+            return True
+
+        if action in {"install", "remove"} and len(arguments) != 1:
+            self.history.add(StatusLine(f"Usage: /{action} <source> [--local]", kind="error"))
+            return True
+        if action == "update" and len(arguments) > 1:
+            self.history.add(StatusLine("Usage: /update [source] [--local]", kind="error"))
+            return True
+        source = arguments[0] if arguments else None
+        title = f"{action.capitalize()} package"
+        target = source or f"all {scope} packages"
+        if not self.prompt_extension_confirm(title, f"{action.capitalize()} {target}?"):
+            self.history.add(StatusLine(f"Package {action} cancelled.", kind="warning"))
+            self.tui.request_render()
+            return True
+
+        self.status.set_message(f"{action.capitalize()}ing package")
+        self._refresh_footer()
+        self.tui.request_render()
+        try:
+            if action == "install":
+                result = self._run_session_command(
+                    "package-install",
+                    lambda: manager.install(source, scope=scope),
+                )
+                self.history.add(StatusLine(f"Installed package: {result.source.raw}", kind="success"))
+                changed = True
+            elif action == "remove":
+                changed = self._run_session_command(
+                    "package-remove",
+                    lambda: manager.remove(source, scope=scope),
+                )
+                if not changed:
+                    raise KeyError(f"Installed package not found: {source}")
+                self.history.add(StatusLine(f"Removed package: {source}", kind="success"))
+            else:
+                results = self._run_session_command(
+                    "package-update",
+                    lambda: manager.update(source, scope=scope),
+                )
+                changed = bool(results)
+                suffix = "" if len(results) == 1 else "s"
+                self.history.add(StatusLine(f"Updated {len(results)} package{suffix}.", kind="success"))
+        except Exception as error:  # noqa: BLE001 - package errors render without ending the TUI.
+            detail = error.args[0] if isinstance(error, KeyError) and error.args else str(error)
+            self.history.add(StatusLine(f"Package {action} failed: {detail}", kind="error"))
+            self.status.set_message("Idle")
+            self._refresh_footer()
+            self.tui.request_render()
+            return True
+        if changed:
+            self._run_reload_command()
+        else:
+            self.status.set_message("Idle")
+            self._refresh_footer()
+            self.tui.request_render()
+        return True
 
     def _dispatch_extension_shortcut(self, prompt: str) -> bool:
         if not prompt:

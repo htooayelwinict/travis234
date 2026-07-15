@@ -14,8 +14,9 @@ from pathlib import Path
 from typing import Any, Callable, Literal, Mapping, Optional
 
 from travis.ai.model_resolver import ScopedModel
+from travis.ai.context_estimate import calculate_prompt_tokens, estimate_context_tokens
 from travis.ai.overflow import is_context_overflow, parse_available_output_tokens_from_error
-from travis.ai.types import Context, Model, SimpleStreamOptions, TextContent, UserMessage, now_ms
+from travis.ai.types import Context, Model, SimpleStreamOptions, TextContent, Tool, UserMessage, now_ms
 from travis.ai.types import AssistantMessage
 from travis.coding_agent.agent_session import AgentSession
 from travis.coding_agent.message_utils import last_assistant_message as _last_assistant_message
@@ -31,10 +32,13 @@ from travis.coding_agent.processes.completions import ProcessCompletionStore
 from travis.coding_agent.processes.local import create_local_process_transport
 from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import ProcessLaunchRequest, ProcessOwner
+from travis.coding_agent.project_trust import ProjectTrustContext
+from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.tools.bash import get_shell_env
 from travis.coding_agent.session_catalog import SessionCatalog
 from travis.coding_agent.session_store import SessionStore
 from travis.compaction.compressor import ContextCompressor, estimate_tokens
+from travis.compaction.policy import CompactionPolicyInput
 from travis.compaction.timing import CompactionManager
 from travis.tui.interactive import InteractiveRenderer
 from travis.tui.terminal import ProcessTerminal, Terminal
@@ -98,10 +102,19 @@ class CodingApp:
         scoped_models: list[ScopedModel] | None = None,
         enable_tui: bool = True,
         settings_manager: object | None = None,
+        project_trust_override: bool | None = None,
+        project_trust_context: ProjectTrustContext | None = None,
         session_path: str | None = None,
         session_id: str | None = None,
         agent_dir: str | None = None,
         model_registry: ModelRegistry | None = None,
+        allowed_tool_names: list[str] | None = None,
+        excluded_tool_names: list[str] | None = None,
+        additional_extension_paths: list[str] | None = None,
+        additional_skill_paths: list[str] | None = None,
+        additional_prompt_template_paths: list[str] | None = None,
+        additional_theme_paths: list[str] | None = None,
+        offline: bool = False,
         event_trace=None,
         conversation_log=None,
     ) -> None:
@@ -113,10 +126,22 @@ class CodingApp:
             AuthStorage.create(Path(self._agent_dir) / "auth.json"),
             Path(self._agent_dir) / "models.json",
         )
+        self.model_registry.set_offline(offline)
         self.model_registry.ensure_model(model)
         if compression_model is not None:
             self.model_registry.ensure_model(compression_model)
         self._settings_manager = settings_manager or SettingsManager.in_memory()
+        self._project_trust_override = project_trust_override
+        self._project_trust_context = project_trust_context or ProjectTrustContext(False, None)
+        self._allowed_tool_names = (
+            list(allowed_tool_names) if allowed_tool_names is not None else None
+        )
+        self._excluded_tool_names = list(excluded_tool_names or [])
+        self._additional_extension_paths = list(additional_extension_paths or [])
+        self._additional_skill_paths = list(additional_skill_paths or [])
+        self._additional_prompt_template_paths = list(additional_prompt_template_paths or [])
+        self._additional_theme_paths = list(additional_theme_paths or [])
+        self._offline = bool(offline)
         if thinking_level != "off":
             set_default_thinking_level = getattr(
                 self._settings_manager,
@@ -217,13 +242,33 @@ class CodingApp:
             session_path
             and (not Path(session_path).exists() or Path(session_path).stat().st_size == 0)
         )
+        resource_loader = DefaultResourceLoader(
+            cwd=resolved_cwd,
+            agent_dir=self._agent_dir,
+            settings_manager=self._settings_manager,
+            project_trusted=self._project_trust_override,
+            additional_extension_paths=self._additional_extension_paths,
+            additional_skill_paths=self._additional_skill_paths,
+            additional_prompt_template_paths=self._additional_prompt_template_paths,
+            additional_theme_paths=self._additional_theme_paths,
+            offline=self._offline,
+        )
+        resource_loader.reload({"projectTrustContext": self._project_trust_context})
         session = AgentSession(
             cwd=resolved_cwd,
             model=model,
             transform_context=self._transform_context,
             thinking_level=thinking_level,
             scoped_models=self._scoped_models,
+            active_tool_names=(
+                list(self._allowed_tool_names)
+                if self._allowed_tool_names is not None
+                else None
+            ),
+            allowed_tool_names=self._allowed_tool_names,
+            excluded_tool_names=self._excluded_tool_names,
             settings_manager=self._settings_manager,
+            resource_loader=resource_loader,
             retry_enabled=retry_enabled,
             max_retries=max_retries,
             retry_delay_ms=retry_delay_ms,
@@ -261,15 +306,17 @@ class CodingApp:
         return restored or fallback
 
     def _configure_session_components(self) -> None:
-        resolved_context_length, threshold_percent = _resolve_compaction_window(
+        compaction_policy = _resolve_compaction_policy(
             self.session.model,
-            self.session,
             explicit_context_length=self._context_length,
+            summarizer_model=self._compression_model,
         )
         self.compressor = ContextCompressor(
-            context_length=resolved_context_length,
-            threshold_percent=threshold_percent,
-            max_tokens=self.session.model.max_tokens,
+            context_length=compaction_policy.context_window,
+            threshold_percent=compaction_policy.threshold_ratio,
+            max_tokens=compaction_policy.max_output_tokens,
+            summarizer_context_window=compaction_policy.summarizer_context_window,
+            summarizer_max_tokens=compaction_policy.summarizer_max_output_tokens,
             summarizer=self._summarizer,
             summary_summarizer=self._compression_summarizer,
             model=_model_route(self.session.model),
@@ -302,16 +349,18 @@ class CodingApp:
         self._configure_session_components()
 
     def _handle_session_model_changed(self, _previous_model: Model, model: Model) -> None:
-        resolved_context_length, threshold_percent = _resolve_compaction_window(
+        compaction_policy = _resolve_compaction_policy(
             model,
-            self.session,
             explicit_context_length=self._context_length,
+            summarizer_model=self._compression_model,
         )
         self.compressor.update_context_window(
-            resolved_context_length,
-            threshold_percent=threshold_percent,
-            max_tokens=model.max_tokens,
+            compaction_policy.context_window,
+            threshold_percent=compaction_policy.threshold_ratio,
+            max_tokens=compaction_policy.max_output_tokens,
             model=_model_route(model),
+            summarizer_context_window=compaction_policy.summarizer_context_window,
+            summarizer_max_tokens=compaction_policy.summarizer_max_output_tokens,
         )
         self.compaction.deep_baseline_tokens = _estimate_static_prompt_tool_tokens(self.session)
 
@@ -367,6 +416,27 @@ class CodingApp:
 
     def new_session(self) -> dict[str, bool]:
         return self.session_runtime.new_session()
+
+    def rename_session(self, name: str | None) -> None:
+        self.session.rename_session(name)
+
+    def fork_session(self, entry_id: str, *, position: str = "before") -> dict[str, object]:
+        return self.session_runtime.fork(entry_id, {"position": position})
+
+    def clone_session(self) -> dict[str, object]:
+        return self.session_runtime.clone()
+
+    def session_tree(self) -> list[dict]:
+        return self.session.session_tree()
+
+    def navigate_session_tree(self, target_id: str, options: dict | None = None) -> dict:
+        return self.session.navigate_tree(target_id, options)
+
+    def import_session(self, input_path: str, *, cwd_override: str | None = None) -> dict[str, bool]:
+        return self.session_runtime.import_from_jsonl(input_path, cwd_override)
+
+    def export_session_jsonl(self, output_path: str | None = None) -> str:
+        return self.session.export_to_jsonl(output_path)
 
     def process_owner(self, origin: Literal["agent", "user"] = "agent") -> ProcessOwner:
         return self._process_owner_for(self.cwd, origin=origin)
@@ -452,6 +522,7 @@ class CodingApp:
         prompt: str,
         stream_fn=None,
         on_post_response_compaction_start: Callable[[], object] | None = None,
+        image_paths: list[str] | tuple[str, ...] | None = None,
     ):
         turn_id = uuid.uuid4().hex[:12]
         started = time.monotonic()
@@ -469,7 +540,11 @@ class CodingApp:
                 return []
             self._compact_failed_turn_context()
             before_prompt_compressions = self.compaction.compressor.compression_count
-            new_messages = self.session.prompt(prompt, stream_fn=stream_fn)
+            new_messages = self.session.prompt(
+                prompt,
+                stream_fn=stream_fn,
+                image_paths=image_paths,
+            )
             if self._recover_output_cap(stream_fn=stream_fn):
                 return new_messages
             if self._recover_context_overflow(stream_fn=stream_fn):
@@ -721,9 +796,7 @@ def _assistant_log_text(messages) -> str | None:
 
 
 def _assistant_prompt_tokens(message: AssistantMessage) -> int:
-    return message.usage.total_tokens or (
-        message.usage.input + message.usage.output + message.usage.cache_read + message.usage.cache_write
-    )
+    return calculate_prompt_tokens(message.usage)
 
 
 def _safe_eval_tool_metadata(tool_name: str, args: object) -> dict[str, str]:
@@ -752,28 +825,39 @@ def _safe_eval_tool_metadata(tool_name: str, args: object) -> dict[str, str]:
     return {}
 
 
-def _resolve_compaction_window(
+def _resolve_compaction_policy(
     model: Model,
-    _session: AgentSession,
     *,
     explicit_context_length: int | None,
-) -> tuple[int, float]:
+    summarizer_model: Model | None,
+) -> CompactionPolicyInput:
     context_length = (
         explicit_context_length
         if explicit_context_length is not None
         else int(model.context_window or 0) or DEFAULT_CONTEXT_LENGTH
     )
-    return context_length, 0.5
+    return CompactionPolicyInput(
+        context_window=context_length,
+        max_output_tokens=int(model.max_tokens or 0),
+        model_id=_model_route(model),
+        summarizer_context_window=(
+            int(summarizer_model.context_window or 0) or None
+            if summarizer_model is not None
+            else None
+        ),
+        summarizer_max_output_tokens=(
+            int(summarizer_model.max_tokens or 0)
+            if summarizer_model is not None
+            else 0
+        ),
+    )
 
 
 def _estimate_static_prompt_tool_tokens(session: AgentSession) -> int:
-    system_prompt = session.system_prompt or ""
-    tools = []
-    for tool in session.agent.state.tools:
-        tools.append({
-            "name": tool.name,
-            "description": tool.description,
-            "parameters": tool.parameters,
-        })
-    payload = system_prompt + json.dumps(tools, sort_keys=True)
-    return len(payload) // 4
+    tools = [
+        Tool(name=tool.name, description=tool.description, parameters=tool.parameters)
+        for tool in session.agent.state.tools
+    ]
+    return estimate_context_tokens(
+        Context(system_prompt=session.system_prompt or "", messages=[], tools=tools)
+    ).tokens

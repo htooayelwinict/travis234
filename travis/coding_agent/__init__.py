@@ -7,11 +7,13 @@ from travis.coding_agent.agent_session import (
     ExtensionCommandContext,
     default_convert_to_llm,
 )
+from travis.coding_agent.agent_harness import AgentHarness, AgentHarnessConfig
 from travis.coding_agent.agent_session_runtime import (
     AgentSessionRuntime,
     AgentSessionRuntimeDiagnostic,
     CreateAgentSessionRuntimeFactory,
     CreateAgentSessionRuntimeResult,
+    InvalidSessionImportError,
     MissingSessionCwdError,
     SessionCwdIssue,
     SessionImportFileNotFoundError,
@@ -91,11 +93,24 @@ from travis.coding_agent.extensions import (
 )
 from travis.coding_agent.model_registry import ModelRegistry
 from travis.coding_agent.mailbox import CodingTurnMailbox, MailboxKind, QueuedCodingMessage
-from travis.coding_agent.resource_loader import (
+from travis.coding_agent.package_manager import (
     DefaultPackageManager,
-    DefaultResourceLoader,
+    InstalledPackage,
+    PackageDiagnostic,
+    PackageSource,
     ResolvedPaths,
     ResolvedResource,
+    parse_package_source,
+    sanitized_package_environment,
+)
+from travis.coding_agent.project_trust import ProjectTrustStore
+from travis.coding_agent.prompt_templates import (
+    PromptTemplate,
+    expand_prompt_template,
+    load_prompt_templates,
+)
+from travis.coding_agent.resource_loader import (
+    DefaultResourceLoader,
     ResourceDiagnostic,
     Skill,
     format_skills_for_prompt,
@@ -110,6 +125,7 @@ from travis.coding_agent.source_info import (
     create_synthetic_source_info,
 )
 from travis.coding_agent.system_prompt import BuildSystemPromptOptions, build_system_prompt
+from travis.coding_agent.themes import Theme, ThemeRegistry
 from travis.coding_agent.tools import (
     DEFAULT_MAX_BYTES,
     DEFAULT_MAX_LINES,
@@ -153,6 +169,8 @@ from travis.coding_agent.tools import (
 __all__ = [
     "AgentSession",
     "AgentSessionRuntime",
+    "AgentHarness",
+    "AgentHarnessConfig",
     "AgentSessionRuntimeDiagnostic",
     "APP_NAME",
     "APP_TITLE",
@@ -195,17 +213,25 @@ __all__ = [
     "SubagentStatus",
     "SubagentSupervisor",
     "SubagentTask",
+    "Theme",
+    "ThemeRegistry",
     "TruncationResult",
     "FileAuthStorageBackend",
     "FileSettingsStorage",
     "InMemoryAuthStorageBackend",
     "InMemorySettingsStorage",
+    "InvalidSessionImportError",
+    "InstalledPackage",
     "ModelRegistry",
     "CodingTurnMailbox",
     "MailboxKind",
     "QueuedCodingMessage",
     "MissingSessionCwdError",
     "PACKAGE_NAME",
+    "PackageDiagnostic",
+    "PackageSource",
+    "PromptTemplate",
+    "ProjectTrustStore",
     "SettingsManager",
     "SessionCwdIssue",
     "all_tool_names",
@@ -232,6 +258,7 @@ __all__ = [
     "define_tool",
     "emit_session_shutdown_event",
     "execute_bash_with_operations",
+    "expand_prompt_template",
     "expand_tilde_path",
     "format_missing_session_cwd_error",
     "format_missing_session_cwd_prompt",
@@ -259,9 +286,12 @@ __all__ = [
     "is_tool_call_event_type",
     "is_write_tool_result",
     "load_project_context_files",
+    "load_prompt_templates",
     "load_skills",
     "load_skills_from_dir",
     "parse_codex_jsonl",
+    "parse_package_source",
+    "sanitized_package_environment",
     "truncate_head",
     "truncate_line",
     "truncate_tail",

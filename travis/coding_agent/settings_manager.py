@@ -136,13 +136,14 @@ class SettingsManager:
         initial_global: dict | None = None,
         initial_project: dict | None = None,
         *,
-        project_trusted: bool = True,
+        project_trusted: bool | None = None,
         initial_errors: list[SettingsError] | None = None,
     ) -> None:
         self.storage = storage
         self.global_settings = copy.deepcopy(initial_global or {})
         self.project_settings = copy.deepcopy(initial_project or {})
-        self.project_trusted = project_trusted
+        self.project_trusted = bool(project_trusted) if project_trusted is not None else False
+        self.project_trust_resolved = project_trusted is not None
         self.errors: list[SettingsError] = list(initial_errors or [])
         self.settings = _deep_merge_settings(self.global_settings, self.project_settings)
 
@@ -158,7 +159,8 @@ class SettingsManager:
 
     @classmethod
     def from_storage(cls, storage: SettingsStorage, options: dict | None = None) -> "SettingsManager":
-        project_trusted = (options or {}).get("projectTrusted", True)
+        resolved_options = options or {}
+        project_trusted = resolved_options.get("projectTrusted") if "projectTrusted" in resolved_options else None
         global_settings, global_error = cls._try_load_from_storage(storage, "global")
         project_settings, project_error = cls._try_load_from_storage(storage, "project", project_trusted)
         errors: list[SettingsError] = []
@@ -251,6 +253,7 @@ class SettingsManager:
 
 
     def set_project_trusted(self, trusted: bool) -> None:
+        self.project_trust_resolved = True
         if self.project_trusted == trusted:
             return
         self.project_trusted = trusted

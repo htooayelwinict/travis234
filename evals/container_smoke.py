@@ -32,10 +32,40 @@ def run_container_smoke(image: str) -> None:
     with tempfile.TemporaryDirectory(prefix="travis-container-smoke-") as temporary:
         workspace = Path(temporary)
         prepare_npm_workspace(workspace)
+        mounted = f"{workspace}:/workspace"
+        installed_modes = _run_mounted_python(
+            image,
+            Path(__file__).with_name("installed_modes_smoke.py"),
+            mounted,
+            ["--workspace", "/workspace/installed-modes"],
+        )
+        if set(json.loads(installed_modes).values()) != {"installed smoke"}:
+            raise RuntimeError("container print/JSON/RPC smoke results differ")
+        untrusted = _run_mounted_python(
+            image,
+            Path(__file__).with_name("untrusted_repository_smoke.py"),
+            mounted,
+            ["--workspace", "/workspace/untrusted"],
+        )
+        untrusted_result = json.loads(untrusted)
+        if (
+            untrusted_result.get("extension_executed") is not False
+            or untrusted_result.get("global_extension_loaded") is not True
+            or untrusted_result.get("session_completed") is not True
+        ):
+            raise RuntimeError(f"container trust smoke failed: {untrusted_result}")
+        qualification = _run_mounted_python(
+            image,
+            Path(__file__).with_name("container_qualification.py"),
+            mounted,
+            ["--workspace", "/workspace/qualification", "--require-container"],
+        )
+        if json.loads(qualification).get("passed") is not True:
+            raise RuntimeError("container runtime qualification did not pass")
         _run(
             [
                 "docker", "run", "--rm", "--entrypoint", "sh",
-                "-v", f"{workspace}:/workspace", "-w", "/workspace", image,
+                "-v", mounted, "-w", "/workspace", image,
                 "-lc",
                 (
                     "npm install --ignore-scripts --no-audit --no-fund is-number; "
@@ -61,6 +91,33 @@ def run_container_smoke(image: str) -> None:
         "raise SystemExit(InteractiveMode(a,input_fn=lambda p:next(i)).run())"
     )
     _run(["docker", "run", "--rm", "--entrypoint", "python", image, "-c", script])
+
+
+def _run_mounted_python(
+    image: str,
+    script: Path,
+    workspace_mount: str,
+    arguments: list[str],
+) -> str:
+    if not script.is_file():
+        raise RuntimeError(f"container smoke helper is missing: {script}")
+    container_script = f"/tmp/{script.name}"
+    return _run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--entrypoint",
+            "python",
+            "-v",
+            workspace_mount,
+            "-v",
+            f"{script.resolve()}:{container_script}:ro",
+            image,
+            container_script,
+            *arguments,
+        ]
+    )
 
 
 def prepare_npm_workspace(workspace: Path) -> None:

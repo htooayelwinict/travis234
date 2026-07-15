@@ -145,6 +145,35 @@ def test_session_resume_smoke_uses_two_processes_and_one_jsonl(tmp_path: Path) -
     assert result["first_session_id"] == result["continued_session_id"]
     assert result["jsonl_count"] == 1
     assert result["restored_marker"] == "remember-7f31"
+    assert result["post_compaction_confidence"] == "estimated_after_compaction_full_request"
+    assert result["next_prompt_confidence"] == "provider_real"
+    assert result["pre_compaction_tokens"] > result["post_compaction_tokens"]
+    assert result["next_prompt_tokens"] >= result["post_compaction_tokens"]
+    assert result["follow_up_delta"] < 5_000
+
+
+def test_untrusted_repository_smoke_never_executes_project_resources(tmp_path: Path) -> None:
+    from evals.untrusted_repository_smoke import run_untrusted_repository_smoke
+
+    result = run_untrusted_repository_smoke(tmp_path)
+
+    assert result.exit_code == 0
+    assert result.project_trusted is False
+    assert result.extension_executed is False
+    assert result.global_extension_loaded is True
+    assert result.session_completed is True
+
+
+def test_installed_modes_smoke_exercises_print_json_and_rpc(tmp_path: Path) -> None:
+    from evals.installed_modes_smoke import run_installed_modes_smoke
+
+    result = run_installed_modes_smoke(tmp_path)
+
+    assert result == {
+        "print": "installed smoke",
+        "json": "installed smoke",
+        "rpc": "installed smoke",
+    }
 
 
 def test_fixture_builds_are_deterministic_and_secret_free(tmp_path: Path) -> None:
@@ -649,7 +678,11 @@ def test_continuous_eval_seeds_required_skills_in_the_project_workspace(
     assert (skills / "subagent-delegation/SKILL.md").is_file()
     from travis.coding_agent.resource_loader import DefaultResourceLoader
 
-    loader = DefaultResourceLoader(cwd=str(workspace), agent_dir=str(tmp_path / "agent"))
+    loader = DefaultResourceLoader(
+        cwd=str(workspace),
+        agent_dir=str(tmp_path / "agent"),
+        project_trusted=True,
+    )
     loader.reload()
     assert {skill.name for skill in loader.get_skills()["skills"]} >= {
         "acceptance-audit",

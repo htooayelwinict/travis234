@@ -989,6 +989,57 @@ def test_second_persisted_compaction_receives_previous_summary(tmp_path: Path) -
     assert "summary-1" in prompts[1]
 
 
+def test_persisted_compaction_restores_summary_cooldown_details(tmp_path: Path) -> None:
+    monotonic = {"value": 100.0}
+    wall = {"value": 1_000.0}
+    session_path = tmp_path / "cooldown-session.jsonl"
+    first_compressor = ContextCompressor(
+        context_length=2_000,
+        protect_first_n=1,
+        protect_last_n=1,
+        clock=lambda: monotonic["value"],
+        wall_clock=lambda: wall["value"],
+    )
+    first = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        session_path=str(session_path),
+        compaction_manager=CompactionManager(
+            first_compressor,
+            summarizer=lambda _prompt: (_ for _ in ()).throw(RuntimeError("summary down")),
+        ),
+    )
+    _append_messages(first, _large_messages("cooldown", count=100))
+
+    status = first.compact()
+
+    assert status.compressed is True
+    compaction_entry = next(
+        entry for entry in reversed(first.session_entries) if entry["type"] == "compaction"
+    )
+    assert compaction_entry["details"]["summaryFallback"] is True
+    assert compaction_entry["details"]["lastSummaryError"] == "summary down"
+    assert compaction_entry["details"]["summaryCooldownUntil"] == 1_600.0
+
+    monotonic["value"] = 200.0
+    reloaded_compressor = ContextCompressor(
+        context_length=2_000,
+        protect_first_n=1,
+        protect_last_n=1,
+        clock=lambda: monotonic["value"],
+        wall_clock=lambda: wall["value"],
+    )
+    AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        session_path=str(session_path),
+        compaction_manager=CompactionManager(reloaded_compressor),
+    )
+
+    assert reloaded_compressor._summary_failure_cooldown_until == 800.0
+    assert reloaded_compressor._last_summary_error == "summary down"
+
+
 def test_automatic_preflight_compaction_receives_persisted_summary(tmp_path: Path) -> None:
     prompts: list[str] = []
     session_path = tmp_path / "auto-session.jsonl"

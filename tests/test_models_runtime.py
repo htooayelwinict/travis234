@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import threading
+
+import pytest
 
 from travis.ai.auth import (
     ApiKeyAuth,
@@ -8,6 +11,7 @@ from travis.ai.auth import (
     InMemoryCredentialStore,
     ModelAuth,
     ProviderAuth,
+    ModelsError,
 )
 from travis.ai.event_stream import create_assistant_message_event_stream
 from travis.ai.models import Models, Provider, ProviderStreams
@@ -194,3 +198,45 @@ def test_unknown_provider_is_a_protocol_error_not_a_setup_exception() -> None:
 
     assert response.stop_reason == "error"
     assert response.error_message == "Unknown provider: missing"
+
+
+def test_async_models_refreshes_and_finds_inside_a_running_loop() -> None:
+    calls = 0
+
+    async def refresh():
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0)
+        return [_model()]
+
+    runtime = Models()
+    runtime.set_provider(
+        Provider(
+            id="fixture",
+            auth=_auth(),
+            models=[],
+            api=_streams(),
+            refresh_models=refresh,
+        )
+    )
+
+    async def scenario():
+        refreshed = await runtime.async_api().refresh("fixture")
+        found = await runtime.async_api().find("fixture", "model")
+        return refreshed, found
+
+    refreshed, found = asyncio.run(scenario())
+
+    assert refreshed == (_model(),)
+    assert found == _model()
+    assert calls == 1
+
+
+def test_sync_model_refresh_in_running_loop_points_to_async_api() -> None:
+    runtime = Models()
+
+    async def scenario() -> None:
+        with pytest.raises(ModelsError, match=r"await models\.async_api\(\)\.refresh"):
+            runtime.refresh()
+
+    asyncio.run(scenario())

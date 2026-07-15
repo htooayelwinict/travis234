@@ -9,12 +9,49 @@ from dataclasses import dataclass
 from typing import Any
 
 from travis.agent.async_utils import resolve, run_sync
+from travis.coding_agent.event_bus import EventBusController, create_event_bus
 from travis.coding_agent.source_info import SourceInfo, create_synthetic_source_info
 from travis.coding_agent.tools.types import ToolDefinition, wrap_tool_definition
 
 ExtensionEvent = dict[str, Any]
 ExtensionHandler = Callable[[ExtensionEvent], object]
 ExtensionErrorListener = Callable[[dict[str, object]], None]
+
+PINNED_PI_EXTENSION_EVENTS = (
+    "project_trust",
+    "resources_discover",
+    "session_start",
+    "session_info_changed",
+    "session_before_switch",
+    "session_before_fork",
+    "session_before_compact",
+    "session_compact",
+    "session_shutdown",
+    "session_before_tree",
+    "session_tree",
+    "context",
+    "before_provider_request",
+    "before_provider_headers",
+    "after_provider_response",
+    "before_agent_start",
+    "agent_start",
+    "agent_end",
+    "agent_settled",
+    "turn_start",
+    "turn_end",
+    "message_start",
+    "message_update",
+    "message_end",
+    "tool_execution_start",
+    "tool_execution_update",
+    "tool_execution_end",
+    "model_select",
+    "thinking_level_select",
+    "tool_call",
+    "tool_result",
+    "user_bash",
+    "input",
+)
 
 _SESSION_BEFORE_EVENTS = frozenset(
     {
@@ -36,6 +73,7 @@ class RegisteredTool:
 @dataclass(frozen=True)
 class RegisteredCommand:
     name: str
+    registration_name: str
     description: str | None
     handler: Callable[..., object]
     source_info: SourceInfo
@@ -300,6 +338,7 @@ class ExtensionRunner:
         cwd: str = "",
         session_manager: object | None = None,
         model_registry: object | None = None,
+        event_bus: EventBusController | None = None,
     ) -> None:
         self._registered_tools: dict[str, RegisteredTool] = {}
         self._registered_commands: dict[str, RegisteredCommand] = {}
@@ -330,6 +369,8 @@ class ExtensionRunner:
         self._cwd = cwd
         self._session_manager = session_manager
         self._model_registry = model_registry
+        self.events = event_bus or create_event_bus()
+        self._event_bus_owner = object()
         self._send_message: Callable[[dict[str, Any], object | None], object] = (
             lambda message, options=None: []
         )
@@ -703,6 +744,16 @@ class ExtensionRunner:
 
         return unsubscribe
 
+    @staticmethod
+    def supported_event_types() -> tuple[str, ...]:
+        return PINNED_PI_EXTENSION_EVENTS
+
+    def dispose(self) -> None:
+        self.invalidate()
+        clear_owner = getattr(self.events, "clear_owner", None)
+        if callable(clear_owner):
+            clear_owner(self._event_bus_owner)
+
     def on_error(self, listener: ExtensionErrorListener) -> Callable[[], None]:
         self._error_listeners.append(listener)
 
@@ -753,6 +804,34 @@ class ExtensionRunner:
                     return result
 
         return result
+
+    async def async_emit_project_trust(
+        self,
+        event: ExtensionEvent,
+        context: object,
+    ) -> dict[str, object] | None:
+        """Return the first decisive bootstrap-extension trust response."""
+
+        for handler in list(self._handlers.get("project_trust", [])):
+            try:
+                result = await _call_extension_handler_async(handler, event, context)
+            except Exception as error:  # noqa: BLE001 - trust handlers fail closed and report diagnostics.
+                self.emit_error(
+                    {
+                        "extensionPath": "<python-extension>",
+                        "event": "project_trust",
+                        "error": str(error),
+                    }
+                )
+                continue
+            if not isinstance(result, dict):
+                continue
+            decision = result.get("trusted")
+            if decision == "undecided":
+                continue
+            if decision in {"yes", "no"}:
+                return result
+        return None
 
     def emit_resources_discover(self, cwd: str, reason: str) -> dict[str, list[dict[str, str]]]:
         discovered = {"skillPaths": [], "promptPaths": [], "themePaths": []}
@@ -1097,14 +1176,23 @@ class ExtensionRunner:
         handler = options.get("handler")
         if not callable(handler):
             raise ValueError("Registered command requires a callable handler")
-        self._registered_commands[name] = RegisteredCommand(
-            name=name,
+        invocation_name = name
+        suffix = 1
+        while invocation_name in self._registered_commands:
+            invocation_name = f"{name}:{suffix}"
+            suffix += 1
+        source_info = options.get("sourceInfo", options.get("source_info"))
+        self._registered_commands[invocation_name] = RegisteredCommand(
+            name=invocation_name,
+            registration_name=name,
             description=str(options["description"]) if options.get("description") is not None else None,
             handler=handler,
-            source_info=create_synthetic_source_info(
-                self._loading_extension_path or f"<extension-command:{name}>",
-                source="extension",
-            ),
+            source_info=source_info
+            if isinstance(source_info, SourceInfo)
+            else create_synthetic_source_info(
+                    self._loading_extension_path or f"<extension-command:{invocation_name}>",
+                    source="extension",
+                ),
             get_argument_completions=options.get("getArgumentCompletions")
             if callable(options.get("getArgumentCompletions"))
             else options.get("get_argument_completions")

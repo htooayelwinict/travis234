@@ -45,12 +45,12 @@ def test_settings_manager_create_persists_global_project_and_project_trust(tmp_p
     agent_dir = tmp_path / "agent"
     cwd.mkdir()
 
-    settings = SettingsManager.create(str(cwd), str(agent_dir))
+    settings = SettingsManager.create(str(cwd), str(agent_dir), {"projectTrusted": True})
     settings.set_shell_command_prefix("printf persisted;")
     settings.set_project_skill_paths(["skills/project"])
     settings.flush()
 
-    reloaded = SettingsManager.create(str(cwd), str(agent_dir))
+    reloaded = SettingsManager.create(str(cwd), str(agent_dir), {"projectTrusted": True})
     assert reloaded.get_shell_command_prefix() == "printf persisted;"
     assert reloaded.get_skill_paths() == ["skills/project"]
     assert (agent_dir / "settings.json").exists()
@@ -318,7 +318,11 @@ def test_default_resource_loader_discovers_context_and_system_prompt_files(tmp_p
     context_files = load_project_context_files(cwd=str(child), agent_dir=str(agent_dir))
     loader = DefaultResourceLoader(cwd=str(child), agent_dir=str(agent_dir))
     loader.reload()
-    project_loader = DefaultResourceLoader(cwd=str(project), agent_dir=str(agent_dir))
+    project_loader = DefaultResourceLoader(
+        cwd=str(project),
+        agent_dir=str(agent_dir),
+        project_trusted=True,
+    )
     project_loader.reload()
 
     assert [Path(item["path"]).name for item in context_files] == ["AGENTS.md", "AGENTS.md", "CLAUDE.md"]
@@ -369,7 +373,11 @@ def test_agent_session_uses_resource_loader_and_rebuilds_after_reload(tmp_path: 
     (project / ".travis234" / "SYSTEM.md").write_text("system v1", encoding="utf-8")
     (project / ".travis234" / "APPEND_SYSTEM.md").write_text("append v1", encoding="utf-8")
 
-    loader = DefaultResourceLoader(cwd=str(project), agent_dir=str(agent_dir))
+    loader = DefaultResourceLoader(
+        cwd=str(project),
+        agent_dir=str(agent_dir),
+        project_trusted=True,
+    )
     loader.reload()
     session = AgentSession(cwd=str(project), model=faux_model(), resource_loader=loader)
 

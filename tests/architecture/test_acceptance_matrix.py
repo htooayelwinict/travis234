@@ -31,8 +31,26 @@ def test_acceptance_matrix_has_every_required_row() -> None:
     assert all(row.status in {"pending", "passed", "failed", "blocked"} for row in matrix.values())
 
 
-def test_current_commit_verifier_rejects_stale_evidence(tmp_path: Path) -> None:
+def test_parity_report_has_only_resolved_evidence() -> None:
     verifier = _verifier_module()
+
+    report = verifier.verify_parity_contracts(root=ROOT)
+
+    assert report["schema_version"] == 1
+    assert report["summary"]["pi"]["invalid"] == 0
+    assert report["summary"]["hermes"]["invalid"] == 0
+
+
+def test_current_commit_verifier_rejects_stale_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    verifier = _verifier_module()
+    monkeypatch.setattr(
+        verifier.subprocess,
+        "run",
+        lambda *_args, **_kwargs: type("Result", (), {"stdout": "current-head\n"})(),
+    )
     evidence = tmp_path / "acceptance-evidence.json"
     evidence.write_text(
         json.dumps(

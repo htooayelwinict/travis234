@@ -187,10 +187,24 @@ class SessionModelController:
         self.agent.follow_up_mode = mode
 
     def set_session_name(self, name: str | None) -> None:
+        previous = self._session_name
         self._session_name = name
         if self._session_store:
             self._session_store.append_session_info(name)
         self._emit(SessionInfoChangedEvent(name=name))
+        self._extension_runner.emit(
+            {
+                "type": "session_info_changed",
+                "previousName": previous,
+                "name": name,
+                "source": "api",
+            }
+        )
+
+    def rename_session(self, name: str | None) -> None:
+        """Rename the active session through the durable session-info owner."""
+
+        self.set_session_name(name)
 
     def set_thinking_level(self, level: str) -> None:
         available_levels = self.get_available_thinking_levels()
@@ -201,6 +215,14 @@ class SessionModelController:
             if self._session_store:
                 self._session_store.append_thinking_level_change(effective_level)
             self._emit(ThinkingLevelChangedEvent(level=effective_level))
+            self._extension_runner.emit(
+                {
+                    "type": "thinking_level_select",
+                    "previousThinkingLevel": previous,
+                    "thinkingLevel": effective_level,
+                    "source": "api",
+                }
+            )
 
     def cycle_thinking_level(self) -> str | None:
         if not self.supports_thinking():
@@ -253,6 +275,14 @@ class SessionModelController:
         listener = getattr(self, "_model_change_listener", None)
         if listener is not None:
             listener(previous_model, model)
+        self._extension_runner.emit(
+            {
+                "type": "model_select",
+                "previousModel": previous_model,
+                "model": model,
+                "source": "api",
+            }
+        )
 
     def with_model_overrides(self, *, max_tokens: int) -> Model:
         overridden = replace(self.model, max_tokens=int(max_tokens))

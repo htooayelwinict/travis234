@@ -694,7 +694,7 @@ def test_agent_session_stats_and_context_usage_from_messages(tmp_path: Path) -> 
     assert context_usage["tokens"] >= 140
     assert context_usage["contextWindow"] == 1000
     assert context_usage["percent"] == (context_usage["tokens"] / 1000) * 100
-    assert context_usage["confidence"] == "provider_real"
+    assert context_usage["confidence"] == "estimated_trailing"
     assert stats["contextUsage"] == context_usage
     assert session.get_session_stats() == stats
     assert session.get_context_usage() == context_usage
@@ -723,7 +723,7 @@ def test_agent_session_context_usage_uses_rough_estimate_when_provider_usage_is_
     assert context_usage["contextWindow"] == 1000
     assert context_usage["percent"] == (context_usage["tokens"] / 1000) * 100
     assert context_usage["estimated"] is True
-    assert context_usage["confidence"] == "estimated_no_provider_usage"
+    assert context_usage["confidence"] == "estimated_full_request"
 
 def test_agent_session_context_usage_estimated_after_compaction_until_post_compaction_assistant(
     tmp_path: Path,
@@ -751,7 +751,12 @@ def test_agent_session_context_usage_estimated_after_compaction_until_post_compa
     assert estimated_usage["contextWindow"] == 1000
     assert estimated_usage["percent"] == (estimated_usage["tokens"] / 1000) * 100
     assert estimated_usage["estimated"] is True
-    assert estimated_usage["confidence"] == "estimated_after_compaction"
+    assert estimated_usage["confidence"] == "estimated_after_compaction_full_request"
+    assert estimated_usage["tokens"] == (
+        estimated_usage["systemTokens"]
+        + estimated_usage["toolTokens"]
+        + estimated_usage["messageTokens"]
+    )
 
     usage = Usage(input=20, output=5, cache_read=0, cache_write=0, total_tokens=25)
     post_compaction = AssistantMessage(
@@ -768,7 +773,7 @@ def test_agent_session_context_usage_estimated_after_compaction_until_post_compa
     context_usage = session.get_context_usage()
 
     assert context_usage is not None
-    assert context_usage["tokens"] >= 25
+    assert context_usage["tokens"] >= 20
     assert context_usage["contextWindow"] == 1000
     assert context_usage["percent"] == (context_usage["tokens"] / 1000) * 100
     assert context_usage.get("estimated") is not True
