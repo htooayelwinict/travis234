@@ -138,7 +138,8 @@ The npm package exposes only the `travis234` command and launches the release co
 | `/name`, `/fork`, `/clone`, `/tree` | Name, branch, clone, or navigate the JSONL v3 session tree |
 | `/resume`, `/new` | Switch to another indexed session or start a new one |
 | `/export`, `/import`, `/copy`, `/share` | Move or present session data through explicit local/platform adapters |
-| `/compact` | Compact the current conversation immediately |
+| `/compact [focus]`, `/compress [focus]` | Safely summarize older history while retaining a recent raw suffix; skip when compression would grow context |
+| `/compact deep [focus]`, `/compress deep [focus]` | Create an aggressive bounded generational checkpoint with no retained raw suffix |
 | `/reload` | Reload project and global extensions without restarting |
 | `/theme` | Select a discovered theme |
 | `/trust` | View or change project trust; reload before newly trusted code runs |
@@ -222,7 +223,11 @@ Model-driven subprocesses do not inherit provider credentials by default. A trus
 
 ## Context and compaction
 
-Travis234 supports both manual compaction with `/compact` and automatic compaction against the effective input window (the selected route's context window minus its reserved output). The Hermes-aligned default triggers at 75% for routes below 512K and 50% for larger routes. Routes below 64K use a reachable 85% fallback instead of an impossible fixed floor.
+Travis234 supports conservative manual compaction with `/compact [focus]`, aggressive manual-only compaction with `/compact deep [focus]`, and automatic compaction against the effective input window (the selected route's context window minus its reserved output). Normal `/compact` and automatic compaction retain a protected recent raw suffix so active work stays verbatim. Normal manual compaction safely makes no changes when its generated summary would increase context. The Hermes-aligned automatic default triggers at 75% for routes below 512K and 50% for larger routes. Routes below 64K use a reachable 85% fallback instead of an impossible fixed floor.
+
+`/compact deep` is an explicit fresh-envelope checkpoint for completed work. It replaces the live conversation with one standalone handoff and retains no pre-checkpoint raw suffix. The handoff targets 2,048 estimated tokens; one validation-repair pass may use an absolute 4,096-token ceiling. Large tool results and arguments are bounded before summarization, private reasoning is excluded, sensitive text is redacted, and recent read/modified file anchors are carried forward. Earlier JSONL records remain append-only session history, but they are not replayed into the next provider request.
+
+Deep compaction is atomic and fail-closed. It refuses unanswered users, aborted or errored assistants, unfinished tool turns, insufficient summarizer capacity, invalid or secret-shaped output, and checkpoints that do not save at least 256 tokens or 5%. A refusal preserves the exact live messages and appends no compaction entry. Use normal `/compact` during active implementation when recent turns should remain verbatim; use `/compact deep` after a clean completed turn when reclaiming the context envelope matters more than raw conversational detail. The optional `focus` text tells either summarizer what to prioritize.
 
 An auxiliary summarizer can compact context without changing the active coding model:
 

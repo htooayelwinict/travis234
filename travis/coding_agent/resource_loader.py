@@ -12,6 +12,7 @@ from types import ModuleType
 from pathlib import Path
 
 from travis.agent.async_utils import resolve, run_sync
+from travis.coding_agent.config import get_agent_dir
 from travis.coding_agent.event_bus import EventBusController, create_event_bus
 from travis.coding_agent.extensions import ExtensionRunner
 from travis.coding_agent.object_utils import settings_value as _settings_value
@@ -133,7 +134,7 @@ class DefaultResourceLoader:
         append_system_prompt_override: Callable[[list[str]], list[str]] | None = None,
     ) -> None:
         self.cwd = str(Path(cwd).expanduser().resolve())
-        self.agent_dir = str(Path(agent_dir).expanduser().resolve()) if agent_dir else str(Path.home() / ".travis234" / "agent")
+        self.agent_dir = str(Path(agent_dir or get_agent_dir()).expanduser().resolve())
         self.settings_manager = settings_manager or SettingsManager.create(self.cwd, self.agent_dir)
         self.event_bus = event_bus or create_event_bus()
         self.no_context_files = no_context_files

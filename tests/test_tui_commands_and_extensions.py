@@ -5,6 +5,37 @@ from pathlib import Path
 from tests._support_tui import *  # noqa: F403
 from travis.coding_agent.project_trust import ProjectTrustStore
 from travis.coding_agent.settings_manager import SettingsManager
+from travis.tui.interactive_extensions import _manual_compression_options
+
+
+def test_compact_deep_help_describes_the_generational_checkpoint(tmp_path: Path) -> None:
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=120, rows=40),
+        enable_tui=True,
+    )
+    mode = InteractiveMode(app, input_fn=lambda _prompt: "/exit")
+
+    try:
+        mode._run_help_command()
+        rendered = strip_ansi("\n".join(mode.history.render(1_000)))
+
+        assert (
+            "/compact deep [focus] - Create an aggressive bounded generational checkpoint."
+            in rendered
+        )
+        assert "multi-pass compaction" not in rendered
+    finally:
+        mode.footer_data_provider.dispose()
+        app.close()
+
+
+def test_compress_deep_remains_a_manual_deep_alias() -> None:
+    assert _manual_compression_options("/compress deep context envelope") == (
+        "context envelope",
+        True,
+    )
 
 
 def test_interactive_trust_command_persists_without_executing_project_code(tmp_path) -> None:

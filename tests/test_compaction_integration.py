@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from travis.agent.types import AgentMessage
 from travis.ai.event_stream import create_assistant_message_event_stream
 from travis.ai.providers.faux import faux_model
 from travis.ai.providers.faux import text_response_events
@@ -24,9 +25,39 @@ from travis.coding_agent.auth_storage import AuthStorage
 from travis.coding_agent.compaction_adapter import to_compressor_context, to_compressor_messages
 from travis.coding_agent.extensions import ExtensionRunner
 from travis.coding_agent.model_registry import ModelRegistry
+from travis.coding_agent.process_context import ProcessContextRecord
 from travis.coding_agent.session_store import BashExecutionMessage, BranchSummaryMessage, CustomMessage
 from travis.coding_agent.session_types import default_convert_to_llm
 from travis.compaction import CompactionManager, ContextCompressor, estimate_tokens
+
+
+DEEP_VALID_SUMMARY = """## Historical Task Snapshot
+None.
+## Goal
+Preserve the completed checkpoint.
+## Constraints & Preferences
+(none)
+## Completed Actions
+1. Verified the requested state.
+## Active State at Compaction Cut
+Idle.
+## Historical In-Progress State
+None.
+## Blocked
+(none)
+## Key Decisions
+- Use an atomic checkpoint.
+## Resolved Questions
+None.
+## Historical Pending User Asks
+None.
+## Relevant Files
+(none)
+## Historical Remaining Work
+None.
+## Critical Context
+Checkpoint complete.
+"""
 
 
 def _large_messages(prefix: str, count: int = 12) -> list[UserMessage]:
@@ -34,6 +65,26 @@ def _large_messages(prefix: str, count: int = 12) -> list[UserMessage]:
         UserMessage(content=f"{prefix} message {index} " + ("x" * 80), timestamp=now_ms() + index)
         for index in range(count)
     ]
+
+
+def _completed_deep_messages(marker: str, count: int = 6) -> list[AgentMessage]:
+    messages: list[AgentMessage] = []
+    for index in range(count):
+        messages.extend(
+            [
+                UserMessage(content=f"completed request {index}", timestamp=now_ms() + index),
+                AssistantMessage(
+                    content=[TextContent(text=f"{marker} completed {index} " + ("x" * 10_000))],
+                    api="faux",
+                    provider="faux",
+                    model="m",
+                    usage=empty_usage(),
+                    stop_reason="stop",
+                    timestamp=now_ms() + index,
+                ),
+            ]
+        )
+    return messages
 
 
 def test_compaction_converts_custom_session_messages_before_tokenizing_and_summarizing() -> None:
@@ -639,11 +690,260 @@ def _session_with_compaction(path: Path, prompts: list[str]) -> AgentSession:
     )
 
 
-def _append_messages(session: AgentSession, messages: list[UserMessage]) -> None:
+def _append_messages(session: AgentSession, messages: list[AgentMessage]) -> None:
     session.agent.state.messages.extend(messages)
     assert session._session_store is not None
     for message in messages:
         session._session_store.append_message(message)
+
+
+def test_manual_deep_compaction_persists_one_generation_without_raw_suffix(
+    tmp_path: Path,
+) -> None:
+    session_path = tmp_path / "deep-generation.jsonl"
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        session_path=str(session_path),
+        compaction_manager=CompactionManager(
+            ContextCompressor(context_length=1_048_576),
+            summarizer=lambda _prompt: DEEP_VALID_SUMMARY,
+        ),
+    )
+    _append_messages(session, _completed_deep_messages("DEEP-RAW-HISTORY"))
+
+    status = session.compact(deep=True)
+
+    assert status.compressed is True
+    assert [message.role for message in session.messages] == ["compactionSummary"]
+    entry = next(entry for entry in reversed(session.session_entries) if entry["type"] == "compaction")
+    assert entry["firstKeptEntryId"] == ""
+    assert entry["details"]["deepStrategy"] == "generational-v1"
+    assert status.first_kept_entry_id == ""
+
+    resumed = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        session_path=str(session_path),
+        compaction_manager=CompactionManager(ContextCompressor(context_length=1_048_576)),
+    )
+    assert [message.role for message in resumed.messages] == ["compactionSummary"]
+
+
+def test_manual_deep_follow_up_does_not_replay_pre_cut_raw_tail(tmp_path: Path) -> None:
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        session_path=str(tmp_path / "deep-follow-up.jsonl"),
+        compaction_manager=CompactionManager(
+            ContextCompressor(context_length=1_048_576),
+            summarizer=lambda _prompt: DEEP_VALID_SUMMARY,
+        ),
+    )
+    _append_messages(session, _completed_deep_messages("PRE-CUT-RAW-TAIL"))
+    assert session.compact(deep=True).compressed is True
+
+    _append_messages(
+        session,
+        [UserMessage(content="HELLO-AFTER-DEEP", timestamp=now_ms())],
+    )
+    provider_context = repr(to_compressor_context(session.messages).messages)
+
+    assert "HELLO-AFTER-DEEP" in provider_context
+    assert "PRE-CUT-RAW-TAIL" not in provider_context
+
+
+def test_manual_deep_refuses_an_unfinished_tool_turn_without_persisting(tmp_path: Path) -> None:
+    session_path = tmp_path / "deep-unsafe-boundary.jsonl"
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        session_path=str(session_path),
+        compaction_manager=CompactionManager(
+            ContextCompressor(context_length=1_048_576),
+            summarizer=lambda _prompt: DEEP_VALID_SUMMARY,
+        ),
+    )
+    call = ToolCall(id="unfinished-read", name="read", arguments={"path": "state.txt"})
+    messages = _completed_deep_messages("SAFE-COMPLETED", count=2)
+    messages.extend(
+        [
+            UserMessage(content="read current state", timestamp=now_ms()),
+            AssistantMessage(
+                content=[call],
+                api="faux",
+                provider="faux",
+                model="m",
+                usage=empty_usage(),
+                stop_reason="toolUse",
+                timestamp=now_ms(),
+            ),
+            ToolResultMessage(
+                tool_call_id="unfinished-read",
+                tool_name="read",
+                content=[TextContent(text="tool returned but final assistant is absent")],
+                is_error=False,
+                timestamp=now_ms(),
+            ),
+        ]
+    )
+    _append_messages(session, messages)
+    before_messages = list(session.messages)
+    before_bytes = session_path.read_bytes()
+
+    status = session.compact(deep=True)
+
+    assert status.compressed is False
+    assert status.deep_stop_reason == "unsafe_boundary"
+    assert session.messages == before_messages
+    assert session_path.read_bytes() == before_bytes
+    assert not any(entry["type"] == "compaction" for entry in session.session_entries)
+
+
+def test_normal_manual_compaction_retains_its_existing_suffix(tmp_path: Path) -> None:
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        session_path=str(tmp_path / "normal-manual-isolation.jsonl"),
+        compaction_manager=CompactionManager(
+            ContextCompressor(context_length=2_000, protect_first_n=1, protect_last_n=2),
+            summarizer=lambda _prompt: "## Goal\nnormal manual checkpoint",
+        ),
+    )
+    _append_messages(session, _completed_deep_messages("NORMAL-MANUAL"))
+
+    status = session.compact(deep=False)
+
+    entry = next(entry for entry in reversed(session.session_entries) if entry["type"] == "compaction")
+    assert status.compressed is True
+    assert entry["firstKeptEntryId"]
+    assert len(session.messages) > 1
+    assert not (entry.get("details") or {}).get("deepStrategy")
+
+
+def test_automatic_preflight_compaction_retains_its_existing_suffix(tmp_path: Path) -> None:
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        session_path=str(tmp_path / "automatic-isolation.jsonl"),
+        compaction_manager=CompactionManager(
+            ContextCompressor(context_length=500, protect_first_n=1, protect_last_n=2),
+            summarizer=lambda _prompt: "## Goal\nautomatic checkpoint",
+        ),
+    )
+    _append_messages(session, _completed_deep_messages("AUTOMATIC"))
+
+    outcome = session.compaction_transactions.preflight(session.messages)
+
+    entry = next(entry for entry in reversed(session.session_entries) if entry["type"] == "compaction")
+    assert outcome.compressed is True
+    assert entry["firstKeptEntryId"]
+    assert len(session.messages) > 1
+    assert not (entry.get("details") or {}).get("deepStrategy")
+
+
+def test_manual_deep_preserves_active_process_details_via_existing_adapter(
+    tmp_path: Path,
+) -> None:
+    class ProcessContext:
+        @staticmethod
+        def resolve(_messages):
+            return (
+                ProcessContextRecord(
+                    session_id="proc_1234567890abcdef1234567890abcdef",
+                    status="running",
+                    cursor=12,
+                    output_size=48,
+                    exit_code=None,
+                    durable_output=True,
+                ),
+            )
+
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        session_path=str(tmp_path / "deep-process.jsonl"),
+        compaction_manager=CompactionManager(ContextCompressor(context_length=1_048_576)),
+    )
+    session._compaction_adapter._process_context = ProcessContext()  # noqa: SLF001
+    _append_messages(session, _completed_deep_messages("PROCESS-HISTORY", count=2))
+
+    status = session.compact(deep=True, summarizer=lambda _prompt: DEEP_VALID_SUMMARY)
+
+    assert status.compressed is True
+    entry = next(entry for entry in reversed(session.session_entries) if entry["type"] == "compaction")
+    assert entry["details"]["deepStrategy"] == "generational-v1"
+    assert entry["details"]["managedProcesses"][0] == {
+        "sessionId": "proc_1234567890abcdef1234567890abcdef",
+        "status": "running",
+        "cursor": 12,
+        "outputSize": 48,
+        "exitCode": None,
+        "durableOutput": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("summarizer", "expected_reason"),
+    [
+        (lambda _prompt: (_ for _ in ()).throw(RuntimeError("summary offline")), "summary_failed"),
+        (lambda _prompt: "invalid checkpoint structure", "validation_failed"),
+    ],
+)
+def test_manual_deep_generation_failure_rolls_back_session_bytes(
+    tmp_path: Path,
+    summarizer,
+    expected_reason: str,
+) -> None:
+    session_path = tmp_path / f"deep-rollback-{expected_reason}.jsonl"
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        session_path=str(session_path),
+        compaction_manager=CompactionManager(ContextCompressor(context_length=1_048_576)),
+    )
+    _append_messages(session, _completed_deep_messages("ROLLBACK-HISTORY", count=2))
+    before_messages = list(session.messages)
+    before_bytes = session_path.read_bytes()
+
+    status = session.compact(deep=True, summarizer=summarizer)
+
+    assert status.compressed is False
+    assert status.deep_stop_reason == expected_reason
+    assert session.messages == before_messages
+    assert session_path.read_bytes() == before_bytes
+    assert not any(entry["type"] == "compaction" for entry in session.session_entries)
+
+
+def test_repeated_manual_deep_is_a_noop_without_another_summary_call(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    def summarize(prompt: str) -> str:
+        calls.append(prompt)
+        return DEEP_VALID_SUMMARY
+
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        session_path=str(tmp_path / "deep-repeated.jsonl"),
+        compaction_manager=CompactionManager(
+            ContextCompressor(context_length=1_048_576),
+            summarizer=summarize,
+        ),
+    )
+    _append_messages(session, _completed_deep_messages("REPEATED-HISTORY", count=2))
+    first = session.compact(deep=True)
+    first_leaf = session.session_entries[-1]["id"]
+    assert first.compressed is True
+    assert len(calls) == 1
+
+    second = session.compact(deep=True)
+
+    assert second.compressed is False
+    assert second.deep_stop_reason == "insufficient_reduction"
+    assert len(calls) == 1
+    assert session.session_entries[-1]["id"] == first_leaf
+    assert [message.role for message in session.messages] == ["compactionSummary"]
 
 
 def test_persisted_compaction_summarizes_every_message_it_discards(tmp_path: Path) -> None:

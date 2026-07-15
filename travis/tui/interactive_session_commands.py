@@ -416,7 +416,7 @@ class InteractiveSessionCommands:
             "/login - Configure provider authentication.",
             "/logout - Remove provider authentication.",
             "/compact or /compress - Safely compress conversation context.",
-            "/compact deep [focus] - Run bounded multi-pass compaction toward a fresh-session baseline.",
+            "/compact deep [focus] - Create an aggressive bounded generational checkpoint.",
             "/resume - Switch to a previous session.",
             "/new - Start a new persistent session.",
             "/session - Show active session details.",

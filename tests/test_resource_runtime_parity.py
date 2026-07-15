@@ -29,6 +29,18 @@ def _user_text(message: UserMessage) -> str:
     return "".join(getattr(block, "text", "") for block in message.content)
 
 
+def test_resource_loader_default_agent_dir_honors_environment_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent_dir = tmp_path / "isolated-agent"
+    monkeypatch.setenv("TRAVIS234_CODING_AGENT_DIR", str(agent_dir))
+
+    loader = DefaultResourceLoader(cwd=str(tmp_path))
+
+    assert Path(loader.agent_dir) == agent_dir.resolve()
+
+
 def test_yaml_frontmatter_supports_pi_metadata_shapes() -> None:
     metadata, body = parse_frontmatter(
         """---

@@ -12,9 +12,65 @@ from travis.coding_agent.compaction_adapter import (
     merge_summary_model_compaction_details,
     to_compressor_context,
 )
+from travis.coding_agent.deep_compaction_command import generate_deep_checkpoint
 from travis.compaction.compressor import estimate_tokens
 from travis.compaction.timing import CompactionManager, ManualCompressionStatus, summarize_manual_compression
 from travis.compaction.strategy import prepare_compaction
+
+
+def _deep_refusal_note(reason: str | None) -> str:
+    notes = {
+        "unanswered_user": (
+            "Deep checkpoint refused because the latest user message has no completed answer."
+        ),
+        "aborted_assistant": (
+            "Deep checkpoint refused because the latest assistant response was aborted."
+        ),
+        "errored_assistant": (
+            "Deep checkpoint refused because the latest assistant response failed."
+        ),
+        "unmatched_tool_call": "Deep checkpoint refused because a tool call is unfinished.",
+        "unfinished_tool_turn": (
+            "Deep checkpoint refused because the latest tool turn has no final assistant response."
+        ),
+        "summarizer_capacity": (
+            "Deep checkpoint refused because the summarizer cannot fit the checkpoint source. "
+            "Run normal /compact first."
+        ),
+        "summary_failed": (
+            "Deep checkpoint summary generation failed; the original context was preserved."
+        ),
+        "summary_unavailable": (
+            "Deep checkpoint has no configured summarizer; the original context was preserved."
+        ),
+        "repair_failed": "Deep checkpoint repair failed; the original context was preserved.",
+        "repair_unavailable": (
+            "Deep checkpoint repair was unavailable; the original context was preserved."
+        ),
+        "validation_failed": (
+            "Deep checkpoint validation failed; the original context was preserved."
+        ),
+        "secret_present": (
+            "Deep checkpoint validation rejected secret-shaped output; the original context "
+            "was preserved."
+        ),
+        "reasoning_present": (
+            "Deep checkpoint validation rejected reasoning output; the original context was "
+            "preserved."
+        ),
+        "invalid_structure": (
+            "Deep checkpoint validation rejected an invalid handoff; the original context "
+            "was preserved."
+        ),
+        "over_budget": (
+            "Deep checkpoint remained over its absolute budget; the original context was "
+            "preserved."
+        ),
+        "insufficient_reduction": (
+            "Deep checkpoint was skipped because it would not materially reduce context."
+        ),
+    }
+    return notes.get(reason, "Deep checkpoint refused; the original context was preserved.")
 
 
 class CompactionDeferredError(RuntimeError):
@@ -116,6 +172,95 @@ class CompactionTransactionCoordinator:
                     tokens_before=tokens_before,
                     first_kept_entry_id=first_kept_entry_id,
                     deep=deep,
+                )
+                return CompactionOutcome(messages=output, compressed=True, result=status)
+            if deep:
+                deep_result = generate_deep_checkpoint(
+                    source,
+                    self.manager.compressor,
+                    summarizer=summarizer or self.manager._summarizer,  # noqa: SLF001
+                    focus=focus,
+                )
+                if not deep_result.compressed:
+                    status = ManualCompressionStatus(
+                        messages=source,
+                        compressed=False,
+                        noop=True,
+                        headline="Deep checkpoint made no changes",
+                        token_line=(
+                            f"Approx request size: ~{deep_result.tokens_before:,} "
+                            "tokens (unchanged)"
+                        ),
+                        note=_deep_refusal_note(deep_result.error or deep_result.reason),
+                        warning=(
+                            f"Deep checkpoint failed: {deep_result.error}"
+                            if deep_result.error
+                            else None
+                        ),
+                        focus=focus,
+                        tokens_before=deep_result.tokens_before,
+                        deep=True,
+                        compression_passes=1 + deep_result.repair_count,
+                        deep_stop_reason=deep_result.reason,
+                        target_tokens=deep_result.target_tokens,
+                    )
+                    return CompactionOutcome(messages=source, compressed=False, result=status)
+
+                compaction = {
+                    "summary": deep_result.summary,
+                    "firstKeptEntryId": "",
+                    "tokensBefore": deep_result.tokens_before,
+                    "details": deep_result.details,
+                }
+                output, entry = self._adapter.apply_extension_compaction(
+                    compaction,
+                    source_messages=source,
+                )
+                persisted_details = (
+                    entry.get("details")
+                    if isinstance(entry.get("details"), dict)
+                    else deep_result.details
+                )
+                record = self.manager.record_extension_compaction(
+                    output,
+                    summary=deep_result.summary or "",
+                    tokens_before=deep_result.tokens_before,
+                    details=persisted_details,
+                    trigger="manual",
+                )
+                self._emit_session_compact(
+                    entry,
+                    from_extension=False,
+                    reason="manual",
+                    will_retry=False,
+                )
+                status = ManualCompressionStatus(
+                    messages=output,
+                    compressed=True,
+                    noop=False,
+                    headline=f"Deep checkpoint: {len(source)} → {len(output)} messages",
+                    token_line=(
+                        f"Approx request size: ~{deep_result.tokens_before:,} → "
+                        f"~{deep_result.handoff_tokens:,} tokens"
+                    ),
+                    note=(
+                        "Created one bounded generational handoff with no retained raw suffix."
+                        + (" One repair pass was used." if deep_result.repair_count else "")
+                    ),
+                    focus=focus,
+                    summary=deep_result.summary,
+                    details=persisted_details,
+                    tokens_before=deep_result.tokens_before,
+                    first_kept_entry_id="",
+                    summary_model_requested=record.summary_model_requested,
+                    summary_model_used=record.summary_model_used,
+                    summary_model_fallback=record.summary_model_fallback,
+                    summary_model_error=record.summary_model_error,
+                    summary_model_dedicated=record.summary_model_dedicated,
+                    deep=True,
+                    compression_passes=1 + deep_result.repair_count,
+                    deep_stop_reason="target_reached",
+                    target_tokens=deep_result.target_tokens,
                 )
                 return CompactionOutcome(messages=output, compressed=True, result=status)
             compressor_context = to_compressor_context(source)
