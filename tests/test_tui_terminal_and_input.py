@@ -59,7 +59,7 @@ def test_footer_ports_travis234_home_path_formatting() -> None:
     footer = FooterComponent(cwd="/home/user/project", model="faux-model", home="/home/user")
     assert footer.render(80)[0] == "~/project"
 
-def test_interactive_mode_footer_shows_history_hint_only_when_scrolled_up(tmp_path) -> None:
+def test_interactive_mode_does_not_claim_terminal_history_navigation(tmp_path) -> None:
     terminal = FakeTerminal(columns=80, rows=6)
     app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
     mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
@@ -68,40 +68,11 @@ def test_interactive_mode_footer_shows_history_hint_only_when_scrolled_up(tmp_pa
     for index in range(12):
         mode.history.add(Text(f"history line {index}"))
     app.tui.request_render()
-
-    app.tui.scroll_by(-3)
     mode._refresh_footer()
 
-    scrolled_footer = "\n".join(mode.footer.render(80))
-    assert "history" in scrolled_footer
-    assert "End to latest" in scrolled_footer
-
-    app.tui.scroll_to_bottom()
-    mode._refresh_footer()
-
-    bottom_footer = "\n".join(mode.footer.render(80))
-    assert "End to latest" not in bottom_footer
-
-def test_interactive_mode_footer_history_hint_updates_from_scroll_input(tmp_path) -> None:
-    terminal = FakeTerminal(columns=80, rows=6)
-    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
-    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
-    mode.init()
-
-    for index in range(12):
-        mode.history.add(Text(f"history line {index}"))
-    app.tui.request_render()
-
-    assert terminal.input_handler is not None
-    terminal.input_handler("\x1b[5~")
-
-    scrolled_footer = "\n".join(mode.footer.render(80))
-    assert "End to latest" in scrolled_footer
-
-    terminal.input_handler("\x1b[F")
-
-    bottom_footer = "\n".join(mode.footer.render(80))
-    assert "End to latest" not in bottom_footer
+    assert mode._unsubscribe_tui_scroll_change is None
+    assert mode.footer.history_hint is None
+    assert "End to latest" not in "\n".join(mode.footer.render(80))
 
 def test_interactive_mode_collapses_subagent_tool_noise_but_keeps_lifecycle(tmp_path) -> None:
     terminal = FakeTerminal(columns=100, rows=12)
@@ -360,6 +331,31 @@ def test_keys_ports_travis234_parse_match_and_release_surface() -> None:
 
     assert is_key_release("\x1b[97;1:3u") is True
     assert is_key_release("\x1b[200~90:62:3F:A5\x1b[201~") is False
+
+
+@pytest.mark.parametrize(
+    ("sequence", "expected"),
+    [
+        ("\x1b[[5~", "pageUp"),
+        ("\x1b[[6~", "pageDown"),
+        ("\x1b[57421u", "pageUp"),
+        ("\x1b[57422u", "pageDown"),
+        ("\x1b[57423u", "home"),
+        ("\x1b[57424u", "end"),
+        ("\x1b[5$", "shift+pageUp"),
+        ("\x1b[6^", "ctrl+pageDown"),
+        ("\x1b[7$", "shift+home"),
+        ("\x1b[8^", "ctrl+end"),
+        ("\x1bOH", "home"),
+        ("\x1bOF", "end"),
+        ("\x1b[1~", "home"),
+        ("\x1b[4~", "end"),
+    ],
+)
+def test_parse_key_supports_terminal_functional_variants(sequence: str, expected: str) -> None:
+    from travis.tui.keys import parse_key
+
+    assert parse_key(sequence) == expected
 
 def test_tui_package_exports_travis234_key_helpers() -> None:
     from travis.tui import (
@@ -718,67 +714,62 @@ def test_tui_full_then_diff_single_line() -> None:
     assert "changed" in terminal.writes[-1]
     assert "first" not in terminal.writes[-1]
 
-def test_tui_scrolls_transcript_viewport_without_blank_cutoff() -> None:
+
+def test_tui_native_scrollback_keeps_complete_logical_history() -> None:
     terminal = FakeTerminal(columns=40, rows=4)
     tui = TUI(terminal)
     for index in range(10):
         tui.add(Text(f"line {index}"))
 
-    bottom = tui.request_render()
-    assert bottom.lines == ["line 6", "line 7", "line 8", "line 9"]
+    info = tui.request_render()
 
-    assert tui.scroll_by(-2) == -2
-    scrolled_up = tui.request_render()
+    assert info is not None
+    assert info.lines == [f"line {index}" for index in range(10)]
+    assert "\r\n".join(f"line {index}" for index in range(10)) in strip_ansi(terminal.output)
 
-    assert scrolled_up.lines == ["line 4", "line 5", "line 6", "line 7"]
-    assert all(line for line in scrolled_up.lines)
 
-    assert tui.scroll_by(99) == 2
-    back_at_bottom = tui.request_render()
-
-    assert back_at_bottom.lines == ["line 6", "line 7", "line 8", "line 9"]
-
-def test_tui_manual_scroll_preserves_offset_until_rejoined_to_bottom() -> None:
+def test_tui_force_render_never_erases_native_scrollback() -> None:
     terminal = FakeTerminal(columns=40, rows=4)
     tui = TUI(terminal)
-    for index in range(10):
-        tui.add(Text(f"line {index}"))
-
+    tui.add(Text("history"))
     tui.request_render()
-    tui.scroll_by(-2)
-    assert tui.request_render().lines == ["line 4", "line 5", "line 6", "line 7"]
+    terminal.writes.clear()
 
-    tui.add(Text("line 10"))
-    scrolled_after_growth = tui.request_render()
+    tui.request_render(force=True)
 
-    assert scrolled_after_growth.lines == ["line 5", "line 6", "line 7", "line 8"]
-    assert "line 10" not in scrolled_after_growth.lines
+    assert "\x1b[3J" not in terminal.output
 
+
+def test_tui_append_only_growth_enters_terminal_history_with_crlf() -> None:
+    terminal = FakeTerminal(columns=40, rows=4)
+    tui = TUI(terminal)
+    history = Container([Text("one"), Text("two"), Text("three"), Text("four")])
+    tui.add(history)
+    tui.request_render()
+    terminal.writes.clear()
+
+    history.add(Text("five"))
+    tui.request_render()
+
+    assert "\r\nfive" in strip_ansi(terminal.output)
+    assert tui.previous_lines == ["one", "two", "three", "four", "five"]
+
+def test_tui_internal_scroll_api_is_inert_when_terminal_owns_history() -> None:
+    terminal = FakeTerminal(columns=40, rows=4)
+    tui = TUI(terminal)
+    for index in range(10):
+        tui.add(Text(f"line {index}"))
+
+    initial = tui.request_render()
+
+    assert tui.scroll_by(-3) == 0
+    assert tui.is_scrolled() is False
     tui.scroll_to_bottom()
-    assert tui.request_render().lines == ["line 7", "line 8", "line 9", "line 10"]
+    assert tui.request_render().lines == initial.lines
 
-    tui.add(Text("line 11"))
-    assert tui.request_render().lines == ["line 8", "line 9", "line 10", "line 11"]
 
-def test_interactive_mode_submit_rejoins_bottom_after_manual_scroll(tmp_path) -> None:
-    register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "unused")))
-    terminal = FakeTerminal(columns=80, rows=6)
-    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=terminal, enable_tui=True)
-    inputs = iter(["/agents", "/exit"])
-    mode = InteractiveMode(app, input_fn=lambda prompt: next(inputs))
-    mode.init()
-    for index in range(12):
-        mode.history.add(Text(f"history {index}"))
-
-    app.tui.request_render()
-    app.tui.scroll_by(-3)
-    assert app.tui.is_scrolled()
-
-    assert mode.run() == 0
-
-    assert not app.tui.is_scrolled()
-
-def test_tui_page_keys_scroll_transcript_before_focused_input() -> None:
+@pytest.mark.parametrize("sequence", ["\x1b[5~", "\x1b[6~", "\x1b[F", "\x1b[4~"])
+def test_tui_terminal_navigation_reaches_focused_component(sequence: str) -> None:
     class InputRecorder(Container):
         def __init__(self) -> None:
             super().__init__()
@@ -801,142 +792,13 @@ def test_tui_page_keys_scroll_transcript_before_focused_input() -> None:
 
     assert terminal.input_handler is not None
     assert tui.last_render is not None
-    assert tui.last_render.lines == ["line 5", "line 6", "line 7", "prompt"]
+    assert tui.last_render.lines == [*[f"line {index}" for index in range(8)], "prompt"]
 
-    terminal.input_handler("\x1b[5~")
+    terminal.input_handler(sequence)
 
-    assert input_recorder.inputs == []
+    assert input_recorder.inputs == [sequence]
     assert tui.last_render is not None
-    assert tui.last_render.lines == ["line 2", "line 3", "line 4", "line 5"]
-
-    terminal.input_handler("\x1b[F")
-
-    assert input_recorder.inputs == []
-    assert tui.last_render is not None
-    assert tui.last_render.lines == ["line 5", "line 6", "line 7", "prompt"]
-
-    terminal.input_handler("\x1b[5~")
-
-    assert input_recorder.inputs == []
-    assert tui.last_render is not None
-    assert tui.last_render.lines == ["line 2", "line 3", "line 4", "line 5"]
-
-    terminal.input_handler("\x1b[6~")
-
-    assert input_recorder.inputs == []
-    assert tui.last_render is not None
-    assert tui.last_render.lines == ["line 5", "line 6", "line 7", "prompt"]
-
-def test_tui_mouse_wheel_scrolls_transcript_before_focused_input() -> None:
-    class InputRecorder(Container):
-        def __init__(self) -> None:
-            super().__init__()
-            self.inputs: list[str] = []
-
-        def render(self, width: int) -> list[str]:
-            return ["prompt"]
-
-        def handle_input(self, data: str) -> None:
-            self.inputs.append(data)
-
-    terminal = FakeTerminal(columns=40, rows=4)
-    tui = TUI(terminal)
-    for index in range(8):
-        tui.add(Text(f"line {index}"))
-    input_recorder = InputRecorder()
-    tui.add(input_recorder)
-    tui.set_focus(input_recorder)
-    tui.start()
-
-    assert terminal.input_handler is not None
-    assert tui.last_render is not None
-    assert tui.last_render.lines == ["line 5", "line 6", "line 7", "prompt"]
-
-    terminal.input_handler("\x1b[<64;1;1M")
-
-    assert input_recorder.inputs == []
-    assert tui.last_render is not None
-    assert tui.last_render.lines == ["line 2", "line 3", "line 4", "line 5"]
-
-    terminal.input_handler("\x1b[<65;1;1M")
-
-    assert input_recorder.inputs == []
-    assert tui.last_render is not None
-    assert tui.last_render.lines == ["line 5", "line 6", "line 7", "prompt"]
-
-def test_tui_rxvt_mouse_wheel_scrolls_transcript_before_focused_input() -> None:
-    class InputRecorder(Container):
-        def __init__(self) -> None:
-            super().__init__()
-            self.inputs: list[str] = []
-
-        def render(self, width: int) -> list[str]:
-            return ["prompt"]
-
-        def handle_input(self, data: str) -> None:
-            self.inputs.append(data)
-
-    terminal = FakeTerminal(columns=40, rows=4)
-    tui = TUI(terminal)
-    for index in range(8):
-        tui.add(Text(f"line {index}"))
-    input_recorder = InputRecorder()
-    tui.add(input_recorder)
-    tui.set_focus(input_recorder)
-    tui.start()
-
-    assert terminal.input_handler is not None
-    assert tui.last_render is not None
-    assert tui.last_render.lines == ["line 5", "line 6", "line 7", "prompt"]
-
-    terminal.input_handler("\x1b[64;1;1M")
-
-    assert input_recorder.inputs == []
-    assert tui.last_render is not None
-    assert tui.last_render.lines == ["line 2", "line 3", "line 4", "line 5"]
-
-    terminal.input_handler("\x1b[65;1;1M")
-
-    assert input_recorder.inputs == []
-    assert tui.last_render is not None
-    assert tui.last_render.lines == ["line 5", "line 6", "line 7", "prompt"]
-
-def test_tui_legacy_x10_mouse_wheel_scrolls_transcript_before_focused_input() -> None:
-    class InputRecorder(Container):
-        def __init__(self) -> None:
-            super().__init__()
-            self.inputs: list[str] = []
-
-        def render(self, width: int) -> list[str]:
-            return ["prompt"]
-
-        def handle_input(self, data: str) -> None:
-            self.inputs.append(data)
-
-    terminal = FakeTerminal(columns=40, rows=4)
-    tui = TUI(terminal)
-    for index in range(8):
-        tui.add(Text(f"line {index}"))
-    input_recorder = InputRecorder()
-    tui.add(input_recorder)
-    tui.set_focus(input_recorder)
-    tui.start()
-
-    assert terminal.input_handler is not None
-    assert tui.last_render is not None
-    assert tui.last_render.lines == ["line 5", "line 6", "line 7", "prompt"]
-
-    terminal.input_handler("\x1b[M`!!")
-
-    assert input_recorder.inputs == []
-    assert tui.last_render is not None
-    assert tui.last_render.lines == ["line 2", "line 3", "line 4", "line 5"]
-
-    terminal.input_handler("\x1b[Ma!!")
-
-    assert input_recorder.inputs == []
-    assert tui.last_render is not None
-    assert tui.last_render.lines == ["line 5", "line 6", "line 7", "prompt"]
+    assert tui.last_render.lines == [*[f"line {index}" for index in range(8)], "prompt"]
 
 def test_tui_ports_travis234_synchronized_output_wrapping_for_full_and_diff_renders() -> None:
     terminal = FakeTerminal(columns=40)
@@ -963,7 +825,7 @@ def test_tui_ports_travis234_first_render_without_screen_clear() -> None:
     assert terminal.writes[-1].startswith("\x1b[?2026hfirst")
     assert "\x1b[2J\x1b[H" not in terminal.writes[-1]
 
-def test_tui_ports_travis234_forced_full_render_clears_scrollback() -> None:
+def test_tui_forced_full_render_repaints_viewport_without_clearing_scrollback() -> None:
     terminal = FakeTerminal(columns=40)
     tui = TUI(terminal)
     tui.add(Text("first"))
@@ -971,7 +833,8 @@ def test_tui_ports_travis234_forced_full_render_clears_scrollback() -> None:
 
     tui.request_render(force=True)
 
-    assert "\x1b[2J\x1b[H\x1b[3J" in terminal.writes[-1]
+    assert "\x1b[2J\x1b[H" in terminal.writes[-1]
+    assert "\x1b[3J" not in terminal.writes[-1]
 
 def test_tui_ports_travis234_clear_on_shrink_api_and_env(monkeypatch) -> None:
     monkeypatch.delenv("TRAVIS234_CLEAR_ON_SHRINK", raising=False)
@@ -988,7 +851,7 @@ def test_tui_ports_travis234_clear_on_shrink_api_and_env(monkeypatch) -> None:
     monkeypatch.setenv("TRAVIS234_CLEAR_ON_SHRINK", "1")
     assert TUI(FakeTerminal(columns=40)).get_clear_on_shrink() is True
 
-def test_tui_ports_travis234_clear_on_shrink_uses_clearing_full_redraw() -> None:
+def test_tui_clear_on_shrink_repaints_viewport_without_clearing_scrollback() -> None:
     terminal = FakeTerminal(columns=40, rows=10)
     tui = TUI(terminal)
     tui.set_clear_on_shrink(True)
@@ -1001,7 +864,8 @@ def test_tui_ports_travis234_clear_on_shrink_uses_clearing_full_redraw() -> None
     info = tui.request_render()
 
     assert info.full is True
-    assert "\x1b[2J\x1b[H\x1b[3J" in terminal.writes[-1]
+    assert "\x1b[2J\x1b[H" in terminal.writes[-1]
+    assert "\x1b[3J" not in terminal.writes[-1]
 
 def test_tui_ports_travis234_full_redraw_counter() -> None:
     terminal = FakeTerminal(columns=40)
@@ -1137,7 +1001,7 @@ def test_process_terminal_disables_mouse_tracking_by_default_to_keep_touchpad_sc
     assert "\x1b[?1000h\x1b[?1006h" not in terminal.writes
     assert "\x1b[?1006l\x1b[?1000l" not in terminal.writes
 
-def test_process_terminal_enables_mouse_tracking_by_default_in_sandbox(monkeypatch) -> None:
+def test_process_terminal_never_enables_mouse_tracking_implicitly_in_sandbox(monkeypatch) -> None:
     class RecordingProcessTerminal(ProcessTerminal):
         def __init__(self) -> None:
             self.writes: list[str] = []
@@ -1153,8 +1017,9 @@ def test_process_terminal_enables_mouse_tracking_by_default_in_sandbox(monkeypat
     terminal.start(lambda data: None, lambda: None)
     terminal.stop()
 
-    assert "\x1b[?1000h\x1b[?1006h" in terminal.writes
-    assert "\x1b[?1006l\x1b[?1000l" in terminal.writes
+    assert terminal.mouse_tracking_enabled is False
+    assert "\x1b[?1000h\x1b[?1006h" not in terminal.writes
+    assert "\x1b[?1006l\x1b[?1000l" not in terminal.writes
 
 def test_process_terminal_can_disable_sandbox_mouse_tracking(monkeypatch) -> None:
     class RecordingProcessTerminal(ProcessTerminal):
@@ -1192,6 +1057,31 @@ def test_process_terminal_can_opt_into_mouse_tracking(monkeypatch) -> None:
 
     assert "\x1b[?1000h\x1b[?1006h" in terminal.writes
     assert "\x1b[?1006l\x1b[?1000l" in terminal.writes
+
+
+def test_process_terminal_tracks_real_pty_resize_and_restores_signal_handler(monkeypatch) -> None:
+    import signal
+    import travis.tui.terminal as terminal_module
+
+    registrations: list[tuple[object, object]] = []
+    previous_handler = object()
+    monkeypatch.setattr(signal, "getsignal", lambda _signal: previous_handler)
+    monkeypatch.setattr(signal, "signal", lambda registered_signal, handler: registrations.append((registered_signal, handler)))
+
+    terminal = ProcessTerminal()
+    monkeypatch.setattr(terminal_module, "_terminal_size", lambda: (40, 18))
+    resized: list[tuple[int, int]] = []
+
+    terminal.start(lambda _data: None, lambda: resized.append((terminal.columns, terminal.rows)))
+
+    assert registrations and registrations[-1][0] == signal.SIGWINCH
+    resize_handler = registrations[-1][1]
+    resize_handler(signal.SIGWINCH, None)
+    assert (terminal.columns, terminal.rows) == (40, 18)
+    assert resized == [(40, 18)]
+
+    terminal.stop()
+    assert registrations[-1] == (signal.SIGWINCH, previous_handler)
 
 def test_process_terminal_ports_travis234_utf8_text_decoding_before_stdin_buffer() -> None:
     terminal = ProcessTerminal()
@@ -1281,6 +1171,8 @@ def test_process_terminal_drain_input_discards_pending_bytes() -> None:
         os.close(write_fd)
 
 def test_interactive_mode_default_uses_raw_tui_input_for_prompt_submit(monkeypatch, tmp_path) -> None:
+    from travis.tui import Editor
+
     def forbidden_input(prompt: str) -> str:
         raise AssertionError("raw TUI mode must not call Python input()")
 
@@ -1314,14 +1206,17 @@ def test_interactive_mode_default_uses_raw_tui_input_for_prompt_submit(monkeypat
     try:
         assert _wait_until(lambda: terminal.input_handler is not None and mode.active_editor is not None)
         assert mode.active_editor is not None
+        assert isinstance(mode.active_editor, Editor)
         assert mode.active_editor.focused is True
 
         terminal.input_handler("h")
         terminal.input_handler("i")
-        assert _wait_until(lambda: mode.active_editor is not None and mode.active_editor.get_value() == "hi")
+        terminal.input_handler("\x1b[13;2u")
+        terminal.input_handler("there")
+        assert _wait_until(lambda: mode.active_editor is not None and mode.active_editor.get_value() == "hi\nthere")
         terminal.input_handler("\r")
 
-        assert _wait_until(lambda: seen_prompts == ["hi"], timeout=2)
+        assert _wait_until(lambda: seen_prompts == ["hi\nthere"], timeout=2)
         assert _wait_until(lambda: not mode._is_turn_active(), timeout=2)
         assert _wait_until(lambda: mode.active_editor is not None, timeout=2)
         terminal.input_handler("/exit\r")

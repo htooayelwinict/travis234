@@ -168,12 +168,14 @@ class Input(Component):
         prompt: str = "",
         on_submit: Callable[[str], None] | None = None,
         mask: bool = False,
+        theme_context: object | None = None,
     ) -> None:
         self.value = value
         self.prompt = prompt
         self.mask = mask
         self.cursor = len(value)
         self.on_submit = on_submit
+        self.theme_context = theme_context
         self.on_escape: Callable[[], None] | None = None
         self.on_escape: Callable[[], None] | None = None
         self.focused = False
@@ -398,7 +400,7 @@ class Input(Component):
         prompt_width = visible_width(self.prompt)
         available_width = width - prompt_width
         if available_width <= 0:
-            return [truncate_to_width(self.prompt, width)]
+            return [self._style_line(truncate_to_width(self.prompt, width))]
         display_value = ("*" * len(self.value)) if self.mask else self.value
         display_cursor = max(0, min(self.cursor, len(display_value)))
         if _is_plain_ascii_input(display_value):
@@ -434,7 +436,7 @@ class Input(Component):
         text_with_cursor = before_cursor + marker + f"\x1b[7m{at_cursor}\x1b[27m" + after_cursor
         visual_length = visible_width(text_with_cursor)
         padding = " " * max(0, available_width - visual_length)
-        return [truncate_to_width(self.prompt + text_with_cursor + padding, width)]
+        return [self._style_line(truncate_to_width(self.prompt + text_with_cursor + padding, width))]
 
     def _render_plain_ascii(
         self,
@@ -475,7 +477,13 @@ class Input(Component):
         text_with_cursor = before_cursor + marker + f"\x1b[7m{at_cursor}\x1b[27m" + after_cursor
         visual_length = visible_width(text_with_cursor)
         padding = " " * max(0, available_width - visual_length)
-        return [truncate_to_width(self.prompt + text_with_cursor + padding, width)]
+        return [self._style_line(truncate_to_width(self.prompt + text_with_cursor + padding, width))]
+
+    def _style_line(self, line: str) -> str:
+        theme = getattr(self.theme_context, "theme", None)
+        if theme is None or not self.prompt or not line.startswith(self.prompt):
+            return line
+        return theme.fg("accent", self.prompt) + line[len(self.prompt) :]
 
     def _push_kill(self, text: str, *, prepend: bool, accumulate: bool) -> None:
         if not text:

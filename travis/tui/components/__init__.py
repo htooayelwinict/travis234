@@ -7,6 +7,7 @@ from travis.tui.components.footer import FooterComponent, StatusLine, format_cwd
 from travis.tui.components.image import Image
 from travis.tui.components.loaders import CancellableLoader, Loader
 from travis.tui.components.markdown import Markdown
+from travis.tui.components.multiline_editor import Editor
 from travis.tui.components.pickers import SelectItem, SelectList, SettingsList
 
 __all__ = [
@@ -17,6 +18,7 @@ __all__ = [
     "Container",
     "CURSOR_MARKER",
     "FooterComponent",
+    "Editor",
     "Image",
     "Input",
     "Loader",

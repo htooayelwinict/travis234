@@ -36,12 +36,28 @@ class Component:
     def invalidate(self) -> None:
         pass
 
+    def set_theme_context(self, theme_context: object | None) -> None:
+        self.theme_context = theme_context
+        self.invalidate()
+
 
 class Container(Component):
-    def __init__(self, children: Optional[list[Component]] = None) -> None:
-        self.children: list[Component] = list(children or [])
+    def __init__(
+        self,
+        children: Optional[list[Component]] = None,
+        *,
+        theme_context: object | None = None,
+    ) -> None:
+        self.children: list[Component] = []
+        self.theme_context = theme_context
+        for child in children or []:
+            self.add(child)
 
     def add(self, component: Component) -> Component:
+        if self.theme_context is not None:
+            setter = getattr(component, "set_theme_context", None)
+            if callable(setter):
+                setter(self.theme_context)
         self.children.append(component)
         return component
 
@@ -62,10 +78,28 @@ class Container(Component):
         for child in self.children:
             child.invalidate()
 
+    def set_theme_context(self, theme_context: object | None) -> None:
+        self.theme_context = theme_context
+        for child in self.children:
+            setter = getattr(child, "set_theme_context", None)
+            if callable(setter):
+                setter(theme_context)
+        self.invalidate()
+
 
 class Text(Component):
-    def __init__(self, text: str = "") -> None:
+    def __init__(
+        self,
+        text: str = "",
+        *,
+        theme_context: object | None = None,
+        role: str | None = None,
+        background_role: str | None = None,
+    ) -> None:
         self._text = text
+        self.theme_context = theme_context
+        self.role = role
+        self.background_role = background_role
         self._cache: list[str] | None = None
         self._cache_key: tuple[str, int] | None = None
 
@@ -84,13 +118,26 @@ class Text(Component):
     def render(self, width: int) -> list[str]:
         key = (self._text, width)
         if self._cache is not None and self._cache_key == key:
-            return self._cache
+            return self._style_lines(self._cache)
         lines: list[str] = []
         for raw in self._text.split("\n"):
             lines.extend(wrap_text(raw, width))
         self._cache = lines
         self._cache_key = key
-        return lines
+        return self._style_lines(lines)
+
+    def _style_lines(self, lines: list[str]) -> list[str]:
+        context = self.theme_context
+        theme = getattr(context, "theme", None) if context is not None else None
+        if theme is None:
+            return lines
+        styled: list[str] = []
+        for line in lines:
+            value = theme.fg(self.role, line) if self.role else line
+            if self.background_role:
+                value = theme.bg(self.background_role, value)
+            styled.append(value)
+        return styled
 
 
 class TruncatedText(Component):
@@ -132,24 +179,75 @@ class Spacer(Component):
 class Box(Component):
     """A child wrapped in a simple single-line border (optional title)."""
 
-    def __init__(self, child: Component, title: str = "") -> None:
+    def __init__(
+        self,
+        child: Component,
+        title: str = "",
+        *,
+        theme_context: object | None = None,
+        border_role: str = "border",
+        background_role: str | None = None,
+        title_role: str = "accent",
+        padding: int = 0,
+        unicode: bool = False,
+        accent_rail: bool = False,
+    ) -> None:
         self.child = child
         self.title = title
+        self.theme_context = theme_context
+        self.border_role = border_role
+        self.background_role = background_role
+        self.title_role = title_role
+        self.padding = max(0, int(padding))
+        self.unicode = bool(unicode)
+        self.accent_rail = bool(accent_rail)
+        if theme_context is not None:
+            self.child.set_theme_context(theme_context)
 
     def invalidate(self) -> None:
         self.child.invalidate()
 
+    def set_theme_context(self, theme_context: object | None) -> None:
+        self.theme_context = theme_context
+        self.child.set_theme_context(theme_context)
+        self.invalidate()
+
     def render(self, width: int) -> list[str]:
+        if self.accent_rail:
+            inner_width = max(1, width - 2 - self.padding * 2)
+            lines = [*([""] * self.padding), *self.child.render(inner_width), *([""] * self.padding)]
+            rows: list[str] = []
+            for line in lines:
+                content = (" " * self.padding) + truncate_to_width(line, inner_width) + (" " * self.padding)
+                content += " " * max(0, width - 2 - visible_width(content))
+                rows.append(self._fg(self.border_role, "▌") + " " + self._bg(content))
+            return rows
         inner_width = max(1, width - 2)
         top_label = f" {self.title} " if self.title else ""
-        top = "+" + top_label + "-" * max(0, inner_width - visible_width(top_label)) + "+"
+        top_left, top_right, bottom_left, bottom_right, horizontal, vertical = (
+            ("╭", "╮", "╰", "╯", "─", "│") if self.unicode else ("+", "+", "+", "+", "-", "|")
+        )
+        rendered_label = self._fg(self.title_role, top_label) if top_label else ""
+        top = self._fg(self.border_role, top_left) + rendered_label + self._fg(
+            self.border_role,
+            horizontal * max(0, inner_width - visible_width(top_label)) + top_right,
+        )
         rows = [top]
         for line in self.child.render(inner_width):
             padded = truncate_to_width(line, inner_width)
             pad = inner_width - visible_width(padded)
-            rows.append("|" + padded + (" " * max(0, pad)) + "|")
-        rows.append("+" + "-" * inner_width + "+")
+            content = self._bg(padded + (" " * max(0, pad)))
+            rows.append(self._fg(self.border_role, vertical) + content + self._fg(self.border_role, vertical))
+        rows.append(self._fg(self.border_role, bottom_left + horizontal * inner_width + bottom_right))
         return rows
+
+    def _fg(self, role: str, text: str) -> str:
+        theme = getattr(self.theme_context, "theme", None)
+        return theme.fg(role, text) if theme is not None else text
+
+    def _bg(self, text: str) -> str:
+        theme = getattr(self.theme_context, "theme", None)
+        return theme.bg(self.background_role, text) if theme is not None and self.background_role else text
 
 def _single_line(text: str) -> str:
     return " ".join(text.replace("\r", " ").replace("\n", " ").replace("\t", " ").split())

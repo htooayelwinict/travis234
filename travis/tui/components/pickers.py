@@ -241,16 +241,15 @@ class SelectList(Component):
         max_visible: int = 5,
         theme: object | None = None,
         layout: dict[str, Any] | None = None,
+        theme_context: object | None = None,
     ) -> None:
         self.items = list(items)
         self.filtered_items = list(items)
         self.max_visible = max(1, max_visible)
         self.theme = theme
+        self.theme_context = theme_context
         self.layout = dict(layout or {})
         self.selected_index = 0
-        self.on_select: Callable[[SelectItem], None] | None = None
-        self.on_cancel: Callable[[], None] | None = None
-        self.on_selection_change: Callable[[SelectItem], None] | None = None
         self.on_select: Callable[[SelectItem], None] | None = None
         self.on_cancel: Callable[[], None] | None = None
         self.on_selection_change: Callable[[SelectItem], None] | None = None
@@ -392,6 +391,16 @@ class SelectList(Component):
             callback = getattr(self.theme, name, None)
         if callable(callback):
             return str(callback(text))
+        semantic_theme = getattr(self.theme_context, "theme", None)
+        if semantic_theme is not None:
+            if name == "selectedText":
+                return semantic_theme.bg("selectedBg", semantic_theme.fg("text", text))
+            role = {
+                "description": "muted",
+                "scrollInfo": "dim",
+                "noMatch": "warning",
+            }.get(name, "text")
+            return semantic_theme.fg(role, text)
         return text
 
     def _notify_selection_change(self) -> None:

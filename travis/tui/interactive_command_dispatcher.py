@@ -28,6 +28,7 @@ from travis.tui.components import (
     CombinedAutocompleteProvider,
     Component,
     Container,
+    Editor,
     FooterComponent,
     Input,
     Spacer,
@@ -167,7 +168,12 @@ class InteractiveCommandDispatcher:
                     submitted.append(value)
                     submitted_queue.put(value)
 
-                prompt_component = Input(value=self.editor_text, prompt=self.prompt_label, on_submit=on_submit)
+                prompt_component = Editor(
+                    value=self.editor_text,
+                    prompt=self.prompt_label,
+                    on_submit=on_submit,
+                    theme_context=self.theme_context,
+                )
                 prompt_component.set_history(self.prompt_history)
                 prompt_component.on_escape = self._handle_editor_escape
                 prompt_component.on_escape = self._handle_editor_escape

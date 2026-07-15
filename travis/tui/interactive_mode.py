@@ -21,6 +21,7 @@ from travis.compaction import estimate_tokens
 from travis.coding_agent.agent_session import BashResult
 from travis.coding_agent.session_catalog import SessionInfo
 from travis.coding_agent.session_commands import SessionCommandExecutor
+from travis.coding_agent.source_info import SourceInfo
 from travis.coding_agent.themes import Theme, ThemeRegistry
 from travis.coding_agent.processes.types import ProcessEvent, ProcessSnapshot, ProcessState
 from travis.coding_agent.tools.bash import BashExecOptions, get_shell_env
@@ -48,6 +49,9 @@ from travis.tui.user_commands import (
     UserCommandController,
     UserCommandHandle,
 )
+from travis.tui.builtin_themes import BUILTIN_THEMES, resolve_builtin_theme
+from travis.tui.theme import ThemeContext
+from travis.tui.theme_controller import ThemeController
 
 from travis.tui.interactive_command_dispatcher import *  # noqa: F403
 from travis.tui.interactive_extensions import *  # noqa: F403
@@ -62,6 +66,33 @@ from travis.runtime_facade import RuntimeFacade
 
 from travis.tui.footer_data import _ExtensionFooterDataProvider
 from travis.tui.interactive_shutdown import InputFn
+
+
+def _builtin_theme_records() -> list[Theme]:
+    records: list[Theme] = []
+    for name, definition in BUILTIN_THEMES.items():
+        records.append(
+            Theme(
+                name=name,
+                colors=dict(definition["colors"]),
+                vars=dict(definition["vars"]),
+                source_path="",
+                source_info=SourceInfo(
+                    path=f"builtin:{name}",
+                    source="travis234-builtin",
+                    scope="built-in",
+                ),
+            )
+        )
+    return records
+
+
+def _terminal_color_mode() -> str:
+    if "NO_COLOR" in os.environ or os.environ.get("TERM", "").lower() == "dumb":
+        return "none"
+    if "256color" in os.environ.get("TERM", "").lower():
+        return "256color"
+    return "truecolor"
 
 class _InteractiveRuntime(
         InteractiveCommandDispatcher,
@@ -97,6 +128,8 @@ class _InteractiveRuntime(
         self._line_input_mode = input_fn is not None
         self.prompt_label = prompt_label
         self.theme_registry = ThemeRegistry()
+        self._builtin_theme_records = _builtin_theme_records()
+        self.theme_registry.register_many(self._builtin_theme_records)
         resource_loader = getattr(app.session, "resource_loader", None)
         discovered_themes = (
             resource_loader.get_themes().get("themes", [])
@@ -110,8 +143,20 @@ class _InteractiveRuntime(
                 if isinstance(theme, Theme)
             ]
         )
-        self.history = Container()
-        self.status = StatusLine("Idle")
+        color_mode = _terminal_color_mode()
+        initial_theme, _ = resolve_builtin_theme("Signal Glass", color_mode=color_mode)
+        self.theme_context = ThemeContext(initial_theme)
+        self._theme_render_ready = False
+        self.theme_controller = ThemeController(
+            self.theme_registry,
+            getattr(app.session, "settings_manager", None),
+            self.theme_context,
+            lambda: self.tui.request_render() if self._theme_render_ready else None,
+            color_mode=color_mode,
+        )
+        self.theme_controller.select_persisted()
+        self.history = Container(theme_context=self.theme_context)
+        self.status = StatusLine("Idle", theme_context=self.theme_context)
         self.default_working_message = "Idle"
         self.default_hidden_thinking_label = ""
         self.hidden_thinking_label = self.default_hidden_thinking_label
@@ -163,12 +208,12 @@ class _InteractiveRuntime(
                     lambda: self._fail_user_command(handle.command_id, message)
                 ),
             )
-        self.built_in_header = Text(self._startup_text())
-        self.header_container = Container([self.built_in_header, Spacer(1)])
+        self.built_in_header = Text(self._startup_text(), role="accent")
+        self.header_container = Container([self.built_in_header, Spacer(1)], theme_context=self.theme_context)
         self.custom_header: object | None = None
-        self.widget_container_above = Container()
-        self.editor_container = Container()
-        self.widget_container_below = Container()
+        self.widget_container_above = Container(theme_context=self.theme_context)
+        self.editor_container = Container(theme_context=self.theme_context)
+        self.widget_container_below = Container(theme_context=self.theme_context)
         self.footer = FooterComponent(
             cwd=str(app.cwd),
             model=app.session.model.id,
@@ -176,12 +221,15 @@ class _InteractiveRuntime(
             thinking_level=app.session.thinking_level,
             session_name=app.session.session_name,
             extension_statuses=self.extension_statuses,
+            theme_context=self.theme_context,
         )
         self.footer_container = Container([self.footer])
         self.footer_data_provider = _ExtensionFooterDataProvider(self)
         self.custom_footer: object | None = None
         if hasattr(app, "renderer") and hasattr(app.renderer, "set_output_container"):
             app.renderer.set_output_container(self.history)
+        if hasattr(app, "renderer") and hasattr(app.renderer, "set_theme_context"):
+            app.renderer.set_theme_context(self.theme_context)
         if hasattr(app, "renderer") and hasattr(app.renderer, "set_hidden_thinking_label"):
             app.renderer.set_hidden_thinking_label(self.hidden_thinking_label)
         if hasattr(app, "renderer") and hasattr(app.renderer, "set_hide_thinking_block"):
@@ -201,6 +249,13 @@ class _InteractiveRuntime(
                 lambda _session: self.tui.post(self._rebind_session_ui)
             )
         self.setup_autocomplete_provider()
+        self._theme_render_ready = True
+
+    def _ensure_builtin_themes(self) -> None:
+        existing = {theme.name for theme in self.theme_registry.list()}
+        missing = [theme for theme in self._builtin_theme_records if theme.name not in existing]
+        if missing:
+            self.theme_registry.register_many(missing)
 
 
 class InteractiveMode(RuntimeFacade):

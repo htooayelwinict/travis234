@@ -207,6 +207,49 @@ def test_interactive_theme_registry_connects_set_theme_and_falls_back_on_reload(
         app.close()
 
 
+def test_interactive_package_parser_ignores_ordinary_prompt_with_apostrophe(tmp_path) -> None:
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=100, rows=30),
+        enable_tui=True,
+        agent_dir=str(tmp_path / "agent"),
+        project_trust_override=True,
+    )
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+
+    try:
+        before = strip_ansi("\n".join(mode.history.render(500)))
+        assert mode._run_package_command("Report README.md's exact byte count") is False
+        assert mode._run_package_command("/packages-extra README.md's") is False
+        after = strip_ansi("\n".join(mode.history.render(500)))
+        assert after == before
+        assert "Invalid package command" not in after
+    finally:
+        mode.footer_data_provider.dispose()
+        app.close()
+
+
+def test_interactive_package_parser_reports_malformed_recognized_command(tmp_path) -> None:
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=100, rows=30),
+        enable_tui=True,
+        agent_dir=str(tmp_path / "agent"),
+        project_trust_override=True,
+    )
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+
+    try:
+        assert mode._run_package_command("/install 'unterminated") is True
+        history = strip_ansi("\n".join(mode.history.render(500)))
+        assert "Invalid package command: No closing quotation" in history
+    finally:
+        mode.footer_data_provider.dispose()
+        app.close()
+
+
 def test_interactive_package_commands_confirm_mutate_and_refresh_resources(tmp_path) -> None:
     package = tmp_path / "package"
     prompts = package / "prompts"
@@ -2004,7 +2047,7 @@ def test_tui_footer_status_diff_and_width_constraints() -> None:
     assert second.first_changed == 2
     assert all(visible_width(line) <= 24 for line in second.lines)
 
-def test_tui_diff_render_clips_to_terminal_rows_without_scrolling_past_viewport() -> None:
+def test_tui_diff_render_keeps_complete_history_and_addresses_only_visible_tail() -> None:
     terminal = FakeTerminal(columns=80, rows=5)
     tui = TUI(terminal)
     for index in range(8):
@@ -2016,8 +2059,9 @@ def test_tui_diff_render_clips_to_terminal_rows_without_scrolling_past_viewport(
     footer.set_message("Running")
     second = tui.request_render()
 
-    assert len(first.lines) == 5
-    assert len(second.lines) == 5
+    assert len(first.lines) == 9
+    assert len(second.lines) == 9
+    assert first.lines[:2] == ["history 0", "history 1"]
     assert second.lines[-1] == "status: Running"
     assert "\x1b[6;1H" not in terminal.writes[-1]
     assert "\x1b[9;1H" not in terminal.writes[-1]

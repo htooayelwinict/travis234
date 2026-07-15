@@ -729,14 +729,17 @@ def test_interactive_mode_manual_compress_routes_deep_mode_through_session(tmp_p
     assert "compact: No changes from compression: 0 messages" in rendered
     assert "status: Compressing" not in rendered
 
-def test_status_line_uses_signal_glass_theme_for_known_kinds(monkeypatch) -> None:
+def test_status_line_uses_semantic_theme_for_known_kinds(monkeypatch) -> None:
     monkeypatch.delenv("NO_COLOR", raising=False)
     monkeypatch.setenv("TERM", "xterm-256color")
-    line = StatusLine("Compression complete", kind="compact")
+    from travis.tui import ThemeContext, resolve_builtin_theme
+
+    theme, _ = resolve_builtin_theme("Signal Glass", color_mode="truecolor")
+    line = StatusLine("Compression complete", kind="compact", theme_context=ThemeContext(theme))
 
     rendered = "\n".join(line.render(80))
 
-    assert "\x1b[38;2;86;240;182m" in rendered
+    assert theme.foreground_ansi["accent"] in rendered
     assert strip_ansi(rendered) == "compact: Compression complete"
 
 def test_status_line_respects_no_color(monkeypatch) -> None:
@@ -748,20 +751,24 @@ def test_status_line_respects_no_color(monkeypatch) -> None:
     assert "\x1b[" not in rendered
     assert rendered == "compact: Compression complete"
 
-def test_footer_uses_signal_glass_theme_without_changing_text(monkeypatch, tmp_path) -> None:
+def test_footer_uses_semantic_theme_without_changing_text(monkeypatch, tmp_path) -> None:
     monkeypatch.delenv("NO_COLOR", raising=False)
     monkeypatch.setenv("TERM", "xterm-256color")
+    from travis.tui import ThemeContext, resolve_builtin_theme
+
+    theme, _ = resolve_builtin_theme("Signal Glass", color_mode="truecolor")
     footer = FooterComponent(
         cwd=str(tmp_path),
         model="faux-model",
         provider="faux",
         context_window=128_000,
         context_percent=3.5,
+        theme_context=ThemeContext(theme),
     )
 
     rendered = "\n".join(footer.render(120))
 
-    assert "\x1b[38;2;120;255;208m" in rendered
+    assert theme.foreground_ansi["accent"] in rendered
     plain = strip_ansi(rendered)
     assert "faux-model" in plain
     assert "3.5%/128k" in plain
@@ -1160,7 +1167,7 @@ def test_markdown_render_reuses_cached_lines_until_text_changes() -> None:
     second = markdown.render(80)
 
     assert second is first
-    assert first == ["bold code", "- item"]
+    assert first == ["bold code", "• item"]
 
     markdown.set_text("**changed**")
     changed = markdown.render(80)

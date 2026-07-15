@@ -52,8 +52,9 @@ class AssistantMessageComponent(Container):
         *,
         hide_thinking_block: bool = False,
         hidden_thinking_label: str = "Thinking...",
+        theme_context: object | None = None,
     ) -> None:
-        super().__init__()
+        super().__init__(theme_context=theme_context)
         self._message = None
         self.hide_thinking_block = hide_thinking_block
         self.hidden_thinking_label = hidden_thinking_label
@@ -80,18 +81,18 @@ class AssistantMessageComponent(Container):
         for block in getattr(message, "content", []) or []:
             if isinstance(block, TextContent):
                 if block.text.strip():
-                    self.add(Markdown(block.text.strip()))
+                    self.add(Markdown(block.text.strip(), role="text"))
             elif isinstance(block, ThinkingContent):
                 if block.thinking.strip():
                     if self.hide_thinking_block:
                         if self.hidden_thinking_label.strip():
-                            self.add(Text(self.hidden_thinking_label))
+                            self.add(Text(self.hidden_thinking_label, role="thinkingText"))
                     else:
-                        self.add(Markdown(f"Thinking:\n{block.thinking.strip()}"))
+                        self.add(Markdown(f"Thinking:\n{block.thinking.strip()}", role="thinkingText"))
         if getattr(message, "stop_reason", None) == "error":
-            self.add(Text(f"Error: {getattr(message, 'error_message', None) or 'Unknown error'}"))
+            self.add(Text(f"Error: {getattr(message, 'error_message', None) or 'Unknown error'}", role="error"))
         elif getattr(message, "stop_reason", None) == "aborted":
-            self.add(Text(getattr(message, "error_message", None) or "Operation aborted"))
+            self.add(Text(getattr(message, "error_message", None) or "Operation aborted", role="warning"))
         if not self.children:
             self.add(Text(""))
 
@@ -105,8 +106,9 @@ class ToolExecutionComponent(Container):
         *,
         tool_definition=None,
         cwd: str = "",
+        theme_context: object | None = None,
     ) -> None:
-        super().__init__()
+        super().__init__(theme_context=theme_context)
         self.tool_name = tool_name
         if args is None:
             self.tool_call_id = ""
@@ -134,7 +136,12 @@ class ToolExecutionComponent(Container):
             result_width = max(1, width - 2)
             for line in _render_tool_ui_value(result_value, result_width, markdown=True):
                 lines.append(f"  {line}")
-        return [truncate_to_width(line, width) for line in lines]
+        lines = [truncate_to_width(line, width) for line in lines]
+        theme = getattr(self.theme_context, "theme", None)
+        if theme is None:
+            return lines
+        background_role = "toolPendingBg" if self.result is None else ("toolErrorBg" if self.is_error else "toolSuccessBg")
+        return [theme.bg(background_role, theme.fg("toolTitle" if index == 0 else "toolOutput", line)) for index, line in enumerate(lines)]
 
     def _render_call(self) -> Any:
         if self.tool_definition and self.tool_definition.render_call:
@@ -269,14 +276,24 @@ def _render_tool_ui_value(value: Any, width: int, *, markdown: bool) -> list[str
 class UserMessageComponent(Container):
     """user message renderer with OSC 133 prompt zones."""
 
-    def __init__(self, text: str) -> None:
-        super().__init__()
+    def __init__(self, text: str, *, theme_context: object | None = None) -> None:
+        super().__init__(theme_context=theme_context)
         self.text = text
-        self.add(Box(Markdown(text)))
+        self.add(
+            Box(
+                Markdown(text, role="userMessageText"),
+                border_role="borderAccent",
+                background_role="userMessageBg",
+                accent_rail=True,
+            )
+        )
 
     def render(self, width: int) -> list[str]:
         lines = super().render(width)
         if not lines:
+            return lines
+        if len(lines) == 1:
+            lines[0] = OSC133_ZONE_START + lines[0] + OSC133_ZONE_END + OSC133_ZONE_FINAL
             return lines
         lines[0] = OSC133_ZONE_START + lines[0]
         lines[-1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[-1]
@@ -284,8 +301,8 @@ class UserMessageComponent(Container):
 
 
 class _ExpandableComponent(Container):
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, *, theme_context: object | None = None) -> None:
+        super().__init__(theme_context=theme_context)
         self.expanded = False
 
     def set_expanded(self, expanded: bool) -> None:
@@ -295,8 +312,8 @@ class _ExpandableComponent(Container):
 
 
 class _SummaryMessageComponent(_ExpandableComponent):
-    def __init__(self, message: Any) -> None:
-        super().__init__()
+    def __init__(self, message: Any, *, theme_context: object | None = None) -> None:
+        super().__init__(theme_context=theme_context)
         self.message = message
         self._rebuild()
 
@@ -304,8 +321,8 @@ class _SummaryMessageComponent(_ExpandableComponent):
 class SkillInvocationMessageComponent(_ExpandableComponent):
     """collapsed/expanded skill invocation renderer."""
 
-    def __init__(self, skill_block: ParsedSkillBlock) -> None:
-        super().__init__()
+    def __init__(self, skill_block: ParsedSkillBlock, *, theme_context: object | None = None) -> None:
+        super().__init__(theme_context=theme_context)
         self.skill_block = skill_block
         self._rebuild()
 
@@ -315,12 +332,12 @@ class SkillInvocationMessageComponent(_ExpandableComponent):
     def _rebuild(self) -> None:
         body = Container()
         if self.expanded:
-            body.add(Text("[skill]"))
-            body.add(Markdown(f"**{self.skill_block.name}**\n\n{self.skill_block.content}"))
+            body.add(Text("[skill]", role="accent"))
+            body.add(Markdown(f"**{self.skill_block.name}**\n\n{self.skill_block.content}", role="text"))
         else:
-            body.add(Text(f"[skill] {self.skill_block.name} (expand to view)"))
+            body.add(Text(f"[skill] {self.skill_block.name} (expand to view)", role="accent"))
         self.clear()
-        self.add(Box(body))
+        self.add(Box(body, border_role="borderAccent", unicode=True))
 
 
 class BashExecutionComponent(Container):
@@ -328,8 +345,14 @@ class BashExecutionComponent(Container):
 
     PREVIEW_LINES = 20
 
-    def __init__(self, command: str, exclude_from_context: bool = False) -> None:
-        super().__init__()
+    def __init__(
+        self,
+        command: str,
+        exclude_from_context: bool = False,
+        *,
+        theme_context: object | None = None,
+    ) -> None:
+        super().__init__(theme_context=theme_context)
         self.command = command
         self.exclude_from_context = exclude_from_context
         self.output_lines: list[str] = []
@@ -375,13 +398,13 @@ class BashExecutionComponent(Container):
     def render(self, width: int) -> list[str]:
         body = Container()
         suffix = " [no context]" if self.exclude_from_context else ""
-        body.add(Text(f"$ {self.command}{suffix}"))
+        body.add(Text(f"$ {self.command}{suffix}", role="bashMode"))
         output_lines = self.output_lines
         hidden = 0
         if output_lines:
             visible_lines = output_lines if self.expanded else output_lines[-self.PREVIEW_LINES :]
             hidden = max(0, len(output_lines) - len(visible_lines))
-            body.add(Text("\n" + "\n".join(visible_lines)))
+            body.add(Text("\n" + "\n".join(visible_lines), role="toolOutput"))
         status_lines: list[str] = []
         if self.status == "running":
             status_lines.append("Running...")
@@ -394,8 +417,9 @@ class BashExecutionComponent(Container):
         if self.truncated and self.full_output_path:
             status_lines.append(f"Output truncated. Full output: {self.full_output_path}")
         if status_lines:
-            body.add(Text("\n".join(status_lines)))
-        return Box(body).render(width)
+            role = "error" if self.status in {"error", "cancelled"} else "success"
+            body.add(Text("\n".join(status_lines), role=role))
+        return Box(body, theme_context=self.theme_context, border_role="bashMode", unicode=True).render(width)
 
     def get_output(self) -> str:
         return "\n".join(self.output_lines)
@@ -414,14 +438,14 @@ class BranchSummaryMessageComponent(_SummaryMessageComponent):
 
     def _rebuild(self) -> None:
         body = Container()
-        body.add(Text("[branch]"))
+        body.add(Text("[branch]", role="accent"))
         body.add(Spacer(1))
         if self.expanded:
-            body.add(Markdown(f"**Branch Summary**\n\n{getattr(self.message, 'summary', '')}"))
+            body.add(Markdown(f"**Branch Summary**\n\n{getattr(self.message, 'summary', '')}", role="text"))
         else:
-            body.add(Text("Branch summary (expand to view)"))
+            body.add(Text("Branch summary (expand to view)", role="muted"))
         self.clear()
-        self.add(Box(body))
+        self.add(Box(body, border_role="accent", unicode=True))
 
 
 class CompactionSummaryMessageComponent(_SummaryMessageComponent):
@@ -434,21 +458,21 @@ class CompactionSummaryMessageComponent(_SummaryMessageComponent):
         tokens_before = _message_attr(self.message, "tokensBefore", "tokens_before", default=0)
         token_str = f"{_safe_int(tokens_before):,}"
         body = Container()
-        body.add(Text("[compaction]"))
+        body.add(Text("[compaction]", role="warning"))
         body.add(Spacer(1))
         if self.expanded:
-            body.add(Markdown(f"**Compacted from {token_str} tokens**\n\n{getattr(self.message, 'summary', '')}"))
+            body.add(Markdown(f"**Compacted from {token_str} tokens**\n\n{getattr(self.message, 'summary', '')}", role="text"))
         else:
-            body.add(Text(f"Compacted from {token_str} tokens (expand to view)"))
+            body.add(Text(f"Compacted from {token_str} tokens (expand to view)", role="muted"))
         self.clear()
-        self.add(Box(body))
+        self.add(Box(body, border_role="warning", unicode=True))
 
 
 class CustomMessageComponent(_ExpandableComponent):
     """renderer for extension-injected custom messages."""
 
-    def __init__(self, message: Any, custom_renderer=None) -> None:
-        super().__init__()
+    def __init__(self, message: Any, custom_renderer=None, *, theme_context: object | None = None) -> None:
+        super().__init__(theme_context=theme_context)
         self.message = message
         self.custom_renderer = custom_renderer
         self._rebuild()
@@ -471,10 +495,10 @@ class CustomMessageComponent(_ExpandableComponent):
 
         body = Container()
         label = getattr(self.message, "custom_type", "custom")
-        body.add(Text(f"[{label}]"))
+        body.add(Text(f"[{label}]", role="customMessageLabel"))
         body.add(Spacer(1))
-        body.add(Markdown(_custom_message_text(self.message)))
-        self.add(Box(body))
+        body.add(Markdown(_custom_message_text(self.message), role="customMessageText"))
+        self.add(Box(body, border_role="customMessageLabel", background_role="customMessageBg", unicode=True))
 
 
 def message_to_component(
@@ -483,6 +507,7 @@ def message_to_component(
     *,
     hide_thinking_block: bool = False,
     hidden_thinking_label: str = "Thinking...",
+    theme_context: object | None = None,
 ) -> Component | None:
     """Render an existing Travis coding-agent message into a TUI component."""
 
@@ -491,6 +516,7 @@ def message_to_component(
         component = BashExecutionComponent(
             getattr(message, "command", ""),
             exclude_from_context=bool(getattr(message, "exclude_from_context", False)),
+            theme_context=theme_context,
         )
         output = getattr(message, "output", "")
         if output:
@@ -503,38 +529,43 @@ def message_to_component(
         )
         return _with_leading_spacer(component)
     if role == "branchSummary":
-        component = BranchSummaryMessageComponent(message)
+        component = BranchSummaryMessageComponent(message, theme_context=theme_context)
         return _with_leading_spacer(component)
     if role == "compactionSummary":
-        component = CompactionSummaryMessageComponent(message)
+        component = CompactionSummaryMessageComponent(message, theme_context=theme_context)
         return _with_leading_spacer(component)
     if role == "custom":
         if not bool(getattr(message, "display", True)):
             return None
         custom_type = getattr(message, "custom_type", "")
-        component = CustomMessageComponent(message, (custom_renderers or {}).get(custom_type))
+        component = CustomMessageComponent(
+            message,
+            (custom_renderers or {}).get(custom_type),
+            theme_context=theme_context,
+        )
         return _with_leading_spacer(component)
     if role == "assistant":
         return AssistantMessageComponent(
             message,
             hide_thinking_block=hide_thinking_block,
             hidden_thinking_label=hidden_thinking_label,
+            theme_context=theme_context,
         )
     if role == "user":
-        return user_message_to_component(_custom_message_text(message))
+        return user_message_to_component(_custom_message_text(message), theme_context=theme_context)
     return None
 
 
-def user_message_to_component(text: str) -> Component:
+def user_message_to_component(text: str, *, theme_context: object | None = None) -> Component:
     skill_block = parse_skill_block(text)
     if skill_block is None:
-        return UserMessageComponent(text)
+        return UserMessageComponent(text, theme_context=theme_context)
 
-    container = Container()
-    container.add(SkillInvocationMessageComponent(skill_block))
+    container = Container(theme_context=theme_context)
+    container.add(SkillInvocationMessageComponent(skill_block, theme_context=theme_context))
     if skill_block.user_message:
         container.add(Spacer(1))
-        container.add(UserMessageComponent(skill_block.user_message))
+        container.add(UserMessageComponent(skill_block.user_message, theme_context=theme_context))
     return container
 
 
@@ -622,11 +653,13 @@ class InteractiveRenderer:
         output_container: Container | None = None,
         tool_definitions: dict[str, Any] | None = None,
         cwd: str = "",
+        theme_context: object | None = None,
     ) -> None:
         self.tui = tui
         self.output_container: Container = output_container or tui
         self.tool_definitions = tool_definitions or {}
         self.cwd = cwd
+        self.theme_context = theme_context
         self._current_assistant: AssistantMessageComponent | None = None
         self._tool_components: dict[str, ToolExecutionComponent] = {}
         self.hide_thinking_block = True
@@ -634,6 +667,10 @@ class InteractiveRenderer:
 
     def set_output_container(self, output_container: Container) -> None:
         self.output_container = output_container
+
+    def set_theme_context(self, theme_context: object | None) -> None:
+        self.theme_context = theme_context
+        self.output_container.set_theme_context(theme_context)
 
     def set_hidden_thinking_label(self, label: str) -> None:
         self.hidden_thinking_label = str(label)
@@ -665,6 +702,7 @@ class InteractiveRenderer:
                 "",
                 hide_thinking_block=self.hide_thinking_block,
                 hidden_thinking_label=self.hidden_thinking_label,
+                theme_context=self.theme_context,
             )
             self._add(self._current_assistant)
             needs_render = True
@@ -682,6 +720,7 @@ class InteractiveRenderer:
                             block.arguments,
                             tool_definition=self.tool_definitions.get(block.name),
                             cwd=self.cwd,
+                            theme_context=self.theme_context,
                         )
                         self._tool_components[block.id] = component
                         self._add(component)
@@ -702,6 +741,7 @@ class InteractiveRenderer:
                     event.args,
                     tool_definition=self.tool_definitions.get(event.tool_name),
                     cwd=self.cwd,
+                    theme_context=self.theme_context,
                 )
                 self._tool_components[event.tool_call_id] = component
                 self._add(component)

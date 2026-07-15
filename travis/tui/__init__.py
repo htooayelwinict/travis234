@@ -7,6 +7,7 @@ from travis.tui.components import (
     Component,
     Container,
     CURSOR_MARKER,
+    Editor,
     FooterComponent,
     Image,
     Input,
@@ -27,6 +28,7 @@ from travis.tui.fuzzy import (
     fuzzy_filter,
     fuzzy_match,
 )
+from travis.tui.builtin_themes import BUILTIN_THEMES, resolve_builtin_theme
 from travis.tui.interactive import (
     AssistantMessageComponent,
     BashExecutionComponent,
@@ -96,6 +98,14 @@ from travis.tui.terminal_image import (
     set_capabilities,
     set_cell_dimensions,
 )
+from travis.tui.theme import (
+    REQUIRED_THEME_ROLES,
+    ResolvedTheme,
+    ThemeContext,
+    ThemeDiagnostic,
+    resolve_theme,
+)
+from travis.tui.theme_controller import ThemeController
 from travis.tui.tui import (
     RenderInfo,
     TUI,
@@ -120,6 +130,7 @@ from travis.tui.word_navigation import (
 __all__ = [
     "AssistantMessageComponent",
     "BashExecutionComponent",
+    "BUILTIN_THEMES",
     "Box",
     "BranchSummaryMessageComponent",
     "CancellableLoader",
@@ -129,6 +140,7 @@ __all__ = [
     "Component",
     "Container",
     "CustomMessageComponent",
+    "Editor",
     "FakeTerminal",
     "FooterComponent",
     "format_cwd_for_footer",
@@ -152,6 +164,8 @@ __all__ = [
     "ParsedSkillBlock",
     "ProcessTerminal",
     "RenderInfo",
+    "REQUIRED_THEME_ROLES",
+    "ResolvedTheme",
     "SelectItem",
     "SelectList",
     "SettingsList",
@@ -164,6 +178,9 @@ __all__ = [
     "TUI_KEYBINDINGS",
     "Terminal",
     "TerminalCapabilities",
+    "ThemeContext",
+    "ThemeController",
+    "ThemeDiagnostic",
     "Text",
     "ToolExecutionComponent",
     "TruncatedText",
@@ -203,6 +220,8 @@ __all__ = [
     "parse_key",
     "render_image",
     "reset_capabilities_cache",
+    "resolve_builtin_theme",
+    "resolve_theme",
     "set_capabilities",
     "set_cell_dimensions",
     "set_keybindings",

@@ -26,39 +26,35 @@ from travis.tui.utils import slice_by_column, truncate_to_width, visible_width, 
 
 from travis.tui.components.base import Component, Text, _single_line
 
-_ANSI_RESET = "\x1b[0m"
-_SIGNAL_GLASS_STATUS_COLORS = {
-    "compact": "38;2;86;240;182",
-    "info": "38;2;191;231;255",
-    "note": "38;2;255;229;166",
-    "warning": "38;2;255;182;72",
-    "error": "38;2;255;112;112",
-    "help": "38;2;120;255;208",
-    "status": "38;2;217;255;242",
-    "select": "38;2;120;255;208",
-    "auth": "38;2;120;255;208",
-    "model": "38;2;120;255;208",
+_STATUS_ROLES = {
+    "compact": "accent",
+    "info": "accent",
+    "note": "muted",
+    "warning": "warning",
+    "error": "error",
+    "help": "accent",
+    "success": "success",
+    "select": "accent",
+    "auth": "accent",
+    "model": "accent",
+    "input": "accent",
+    "editor": "accent",
+    "theme": "accent",
 }
-_SIGNAL_GLASS_FOOTER_COLOR = "38;2;120;255;208"
-
-def _tui_color_enabled() -> bool:
-    if os.environ.get("NO_COLOR"):
-        return False
-    return os.environ.get("TERM", "").lower() != "dumb"
-
-
-def _ansi_color(text: str, color: str | None) -> str:
-    if not text or not color or not _tui_color_enabled():
-        return text
-    return f"\x1b[{color}m{text}{_ANSI_RESET}"
 
 class StatusLine(Text):
-    def __init__(self, message: str = "", kind: str = "status") -> None:
+    def __init__(
+        self,
+        message: str = "",
+        kind: str = "status",
+        *,
+        theme_context: object | None = None,
+    ) -> None:
         self.kind = kind
         self.visible = True
         self._message = ""
         self._indicator: str | None = None
-        super().__init__("")
+        super().__init__("", theme_context=theme_context)
         self.set_message(message)
 
     def set_message(self, message: str, kind: str | None = None) -> None:
@@ -79,8 +75,12 @@ class StatusLine(Text):
     def render(self, width: int) -> list[str]:
         if not self.visible:
             return []
-        color = _SIGNAL_GLASS_STATUS_COLORS.get(self.kind, _SIGNAL_GLASS_STATUS_COLORS["status"])
-        return [_ansi_color(line, color) for line in super().render(width)]
+        lines = super().render(width)
+        theme = getattr(self.theme_context, "theme", None)
+        if theme is None:
+            return lines
+        role = _STATUS_ROLES.get(self.kind, "text")
+        return [theme.fg(role, line) for line in lines]
 
     def _refresh_text(self) -> None:
         clean = self._message
@@ -120,6 +120,7 @@ class FooterComponent(Component):
         model_reasoning: bool = False,
         history_hint: str | None = None,
         home: str | None = None,
+        theme_context: object | None = None,
     ) -> None:
         self.cwd = cwd
         self.model = model
@@ -148,6 +149,10 @@ class FooterComponent(Component):
         self.model_reasoning = model_reasoning
         self.history_hint = history_hint
         self.home = home
+        self.theme_context = theme_context
+
+    def set_theme_context(self, theme_context: object | None) -> None:
+        self.theme_context = theme_context
 
     def render(self, width: int) -> list[str]:
         width = max(1, int(width))
@@ -174,25 +179,39 @@ class FooterComponent(Component):
             context_percent = 0.0
             context_percent_display = f"{context_percent:.1f}"
         auto_indicator = " (auto)" if self.auto_compact_enabled else ""
-        stats_parts = []
+        detail_segments: list[tuple[int, int, str]] = []
         if self.total_input:
-            stats_parts.append(f"↑{_format_footer_tokens(self.total_input)}")
+            detail_segments.append((3, 0, f"↑{_format_footer_tokens(self.total_input)}"))
         if self.total_output:
-            stats_parts.append(f"↓{_format_footer_tokens(self.total_output)}")
+            detail_segments.append((3, 1, f"↓{_format_footer_tokens(self.total_output)}"))
+        if self.pending:
+            detail_segments.append((2, 2, f"P{self.pending}"))
         if self.total_cache_read:
-            stats_parts.append(f"R{_format_footer_tokens(self.total_cache_read)}")
+            detail_segments.append((6, 3, f"R{_format_footer_tokens(self.total_cache_read)}"))
         if self.total_cache_write:
-            stats_parts.append(f"W{_format_footer_tokens(self.total_cache_write)}")
+            detail_segments.append((6, 4, f"W{_format_footer_tokens(self.total_cache_write)}"))
         if (self.total_cache_read > 0 or self.total_cache_write > 0) and self.latest_cache_hit_rate is not None:
-            stats_parts.append(f"CH{self.latest_cache_hit_rate:.1f}%")
+            detail_segments.append((6, 5, f"CH{self.latest_cache_hit_rate:.1f}%"))
         if self.total_cost or self.using_subscription:
             subscription_suffix = " (sub)" if self.using_subscription else ""
-            stats_parts.append(f"${self.total_cost:.3f}{subscription_suffix}")
+            detail_segments.append((5, 6, f"${self.total_cost:.3f}{subscription_suffix}"))
+        if self.compression_count:
+            detail_segments.append((4, 7, f"C{self.compression_count}"))
         percent_suffix = "" if context_percent_display == "?" else "%"
-        stats_parts.append(f"{context_percent_display}{percent_suffix}/{_format_footer_tokens(context_window)}{auto_indicator}")
-        stats_left = " ".join(stats_parts)
+        context_segment = f"{context_percent_display}{percent_suffix}/{_format_footer_tokens(context_window)}{auto_indicator}"
+        ordered_details = [text for _priority, _order, text in sorted(detail_segments, key=lambda item: item[1])]
+        stats_left = " ".join([*ordered_details, context_segment])
         if visible_width(stats_left) > width:
-            stats_left = truncate_to_width(stats_left, width, "...")
+            selected: list[tuple[int, str]] = []
+            for priority, order, text in sorted(detail_segments, key=lambda item: (item[0], item[1])):
+                candidate_details = [value for _index, value in sorted([*selected, (order, text)])]
+                candidate = " ".join([*candidate_details, context_segment])
+                if visible_width(candidate) <= width:
+                    selected.append((order, text))
+            selected_details = [text for _order, text in sorted(selected)]
+            stats_left = " ".join([*selected_details, context_segment])
+            if visible_width(stats_left) > width:
+                stats_left = truncate_to_width(context_segment, width, "")
 
         right_side_without_provider = self.model
         if self.model_reasoning:
@@ -227,7 +246,14 @@ class FooterComponent(Component):
             lines.append(truncate_to_width(status_line, width, "..."))
         if self.history_hint:
             lines.append(truncate_to_width(_single_line(self.history_hint), width, "..."))
-        return [_ansi_color(line, _SIGNAL_GLASS_FOOTER_COLOR) for line in lines]
+        theme = getattr(self.theme_context, "theme", None)
+        if theme is None:
+            return lines
+        context_role = "warning" if self.context_percent_unknown or context_percent >= 75 else "muted"
+        if not self.context_percent_unknown and context_percent >= 90:
+            context_role = "error"
+        roles = ["accent", context_role, *(["muted"] if status_line else []), *(["dim"] if self.history_hint else [])]
+        return [theme.fg(roles[index], line) for index, line in enumerate(lines)]
 
 
 def _format_footer_tokens(count: int) -> str:

@@ -3,6 +3,109 @@ from __future__ import annotations
 from tests._support_tui import *  # noqa: F403
 
 
+def test_semantic_theme_changes_every_primary_tui_surface_without_changing_text() -> None:
+    from travis.tui import (
+        AssistantMessageComponent,
+        BashExecutionComponent,
+        BranchSummaryMessageComponent,
+        CompactionSummaryMessageComponent,
+        CustomMessageComponent,
+        SkillInvocationMessageComponent,
+        ThemeContext,
+        UserMessageComponent,
+        parse_skill_block,
+        resolve_builtin_theme,
+    )
+
+    def snapshots(theme_name: str) -> dict[str, str]:
+        theme, _ = resolve_builtin_theme(theme_name, color_mode="truecolor")
+        context = ThemeContext(theme)
+        assistant_message = _assistant("Visible **answer**")
+        thinking_message = _assistant("Done")
+        thinking_message.content.insert(0, ThinkingContent(thinking="Checking state"))
+        error_message = _assistant("")
+        error_message.stop_reason = "error"
+        error_message.error_message = "provider failed"
+        aborted_message = _assistant("")
+        aborted_message.stop_reason = "aborted"
+        aborted_message.error_message = "cancelled safely"
+
+        pending_tool = ToolExecutionComponent("read", {"path": "a.txt"}, theme_context=context)
+        success_tool = ToolExecutionComponent("read", {"path": "a.txt"}, theme_context=context)
+        success_tool.update_result(AgentToolResult(content=[TextContent(text="ok")]), is_error=False)
+        error_tool = ToolExecutionComponent("read", {"path": "a.txt"}, theme_context=context)
+        error_tool.update_result(AgentToolResult(content=[TextContent(text="bad")]), is_error=True)
+
+        bash = BashExecutionComponent("printf hi", theme_context=context)
+        bash.append_output("hi")
+        bash.set_complete(0, False)
+        branch = BranchSummaryMessageComponent(
+            BranchSummaryMessage(summary="changed app.py", from_id="root", timestamp=now_ms()),
+            theme_context=context,
+        )
+        compaction = CompactionSummaryMessageComponent(
+            type("Compaction", (), {"summary": "older context", "tokensBefore": 12000})(),
+            theme_context=context,
+        )
+        custom = CustomMessageComponent(
+            CustomMessage(
+                custom_type="note",
+                content="remember this",
+                display=True,
+                details=None,
+                timestamp=now_ms(),
+            ),
+            theme_context=context,
+        )
+        skill_block = parse_skill_block(
+            '<skill name="tui" location="/skills/tui/SKILL.md">\nUse it.\n</skill>'
+        )
+        assert skill_block is not None
+        select = SelectList(
+            [SelectItem(value="one", label="One"), SelectItem(value="two", label="Two")],
+            theme_context=context,
+        )
+        editor = Input(value="hello", prompt="> ", theme_context=context)
+        status = StatusLine("Ready", kind="success", theme_context=context)
+        footer = FooterComponent(
+            cwd="/tmp/project",
+            model="faux-model",
+            context_window=100000,
+            context_percent=81.0,
+            theme_context=context,
+        )
+        components = {
+            "user": UserMessageComponent("hello user", theme_context=context),
+            "assistant": AssistantMessageComponent(assistant_message, theme_context=context),
+            "thinking": AssistantMessageComponent(thinking_message, theme_context=context),
+            "error": AssistantMessageComponent(error_message, theme_context=context),
+            "abort": AssistantMessageComponent(aborted_message, theme_context=context),
+            "tool_pending": pending_tool,
+            "tool_success": success_tool,
+            "tool_error": error_tool,
+            "bash": bash,
+            "branch": branch,
+            "compaction": compaction,
+            "custom": custom,
+            "skill": SkillInvocationMessageComponent(skill_block, theme_context=context),
+            "picker": select,
+            "editor": editor,
+            "status": status,
+            "footer": footer,
+        }
+        return {name: "\n".join(component.render(80)) for name, component in components.items()}
+
+    signal = snapshots("Signal Glass")
+    blood = snapshots("Blood Circuit")
+
+    assert signal.keys() == blood.keys()
+    for surface in signal:
+        assert "\x1b[" in signal[surface], surface
+        assert "\x1b[" in blood[surface], surface
+        assert signal[surface] != blood[surface], surface
+        assert strip_ansi(signal[surface]) == strip_ansi(blood[surface]), surface
+
+
 def test_interactive_mode_turn_failure_resets_status_and_accepts_followup_prompt(tmp_path) -> None:
     register_api_provider(create_faux_provider(lambda model, context: text_response_events(model, "unused")))
     terminal = FakeTerminal(columns=120)
@@ -628,7 +731,7 @@ def test_interactive_renderer_ignores_dict_subagent_events() -> None:
 
 def test_markdown_input_select_and_footer_components() -> None:
     markdown = Markdown("# Title\n\n- one\n**bold** and `code`")
-    assert markdown.render(40) == ["Title", "", "- one", "bold and code"]
+    assert markdown.render(40) == ["Title", "", "• one", "bold and code"]
 
     submitted: list[str] = []
     input_component = Input(prompt="> ", on_submit=submitted.append)
@@ -663,7 +766,10 @@ def test_markdown_input_select_and_footer_components() -> None:
     assert cancelled == [True]
 
     footer = FooterComponent(cwd="/tmp/project", model="faux-model", thinking_level="high", pending=2)
-    assert footer.render(25) == ["/tmp/project", "0.0%/0 (auto)  faux-model"]
+    assert [strip_ansi(line) for line in footer.render(25)] == [
+        "/tmp/project",
+        "P2 0.0%/0 (auto)  faux-mo",
+    ]
     footer = FooterComponent(
         cwd="/tmp/project",
         model="faux-model",
@@ -676,9 +782,9 @@ def test_markdown_input_select_and_footer_components() -> None:
         git_branch="main",
         extension_statuses={"plan": "ready\nnow"},
     )
-    assert footer.render(35) == [
+    assert [strip_ansi(line) for line in footer.render(35)] == [
         "/tmp/project (main)",
-        "7.5%/16k (auto)   (faux) faux-model",
+        "C2 7.5%/16k (auto)       faux-model",
         "ready now",
     ]
     footer = FooterComponent(
@@ -710,6 +816,103 @@ def test_markdown_input_select_and_footer_components() -> None:
     assert footer.render(40)[1] == "?/200k (auto)                 faux-model"
     status = StatusLine("Retrying\nsoon", kind="info")
     assert status.render(40) == ["info: Retrying soon"]
+
+
+def test_markdown_renders_semantic_blocks_links_tables_and_streaming_fences() -> None:
+    from travis.tui import ThemeContext, resolve_builtin_theme
+
+    theme, _ = resolve_builtin_theme("Neon Oni", color_mode="truecolor")
+    context = ThemeContext(theme)
+    set_capabilities({"images": None, "trueColor": True, "hyperlinks": True})
+    markdown = Markdown(
+        "# Heading\n\n"
+        "> quoted **bold** text\n"
+        "- bullet with *emphasis* and `code`\n"
+        "1. ordered [link](https://example.com/docs)\n"
+        "---\n"
+        "```python\nprint('hello')\n```\n",
+        theme_context=context,
+    )
+
+    rendered = markdown.render(48)
+    joined = "\n".join(rendered)
+
+    assert "Heading" in strip_ansi(joined)
+    assert "│ quoted bold text" in strip_ansi(joined)
+    assert "• bullet with emphasis and code" in strip_ansi(joined)
+    assert "1. ordered link" in strip_ansi(joined)
+    assert "print('hello')" in strip_ansi(joined)
+    assert "\x1b]8;;https://example.com/docs" in joined
+    assert theme.foreground_ansi["mdHeading"] in joined
+    assert theme.foreground_ansi["mdCode"] in joined
+    assert theme.foreground_ansi["mdQuoteBorder"] in joined
+    assert all(visible_width(line) <= 48 for line in rendered)
+
+    incomplete = Markdown("```py\nx = 1", theme_context=context).render(20)
+    completed = Markdown("```py\nx = 1\n```", theme_context=context).render(20)
+    assert strip_ansi("\n".join(incomplete)) == strip_ansi("\n".join(completed))
+    assert "x = 1" in strip_ansi("\n".join(incomplete))
+
+    set_capabilities({"images": None, "trueColor": True, "hyperlinks": False})
+    fallback_link = strip_ansi("\n".join(Markdown("[Docs](https://example.com)", theme_context=context).render(80)))
+    assert fallback_link == "Docs (https://example.com)"
+
+
+def test_markdown_narrow_table_falls_back_to_stacked_rows_and_handles_wide_text() -> None:
+    from travis.tui import ThemeContext, resolve_builtin_theme
+
+    theme, _ = resolve_builtin_theme("Signal Glass", color_mode="truecolor")
+    context = ThemeContext(theme)
+    markdown = Markdown(
+        "| Name | Status |\n"
+        "| --- | --- |\n"
+        "| 世界🙂 | operational |\n",
+        theme_context=context,
+    )
+
+    rendered = markdown.render(20)
+    plain = strip_ansi("\n".join(rendered))
+
+    assert "Name: 世界🙂" in plain
+    assert "Status: operational" in plain
+    assert all(visible_width(line) <= 20 for line in rendered)
+
+
+def test_markdown_streaming_table_header_without_data_rows_is_stable() -> None:
+    from travis.tui import Markdown
+
+    rendered = Markdown("| Format | Syntax |\n| --- | --- |").render(80)
+
+    assert strip_ansi("\n".join(rendered)) == "| Format | Syntax |"
+    assert all("\x1b[" not in strip_ansi(line) for line in rendered)
+
+
+def test_footer_responsive_priorities_keep_context_pressure_before_detail() -> None:
+    footer = FooterComponent(
+        cwd="/very/long/project",
+        model="mimo-v2.5",
+        provider="openrouter",
+        thinking_level="high",
+        context_window=1_000_000,
+        context_percent=94.2,
+        total_input=123_456,
+        total_output=7_890,
+        total_cache_read=33_333,
+        total_cost=1.23,
+        compression_count=4,
+        git_branch="feature/native",
+        session_name="work",
+        extension_statuses={"warning": "sandbox unavailable"},
+    )
+
+    rendered_by_width = {width: [strip_ansi(line) for line in footer.render(width)] for width in (20, 40, 80, 120, 200)}
+
+    for width, lines in rendered_by_width.items():
+        assert all(visible_width(line) <= width for line in lines)
+        assert any("94.2%" in line for line in lines), width
+        assert any("sandbox unavailable" in line for line in lines), width
+    assert all("mimo-v2.5" not in line for line in rendered_by_width[20])
+    assert any("C4" in line and "mimo-v2.5" in line for line in rendered_by_width[80])
 
 def test_select_list_ports_travis234_ctrl_c_cancel_keybinding() -> None:
     select = SelectList(
@@ -1240,6 +1443,76 @@ def test_input_ports_travis234_alt_backspace_delete_word_backward() -> None:
 
     input_component.handle_input("\x19")
     assert input_component.get_value() == "hello world"
+
+
+def test_multiline_editor_preserves_single_line_input_editing_parity() -> None:
+    from travis.tui import Editor
+
+    def exercise(component_type):
+        submitted: list[str] = []
+        component = component_type(prompt="> ", on_submit=submitted.append)
+        component.set_history(["older prompt"])
+        for data in ("alpha beta", "\x1bb", "\x17", "\x19", "\x1b[45;5u", "\x05", "!"):
+            component.handle_input(data)
+        before_submit = (component.get_value(), component.cursor)
+        component.handle_input("\r")
+        return before_submit, submitted, component.get_value(), component.cursor
+
+    assert exercise(Editor) == exercise(Input)
+
+
+def test_multiline_editor_preserves_paste_newlines_vertical_column_and_atomic_undo() -> None:
+    from travis.tui import Editor
+
+    editor = Editor(max_visible_lines=3)
+    editor.handle_input("\x1b[200~abcd\nx\nabcdef\x1b[201~")
+    assert editor.get_value() == "abcd\nx\nabcdef"
+
+    editor.cursor = 3
+    editor.handle_input("\x1b[B")
+    assert editor.cursor == len("abcd\nx")
+    editor.handle_input("\x1b[B")
+    assert editor.cursor == len("abcd\nx\nabc")
+
+    editor.handle_input("\x1b[H")
+    assert editor.cursor == len("abcd\nx\n")
+    editor.handle_input("\x1b[F")
+    assert editor.cursor == len("abcd\nx\nabcdef")
+
+    editor.handle_input("\x1b[45;5u")
+    assert editor.get_value() == ""
+    assert editor.cursor == 0
+
+
+def test_multiline_editor_newline_keys_submit_contract_and_visual_bounds() -> None:
+    from travis.tui import Editor, ThemeContext, resolve_builtin_theme
+
+    theme, _ = resolve_builtin_theme("Black Ice", color_mode="truecolor")
+    submitted: list[str] = []
+    editor = Editor(
+        prompt="travis> ",
+        on_submit=submitted.append,
+        max_visible_lines=2,
+        theme_context=ThemeContext(theme),
+    )
+    editor.focused = True
+    editor.handle_input("first")
+    editor.handle_input("\x1b[13;2u")
+    editor.handle_input("second")
+    editor.handle_input("\x1b\r")
+    editor.handle_input("third")
+
+    rendered = editor.render(24)
+
+    assert editor.get_value() == "first\nsecond\nthird"
+    assert len(rendered) == 4
+    assert all(visible_width(line) <= 24 for line in rendered)
+    assert "\x1b_travis234:c\x07" in "\n".join(rendered)
+    assert theme.foreground_ansi["borderAccent"] in "\n".join(rendered)
+
+    editor.handle_input("\r")
+    assert submitted == ["first\nsecond\nthird"]
+    assert editor.get_value() == ""
 
 def test_assistant_markdown_thinking_error_and_narrow_wrapping() -> None:
     message = AssistantMessage(

@@ -6,6 +6,7 @@ import codecs
 from collections.abc import Callable
 import os
 import select
+import signal as signal_module
 import sys
 import termios
 import threading
@@ -34,14 +35,8 @@ def _env_flag_enabled(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _env_flag_disabled(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in {"0", "false", "no", "off"}
-
-
 def _mouse_tracking_enabled() -> bool:
-    if "TRAVIS234_TUI_MOUSE" in os.environ:
-        return _env_flag_enabled("TRAVIS234_TUI_MOUSE") and not _env_flag_disabled("TRAVIS234_TUI_MOUSE")
-    return _env_flag_enabled("TRAVIS234_SANDBOX")
+    return _env_flag_enabled("TRAVIS234_TUI_MOUSE")
 
 
 class Terminal(Protocol):
@@ -161,6 +156,12 @@ class ProcessTerminal:
         self._stdin_decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self._draining_input = False
         self._mouse_tracking_enabled = False
+        self._previous_resize_signal_handler: object | None = None
+        self._resize_signal_installed = False
+
+    @property
+    def mouse_tracking_enabled(self) -> bool:
+        return self._mouse_tracking_enabled
 
     def write(self, data: str) -> None:  # pragma: no cover - real IO
         sys.stdout.write(data)
@@ -169,6 +170,7 @@ class ProcessTerminal:
     def start(self, on_input: Callable[[str], None], on_resize: Callable[[], None]) -> None:  # pragma: no cover - real IO
         self.input_handler = on_input
         self.resize_handler = on_resize
+        self._install_resize_signal_handler()
         self._start_raw_stdin()
         self.write(_BRACKETED_PASTE_ENABLE)
         self._mouse_tracking_enabled = _mouse_tracking_enabled()
@@ -177,6 +179,7 @@ class ProcessTerminal:
 
     def stop(self) -> None:  # pragma: no cover - real IO
         self._stop_raw_stdin()
+        self._restore_resize_signal_handler()
         with self._progress_lock:
             progress_was_active = self._progress_active or self._progress_timer is not None
             self._progress_active = False
@@ -187,6 +190,41 @@ class ProcessTerminal:
             self.write(_MOUSE_TRACKING_DISABLE)
             self._mouse_tracking_enabled = False
         self.write(_BRACKETED_PASTE_DISABLE)
+
+    def _install_resize_signal_handler(self) -> None:
+        resize_signal = getattr(signal_module, "SIGWINCH", None)
+        if resize_signal is None or threading.current_thread() is not threading.main_thread():
+            return
+        try:
+            previous = signal_module.getsignal(resize_signal)
+            signal_module.signal(resize_signal, self._handle_resize_signal)
+        except (OSError, RuntimeError, ValueError):
+            return
+        self._previous_resize_signal_handler = previous
+        self._resize_signal_installed = True
+
+    def _restore_resize_signal_handler(self) -> None:
+        if not self._resize_signal_installed:
+            return
+        resize_signal = getattr(signal_module, "SIGWINCH", None)
+        previous = self._previous_resize_signal_handler
+        try:
+            if resize_signal is not None:
+                signal_module.signal(resize_signal, previous)
+        except (OSError, RuntimeError, ValueError):
+            pass
+        finally:
+            self._previous_resize_signal_handler = None
+            self._resize_signal_installed = False
+
+    def _handle_resize_signal(self, _signal_number: int, _frame: object) -> None:
+        columns, rows = _terminal_size()
+        if (columns, rows) == (self.columns, self.rows):
+            return
+        self.columns = columns
+        self.rows = rows
+        if self.resize_handler is not None:
+            self.resize_handler()
 
     def _start_raw_stdin(self) -> None:  # pragma: no cover - real IO
         if self._stdin_thread is not None:

@@ -20,10 +20,26 @@ _LEGACY_SPECIALS = {
     "\x1b[D": "left",
     "\x1b[H": "home",
     "\x1b[F": "end",
+    "\x1bOH": "home",
+    "\x1bOF": "end",
+    "\x1b[1~": "home",
+    "\x1b[4~": "end",
+    "\x1b[7~": "home",
+    "\x1b[8~": "end",
     "\x1b[3~": "delete",
+    "\x1b[[5~": "pageUp",
+    "\x1b[[6~": "pageDown",
 }
 _ARROW_SUFFIX = {"A": "up", "B": "down", "C": "right", "D": "left"}
 _FUNCTIONAL_CODES = {2: "insert", 3: "delete", 5: "pageUp", 6: "pageDown", 7: "home", 8: "end"}
+_KITTY_FUNCTIONAL_CODES = {
+    57421: "pageUp",
+    57422: "pageDown",
+    57423: "home",
+    57424: "end",
+    57425: "insert",
+    57426: "delete",
+}
 _MODIFIER_BITS = {"shift": 1, "alt": 2, "ctrl": 4, "super": 8}
 
 
@@ -233,8 +249,16 @@ def parse_key(data: str) -> str | None:
             return None
         modifiers = _modifier_prefix(int(func_match.group(2) or "1") - 1)
         return _join_key(modifiers, key)
+    if legacy_modifier_match := re.fullmatch(r"\x1b\[([235678])([\$\^])", data):
+        key = _FUNCTIONAL_CODES.get(int(legacy_modifier_match.group(1)))
+        if key is None:
+            return None
+        modifier = "shift" if legacy_modifier_match.group(2) == "$" else "ctrl"
+        return f"{modifier}+{key}"
     if kitty := _parse_kitty_csi_u(data):
         codepoint, modifier = kitty
+        if functional_key := _KITTY_FUNCTIONAL_CODES.get(codepoint):
+            return _join_key(_modifier_prefix(modifier), functional_key)
         return _format_codepoint_key(codepoint, modifier)
     if len(data) == 1 and data.isprintable():
         return data.lower() if "A" <= data <= "Z" else data

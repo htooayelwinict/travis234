@@ -49,6 +49,10 @@ from travis.tui.user_commands import (
     UserCommandHandle,
 )
 
+
+_PACKAGE_COMMANDS = frozenset({"/install", "/remove", "/update", "/packages"})
+
+
 class _ExtensionShortcutUI:
     def __init__(self, mode: InteractiveMode) -> None:
         self._mode = mode
@@ -380,12 +384,16 @@ class InteractiveExtensions:
         self.tui.request_render()
 
     def _run_package_command(self, prompt: str) -> bool:
+        prompt_parts = prompt.split(maxsplit=1)
+        first_token = prompt_parts[0] if prompt_parts else ""
+        if first_token not in _PACKAGE_COMMANDS:
+            return False
         try:
             parts = shlex.split(prompt)
         except ValueError as error:
             self.history.add(StatusLine(f"Invalid package command: {error}", kind="error"))
             return True
-        if not parts or parts[0] not in {"/install", "/remove", "/update", "/packages"}:
+        if not parts or parts[0] not in _PACKAGE_COMMANDS:
             return False
         action = parts[0][1:]
         local = "--local" in parts[1:]

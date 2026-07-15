@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 import json
 import os
 import queue
@@ -30,6 +29,8 @@ from travis.tui.components import (
     Container,
     FooterComponent,
     Input,
+    SelectItem,
+    SelectList,
     Spacer,
     StatusLine,
     Text,
@@ -49,6 +50,7 @@ from travis.tui.user_commands import (
 )
 
 from travis.tui.footer_data import _footer_usage_stats
+from travis.tui.interactive_custom_dialog import prompt_extension_custom as _prompt_extension_custom
 from travis.tui.interactive_extensions import _apply_hidden_thinking_label, _autocomplete_trigger_characters, _coerce_extension_component, _create_extension_widget_component, _dispose_extension_widget, _extension_dialog_aborted, _extension_dialog_label, _extension_dialog_secret, _resolve_extension_select_choice, _set_autocomplete_trigger_characters
 
 def _short_status_text(text: str, *, limit: int) -> str:
@@ -86,8 +88,6 @@ class InteractiveView:
             )
         if self._unsubscribe_tui_terminal_input is None:
             self._unsubscribe_tui_terminal_input = self.tui.add_input_listener(self._handle_tui_terminal_input)
-        if self._unsubscribe_tui_scroll_change is None:
-            self._unsubscribe_tui_scroll_change = self.tui.add_scroll_listener(self._refresh_footer_history_hint)
         process_service = getattr(self.app, "process_service", None)
         subscribe_process = getattr(process_service, "subscribe", None)
         if self._unsubscribe_process_events is None and callable(subscribe_process):
@@ -343,6 +343,8 @@ class InteractiveView:
             )
 
     def _refresh_footer(self) -> None:
+        self._ensure_builtin_themes()
+        self.theme_controller.sync()
         self.footer.model = self.app.session.model.id
         self.footer.provider = self.app.session.model.provider
         self.footer.thinking_level = self.app.session.thinking_level
@@ -386,10 +388,7 @@ class InteractiveView:
         self.footer.git_branch = self.footer_data_provider.get_git_branch()
         self.footer.available_provider_count = self.footer_data_provider.get_available_provider_count()
         self.footer.model_reasoning = bool(getattr(self.app.session.model, "reasoning", False))
-        self._refresh_footer_history_hint()
-
-    def _refresh_footer_history_hint(self) -> None:
-        self.footer.history_hint = "history - PageDown/End to latest" if self.tui.is_scrolled() else None
+        self.footer.history_hint = None
 
     def set_extension_status(self, key: str, text: str | None) -> None:
         if text is None:
@@ -584,6 +583,17 @@ class InteractiveView:
         if not normalized_choices:
             return None
         clean_title = _extension_dialog_label(title)
+        if kind == "theme" and not self._line_input_mode:
+            self.history.add(StatusLine(clean_title, kind=kind))
+            self.tui.request_render()
+            selected = self._prompt_tui_theme_select(normalized_choices)
+            if selected is not None:
+                self.history.add(Text(selected))
+                self.tui.request_render()
+                return selected
+            self.history.add(StatusLine("Selection cancelled.", kind=kind))
+            self.tui.request_render()
+            return None
         self.history.add(StatusLine(clean_title, kind=kind))
         for index, choice in enumerate(normalized_choices, start=1):
             self.history.add(Text(f"{index}. {choice}"))
@@ -616,6 +626,54 @@ class InteractiveView:
             )
         self.tui.request_render()
         return selected
+
+    def _prompt_tui_theme_select(self, choices: list[str]) -> str | None:
+        outcome: queue.Queue[tuple[str, str | None]] = queue.Queue()
+        selector = SelectList(
+            [SelectItem(value=choice, label=choice) for choice in choices],
+            max_visible=min(8, len(choices)),
+            theme_context=self.theme_context,
+        )
+        active_name = self.theme_registry.active_name
+        if active_name in choices:
+            selector.set_selected_index(choices.index(active_name))
+
+        selector.on_selection_change = lambda item: self.theme_controller.preview(item.value)
+
+        def select(item: SelectItem) -> None:
+            self.theme_controller.preview(item.value)
+            outcome.put(("select", item.value))
+
+        selector.on_select = select
+        selector.on_cancel = lambda: outcome.put(("cancel", None))
+        handle = self.tui.show_overlay(
+            selector,
+            {
+                "anchor": "center",
+                "width": "70%",
+                "minWidth": min(44, max(1, self.tui.terminal.columns)),
+                "maxHeight": min(10, max(1, self.tui.terminal.rows - 2)),
+            },
+        )
+        try:
+            while not self._shutdown_requested:
+                try:
+                    action, value = outcome.get(timeout=self.tui.time_until_next_work(0.05))
+                except queue.Empty:
+                    if self.tui.dispatcher.is_owner_thread():
+                        self.tui.drain_dispatcher()
+                    continue
+                if self.tui.dispatcher.is_owner_thread():
+                    self.tui.drain_dispatcher()
+                if action == "select":
+                    return self.theme_controller.commit_preview_result() or value
+                self.theme_controller.restore_preview()
+                return None
+            self.theme_controller.restore_preview()
+            return None
+        finally:
+            self.theme_controller.restore_preview()
+            handle.hide()
 
     def _prompt_tui_value(self, prompt: str, *, mask: bool = False) -> str | None:
         submitted_queue: queue.Queue[str] = queue.Queue()
@@ -656,64 +714,7 @@ class InteractiveView:
         return self.prompt_extension_select(label, ("Yes", "No"), options, kind="confirm") == "Yes"
 
     def prompt_extension_custom(self, factory: Callable[..., object], options: dict | None = None) -> object:
-        previous_children = list(self.editor_container.children)
-        saved_editor = self.active_editor
-        saved_text = saved_editor.get_value() if saved_editor is not None else self.editor_text
-        result: dict[str, object] = {"closed": False, "value": None}
-        component_holder: dict[str, object] = {"component": None}
-
-        def restore_editor() -> None:
-            self.editor_container.clear()
-            if saved_editor is not None:
-                saved_editor.set_value(saved_text)
-                self.active_editor = saved_editor
-            else:
-                self.editor_text = saved_text
-            for child in previous_children:
-                self.editor_container.add(child)
-            self.tui.request_render()
-
-        def close(value: object = None) -> None:
-            if result["closed"]:
-                return
-            result["closed"] = True
-            result["value"] = value
-            restore_editor()
-            _dispose_extension_widget(component_holder["component"])
-
-        try:
-            component = factory(self.tui, None, None, close)
-            if inspect.isawaitable(component):
-                import asyncio
-
-                component = asyncio.run(component)
-        except Exception:
-            restore_editor()
-            raise
-
-        component_holder["component"] = component
-        if result["closed"]:
-            _dispose_extension_widget(component)
-            return result["value"]
-
-        self.editor_container.clear()
-        self.editor_container.add(_coerce_extension_component(component))
-        self.tui.request_render(force=True)
-
-        while not result["closed"]:
-            try:
-                data = self._read_prompt_from_line_input("")
-            except EOFError:
-                close(None)
-                break
-            handle_result = getattr(component, "handle_input", lambda _data: None)(data)
-            if inspect.isawaitable(handle_result):
-                import asyncio
-
-                asyncio.run(handle_result)
-            if not result["closed"]:
-                self.tui.request_render()
-        return result["value"]
+        return _prompt_extension_custom(self, factory, options)
 
     def add_terminal_input_listener(self, handler: Callable[[str], object]):
         self._terminal_input_listeners.append(handler)

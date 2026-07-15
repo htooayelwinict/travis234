@@ -150,6 +150,22 @@ The npm package exposes only the `travis234` command and launches the release co
 
 User `!command` and `!!command` run asynchronously. Output from `!command` is added to context; `!!command` output remains outside model context.
 
+### Terminal history and selection
+
+Travis234 renders complete logical output into the terminal's normal buffer. The terminal—not the agent—owns wheel and touchpad scrolling, drag selection, clickable links, and terminal or tmux history. PageUp, PageDown, Home, and End are passed to the focused TUI component; Shift+PageUp and Shift+PageDown follow the terminal's own configuration.
+
+Real PTY resize events are tracked through `SIGWINCH`; the active screen repaints at the new width without erasing native scrollback.
+
+Mouse reporting is disabled by default, including in the release sandbox, so ordinary text selection remains available. `TRAVIS234_TUI_MOUSE=1` is an explicit diagnostic opt-in; many terminals disable normal selection, URL interaction, and tmux scrollback while mouse reporting is active.
+
+### Themes and multiline input
+
+The built-in semantic themes are **Signal Glass**, **Black Ice**, **Neon Oni**, **Blood Circuit**, **Reactor Gold**, and **Polar Ghost**. Run `/theme` to open the live preview: arrow keys preview without persistence, Escape restores the exact original palette, and Enter returns the selection to the existing `/theme` command for the single persisted commit.
+
+External Pi-compatible JSON themes may provide any subset of the semantic colors. Missing roles inherit from Signal Glass. Values may be strict `#RRGGBB`, xterm indices `0..255`, an empty string for the terminal default, or references into `vars`; malformed roles fall back locally and never enter the agent context. `NO_COLOR=1` or `TERM=dumb` keeps the same semantic text with no ANSI color.
+
+The main prompt is multiline. Enter submits the complete prompt; Shift+Enter inserts a newline when the terminal reports modified Enter, and Alt+Enter is the portable fallback. Arrow keys move through lines while preserving the visual column. Dialog, search, password, and picker fields remain single-line.
+
 ## Inside the runtime
 
 ```mermaid
@@ -337,7 +353,7 @@ uv run travis234 \
   --conversation-log /tmp/travis234-acceptance/conversation.jsonl
 ```
 
-Run `/model mimo`, select `openrouter/xiaomi/mimo-v2.5`, and enter the 21 scenarios in `evals/scenarios.json` manually, one at a time. For every completed prompt:
+Run `/model mimo`, select `openrouter/xiaomi/mimo-v2.5-pro`, and enter the 21 scenarios in `evals/scenarios.json` manually, one at a time. For every completed prompt:
 
 1. Wait until the TUI is idle and inspect the final answer.
 2. Verify edits, tool choices, persistence, process ownership, and recovery behavior.
@@ -348,6 +364,32 @@ Run `/model mimo`, select `openrouter/xiaomi/mimo-v2.5`, and enter the 21 scenar
 The same session must exercise extension creation and `/reload`, lazy skill loading, a reviewer subagent, managed process stdin and cancellation, repeated Ctrl-C escalation, `/session`, manual `/compact`, automatic compaction, and a dependent post-compaction prompt. Exit with `/exit` and confirm that no owned process remains.
 
 A paid provider failure stops the run for diagnosis. A weak model answer is recorded as model quality and does not, by itself, justify a runtime change.
+
+### Five-scenario native-TUI acceptance
+
+Use this shorter protocol for scrollback, selection, themes, Markdown, tools, resize, and multiline regressions. It must use the installed `travis234` console entry point in a real PTY with isolated state—not `python -m`, a fake terminal, or the eval runner.
+
+```bash
+rm -rf /tmp/travis234-tui-acceptance
+mkdir -p /tmp/travis234-tui-acceptance/workspace
+cp README.md /tmp/travis234-tui-acceptance/workspace/README.md
+TRAVIS234_CODING_AGENT_DIR=/tmp/travis234-tui-acceptance/agent \
+uv run travis234 \
+  --cwd /tmp/travis234-tui-acceptance/workspace \
+  --dotenv .env \
+  --temperature 0.2 \
+  --thinking high
+```
+
+Run `/model mimo`, select `openrouter/xiaomi/mimo-v2.5-pro`, then complete these five prompts in the same session:
+
+1. `Return a numbered diagnostic checklist with 80 short lines, then end with NATIVE-HISTORY-END.` Scroll with the wheel/touchpad, Shift+PageUp/PageDown or tmux history; drag-select lines near the top and copy them. The prompt must remain usable at the live bottom.
+2. `Show a compact Markdown demo containing a heading, quote, bullets, ordered steps, inline code, a fenced diff, a link, and a two-column table.` Verify semantic styling, clickable-link behavior when supported, clean narrow-table fallback, and no raw Markdown fences.
+3. Enter `Explain the difference between` then insert a newline with Shift+Enter or Alt+Enter, enter `terminal scrollback and an application viewport`, and submit with Enter. Verify that the provider receives one prompt containing the newline and that Up/Down preserves the intended column before submission.
+4. `Read README.md and report only its product name, Python version, and the six built-in TUI theme names.` Verify pending/success tool surfaces, stable output ordering, and that selection/copy remain terminal-native while the tool runs.
+5. Preview Neon Oni, cancel, preview Blood Circuit, commit, resize through roughly 40/80/120 columns, then enter `Reply exactly: THEME-RESIZE-OK`. Verify exact preview restoration, persisted commit, bounded line widths, visible context pressure, and a clean final prompt.
+
+Repeat scenario 1 with `NO_COLOR=1`, and once inside tmux when available. Exit with `/exit`; the terminal must restore cursor, bracketed-paste, and mouse state without deleting native history.
 
 ## Distribution identity
 

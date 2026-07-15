@@ -30,25 +30,12 @@ from travis.tui.utils import (
     visible_width,
 )
 
-_CLEAR_SCREEN = "\x1b[2J\x1b[H\x1b[3J"
+_CLEAR_VIEWPORT = "\x1b[2J\x1b[H"
 _SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07"
 _SYNC_BEGIN = "\x1b[?2026h"
 _SYNC_END = "\x1b[?2026l"
 _KITTY_SEQUENCE_PREFIX = "\x1b_G"
 _CELL_SIZE_RESPONSE_RE = re.compile(r"^\x1b\[6;(\d+);(\d+)t$")
-_SGR_MOUSE_RE = re.compile(r"^\x1b\[<(\d+);(\d+);(\d+)([Mm])$")
-_RXVT_MOUSE_RE = re.compile(r"^\x1b\[(\d+);(\d+);(\d+)([Mm])$")
-_X10_MOUSE_RE = re.compile(r"^\x1b\[M(.)(.)(.)$")
-_PAGE_UP = "\x1b[5~"
-_PAGE_DOWN = "\x1b[6~"
-_END_KEYS = {"\x1b[F", "\x1b[4~"}
-_MOUSE_WHEEL_STEP_LINES = 3
-
-
-def _move_to_line(index: int) -> str:
-    return f"\x1b[{index + 1};1H"
-
-
 def _clear_line() -> str:
     return "\x1b[2K"
 
@@ -134,8 +121,11 @@ class TUI(Container):
         self.terminal = terminal
         self.previous_lines: list[str] = []
         self._last_width: int | None = None
+        self._last_height: int | None = None
         self._max_lines_rendered = 0
+        self._cursor_row = 0
         self._hardware_cursor_row = 0
+        self._previous_viewport_top = 0
         self._clear_on_shrink = os.environ.get("TRAVIS234_CLEAR_ON_SHRINK") == "1"
         self._full_redraw_count = 0
         explicit_hardware_cursor = show_hardware_cursor
@@ -153,8 +143,6 @@ class TUI(Container):
         self._previous_kitty_image_ids: set[int] = set()
         self._focus_order_counter = 0
         self._overlay_stack: list[dict[str, object]] = []
-        self._scroll_offset_from_bottom = 0
-        self._logical_line_count = 0
         self._scroll_listeners: list[Callable[[], None]] = []
         self.dispatcher = UiDispatcher(render=self._do_render, render_interval=render_interval)
 
@@ -319,55 +307,11 @@ class TUI(Container):
         if focused_overlay is not None and not self._is_overlay_visible(focused_overlay):
             top_visible = self._get_topmost_visible_overlay()
             self.set_focus(top_visible["component"] if top_visible is not None else focused_overlay.get("pre_focus"))
-        focus_is_overlay = any(
-            entry.get("component") is self._focused_component and self._is_overlay_visible(entry)
-            for entry in self._overlay_stack
-        )
-        if not focus_is_overlay and self._handle_scroll_input(current):
-            return
         if self._focused_component is not None and hasattr(self._focused_component, "handle_input"):
             if is_key_release(current) and not _wants_key_release(self._focused_component):
                 return
             self._focused_component.handle_input(current)
             self.request_render()
-
-    def _handle_scroll_input(self, data: str) -> bool:
-        page_size = max(1, self.terminal.rows - 1)
-        if data == _PAGE_UP:
-            self.scroll_by(-page_size)
-            return True
-        if data == _PAGE_DOWN:
-            self.scroll_by(page_size)
-            return True
-        if data in _END_KEYS:
-            self.scroll_to_bottom()
-            return True
-        mouse_match = _SGR_MOUSE_RE.match(data)
-        if mouse_match is not None:
-            button_code = int(mouse_match.group(1))
-            self._handle_mouse_button_code(button_code)
-            return True
-        rxvt_mouse_match = _RXVT_MOUSE_RE.match(data)
-        if rxvt_mouse_match is not None:
-            button_code = int(rxvt_mouse_match.group(1))
-            self._handle_mouse_button_code(button_code)
-            return True
-        legacy_mouse_match = _X10_MOUSE_RE.match(data)
-        if legacy_mouse_match is None:
-            return False
-        button_code = ord(legacy_mouse_match.group(1)) - 32
-        if button_code < 0:
-            return True
-        self._handle_mouse_button_code(button_code)
-        return True
-
-    def _handle_mouse_button_code(self, button_code: int) -> None:
-        if button_code & 64:
-            wheel_button = button_code & 3
-            if wheel_button == 0:
-                self.scroll_by(-_MOUSE_WHEEL_STEP_LINES)
-            elif wheel_button == 1:
-                self.scroll_by(_MOUSE_WHEEL_STEP_LINES)
 
     def _query_cell_size(self) -> None:
         if not get_capabilities()["images"]:
@@ -446,109 +390,95 @@ class TUI(Container):
 
     def _do_render(self, force: bool) -> RenderInfo:
         width = self.terminal.columns
+        height = max(1, self.terminal.rows)
         rendered_lines = super().render(width)
         if self._overlay_stack:
-            rendered_lines = self._composite_overlays(rendered_lines, width, self.terminal.rows)
-        logical_lines = [
+            rendered_lines = self._composite_overlays(rendered_lines, width, height)
+        new_lines = [
             line if is_image_line(line) else truncate_to_width(line, width)
             for line in rendered_lines
         ]
-        self._logical_line_count = len(logical_lines)
-        self._clamp_scroll_offset()
-        viewport_top = self._viewport_top(len(logical_lines), force_bottom=self.has_overlay())
-        cursor_position = self._extract_cursor_position(logical_lines, viewport_top)
-        new_lines = self._viewport_lines(logical_lines, viewport_top)
+        cursor_position = self._extract_cursor_position(new_lines, height)
 
-        size_changed = self._last_width is not None and self._last_width != width
+        width_changed = self._last_width is not None and self._last_width != width
+        height_changed = self._last_height is not None and self._last_height != height
+        previous_buffer_length = (
+            self._previous_viewport_top + self._last_height
+            if self._last_height is not None
+            else height
+        )
+        previous_viewport_top = (
+            max(0, previous_buffer_length - height)
+            if height_changed
+            else self._previous_viewport_top
+        )
         first_render = not self.previous_lines
         clear_on_shrink = self._clear_on_shrink and bool(self.previous_lines) and len(new_lines) < self._max_lines_rendered
 
-        if force or first_render or size_changed or clear_on_shrink:
-            should_clear = force or size_changed or clear_on_shrink
-            info = self._full_render(new_lines, cursor_position, clear=should_clear)
+        if first_render and not force and not width_changed and not height_changed:
+            info = self._full_render(new_lines, cursor_position, clear=False, height=height)
+        elif force or width_changed or height_changed or clear_on_shrink:
+            info = self._full_render(new_lines, cursor_position, clear=True, height=height)
         else:
-            info = self._diff_render(new_lines, cursor_position)
+            info = self._diff_render(
+                new_lines,
+                cursor_position,
+                height=height,
+                previous_viewport_top=previous_viewport_top,
+            )
 
         self.previous_lines = new_lines
         self._previous_kitty_image_ids = self._collect_kitty_image_ids(new_lines)
         self._last_width = width
-        if info.full and (force or size_changed or clear_on_shrink):
-            self._max_lines_rendered = len(new_lines)
-        else:
-            self._max_lines_rendered = max(self._max_lines_rendered, len(new_lines))
+        self._last_height = height
         self.last_render = info
         return info
 
     def scroll_by(self, delta: int) -> int:
-        old_offset = self._scroll_offset_from_bottom
-        max_offset = self._max_scroll_offset()
-        if delta > 0:
-            new_offset = max(0, old_offset - int(delta))
-        elif delta < 0:
-            new_offset = min(max_offset, old_offset + abs(int(delta)))
-        else:
-            return 0
-        if new_offset == old_offset:
-            return 0
-
-        self._scroll_offset_from_bottom = new_offset
-        self._notify_scroll_listeners()
-        self.request_render()
-        return old_offset - new_offset
+        del delta
+        return 0
 
 
     def scroll_to_bottom(self) -> None:
-        if self._scroll_offset_from_bottom == 0:
-            return
-        self._scroll_offset_from_bottom = 0
-        self._notify_scroll_listeners()
-        self.request_render()
+        return None
 
 
     def is_scrolled(self) -> bool:
-        return self._scroll_offset_from_bottom > 0
+        return False
 
-
-    def _notify_scroll_listeners(self) -> None:
-        for listener in list(self._scroll_listeners):
-            listener()
-
-    def _max_scroll_offset(self, line_count: int | None = None) -> int:
-        rows = max(1, self.terminal.rows)
-        total = self._logical_line_count if line_count is None else line_count
-        return max(0, total - rows)
-
-    def _clamp_scroll_offset(self) -> None:
-        self._scroll_offset_from_bottom = min(max(0, self._scroll_offset_from_bottom), self._max_scroll_offset())
-
-    def _viewport_top(self, line_count: int, *, force_bottom: bool = False) -> int:
-        rows = max(1, self.terminal.rows)
-        bottom_top = max(0, line_count - rows)
-        offset = 0 if force_bottom else min(self._scroll_offset_from_bottom, bottom_top)
-        return max(0, bottom_top - offset)
-
-    def _viewport_lines(self, lines: list[str], viewport_top: int) -> list[str]:
-        rows = max(1, self.terminal.rows)
-        return lines[viewport_top : viewport_top + rows]
-
-    def _extract_cursor_position(self, lines: list[str], viewport_top: int) -> tuple[int, int] | None:
-        viewport_bottom = min(len(lines), viewport_top + max(1, self.terminal.rows))
-        for row in range(viewport_bottom - 1, viewport_top - 1, -1):
+    def _extract_cursor_position(self, lines: list[str], height: int) -> tuple[int, int] | None:
+        viewport_top = max(0, len(lines) - max(1, height))
+        for row in range(len(lines) - 1, viewport_top - 1, -1):
             marker_index = lines[row].find(CURSOR_MARKER)
             if marker_index == -1:
                 continue
             before_marker = lines[row][:marker_index]
             lines[row] = lines[row][:marker_index] + lines[row][marker_index + len(CURSOR_MARKER) :]
-            return row - viewport_top, visible_width(before_marker)
+            return row, visible_width(before_marker)
         return None
 
-    def _full_render(self, new_lines: list[str], cursor_position: tuple[int, int] | None, *, clear: bool) -> RenderInfo:
+    def _full_render(
+        self,
+        new_lines: list[str],
+        cursor_position: tuple[int, int] | None,
+        *,
+        clear: bool,
+        height: int,
+    ) -> RenderInfo:
         self._full_redraw_count += 1
-        clear_sequence = self._delete_kitty_images(self._previous_kitty_image_ids) + _CLEAR_SCREEN if clear else ""
+        viewport_top = max(0, len(new_lines) - height)
+        output_lines = new_lines[viewport_top:] if clear else new_lines
+        clear_sequence = self._delete_kitty_images(self._previous_kitty_image_ids) + _CLEAR_VIEWPORT if clear else ""
         self.terminal.write(
-            _SYNC_BEGIN + clear_sequence + "\r\n".join(_terminal_line(line) for line in new_lines) + _SYNC_END
+            _SYNC_BEGIN + clear_sequence + "\r\n".join(_terminal_line(line) for line in output_lines) + _SYNC_END
         )
-        self._hardware_cursor_row = max(0, len(new_lines) - 1)
+        self._cursor_row = max(0, len(new_lines) - 1)
+        self._hardware_cursor_row = self._cursor_row
+        self._previous_viewport_top = viewport_top
+        if clear:
+            self._max_lines_rendered = len(new_lines)
+        else:
+            self._max_lines_rendered = max(self._max_lines_rendered, len(new_lines))
         self._position_hardware_cursor(cursor_position, len(new_lines))
         return RenderInfo(
             full=True,
@@ -558,19 +488,36 @@ class TUI(Container):
             cursor_position=cursor_position,
         )
 
-    def _diff_render(self, new_lines: list[str], cursor_position: tuple[int, int] | None) -> RenderInfo:
+    def _diff_render(
+        self,
+        new_lines: list[str],
+        cursor_position: tuple[int, int] | None,
+        *,
+        height: int,
+        previous_viewport_top: int,
+    ) -> RenderInfo:
         old_lines = self.previous_lines
         max_len = max(len(old_lines), len(new_lines))
 
         first_changed = -1
+        last_changed = -1
         for index in range(max_len):
-            old = old_lines[index] if index < len(old_lines) else None
-            new = new_lines[index] if index < len(new_lines) else None
+            old = old_lines[index] if index < len(old_lines) else ""
+            new = new_lines[index] if index < len(new_lines) else ""
             if old != new:
-                first_changed = index
-                break
+                if first_changed == -1:
+                    first_changed = index
+                last_changed = index
+
+        appended_lines = len(new_lines) > len(old_lines)
+        if appended_lines:
+            if first_changed == -1:
+                first_changed = len(old_lines)
+            last_changed = len(new_lines) - 1
+
         if first_changed == -1:
             self._position_hardware_cursor(cursor_position, len(new_lines))
+            self._previous_viewport_top = previous_viewport_top
             return RenderInfo(
                 full=False,
                 first_changed=-1,
@@ -579,27 +526,78 @@ class TUI(Container):
                 cursor_position=cursor_position,
             )
 
-        last_changed = first_changed
-        for index in range(max_len - 1, first_changed - 1, -1):
-            old = old_lines[index] if index < len(old_lines) else None
-            new = new_lines[index] if index < len(new_lines) else None
-            if old != new:
-                last_changed = index
-                break
-
         expanded_range = self._expand_changed_range_for_kitty_images(first_changed, last_changed, new_lines)
         first_changed = expanded_range["first_changed"]
         last_changed = expanded_range["last_changed"]
+        append_start = appended_lines and first_changed == len(old_lines) and first_changed > 0
+
+        if first_changed >= len(new_lines) or first_changed < previous_viewport_top:
+            return self._full_render(new_lines, cursor_position, clear=True, height=height)
 
         buffer: list[str] = []
+        buffer.append(_SYNC_BEGIN)
         delete_sequence = self._delete_changed_kitty_images(first_changed, last_changed)
         if delete_sequence:
             buffer.append(delete_sequence)
-        for index in range(first_changed, last_changed + 1):
-            line = new_lines[index] if index < len(new_lines) else ""
-            buffer.append(_move_to_line(index) + _clear_line() + _terminal_line(line))
-        self.terminal.write(_SYNC_BEGIN + "".join(buffer) + _SYNC_END)
-        self._hardware_cursor_row = max(0, last_changed)
+
+        viewport_top = previous_viewport_top
+        hardware_cursor_row = self._hardware_cursor_row
+        previous_viewport_bottom = previous_viewport_top + height - 1
+        move_target_row = first_changed - 1 if append_start else first_changed
+
+        if move_target_row > previous_viewport_bottom:
+            current_screen_row = max(0, min(height - 1, hardware_cursor_row - previous_viewport_top))
+            move_to_bottom = height - 1 - current_screen_row
+            if move_to_bottom > 0:
+                buffer.append(f"\x1b[{move_to_bottom}B")
+            scroll = move_target_row - previous_viewport_bottom
+            buffer.append("\r\n" * scroll)
+            previous_viewport_top += scroll
+            viewport_top += scroll
+            hardware_cursor_row = move_target_row
+
+        current_screen_row = hardware_cursor_row - previous_viewport_top
+        target_screen_row = move_target_row - viewport_top
+        line_diff = target_screen_row - current_screen_row
+        if line_diff > 0:
+            buffer.append(f"\x1b[{line_diff}B")
+        elif line_diff < 0:
+            buffer.append(f"\x1b[{-line_diff}A")
+        buffer.append("\r\n" if append_start else "\r")
+
+        render_end = min(last_changed, len(new_lines) - 1)
+        for index in range(first_changed, render_end + 1):
+            if index > first_changed:
+                buffer.append("\r\n")
+            line = new_lines[index]
+            image_reserved_rows = self._get_kitty_image_reserved_rows(new_lines, index, render_end) if is_image_line(line) else 1
+            if image_reserved_rows > 1:
+                image_start_screen_row = index - viewport_top
+                if image_start_screen_row < 0 or image_start_screen_row + image_reserved_rows > height:
+                    return self._full_render(new_lines, cursor_position, clear=True, height=height)
+                buffer.append(_clear_line())
+                for _row in range(1, image_reserved_rows):
+                    buffer.append("\r\n" + _clear_line())
+                buffer.append(f"\x1b[{image_reserved_rows - 1}A")
+                buffer.append(_terminal_line(line))
+                buffer.append(f"\x1b[{image_reserved_rows - 1}B")
+                continue
+            buffer.append(_clear_line() + _terminal_line(line))
+
+        final_cursor_row = render_end
+        if len(old_lines) > len(new_lines):
+            extra_lines = len(old_lines) - len(new_lines)
+            for _index in range(extra_lines):
+                buffer.append("\r\n" + _clear_line())
+            if extra_lines > 0:
+                buffer.append(f"\x1b[{extra_lines}A")
+
+        buffer.append(_SYNC_END)
+        self.terminal.write("".join(buffer))
+        self._cursor_row = max(0, len(new_lines) - 1)
+        self._hardware_cursor_row = final_cursor_row
+        self._max_lines_rendered = max(self._max_lines_rendered, len(new_lines))
+        self._previous_viewport_top = max(previous_viewport_top, final_cursor_row - height + 1)
         self._position_hardware_cursor(cursor_position, len(new_lines))
         return RenderInfo(
             full=False,
