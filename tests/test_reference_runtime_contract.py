@@ -1814,6 +1814,182 @@ def test_anthropic_native_contract_applies_cache_and_adaptive_thinking() -> None
     assert summary_body["max_tokens"] == model.max_tokens
 
 
+@pytest.mark.parametrize(
+    ("provider", "model_id"),
+    [
+        ("anthropic", "claude-fable-5"),
+        ("anthropic", "claude-opus-4-7"),
+        ("anthropic", "claude-opus-4-8"),
+        ("anthropic", "claude-sonnet-5"),
+        ("github-copilot", "claude-opus-4.7"),
+        ("github-copilot", "claude-opus-4.8"),
+        ("github-copilot", "claude-sonnet-5"),
+    ],
+)
+def test_subscription_claude_sampling_is_absent_from_final_wire_body(
+    provider: str,
+    model_id: str,
+) -> None:
+    model = next(
+        model
+        for model in load_builtin_models()
+        if model.provider == provider and model.id == model_id
+    )
+
+    body = AnthropicMessagesTransport().build_kwargs(
+        model=model.id,
+        messages=[],
+        tools=[],
+        profile=get_provider_profile(provider),
+        stream=True,
+        temperature=0.2,
+        max_tokens=4096,
+        reasoning_config={"enabled": False, "effort": "off"},
+        request_overrides={"temperature": 0.2, "top_p": 0.8},
+        context=Context(messages=[UserMessage(content="hello")]),
+        target_model=model,
+        model_compat=model.compat,
+    )
+
+    assert "temperature" not in body
+    assert "top_p" not in body
+
+
+def test_claude_fable_off_omits_unsupported_disabled_thinking() -> None:
+    model = next(
+        model
+        for model in load_builtin_models()
+        if model.provider == "anthropic" and model.id == "claude-fable-5"
+    )
+
+    body = AnthropicMessagesTransport().build_kwargs(
+        model=model.id,
+        messages=[],
+        tools=[],
+        profile=get_provider_profile(model.provider),
+        stream=True,
+        temperature=None,
+        max_tokens=4096,
+        reasoning_config={"enabled": False, "effort": "off"},
+        context=Context(messages=[UserMessage(content="hello")]),
+        target_model=model,
+        model_compat=model.compat,
+    )
+
+    assert "thinking" not in body
+
+
+def test_manual_claude_thinking_normalizes_sampling_and_forced_tool_choice() -> None:
+    model = next(
+        model
+        for model in load_builtin_models()
+        if model.provider == "anthropic" and model.id == "claude-haiku-4-5"
+    )
+
+    body = AnthropicMessagesTransport().build_kwargs(
+        model=model.id,
+        messages=[],
+        tools=[],
+        profile=get_provider_profile(model.provider),
+        stream=True,
+        temperature=None,
+        max_tokens=4096,
+        reasoning_config={"enabled": True, "effort": "high"},
+        request_overrides={"top_p": 0.8},
+        tool_choice="any",
+        context=Context(messages=[UserMessage(content="hello")]),
+        target_model=model,
+        model_compat=model.compat,
+    )
+
+    assert body["thinking"]["type"] == "enabled"
+    assert "top_p" not in body
+    assert body["tool_choice"] == {"type": "auto"}
+
+
+def test_manual_claude_thinking_preserves_valid_sampling_and_none_tool_choice() -> None:
+    model = next(
+        model
+        for model in load_builtin_models()
+        if model.provider == "anthropic" and model.id == "claude-haiku-4-5"
+    )
+
+    body = AnthropicMessagesTransport().build_kwargs(
+        model=model.id,
+        messages=[],
+        tools=[],
+        profile=get_provider_profile(model.provider),
+        stream=True,
+        temperature=None,
+        max_tokens=4096,
+        reasoning_config={"enabled": True, "effort": "medium"},
+        request_overrides={"top_p": 0.95},
+        tool_choice="none",
+        context=Context(messages=[UserMessage(content="hello")]),
+        target_model=model,
+        model_compat=model.compat,
+    )
+
+    assert body["top_p"] == 0.95
+    assert body["tool_choice"] == {"type": "none"}
+
+
+def test_manual_claude_thinking_rejects_too_small_output_budget() -> None:
+    model = next(
+        model
+        for model in load_builtin_models()
+        if model.provider == "anthropic" and model.id == "claude-haiku-4-5"
+    )
+
+    with pytest.raises(ValueError, match="manual thinking requires max_tokens >= 2048"):
+        AnthropicMessagesTransport().build_kwargs(
+            model=model.id,
+            messages=[],
+            tools=[],
+            profile=get_provider_profile(model.provider),
+            stream=True,
+            temperature=None,
+            max_tokens=1500,
+            reasoning_config={"enabled": True, "effort": "high"},
+            context=Context(messages=[UserMessage(content="hello")]),
+            target_model=model,
+            model_compat=model.compat,
+        )
+
+
+def test_claude_code_wire_guard_preserves_identity_and_travis_system_prompt() -> None:
+    model = next(
+        model
+        for model in load_builtin_models()
+        if model.provider == "anthropic" and model.id == "claude-sonnet-5"
+    )
+
+    body = AnthropicMessagesTransport().build_kwargs(
+        model=model.id,
+        messages=[],
+        tools=[],
+        profile=get_provider_profile(model.provider),
+        stream=True,
+        temperature=0.2,
+        max_tokens=4096,
+        request_overrides={"top_p": 0.8},
+        context=Context(
+            messages=[UserMessage(content="hello")],
+            system_prompt="SYSTEM_SENTINEL",
+        ),
+        target_model=model,
+        model_compat=model.compat,
+        api_key="sk-ant-oat-test-placeholder",
+    )
+
+    assert [block["text"] for block in body["system"]] == [
+        "You are Claude Code, Anthropic's official CLI for Claude.",
+        "SYSTEM_SENTINEL",
+    ]
+    assert "temperature" not in body
+    assert "top_p" not in body
+
+
 def test_anthropic_native_contract_uses_deferred_tool_references() -> None:
     model = Model(
         id="claude-sonnet-4-6",

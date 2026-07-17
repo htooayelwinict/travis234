@@ -832,6 +832,38 @@ def _off_thinking_supported(thinking_level_map: dict[str, str | None] | None) ->
     )
 
 
+def _anthropic_allows_disabled_thinking(target_model: Any) -> bool:
+    mapping = getattr(target_model, "thinking_level_map", None)
+    return not (
+        isinstance(mapping, dict)
+        and "off" in mapping
+        and mapping["off"] is None
+    )
+
+
+def _apply_anthropic_wire_compatibility(
+    body: dict[str, Any],
+    *,
+    compat: dict[str, Any],
+    thinking_enabled: bool,
+) -> None:
+    if compat.get("supportsTemperature") is False:
+        body.pop("temperature", None)
+    if compat.get("supportsTopP") is False:
+        body.pop("top_p", None)
+    elif thinking_enabled:
+        top_p = body.get("top_p")
+        if isinstance(top_p, (int, float)) and not 0.95 <= float(top_p) <= 1.0:
+            body.pop("top_p", None)
+
+    if not thinking_enabled:
+        return
+    tool_choice = body.get("tool_choice")
+    choice_type = tool_choice.get("type") if isinstance(tool_choice, dict) else tool_choice
+    if choice_type in {"any", "tool", "required"}:
+        body["tool_choice"] = {"type": "auto"}
+
+
 def _resolve_chat_template_value(
     value: Any,
     *,
@@ -1761,7 +1793,8 @@ class AnthropicMessagesTransport:
             body["tools"] = self.convert_tools(tools)
         if native_model is not None and native_model.reasoning and isinstance(reasoning_config, dict):
             if not thinking_enabled:
-                body["thinking"] = {"type": "disabled"}
+                if _anthropic_allows_disabled_thinking(native_model):
+                    body["thinking"] = {"type": "disabled"}
             elif compat.get("forceAdaptiveThinking") is True:
                 effort = str(reasoning_config.get("effort") or "medium").strip().lower()
                 mapped = "low" if effort in {"minimal", "low"} else effort
@@ -1770,6 +1803,11 @@ class AnthropicMessagesTransport:
                 body["thinking"] = {"type": "adaptive", "display": "summarized"}
                 body["output_config"] = {"effort": mapped}
             else:
+                if int(body["max_tokens"]) < 2048:
+                    raise ValueError(
+                        "Anthropic manual thinking requires max_tokens >= 2048 "
+                        "to preserve the 1024-token minimum thinking budget and response reserve."
+                    )
                 effort = str(reasoning_config.get("effort") or "medium").strip().lower()
                 budget = {
                     "minimal": 1024,
@@ -1813,6 +1851,11 @@ class AnthropicMessagesTransport:
             body["tool_choice"] = {"type": tool_choice} if isinstance(tool_choice, str) else tool_choice
         if request_overrides:
             body.update(request_overrides)
+        _apply_anthropic_wire_compatibility(
+            body,
+            compat=compat,
+            thinking_enabled=thinking_enabled,
+        )
         return body
 
     def normalize_response(self, response: Any, **_kwargs: Any) -> NormalizedResponse:
