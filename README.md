@@ -69,6 +69,30 @@ Travis234 is designed for developers who want an agent to carry a task—not one
 
 ## Quick start
 
+### Install from PyPI
+
+Install the persistent CLI with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv tool install --python 3.13 travis234
+travis234 --cwd .
+```
+
+Run it once without a persistent installation:
+
+```bash
+uvx --python 3.13 travis234 --cwd .
+```
+
+Or install it with pip:
+
+```bash
+python3.13 -m pip install travis234
+travis234 --cwd .
+```
+
+Upgrade an existing uv tool installation with `uv tool upgrade travis234`. The public Python package is available at [PyPI](https://pypi.org/project/travis234/) and requires Python 3.13.
+
 ### Run from source
 
 Travis234 requires Python 3.13.
@@ -124,9 +148,6 @@ npx @htooayelwinict/travis234 --cwd .
 ```
 
 The npm package exposes only the `travis234` command and launches the release container with isolated Travis234 state.
-
-> [!NOTE]
-> The Python distribution is configured as `travis234`, but the public PyPI release is a separate release step. Until that release exists, install from source or use the npm launcher.
 
 ## Everyday controls
 
