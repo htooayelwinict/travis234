@@ -179,6 +179,8 @@ class _InteractiveRuntime(
         self.prompt_history: list[str] = []
         self.active_editor: Input | None = None
         self.extension_statuses: dict[str, str] = {}
+        self.extension_status_states: dict[str, str] = {}
+        self.extension_working_active = False
         self.extension_widgets_above: dict[str, Component] = {}
         self.extension_widgets_below: dict[str, Component] = {}
         self._terminal_input_listeners: list[Callable[[str], object]] = []

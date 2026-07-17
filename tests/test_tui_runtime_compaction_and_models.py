@@ -124,7 +124,10 @@ def test_interactive_mode_labels_post_response_compaction_after_reply(tmp_path) 
     assert _wait_until(lambda: mode.status._message == "Compressing")
     rendered = strip_ansi("\n".join(app.tui.render(120)))
     assert "reply before compaction" in rendered
-    assert "status: Compressing" in rendered
+    assert any(
+        line.startswith("status: ") and line.endswith(" Compressing")
+        for line in rendered.splitlines()
+    )
     assert "status: Running" not in rendered
 
     release_compression.set()

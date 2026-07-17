@@ -49,6 +49,7 @@ from travis.tui.user_commands import (
 )
 
 from travis.tui.interactive_shutdown import IDLE_CTRL_C_EXIT_WINDOW_SECONDS, LATE_ABORT_GRACE_SECONDS
+from travis.tui.motion import MotionState
 
 class InteractiveTurnController:
     """Owns a focused interactive runtime concern."""
@@ -157,6 +158,9 @@ class InteractiveTurnController:
 
     def _finish_turn_thread(self, before_compressions: int, before_tokens: int) -> None:
         self._agent_abort_requested = False
+        self._clear_motion_signal("retry")
+        self._clear_motion_signal("termination")
+        self._clear_motion_signal("compaction")
         self._render_auto_compaction_notice(before_compressions, before_tokens)
         with self._turn_lock:
             next_prompt = None if self._shutdown_requested or not self._queued_after_turn else self._queued_after_turn.pop(0)
@@ -169,6 +173,7 @@ class InteractiveTurnController:
             self._start_turn_thread(next_prompt, next_before_compressions, next_before_tokens)
             return
         self._last_turn_finished_at = time.monotonic()
+        self._clear_motion_signal("turn")
         self.status.set_message("Idle")
         self._refresh_footer()
         self.tui.request_render()
@@ -239,6 +244,7 @@ class InteractiveTurnController:
         if self._is_turn_active() or self.app.session.is_streaming:
             if not self._agent_abort_requested:
                 self._agent_abort_requested = True
+                self._set_motion_signal("termination", MotionState.TERMINATING)
                 self.status.set_message("Aborting")
                 self.app.session.agent.abort()
             self._refresh_footer()
@@ -261,6 +267,7 @@ class InteractiveTurnController:
         if not self.tui.dispatcher.is_owner_thread():
             self.tui.post(self._show_post_response_compaction_status)
             return
+        self._set_motion_signal("compaction", MotionState.MAINTENANCE)
         self.status.set_message("Compressing")
         self._refresh_footer()
         self.tui.request_render()

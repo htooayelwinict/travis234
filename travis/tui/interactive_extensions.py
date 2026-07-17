@@ -48,6 +48,7 @@ from travis.tui.user_commands import (
     UserCommandController,
     UserCommandHandle,
 )
+from travis.tui.motion import MotionState
 
 
 _PACKAGE_COMMANDS = frozenset({"/install", "/remove", "/update", "/packages"})
@@ -81,8 +82,8 @@ class _ExtensionShortcutUI:
         raise AttributeError(name)
 
 
-    def set_status(self, key: str, text: str | None) -> None:
-        self._mode.set_extension_status(key, text)
+    def set_status(self, key: str, text: str | None, options: dict | None = None) -> None:
+        self._mode.set_extension_status(key, text, options)
 
 
     def set_working_message(self, message: str | None = None) -> None:
@@ -316,6 +317,9 @@ class InteractiveExtensions:
         self.extension_widgets_below.clear()
         self._render_widgets()
         self.extension_statuses.clear()
+        self.extension_status_states.clear()
+        self.extension_working_active = False
+        self._refresh_extension_motion_signal()
         self.autocomplete_provider_wrappers.clear()
         self.set_working_message()
         self.set_working_visible(True)
@@ -332,7 +336,14 @@ class InteractiveExtensions:
             self.history.add(StatusLine("Wait for compaction to finish before reloading.", kind="warning"))
             return
         self._reset_extension_ui()
+        self._set_motion_signal("maintenance", MotionState.MAINTENANCE)
         self.status.set_message("Reloading extensions")
+        try:
+            self._run_reload_body()
+        finally:
+            self._clear_motion_signal("maintenance")
+
+    def _run_reload_body(self) -> None:
         try:
             self.app.session.reload()
             self.setup_autocomplete_provider()
@@ -431,6 +442,7 @@ class InteractiveExtensions:
             return True
 
         self.status.set_message(f"{action.capitalize()}ing package")
+        self._set_motion_signal("package", MotionState.MAINTENANCE)
         self._refresh_footer()
         self.tui.request_render()
         try:
@@ -460,13 +472,18 @@ class InteractiveExtensions:
         except Exception as error:  # noqa: BLE001 - package errors render without ending the TUI.
             detail = error.args[0] if isinstance(error, KeyError) and error.args else str(error)
             self.history.add(StatusLine(f"Package {action} failed: {detail}", kind="error"))
+            self._clear_motion_signal("package")
             self.status.set_message("Idle")
             self._refresh_footer()
             self.tui.request_render()
             return True
         if changed:
-            self._run_reload_command()
+            try:
+                self._run_reload_command()
+            finally:
+                self._clear_motion_signal("package")
         else:
+            self._clear_motion_signal("package")
             self.status.set_message("Idle")
             self._refresh_footer()
             self.tui.request_render()

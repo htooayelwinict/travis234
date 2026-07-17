@@ -50,6 +50,7 @@ from travis.tui.user_commands import (
     UserCommandController,
     UserCommandHandle,
 )
+from travis.tui.motion import MotionState
 
 from travis.tui.footer_data import _footer_usage_stats
 from travis.tui.interactive_extensions import _manual_compression_options
@@ -429,6 +430,7 @@ class InteractiveSessionCommands:
             "/copy - Copy the last agent message when a clipboard adapter is available.",
             "/share - Report configured sharing support.",
             "/theme [name] - Select a discovered theme.",
+            "/motion [on|off] - Inspect or change restrained TUI motion for this process.",
             "/trust - View or change the project trust decision.",
             "/processes - Inspect and control managed processes.",
             "/reload - Reload extensions, skills, prompts, and themes.",
@@ -511,6 +513,7 @@ class InteractiveSessionCommands:
 
     def _run_manual_compress(self, prompt: str) -> None:
         focus, deep = _manual_compression_options(prompt)
+        self._set_motion_signal("compaction", MotionState.MAINTENANCE)
         self.status.set_message("Compressing")
         self._refresh_footer()
         self.tui.request_render()
@@ -534,6 +537,7 @@ class InteractiveSessionCommands:
         except Exception as error:  # noqa: BLE001 - keep the command boundary stable: report local command failure without trapping TUI.
             self.history.add(StatusLine(f"Compression failed: {error}", kind="compact"))
         finally:
+            self._clear_motion_signal("compaction")
             self.status.set_message("Idle")
             self._refresh_footer()
             self.tui.request_render()

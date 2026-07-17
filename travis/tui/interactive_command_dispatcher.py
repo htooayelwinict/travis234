@@ -50,6 +50,7 @@ from travis.tui.user_commands import (
 )
 
 from travis.tui.interactive_shutdown import SESSION_COMMAND_SHUTDOWN_TIMEOUT_SECONDS
+from travis.tui.motion import MotionState
 
 def _is_manual_compression_command(prompt: str) -> bool:
     return prompt in {"/compress", "/compact"} or prompt.startswith("/compress ") or prompt.startswith("/compact ")
@@ -136,6 +137,22 @@ def _parse_params_command(prompt: str) -> str | None:
     return None
 
 
+_NOT_MOTION_COMMAND = object()
+_INVALID_MOTION_COMMAND = object()
+
+
+def _parse_motion_command(prompt: str) -> bool | None | object:
+    if prompt == "/motion":
+        return None
+    if prompt == "/motion on":
+        return True
+    if prompt == "/motion off":
+        return False
+    if prompt.startswith("/motion "):
+        return _INVALID_MOTION_COMMAND
+    return _NOT_MOTION_COMMAND
+
+
 def _is_openrouter_model(model) -> bool:
     return getattr(model, "provider", "") == "openrouter" or "openrouter.ai" in str(getattr(model, "base_url", ""))
 
@@ -210,6 +227,7 @@ class InteractiveCommandDispatcher:
                 self.active_editor = None
                 if self._dispatch_extension_shortcut(prompt):
                     if self._shutdown_requested:
+                        self._set_motion_signal("termination", MotionState.TERMINATING)
                         self.status.set_message("Exiting")
                         self._refresh_footer()
                         self.tui.request_render()
@@ -227,6 +245,7 @@ class InteractiveCommandDispatcher:
 
                 if prompt in {"/exit", "/quit", "exit", "quit"}:
                     self._shutdown_requested = True
+                    self._set_motion_signal("termination", MotionState.TERMINATING)
                     self.status.set_message("Exiting")
                     self._refresh_footer()
                     self.tui.request_render()
@@ -234,6 +253,10 @@ class InteractiveCommandDispatcher:
                 if not prompt:
                     continue
                 prompt_component.add_to_history(prompt)
+                motion_command = _parse_motion_command(prompt)
+                if motion_command is not _NOT_MOTION_COMMAND:
+                    self._run_motion_command(motion_command)
+                    continue
                 if _is_help_command(prompt):
                     self._run_help_command()
                     continue
@@ -318,6 +341,7 @@ class InteractiveCommandDispatcher:
                 if self._handle_active_turn_prompt(prompt):
                     continue
                 self.status.set_message("Running")
+                self._set_motion_signal("turn", MotionState.WORKING)
                 before_compressions = self.app.compaction.compressor.compression_count
                 before_tokens = estimate_tokens(self.app.messages)
                 self._refresh_footer()
@@ -357,8 +381,24 @@ class InteractiveCommandDispatcher:
             self.footer_data_provider.dispose()
             if self.app.event_trace is not None:
                 self.app.event_trace.write("shutdown", {"status": "ok"})
+            self.motion_controller.stop()
             self.tui.stop()
             self._restore_sigint_handler(previous_sigint_handler)
+
+    def _run_motion_command(self, enabled: bool | None | object) -> None:
+        if enabled is _INVALID_MOTION_COMMAND:
+            self.history.add(StatusLine("Usage: /motion [on|off]", kind="error"))
+        elif enabled is None:
+            state = "enabled" if self.motion_controller.enabled else "disabled"
+            self.history.add(StatusLine(f"Motion is {state} for this TUI process.", kind="info"))
+        else:
+            resolved = bool(enabled)
+            self.motion_controller.set_enabled(resolved)
+            state = "enabled" if resolved else "disabled"
+            self.history.add(StatusLine(f"Motion {state} for this TUI process.", kind="info"))
+        self.status.set_message("Idle")
+        self._refresh_footer()
+        self.tui.request_render()
 
 __all__ = (
     'InteractiveCommandDispatcher',
@@ -373,6 +413,7 @@ __all__ = (
     '_parse_auth_command',
     '_parse_bash_command',
     '_parse_model_command',
+    '_parse_motion_command',
     '_parse_params_command',
     '_parse_session_command',
 )

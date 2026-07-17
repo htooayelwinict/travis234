@@ -148,6 +148,7 @@ class InteractiveView:
             {"name": "logout", "description": "Remove provider authentication"},
             {"name": "model", "description": "Switch model"},
             {"name": "models", "description": "List available models"},
+            {"name": "motion", "description": "Enable, disable, or inspect restrained TUI motion"},
             {"name": "install", "description": "Install a resource package"},
             {"name": "remove", "description": "Remove an installed resource package"},
             {"name": "update", "description": "Update installed resource packages"},
@@ -225,11 +226,13 @@ class InteractiveView:
             seconds = max(0, (delay_ms + 999) // 1000)
             attempt = getattr(event, "attempt", 0)
             max_attempts = getattr(event, "max_attempts", getattr(event, "maxAttempts", 0))
+            self._set_motion_signal("retry", MotionState.RETRY, countdown=seconds)
             self.status.set_message(f"Retrying ({attempt}/{max_attempts}) in {seconds}s")
             self._refresh_footer()
             self.tui.request_render()
             return
         if event_type == "auto_retry_end":
+            self._clear_motion_signal("retry")
             if not getattr(event, "success", False):
                 final_error = getattr(event, "final_error", getattr(event, "finalError", None)) or "Unknown error"
                 self.history.add(StatusLine(f"Retry failed after {event.attempt} attempts: {final_error}", kind="error"))
@@ -351,6 +354,10 @@ class InteractiveView:
         self.footer.thinking_level = self.app.session.thinking_level
         self.footer.session_name = self.app.session.session_name
         self.footer.pending = len(self.app.session.agent.state.pending_tool_calls)
+        if self.footer.pending:
+            self._set_motion_signal("agent-tools", MotionState.TOOL)
+        else:
+            self._clear_motion_signal("agent-tools")
         usage_stats = _footer_usage_stats(self.app.session.messages)
         self.footer.total_input = usage_stats["input"]
         self.footer.total_output = usage_stats["output"]
@@ -391,11 +398,24 @@ class InteractiveView:
         self.footer.model_reasoning = bool(getattr(self.app.session.model, "reasoning", False))
         self.footer.history_hint = None
 
-    def set_extension_status(self, key: str, text: str | None) -> None:
+    def set_extension_status(
+        self,
+        key: str,
+        text: str | None,
+        options: dict | None = None,
+    ) -> None:
+        status_key = str(key)
         if text is None:
-            self.extension_statuses.pop(str(key), None)
+            self.extension_statuses.pop(status_key, None)
+            self.extension_status_states.pop(status_key, None)
         else:
-            self.extension_statuses[str(key)] = str(text)
+            self.extension_statuses[status_key] = str(text)
+            state = options.get("state") if isinstance(options, dict) else None
+            if state == "working":
+                self.extension_status_states[status_key] = "working"
+            else:
+                self.extension_status_states.pop(status_key, None)
+        self._refresh_extension_motion_signal()
         self._refresh_footer()
         self.tui.request_render()
 
@@ -411,12 +431,22 @@ class InteractiveView:
     def _clear_motion_signal(self, source: str) -> None:
         self.motion_controller.clear_signal(source)
 
+    def _refresh_extension_motion_signal(self) -> None:
+        visible_working_message = self.extension_working_active and self.status.visible
+        if visible_working_message or self.extension_status_states:
+            self._set_motion_signal("extension", MotionState.EXTENSION)
+        else:
+            self._clear_motion_signal("extension")
+
     def set_working_message(self, message: str | None = None) -> None:
+        self.extension_working_active = message is not None
         self.status.set_message(message if message is not None else self.default_working_message)
+        self._refresh_extension_motion_signal()
         self.tui.request_render()
 
     def set_working_visible(self, visible: bool) -> None:
         self.status.set_visible(bool(visible))
+        self._refresh_extension_motion_signal()
         self.tui.request_render()
 
     def set_working_indicator(self, options: dict | None = None) -> None:

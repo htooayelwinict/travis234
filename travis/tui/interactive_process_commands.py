@@ -47,6 +47,7 @@ from travis.tui.user_commands import (
     UserCommandController,
     UserCommandHandle,
 )
+from travis.tui.motion import MotionState
 
 from travis.tui.interactive_view import _short_status_text
 
@@ -208,6 +209,7 @@ class InteractiveProcessCommands:
     def _run_bash_command(self, command: str, *, exclude_from_context: bool) -> None:
         component = BashExecutionComponent(command, exclude_from_context=exclude_from_context)
         self.history.add(component)
+        self._set_motion_signal("user-bash", MotionState.TOOL)
         self.status.set_message("Running bash")
         self._refresh_footer()
         self.tui.request_render()
@@ -226,6 +228,7 @@ class InteractiveProcessCommands:
             if self.app.event_trace is not None:
                 self.app.event_trace.write("user_command_started", {"status": "ok"})
         except Exception as error:  # noqa: BLE001 - user bash errors are rendered in the TUI
+            self._clear_motion_signal("user-bash")
             component.set_complete(None, False)
             self.history.add(StatusLine(f"Bash command failed: {error}", kind="error"))
 
@@ -343,6 +346,10 @@ class InteractiveProcessCommands:
         self._completed_user_commands[handle.command_id] = (handle, result)
         self._flush_completed_user_command_records()
         has_user_commands = self._user_commands is not None and bool(self._user_commands.list())
+        if has_user_commands:
+            self._set_motion_signal("user-bash", MotionState.TOOL)
+        else:
+            self._clear_motion_signal("user-bash")
         self.status.set_message("Running bash" if has_user_commands else "Running" if self._is_turn_active() else "Idle")
         self._refresh_footer()
         self.tui.request_render()
@@ -379,6 +386,10 @@ class InteractiveProcessCommands:
         self._completed_user_commands[command_id] = None
         self._flush_completed_user_command_records()
         has_user_commands = self._user_commands is not None and bool(self._user_commands.list())
+        if has_user_commands:
+            self._set_motion_signal("user-bash", MotionState.TOOL)
+        else:
+            self._clear_motion_signal("user-bash")
         self.status.set_message("Running bash" if has_user_commands else "Running" if self._is_turn_active() else "Idle")
         self._refresh_footer()
         self.tui.request_render()
