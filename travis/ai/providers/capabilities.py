@@ -34,6 +34,7 @@ _CHAT_COMMON = (
     "tool_choice",
 )
 _ANTHROPIC_DIRECT = ("top_p", "stop")
+_ANTHROPIC_TOOL_CHOICES = {"auto", "any", "none"}
 _RESPONSES_COMMON = ("top_p", "parallel_tool_calls", "tool_choice")
 _CODEX_RESPONSES_SUPPORTED = ("parallel_tool_calls", "tool_choice")
 _CODEX_RESPONSES_UNSUPPORTED = (
@@ -61,6 +62,20 @@ def build_generation_payload(
     warnings: list[ProviderParamWarning] = []
 
     if api_mode == "anthropic_messages":
+        temperature = params.temperature
+        if (
+            provider_id in {"anthropic", "github-copilot"}
+            and temperature is not None
+            and not 0.0 <= temperature <= 1.0
+        ):
+            warnings.append(
+                ProviderParamWarning(
+                    param="temperature",
+                    action="dropped",
+                    reason="Anthropic Messages temperature must be between 0 and 1.",
+                )
+            )
+            temperature = None
         _copy_supported(params, request_overrides, _ANTHROPIC_DIRECT)
         if params.stop:
             request_overrides["stop_sequences"] = list(params.stop)
@@ -86,10 +101,11 @@ def build_generation_payload(
             "dropped",
             "Anthropic parallel tool control uses tool_choice.disable_parallel_tool_use.",
         )
-        if params.tool_choice is not None:
-            request_overrides["tool_choice"] = {"type": params.tool_choice}
+        anthropic_tool_choice = _anthropic_tool_choice(params.tool_choice, warnings)
+        if anthropic_tool_choice is not None:
+            request_overrides["tool_choice"] = anthropic_tool_choice
         return GenerationPayload(
-            temperature=params.temperature,
+            temperature=temperature,
             max_tokens=params.max_tokens,
             request_overrides=request_overrides,
             warnings=warnings,
@@ -227,6 +243,34 @@ def _copy_supported(params: GenerationParams, target: dict[str, Any], names: tup
         if name == "stop":
             continue
         target[name] = value
+
+
+def _anthropic_tool_choice(
+    value: str | None,
+    warnings: list[ProviderParamWarning],
+) -> dict[str, str] | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized == "required":
+        warnings.append(
+            ProviderParamWarning(
+                param="tool_choice",
+                action="translated",
+                reason="Anthropic names required tool use 'any'.",
+            )
+        )
+        return {"type": "any"}
+    if normalized in _ANTHROPIC_TOOL_CHOICES:
+        return {"type": normalized}
+    warnings.append(
+        ProviderParamWarning(
+            param="tool_choice",
+            action="dropped",
+            reason="Anthropic tool_choice must be auto, any, none, or a structured named-tool choice.",
+        )
+    )
+    return None
 
 
 def _warn_if_set(

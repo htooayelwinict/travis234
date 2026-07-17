@@ -46,6 +46,85 @@ def test_anthropic_translates_stop_and_drops_unsupported_penalties() -> None:
     assert all(warning.action == "dropped" for warning in payload.warnings)
 
 
+@pytest.mark.parametrize(
+    ("requested", "expected"),
+    [
+        ("auto", {"type": "auto"}),
+        ("any", {"type": "any"}),
+        ("none", {"type": "none"}),
+    ],
+)
+def test_anthropic_accepts_native_tool_choice_values(
+    requested: str,
+    expected: dict[str, str],
+) -> None:
+    payload = build_generation_payload(
+        provider="anthropic",
+        api_mode="anthropic_messages",
+        params=GenerationParams(tool_choice=requested),
+        tools_enabled=True,
+    )
+
+    assert payload.request_overrides["tool_choice"] == expected
+    assert payload.warnings == []
+
+
+def test_anthropic_translates_required_tool_choice_to_any() -> None:
+    payload = build_generation_payload(
+        provider="anthropic",
+        api_mode="anthropic_messages",
+        params=GenerationParams(tool_choice="required"),
+        tools_enabled=True,
+    )
+
+    assert payload.request_overrides["tool_choice"] == {"type": "any"}
+    assert [(warning.param, warning.action) for warning in payload.warnings] == [
+        ("tool_choice", "translated")
+    ]
+
+
+def test_anthropic_drops_unknown_tool_choice_instead_of_sending_invalid_type() -> None:
+    payload = build_generation_payload(
+        provider="anthropic",
+        api_mode="anthropic_messages",
+        params=GenerationParams(tool_choice="read"),
+        tools_enabled=True,
+    )
+
+    assert "tool_choice" not in payload.request_overrides
+    assert [(warning.param, warning.action) for warning in payload.warnings] == [
+        ("tool_choice", "dropped")
+    ]
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "github-copilot"])
+def test_subscription_anthropic_route_drops_temperature_above_one(provider: str) -> None:
+    params = GenerationParams(temperature=1.5)
+    payload = build_generation_payload(
+        provider=provider,
+        api_mode="anthropic_messages",
+        params=params,
+        tools_enabled=True,
+    )
+
+    assert params.temperature == 1.5
+    assert payload.temperature is None
+    assert [(warning.param, warning.action) for warning in payload.warnings] == [
+        ("temperature", "dropped")
+    ]
+
+
+def test_non_subscription_anthropic_compatible_route_keeps_existing_temperature_policy() -> None:
+    payload = build_generation_payload(
+        provider="vercel-ai-gateway",
+        api_mode="anthropic_messages",
+        params=GenerationParams(temperature=1.5),
+        tools_enabled=True,
+    )
+
+    assert payload.temperature == 1.5
+
+
 def test_codex_responses_uses_only_documented_generation_fields() -> None:
     payload = build_generation_payload(
         provider="openai-codex",
