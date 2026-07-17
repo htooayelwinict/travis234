@@ -62,6 +62,7 @@ from travis.tui.keys import (
     set_kitty_protocol_active,
 )
 from travis.tui.kill_ring import KillRing
+from travis.tui.motion import MotionController, MotionSnapshot, MotionState
 from travis.tui.native_modifiers import is_native_modifier_pressed
 from travis.tui.stdin_buffer import StdinBuffer
 from travis.tui.terminal import FakeTerminal, ProcessTerminal, Terminal
@@ -161,6 +162,9 @@ __all__ = [
     "KillRing",
     "Loader",
     "Markdown",
+    "MotionController",
+    "MotionSnapshot",
+    "MotionState",
     "ParsedSkillBlock",
     "ProcessTerminal",
     "RenderInfo",
