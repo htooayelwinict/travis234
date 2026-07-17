@@ -1024,6 +1024,43 @@ def test_codex_request_uses_default_only_without_any_instruction() -> None:
     assert body["instructions"] == "You are a helpful assistant."
 
 
+def test_copilot_gpt_responses_sampling_behavior_is_unchanged() -> None:
+    model = next(
+        model
+        for model in load_builtin_models()
+        if model.provider == "github-copilot" and model.api == "openai-responses"
+    )
+
+    body = OpenAIResponsesTransport().build_kwargs(
+        model=model.id,
+        messages=[{"role": "user", "content": "hello"}],
+        tools=[],
+        profile=get_provider_profile(model.provider),
+        stream=True,
+        temperature=0.2,
+        max_tokens=2048,
+        request_overrides={"top_p": 0.8},
+        context=Context(messages=[UserMessage(content="hello")]),
+        target_model=model,
+        model_compat=model.compat,
+    )
+
+    assert body["temperature"] == 0.2
+    assert body["top_p"] == 0.8
+
+
+def test_copilot_fable_completions_route_is_outside_anthropic_guard() -> None:
+    model = next(
+        model
+        for model in load_builtin_models()
+        if model.provider == "github-copilot" and model.id == "claude-fable-5"
+    )
+
+    assert model.api == "openai-completions"
+    assert model.compat.get("supportsTemperature") is None
+    assert model.compat.get("supportsTopP") is None
+
+
 def test_codex_prepared_request_uses_provider_endpoint_and_oauth_headers() -> None:
     payload = base64.urlsafe_b64encode(
         json.dumps(
