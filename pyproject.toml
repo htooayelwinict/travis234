@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "travis234"
-version = "2.3.1"
+version = "2.3.2"
 description = "Terminal coding agent with persistent sessions and bounded tool execution."
 readme = "README.md"
 license = "MIT"

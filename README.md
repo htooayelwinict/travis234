@@ -10,7 +10,7 @@ TRAVIS234 // NEURAL TERMINAL ONLINE
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-39e6c7?style=for-the-badge&labelColor=10182b"></a>
   <img alt="Python 3.13" src="https://img.shields.io/badge/Python-3.13-63a7ff?style=for-the-badge&labelColor=10182b">
-  <img alt="Version 2.3.1" src="https://img.shields.io/badge/version-2.3.1-bd6cff?style=for-the-badge&labelColor=10182b">
+  <img alt="Version 2.3.2" src="https://img.shields.io/badge/version-2.3.2-bd6cff?style=for-the-badge&labelColor=10182b">
   <img alt="Terminal first" src="https://img.shields.io/badge/interface-terminal-ff7ac6?style=for-the-badge&labelColor=10182b">
 </p>
 

@@ -8,12 +8,12 @@ The current working tree is verified directly from the filesystem. The qualifica
 
 - Focused provider-wire module: 17 passed in 0.52 seconds.
 - Complete provider contract group: 125 passed in 3.16 seconds, including OpenRouter routing/sampling preservation and Copilot route-containment controls.
-- Full source suite: 1,759 passed in 117.60 seconds.
+- Full source suite: 1,759 passed in 114.49 seconds.
 - Repository hygiene: all seven reported categories are zero.
 - npm launcher: 20 passed; npm pack dry-run contained exactly the five declared files.
-- Python compileall passed. The build produced `travis234-2.3.1-py3-none-any.whl` and `travis234-2.3.1.tar.gz`.
+- Python compileall and Twine metadata checks passed. The release build produced `travis234-2.3.2-py3-none-any.whl` and `travis234-2.3.2.tar.gz`.
 - Acceptance verification exited zero: Hermes reported 11 parity, zero divergence, and zero invalid contracts; Pi reported 74 parity, four documented safety divergences, and zero invalid contracts.
-- The no-cache `travis234:provider-wire-smoke` release image build and `evals/container_smoke.py` both exited zero.
+- The no-cache `travis234:2.3.2-release-smoke` release image build and `evals/container_smoke.py` both exited zero.
 - Authenticated Codex smoke: passed. With session `temperature=0.2`, Travis emitted the expected local dropped-parameter warning instead of a provider error, and Codex returned an exact sentinel present only in the isolated project's system instructions.
 - Authenticated Claude Code and GitHub Copilot smokes: not run because those credentials were not configured. No result is represented as passed.
 - Runtime changes are limited to provider capability normalization, final provider wire serialization, and the built-in model compatibility catalog. Agent-loop, session, context-envelope, compaction, retry, continuation, and provider-request ownership paths are unchanged.

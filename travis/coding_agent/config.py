@@ -19,7 +19,7 @@ try:
     VERSION = metadata.version(PACKAGE_NAME)
 except metadata.PackageNotFoundError:
     # Source checkouts can be imported before the editable package is installed.
-    VERSION = "2.3.1"
+    VERSION = "2.3.2"
 
 
 def expand_tilde_path(path: str) -> str:
