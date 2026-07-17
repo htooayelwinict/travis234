@@ -52,6 +52,7 @@ from travis.tui.user_commands import (
 from travis.tui.footer_data import _footer_usage_stats
 from travis.tui.interactive_custom_dialog import prompt_extension_custom as _prompt_extension_custom
 from travis.tui.interactive_extensions import _apply_hidden_thinking_label, _autocomplete_trigger_characters, _coerce_extension_component, _create_extension_widget_component, _dispose_extension_widget, _extension_dialog_aborted, _extension_dialog_label, _extension_dialog_secret, _resolve_extension_select_choice, _set_autocomplete_trigger_characters
+from travis.tui.motion import MotionState
 
 def _short_status_text(text: str, *, limit: int) -> str:
     value = str(text or "").replace("\n", " ").strip()
@@ -397,6 +398,18 @@ class InteractiveView:
             self.extension_statuses[str(key)] = str(text)
         self._refresh_footer()
         self.tui.request_render()
+
+    def _set_motion_signal(
+        self,
+        source: str,
+        state: MotionState,
+        *,
+        countdown: int | None = None,
+    ) -> None:
+        self.motion_controller.set_signal(source, state, countdown=countdown)
+
+    def _clear_motion_signal(self, source: str) -> None:
+        self.motion_controller.clear_signal(source)
 
     def set_working_message(self, message: str | None = None) -> None:
         self.status.set_message(message if message is not None else self.default_working_message)

@@ -50,6 +50,7 @@ from travis.tui.user_commands import (
     UserCommandHandle,
 )
 from travis.tui.builtin_themes import BUILTIN_THEMES, resolve_builtin_theme
+from travis.tui.motion import MotionController
 from travis.tui.theme import ThemeContext
 from travis.tui.theme_controller import ThemeController
 
@@ -157,6 +158,19 @@ class _InteractiveRuntime(
         self.theme_controller.select_persisted()
         self.history = Container(theme_context=self.theme_context)
         self.status = StatusLine("Idle", theme_context=self.theme_context)
+        motion_enabled = os.environ.get("TRAVIS234_MOTION", "1").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
+        self.motion_controller = MotionController(
+            schedule=self.tui.dispatcher.call_later,
+            on_change=lambda snapshot: self.status.set_indicator(snapshot.indicator or None),
+            request_render=self.tui.request_render,
+            enabled=motion_enabled,
+            static=color_mode == "none",
+        )
         self.default_working_message = "Idle"
         self.default_hidden_thinking_label = ""
         self.hidden_thinking_label = self.default_hidden_thinking_label
