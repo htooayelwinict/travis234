@@ -2,10 +2,29 @@
 
 from __future__ import annotations
 
+import heapq
 import threading
 import time
 from collections import deque
 from collections.abc import Callable
+
+
+class ScheduledCall:
+    """Cancellable owner-thread callback scheduled by ``UiDispatcher``."""
+
+    def __init__(self, callback: Callable[[], None]) -> None:
+        self.callback = callback
+        self._cancelled = False
+        self._lock = threading.Lock()
+
+    @property
+    def cancelled(self) -> bool:
+        with self._lock:
+            return self._cancelled
+
+    def cancel(self) -> None:
+        with self._lock:
+            self._cancelled = True
 
 
 class UiDispatcher:
@@ -23,6 +42,8 @@ class UiDispatcher:
         self._render_interval = max(0.0, float(render_interval))
         self._lock = threading.RLock()
         self._callbacks: deque[Callable[[], None]] = deque()
+        self._scheduled: list[tuple[float, int, ScheduledCall]] = []
+        self._schedule_sequence = 0
         self._render_requested = False
         self._force_render = False
         self._last_render_at: float | None = None
@@ -49,6 +70,20 @@ class UiDispatcher:
         with self._lock:
             self._callbacks.append(callback)
 
+    def call_later(self, delay: float, callback: Callable[[], None]) -> ScheduledCall:
+        handle = ScheduledCall(callback)
+        with self._lock:
+            self._schedule_sequence += 1
+            heapq.heappush(
+                self._scheduled,
+                (
+                    self._clock() + max(0.0, float(delay)),
+                    self._schedule_sequence,
+                    handle,
+                ),
+            )
+        return handle
+
     def request_render(self, force: bool = False) -> object | None:
         with self._lock:
             self._render_requested = True
@@ -68,9 +103,18 @@ class UiDispatcher:
             applied = 0
             while True:
                 with self._lock:
-                    if not self._callbacks:
-                        break
-                    callback = self._callbacks.popleft()
+                    if self._callbacks:
+                        callback = self._callbacks.popleft()
+                    else:
+                        now = self._clock()
+                        while self._scheduled and self._scheduled[0][2].cancelled:
+                            heapq.heappop(self._scheduled)
+                        if not self._scheduled or self._scheduled[0][0] > now:
+                            break
+                        _deadline, _sequence, handle = heapq.heappop(self._scheduled)
+                        if handle.cancelled:
+                            continue
+                        callback = handle.callback
                 callback()
                 applied += 1
 
@@ -97,14 +141,23 @@ class UiDispatcher:
         with self._lock:
             if self._callbacks:
                 return 0.0
+            while self._scheduled and self._scheduled[0][2].cancelled:
+                heapq.heappop(self._scheduled)
+            now = self._clock()
+            scheduled_delay = (
+                max(0.0, self._scheduled[0][0] - now)
+                if self._scheduled
+                else fallback
+            )
             if not self._render_requested:
-                return fallback
+                return min(fallback, scheduled_delay)
             if self._force_render or self._last_render_at is None:
                 return 0.0
-            due_at = self._last_render_at + self._render_interval
-        return min(fallback, max(0.0, due_at - self._clock()))
+            render_delay = max(0.0, self._last_render_at + self._render_interval - now)
+        return min(fallback, scheduled_delay, render_delay)
 
 
 __all__ = [
+    "ScheduledCall",
     "UiDispatcher",
 ]

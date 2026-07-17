@@ -120,6 +120,67 @@ def test_dispatcher_explicit_nested_drain_services_modal_input() -> None:
     assert dispatcher.drain() == 1
 
 
+def test_dispatcher_runs_scheduled_callbacks_at_deadline_in_insertion_order() -> None:
+    clock = FakeClock()
+    observed: list[str] = []
+    dispatcher = UiDispatcher(render=lambda force=False: None, clock=clock)
+    dispatcher.call_later(0.25, lambda: observed.append("first"))
+    dispatcher.call_later(0.25, lambda: observed.append("second"))
+
+    assert dispatcher.time_until_next_work(1.0) == pytest.approx(0.25)
+    assert dispatcher.drain() == 0
+    assert observed == []
+
+    clock.advance(0.25)
+
+    assert dispatcher.drain() == 2
+    assert observed == ["first", "second"]
+
+
+def test_dispatcher_cancelled_scheduled_callback_is_idempotent() -> None:
+    clock = FakeClock()
+    observed: list[str] = []
+    dispatcher = UiDispatcher(render=lambda force=False: None, clock=clock)
+    handle = dispatcher.call_later(0.1, lambda: observed.append("late"))
+
+    handle.cancel()
+    handle.cancel()
+    clock.advance(0.1)
+
+    assert dispatcher.drain() == 0
+    assert observed == []
+    assert dispatcher.time_until_next_work(0.5) == pytest.approx(0.5)
+
+
+def test_scheduled_callback_can_request_one_coalesced_render() -> None:
+    clock = FakeClock()
+    renders: list[bool] = []
+    dispatcher = UiDispatcher(
+        render=lambda force=False: renders.append(force),
+        clock=clock,
+        render_interval=0,
+    )
+    dispatcher.call_later(0.1, lambda: dispatcher.request_render())
+    clock.advance(0.1)
+
+    dispatcher.drain()
+
+    assert renders == [False]
+
+
+def test_scheduled_callbacks_run_on_the_owner_thread() -> None:
+    clock = FakeClock()
+    owner = threading.get_ident()
+    observed: list[int] = []
+    dispatcher = UiDispatcher(render=lambda force=False: None, clock=clock)
+    dispatcher.call_later(0.1, lambda: observed.append(threading.get_ident()))
+    clock.advance(0.1)
+
+    dispatcher.drain()
+
+    assert observed == [owner]
+
+
 def test_dispatcher_rejects_drain_from_non_owner() -> None:
     dispatcher = UiDispatcher(render=lambda force=False: None)
     errors: list[BaseException] = []
