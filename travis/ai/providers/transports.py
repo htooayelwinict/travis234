@@ -1862,6 +1862,21 @@ class AnthropicMessagesTransport:
         return NormalizedResponse(content=str(response or ""), tool_calls=None, finish_reason="stop")
 
 
+def _codex_instructions(
+    context: Context | None,
+    messages: list[dict[str, Any]],
+) -> str:
+    if context is not None and isinstance(context.system_prompt, str) and context.system_prompt.strip():
+        return context.system_prompt
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") not in {"system", "developer"}:
+            continue
+        content = _content_to_text(message.get("content"))
+        if content.strip():
+            return content
+    return "You are a helpful assistant."
+
+
 class CodexResponsesTransport:
     api = "openai-codex-responses"
     api_mode = "openai_codex_responses"
@@ -2002,16 +2017,7 @@ class CodexResponsesTransport:
         model_compat: dict[str, Any] | None = None,
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        instructions = next(
-            (
-                content
-                for message in messages
-                if isinstance(message, dict)
-                and message.get("role") == "system"
-                and (content := _content_to_text(message.get("content")).strip())
-            ),
-            "You are a helpful assistant.",
-        )
+        instructions = _codex_instructions(context, messages)
         immediate_tools: list[Any] = []
         deferred_tools: dict[str, Any] = {}
         if context is not None and target_model is not None:

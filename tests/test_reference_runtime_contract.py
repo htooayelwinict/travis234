@@ -962,6 +962,68 @@ def test_responses_request_shapes_are_not_conflated() -> None:
     assert "prompt_cache_retention" not in codex
 
 
+def test_codex_request_uses_native_context_system_prompt_as_instructions() -> None:
+    model = next(
+        model
+        for model in load_builtin_models()
+        if model.provider == "openai-codex" and model.id == "gpt-5.4"
+    )
+    context = Context(
+        messages=[UserMessage(content="hello")],
+        system_prompt="SYSTEM_SENTINEL",
+    )
+
+    body = CodexResponsesTransport().build_kwargs(
+        model=model.id,
+        messages=[
+            {"role": "developer", "content": "SYSTEM_SENTINEL"},
+            {"role": "user", "content": "hello"},
+        ],
+        tools=[],
+        profile=get_provider_profile(model.provider),
+        stream=True,
+        temperature=None,
+        max_tokens=None,
+        context=context,
+        target_model=model,
+        model_compat=model.compat,
+    )
+
+    assert body["instructions"] == "SYSTEM_SENTINEL"
+    assert "SYSTEM_SENTINEL" not in str(body["input"])
+
+
+def test_codex_request_accepts_developer_instruction_without_native_context() -> None:
+    body = CodexResponsesTransport().build_kwargs(
+        model="gpt-test",
+        messages=[
+            {"role": "developer", "content": "DEVELOPER_SENTINEL"},
+            {"role": "user", "content": "hello"},
+        ],
+        tools=[],
+        profile=ProviderProfile(name="openai-codex"),
+        stream=True,
+        temperature=None,
+        max_tokens=None,
+    )
+
+    assert body["instructions"] == "DEVELOPER_SENTINEL"
+
+
+def test_codex_request_uses_default_only_without_any_instruction() -> None:
+    body = CodexResponsesTransport().build_kwargs(
+        model="gpt-test",
+        messages=[{"role": "user", "content": "hello"}],
+        tools=[],
+        profile=ProviderProfile(name="openai-codex"),
+        stream=True,
+        temperature=None,
+        max_tokens=None,
+    )
+
+    assert body["instructions"] == "You are a helpful assistant."
+
+
 def test_codex_prepared_request_uses_provider_endpoint_and_oauth_headers() -> None:
     payload = base64.urlsafe_b64encode(
         json.dumps(
