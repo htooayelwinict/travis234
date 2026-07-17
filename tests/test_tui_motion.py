@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass, field
+from pathlib import Path
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -88,6 +91,35 @@ def test_working_motion_advances_at_four_frames_per_second() -> None:
     assert harness.renders == [False, False]
 
 
+def test_option_a_working_signal_keeps_three_suffix_dots_at_fixed_width() -> None:
+    harness = MotionHarness()
+    harness.controller.set_signal("turn", MotionState.WORKING)
+    frames = [harness.controller.snapshot.indicator]
+
+    for _ in range(2):
+        harness.clock.advance(0.25)
+        harness.dispatcher.drain()
+        frames.append(harness.controller.snapshot.indicator)
+
+    assert [strip_ansi(frame) for frame in frames] == ["...", "...", "..."]
+    assert len(set(frames)) == 3
+
+
+def test_option_a_tool_signal_is_one_fixed_width_spinner_glyph() -> None:
+    harness = MotionHarness()
+    harness.controller.set_signal("tool", MotionState.TOOL)
+    frames = [harness.controller.snapshot.indicator]
+
+    for _ in range(3):
+        harness.clock.advance(0.25)
+        harness.dispatcher.drain()
+        frames.append(harness.controller.snapshot.indicator)
+
+    plain_frames = [strip_ansi(frame) for frame in frames]
+    assert all(frame.startswith(" ") and len(frame) == 2 for frame in plain_frames)
+    assert len(set(plain_frames)) == 4
+
+
 def test_equivalent_signal_does_not_restart_the_frame_deadline() -> None:
     harness = MotionHarness()
     harness.controller.set_signal("turn", MotionState.WORKING)
@@ -130,18 +162,18 @@ def test_retry_countdown_advances_once_per_second_and_settles_at_zero() -> None:
     harness = MotionHarness()
     harness.controller.set_signal("retry", MotionState.RETRY, countdown=2)
 
-    assert harness.controller.snapshot.indicator == "2s"
+    assert harness.controller.snapshot.indicator == " 2s"
     assert harness.controller.snapshot.countdown == 2
     assert harness.dispatcher.time_until_next_work(2.0) == pytest.approx(1.0)
 
     harness.clock.advance(1.0)
     harness.dispatcher.drain()
-    assert harness.controller.snapshot.indicator == "1s"
+    assert harness.controller.snapshot.indicator == " 1s"
     assert harness.controller.snapshot.countdown == 1
 
     harness.clock.advance(1.0)
     harness.dispatcher.drain()
-    assert harness.controller.snapshot.indicator == "0s"
+    assert harness.controller.snapshot.indicator == " 0s"
     assert harness.controller.snapshot.countdown == 0
     assert harness.dispatcher.time_until_next_work(2.0) == pytest.approx(2.0)
 
@@ -160,7 +192,7 @@ def test_terminal_transition_runs_once_then_settles(state: MotionState) -> None:
     harness.dispatcher.drain()
 
     assert harness.controller.snapshot == settled
-    assert settled.indicator in {"✓", "!"}
+    assert settled.indicator in {" ✓", " !"}
 
 
 def test_disabled_motion_uses_static_frame_and_cancels_future_ticks() -> None:
@@ -172,7 +204,7 @@ def test_disabled_motion_uses_static_frame_and_cancels_future_ticks() -> None:
     harness.clock.advance(1.0)
     harness.dispatcher.drain()
 
-    assert settled.indicator == "·"
+    assert settled.indicator == "..."
     assert harness.controller.snapshot == settled
     assert harness.dispatcher.time_until_next_work(1.0) == pytest.approx(1.0)
 
@@ -182,7 +214,7 @@ def test_static_terminal_never_schedules_frames() -> None:
 
     harness.controller.set_signal("turn", MotionState.WORKING)
 
-    assert harness.controller.snapshot.indicator == "·"
+    assert harness.controller.snapshot.indicator == "..."
     assert harness.dispatcher.time_until_next_work(1.0) == pytest.approx(1.0)
 
 
@@ -202,6 +234,35 @@ def test_stop_is_idempotent_and_suppresses_late_callbacks() -> None:
     assert harness.dispatcher.time_until_next_work(1.0) == pytest.approx(1.0)
 
 
+def test_motion_controller_isolates_presentation_callback_failures() -> None:
+    clock = FakeClock()
+    dispatcher = UiDispatcher(render=lambda force=False: None, clock=clock)
+    changes = 0
+
+    def broken_on_change(snapshot: MotionSnapshot) -> None:
+        nonlocal changes
+        changes += 1
+        if snapshot.state is not MotionState.IDLE:
+            raise RuntimeError("broken status component")
+
+    def broken_render_request() -> None:
+        raise RuntimeError("broken render request")
+
+    controller = MotionController(
+        schedule=dispatcher.call_later,
+        on_change=broken_on_change,
+        request_render=broken_render_request,
+    )
+
+    controller.set_signal("turn", MotionState.WORKING)
+    clock.advance(0.25)
+    dispatcher.drain()
+
+    assert changes == 3
+    assert controller.state is MotionState.WORKING
+    assert dispatcher.time_until_next_work(1.0) == pytest.approx(0.25)
+
+
 def test_motion_types_are_exported_from_the_tui_package() -> None:
     import travis.tui as tui
 
@@ -219,6 +280,22 @@ def test_status_line_renders_exactly_one_motion_indicator_with_theme() -> None:
 
     assert strip_ansi(rendered) == "status: .. Running"
     assert theme.foreground_ansi["text"] in rendered
+
+
+def test_status_line_renders_option_a_motion_after_the_semantic_label() -> None:
+    status = StatusLine("Thinking")
+
+    status.set_indicator("...", position="suffix")
+
+    assert status.render(80) == ["status: Thinking..."]
+
+
+def test_status_line_preserves_option_a_suffix_separator() -> None:
+    status = StatusLine("Running bash")
+
+    status.set_indicator(" ⠋", position="suffix")
+
+    assert status.render(80) == ["status: Running bash ⠋"]
 
 
 def test_interactive_runtime_owns_one_motion_controller(tmp_path, monkeypatch) -> None:
@@ -241,6 +318,51 @@ def test_interactive_runtime_owns_one_motion_controller(tmp_path, monkeypatch) -
         mode.motion_controller.stop()
         mode.footer_data_provider.dispose()
         app.close()
+
+
+def test_option_a_active_turn_uses_thinking_label_with_fixed_suffix_dots(tmp_path) -> None:
+    provider_started = threading.Event()
+    release_provider = threading.Event()
+    release_exit = threading.Event()
+
+    def provider(model, context):
+        provider_started.set()
+        release_provider.wait(timeout=2)
+        return text_response_events(model, "done")
+
+    register_api_provider(create_faux_provider(provider))
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=100, rows=30),
+        enable_tui=True,
+    )
+    input_calls = 0
+
+    def input_fn(_prompt: str) -> str:
+        nonlocal input_calls
+        input_calls += 1
+        if input_calls == 1:
+            return "hello"
+        release_exit.wait(timeout=2)
+        return "/exit"
+
+    mode = InteractiveMode(app, input_fn=input_fn)
+    run_thread = threading.Thread(target=mode.run)
+    run_thread.start()
+
+    try:
+        assert provider_started.wait(timeout=2)
+        assert mode.status._message == "Thinking"
+        rendered = strip_ansi("\n".join(app.tui.render(100)))
+        assert "status: Thinking..." in rendered
+    finally:
+        release_provider.set()
+        release_exit.set()
+        run_thread.join(timeout=2)
+        app.close()
+
+    assert not run_thread.is_alive()
 
 
 def test_interactive_view_exposes_narrow_motion_signal_helpers(tmp_path) -> None:
@@ -278,7 +400,7 @@ def test_travis234_motion_zero_disables_runtime_motion(tmp_path, monkeypatch) ->
     try:
         assert mode.motion_controller.enabled is False
         mode.motion_controller.set_signal("turn", MotionState.WORKING)
-        assert mode.motion_controller.snapshot.indicator == "·"
+        assert mode.motion_controller.snapshot.indicator == "..."
         assert mode.tui.time_until_next_work(1.0) == pytest.approx(1.0)
     finally:
         mode.motion_controller.stop()
@@ -310,7 +432,7 @@ def test_plain_terminal_runtime_uses_static_motion(
 
     try:
         mode.motion_controller.set_signal("turn", MotionState.WORKING)
-        assert mode.motion_controller.snapshot.indicator == "·"
+        assert mode.motion_controller.snapshot.indicator == "..."
         assert mode.tui.time_until_next_work(1.0) == pytest.approx(1.0)
     finally:
         mode.motion_controller.stop()
@@ -752,3 +874,69 @@ def test_extension_working_message_uses_shared_extension_signal(tmp_path) -> Non
         mode.motion_controller.stop()
         mode.footer_data_provider.dispose()
         app.close()
+
+
+def test_motion_ticks_leave_context_compaction_and_native_scrollback_unchanged(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=100, rows=30),
+        enable_tui=True,
+    )
+    mode = InteractiveMode(app, input_fn=lambda _prompt: "/exit")
+
+    try:
+        mode.init()
+        messages_before = tuple(app.messages)
+        usage_before = app.session.get_context_usage()
+        compression_count_before = app.compaction.compressor.compression_count
+        history_before = tuple(mode.history.render(100))
+        full_redraws_before = mode.tui.full_redraws
+        generation_before = mode.motion_controller.snapshot.generation
+
+        mode._set_motion_signal("isolation", MotionState.WORKING)
+        deadline = time.monotonic() + 1.0
+        while mode.motion_controller.snapshot.generation < generation_before + 2:
+            if time.monotonic() >= deadline:
+                pytest.fail("motion frame did not advance before the isolation deadline")
+            time.sleep(0.01)
+            mode.tui.drain_dispatcher()
+
+        assert tuple(app.messages) == messages_before
+        assert app.session.get_context_usage() == usage_before
+        assert app.compaction.compressor.compression_count == compression_count_before
+        assert tuple(mode.history.render(100)) == history_before
+        assert mode.tui.full_redraws == full_redraws_before
+    finally:
+        mode.motion_controller.stop()
+        mode.footer_data_provider.dispose()
+        mode.tui.stop()
+        app.close()
+
+
+def test_motion_core_has_no_agent_provider_compaction_or_coding_agent_imports() -> None:
+    source_path = Path(__file__).parents[1] / "travis" / "tui" / "motion.py"
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    imported_modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            imported_modules.add(node.module)
+        elif isinstance(node, ast.Import):
+            imported_modules.update(alias.name for alias in node.names)
+
+    forbidden = (
+        "travis.agent",
+        "travis.ai",
+        "travis.compaction",
+        "travis.coding_agent",
+    )
+    assert not any(
+        module == prefix or module.startswith(f"{prefix}.")
+        for module in imported_modules
+        for prefix in forbidden
+    )

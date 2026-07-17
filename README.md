@@ -164,6 +164,7 @@ The npm package exposes only the `travis234` command and launches the release co
 | `/compact deep [focus]`, `/compress deep [focus]` | Create an aggressive bounded generational checkpoint with no retained raw suffix |
 | `/reload` | Reload project and global extensions without restarting |
 | `/theme` | Select a discovered theme |
+| `/motion [on\|off]` | Inspect or change restrained State Signals for the current TUI process |
 | `/trust` | View or change project trust; reload before newly trusted code runs |
 | `/packages` | List installed resource packages (`--local` selects project scope) |
 | `/install`, `/remove`, `/update` | Confirm and manage local, Git, or Python resource packages |
@@ -206,6 +207,10 @@ Mouse reporting is disabled by default, including in the release sandbox, so ord
 The built-in semantic themes are **Signal Glass**, **Black Ice**, **Neon Oni**, **Blood Circuit**, **Reactor Gold**, and **Polar Ghost**. Run `/theme` to open the live preview: arrow keys preview without persistence, Escape restores the exact original palette, and Enter returns the selection to the existing `/theme` command for the single persisted commit.
 
 External Pi-compatible JSON themes may provide any subset of the semantic colors. Missing roles inherit from Signal Glass. Values may be strict `#RRGGBB`, xterm indices `0..255`, an empty string for the terminal default, or references into `vars`; malformed roles fall back locally and never enter the agent context. `NO_COLOR=1` or `TERM=dumb` keeps the same semantic text with no ANSI color.
+
+State Signals add one restrained animated indicator after the existing activity label while Travis234 is actively working. Active provider turns render `Thinking...`: all three suffix dots stay at a fixed width while their highlight travels. Tool activity uses one fixed-width suffix spinner, and the telemetry footer remains static. At most one signal moves, parallel tools share it, and idle sessions schedule no animation work. Use `/motion off` or `/motion on` for the current process, or start with `TRAVIS234_MOTION=0`; `NO_COLOR=1` and `TERM=dumb` automatically retain a static semantic indicator. Motion stays inside the differential TUI renderer and never enters prompts, messages, context accounting, compaction, provider requests, or session files.
+
+Extensions can keep compact provider or system telemetry in the existing footer with `ui.setStatus(key, text)`. An optional `{"state": "working"}` third argument participates in the shared State Signal, but extensions cannot define animation loops or frame rates. For example, a monitor extension may publish `CPU 42% · RAM 61%` once per second; Travis234 does not sample CPU or memory in core.
 
 The main prompt is multiline. Enter submits the complete prompt; Shift+Enter inserts a newline when the terminal reports modified Enter, and Alt+Enter is the portable fallback. Arrow keys move through lines while preserving the visual column. Dialog, search, password, and picker fields remain single-line.
 

@@ -340,7 +340,7 @@ class InteractiveCommandDispatcher:
                     continue
                 if self._handle_active_turn_prompt(prompt):
                     continue
-                self.status.set_message("Running")
+                self.status.set_message("Thinking")
                 self._set_motion_signal("turn", MotionState.WORKING)
                 before_compressions = self.app.compaction.compressor.compression_count
                 before_tokens = estimate_tokens(self.app.messages)

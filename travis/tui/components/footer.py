@@ -54,6 +54,8 @@ class StatusLine(Text):
         self.visible = True
         self._message = ""
         self._indicator: str | None = None
+        self._indicator_position = "prefix"
+        self._indicator_separator = ""
         super().__init__("", theme_context=theme_context)
         self.set_message(message)
 
@@ -63,8 +65,26 @@ class StatusLine(Text):
         self._message = _single_line(message)
         self._refresh_text()
 
-    def set_indicator(self, indicator: str | None = None) -> None:
+    def set_indicator(
+        self,
+        indicator: str | None = None,
+        *,
+        position: str = "prefix",
+    ) -> None:
+        if position not in {"prefix", "suffix"}:
+            raise ValueError("status indicator position must be 'prefix' or 'suffix'")
         self._indicator = _single_line(indicator) if indicator is not None else None
+        self._indicator_position = position
+        self._indicator_separator = (
+            " "
+            if (
+                position == "suffix"
+                and indicator is not None
+                and bool(self._indicator)
+                and indicator[:1].isspace()
+            )
+            else ""
+        )
         self._refresh_text()
 
     def set_visible(self, visible: bool) -> None:
@@ -85,7 +105,10 @@ class StatusLine(Text):
     def _refresh_text(self) -> None:
         clean = self._message
         if clean and self._indicator:
-            clean = f"{self._indicator} {clean}"
+            if self._indicator_position == "suffix":
+                clean = f"{clean}{self._indicator_separator}{self._indicator}"
+            else:
+                clean = f"{self._indicator} {clean}"
         self.set_text(f"{self.kind}: {clean}" if clean else "")
 
 

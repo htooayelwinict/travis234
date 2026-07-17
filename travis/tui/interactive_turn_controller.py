@@ -168,7 +168,7 @@ class InteractiveTurnController:
         if next_prompt:
             next_before_compressions = self.app.compaction.compressor.compression_count
             next_before_tokens = estimate_tokens(self.app.messages)
-            self.status.set_message("Running")
+            self.status.set_message("Thinking")
             self._refresh_footer()
             self.tui.request_render()
             self._start_turn_thread(next_prompt, next_before_compressions, next_before_tokens)

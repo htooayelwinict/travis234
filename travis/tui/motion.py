@@ -46,16 +46,23 @@ class _SignalClaim:
     sequence: int
 
 
-_WORKING_PROFILE = MotionProfile(("·", "··", "···"), 0.25)
+_DIM = "\x1b[2m"
+_NORMAL_INTENSITY = "\x1b[22m"
+_THINKING_FRAMES = (
+    f".{_DIM}..{_NORMAL_INTENSITY}",
+    f"{_DIM}.{_NORMAL_INTENSITY}.{_DIM}.{_NORMAL_INTENSITY}",
+    f"{_DIM}..{_NORMAL_INTENSITY}.",
+)
+_WORKING_PROFILE = MotionProfile(_THINKING_FRAMES, 0.25, static_frame="...")
 _PROFILES = {
     MotionState.EXTENSION: _WORKING_PROFILE,
     MotionState.WORKING: _WORKING_PROFILE,
-    MotionState.TOOL: _WORKING_PROFILE,
-    MotionState.MAINTENANCE: MotionProfile(("◇", "◈", "◆", "◈"), 0.25),
-    MotionState.RETRY: MotionProfile(("!",), 1.0, static_frame="!"),
-    MotionState.TERMINATING: MotionProfile(("·", "··", "···"), 0.25),
-    MotionState.SUCCESS: MotionProfile(("·", "✓"), 0.25, repeat=False, static_frame="✓"),
-    MotionState.ERROR: MotionProfile(("·", "!"), 0.25, repeat=False, static_frame="!"),
+    MotionState.TOOL: MotionProfile((" ⠋", " ⠙", " ⠹", " ⠸"), 0.25, static_frame=" ◇"),
+    MotionState.MAINTENANCE: MotionProfile((" ◇", " ◈", " ◆", " ◈"), 0.25, static_frame=" ◇"),
+    MotionState.RETRY: MotionProfile((" !",), 1.0, static_frame=" !"),
+    MotionState.TERMINATING: _WORKING_PROFILE,
+    MotionState.SUCCESS: MotionProfile((" ·", " ✓"), 0.25, repeat=False, static_frame=" ✓"),
+    MotionState.ERROR: MotionProfile((" ·", " !"), 0.25, repeat=False, static_frame=" !"),
 }
 _PRIORITIES = {
     MotionState.IDLE: 0,
@@ -96,7 +103,7 @@ class MotionController:
         self._scheduled: Cancellable | None = None
         self._stopped = False
         self._snapshot = MotionSnapshot(MotionState.IDLE, "", None, 0)
-        self._on_change(self._snapshot)
+        self._notify_change(request_render=False)
 
     @property
     def enabled(self) -> bool:
@@ -202,10 +209,10 @@ class MotionController:
             self._emit(MotionState.IDLE, "", None)
             return
         profile = _PROFILES[claim.state]
-        if not self._enabled or self._static:
+        if claim.state is MotionState.RETRY and claim.countdown is not None:
+            indicator = f" {claim.countdown}s"
+        elif not self._enabled or self._static:
             indicator = profile.static_frame
-        elif claim.state is MotionState.RETRY and claim.countdown is not None:
-            indicator = f"{claim.countdown}s"
         else:
             indicator = profile.frames[self._frame_index]
         self._emit(claim.state, indicator, claim.countdown)
@@ -229,8 +236,19 @@ class MotionController:
         ):
             return
         self._snapshot = candidate
-        self._on_change(candidate)
-        self._request_render()
+        self._notify_change(request_render=True)
+
+    def _notify_change(self, *, request_render: bool) -> None:
+        try:
+            self._on_change(self._snapshot)
+        except Exception:
+            pass
+        if not request_render:
+            return
+        try:
+            self._request_render()
+        except Exception:
+            pass
 
     def _schedule_next_frame(self) -> None:
         claim = self._active_claim

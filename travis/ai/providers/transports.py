@@ -2000,8 +2000,6 @@ class CodexResponsesTransport:
             body["service_tier"] = service_tier
         if session_id:
             body["prompt_cache_key"] = _clamp_openai_prompt_cache_key(session_id)
-        if temperature is not None and profile.fixed_temperature is not OMIT_TEMPERATURE:
-            body["temperature"] = profile.fixed_temperature if profile.fixed_temperature is not None else temperature
         if immediate_tools:
             body["tools"] = convert_responses_tools(immediate_tools, strict=None)
         elif context is None and tools:
@@ -2014,6 +2012,8 @@ class CodexResponsesTransport:
                 body["reasoning"] = {"effort": effort, "summary": reasoning_summary or "auto"}
         if request_overrides:
             body.update(request_overrides)
+        for unsupported_field in ("temperature", "top_p", "max_output_tokens"):
+            body.pop(unsupported_field, None)
         return body
 
     def normalize_response(self, response: Any, **_kwargs: Any) -> NormalizedResponse:

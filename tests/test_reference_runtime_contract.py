@@ -942,15 +942,22 @@ def test_responses_request_shapes_are_not_conflated() -> None:
 
     openai = OpenAIResponsesTransport().build_kwargs(**common)
     azure = AzureOpenAIResponsesTransport().build_kwargs(**common)
-    codex = CodexResponsesTransport().build_kwargs(**common)
+    codex = CodexResponsesTransport().build_kwargs(
+        **common,
+        request_overrides={"top_p": 0.9, "max_output_tokens": 123},
+    )
 
+    assert openai["temperature"] == 0
     assert openai["max_output_tokens"] == 16
     assert openai["prompt_cache_key"] == "s" * 64
     assert openai["prompt_cache_retention"] == "24h"
     assert openai["input"][0] == {"role": "system", "content": "policy"}
     assert "prompt_cache_retention" not in azure
+    assert azure["temperature"] == 0
     assert azure["prompt_cache_key"] == "s" * 64
     assert codex["instructions"] == "policy"
+    assert "temperature" not in codex
+    assert "top_p" not in codex
     assert "max_output_tokens" not in codex
     assert "prompt_cache_retention" not in codex
 
@@ -1002,6 +1009,7 @@ def test_codex_prepared_request_uses_provider_endpoint_and_oauth_headers() -> No
     assert request.headers["session-id"] == "session-123"
     assert request.headers["x-client-request-id"] == "session-123"
     assert request.headers["User-Agent"].startswith("travis234 (")
+    assert "temperature" not in request.body
 
 
 @pytest.mark.parametrize(

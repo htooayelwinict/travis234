@@ -13,6 +13,7 @@
 - Preserve the current transcript-first layout and native terminal scrollback.
 - Idle is completely static, with no scheduled animation callback.
 - At most one indicator may animate across the entire TUI.
+- Match the approved option-A mockup: a `Thinking...` activity row with a fixed three-dot suffix for provider work, one fixed-width suffix spinner for tools, and no growing prefix animation.
 - Active motion is capped at four frames per second; retry countdown updates are capped at one per second.
 - Do not add dependencies or core CPU/memory sampling.
 - Do not modify `travis/agent/**`, provider payload construction, compaction algorithms, context construction, message schemas, tool schemas, session schemas, or agent-loop behavior.
@@ -242,7 +243,7 @@ class MotionSnapshot:
     generation: int
 ```
 
-`MotionController` stores source-keyed signal claims, resolves the highest priority deterministically, exposes an immutable snapshot, emits an immediate frame, and keeps at most one cancellable scheduled handle. Every scheduled callback captures a generation and becomes a no-op after cancellation or state replacement. Retry uses a one-second interval and decrements its supplied countdown in the snapshot without scheduling a second timer.
+`MotionController` stores source-keyed signal claims, resolves the highest priority deterministically, exposes an immutable snapshot, emits an immediate frame, and keeps at most one cancellable scheduled handle. Every scheduled callback captures a generation and becomes a no-op after cancellation or state replacement. Thinking frames keep all three suffix dots present while changing intensity; tool frames keep one suffix cell. Retry uses a one-second interval and decrements its supplied countdown in the snapshot without scheduling a second timer.
 
 - [ ] **Step 4: Export types and run controller tests**
 

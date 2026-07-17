@@ -57,6 +57,7 @@ from travis.tui.theme_controller import ThemeController
 from travis.tui.interactive_command_dispatcher import *  # noqa: F403
 from travis.tui.interactive_extensions import *  # noqa: F403
 from travis.tui.interactive_model_auth import *  # noqa: F403
+from travis.tui.interactive_motion import *  # noqa: F403
 from travis.tui.interactive_params import *  # noqa: F403
 from travis.tui.interactive_process_commands import *  # noqa: F403
 from travis.tui.interactive_session_commands import *  # noqa: F403
@@ -97,15 +98,16 @@ def _terminal_color_mode() -> str:
     return "truecolor"
 
 class _InteractiveRuntime(
-        InteractiveCommandDispatcher,
-        InteractiveExtensions,
-        InteractiveModelAuth,
-        InteractiveParams,
-        InteractiveProcessCommands,
-        InteractiveSessionCommands,
-        InteractiveShutdown,
-        InteractiveTurnController,
-        InteractiveView,
+    InteractiveCommandDispatcher,
+    InteractiveExtensions,
+    InteractiveModelAuth,
+    InteractiveMotion,
+    InteractiveParams,
+    InteractiveProcessCommands,
+    InteractiveSessionCommands,
+    InteractiveShutdown,
+    InteractiveTurnController,
+    InteractiveView,
 ):
     """Internal TUI runtime assembled from focused behavior owners."""
 
@@ -170,7 +172,10 @@ class _InteractiveRuntime(
         }
         self.motion_controller = MotionController(
             schedule=self.tui.dispatcher.call_later,
-            on_change=lambda snapshot: self.status.set_indicator(snapshot.indicator or None),
+            on_change=lambda snapshot: self.status.set_indicator(
+                snapshot.indicator or None,
+                position="suffix",
+            ),
             request_render=self.tui.request_render,
             enabled=motion_enabled,
             static=color_mode == "none",

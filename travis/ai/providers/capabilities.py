@@ -35,6 +35,17 @@ _CHAT_COMMON = (
 )
 _ANTHROPIC_DIRECT = ("top_p", "stop")
 _RESPONSES_COMMON = ("top_p", "parallel_tool_calls", "tool_choice")
+_CODEX_RESPONSES_SUPPORTED = ("parallel_tool_calls", "tool_choice")
+_CODEX_RESPONSES_UNSUPPORTED = (
+    "temperature",
+    "top_p",
+    "max_tokens",
+    "stop",
+    "frequency_penalty",
+    "presence_penalty",
+    "seed",
+    "provider_sort",
+)
 _CHAT_API_MODES = {"chat_completions", "mistral_conversations"}
 
 
@@ -84,7 +95,23 @@ def build_generation_payload(
             warnings=warnings,
         )
 
-    if api_mode in {"openai_responses", "azure_openai_responses", "openai_codex_responses"}:
+    if api_mode == "openai_codex_responses":
+        _copy_supported(params, request_overrides, _CODEX_RESPONSES_SUPPORTED)
+        _drop_parallel_tools_without_tools(params, request_overrides, warnings, tools_enabled=tools_enabled)
+        for name in _CODEX_RESPONSES_UNSUPPORTED:
+            _warn_if_set(
+                params,
+                warnings,
+                name,
+                "dropped",
+                f"Codex Responses does not accept {name}.",
+            )
+        return GenerationPayload(
+            request_overrides=request_overrides,
+            warnings=warnings,
+        )
+
+    if api_mode in {"openai_responses", "azure_openai_responses"}:
         _copy_supported(params, request_overrides, _RESPONSES_COMMON)
         _drop_parallel_tools_without_tools(params, request_overrides, warnings, tools_enabled=tools_enabled)
         if params.stop:

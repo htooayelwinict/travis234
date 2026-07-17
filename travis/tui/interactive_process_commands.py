@@ -351,7 +351,7 @@ class InteractiveProcessCommands:
             self._set_motion_signal("user-bash", MotionState.TOOL)
         else:
             self._clear_motion_signal("user-bash")
-        self.status.set_message("Running bash" if has_user_commands else "Running" if self._is_turn_active() else "Idle")
+        self.status.set_message("Running bash" if has_user_commands else "Thinking" if self._is_turn_active() else "Idle")
         self._refresh_footer()
         self.tui.request_render()
 
@@ -391,7 +391,7 @@ class InteractiveProcessCommands:
             self._set_motion_signal("user-bash", MotionState.TOOL)
         else:
             self._clear_motion_signal("user-bash")
-        self.status.set_message("Running bash" if has_user_commands else "Running" if self._is_turn_active() else "Idle")
+        self.status.set_message("Running bash" if has_user_commands else "Thinking" if self._is_turn_active() else "Idle")
         self._refresh_footer()
         self.tui.request_render()
 

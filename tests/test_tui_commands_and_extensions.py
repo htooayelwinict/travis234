@@ -1248,10 +1248,7 @@ def test_interactive_mode_extension_shortcut_can_set_working_message(tmp_path) -
     assert mode._dispatch_extension_shortcut("ctrl+w") is True
 
     rendered = strip_ansi("\n".join(app.tui.render(140)))
-    assert any(
-        line.startswith("status: ") and line.endswith(" Indexing workspace")
-        for line in rendered.splitlines()
-    )
+    assert "status: Indexing workspace..." in rendered
     assert "ctrl+w" not in rendered
 
 def test_interactive_mode_extension_shortcut_can_hide_working_status(tmp_path) -> None:

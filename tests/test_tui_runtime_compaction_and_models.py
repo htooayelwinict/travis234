@@ -124,10 +124,7 @@ def test_interactive_mode_labels_post_response_compaction_after_reply(tmp_path) 
     assert _wait_until(lambda: mode.status._message == "Compressing")
     rendered = strip_ansi("\n".join(app.tui.render(120)))
     assert "reply before compaction" in rendered
-    assert any(
-        line.startswith("status: ") and line.endswith(" Compressing")
-        for line in rendered.splitlines()
-    )
+    assert any(line.startswith("status: Compressing ") for line in rendered.splitlines())
     assert "status: Running" not in rendered
 
     release_compression.set()
@@ -1476,6 +1473,51 @@ def test_interactive_mode_params_warnings_follow_the_model_transport_api(tmp_pat
     assert [(warning.param, warning.action) for warning in mode.generation_param_warnings] == [
         ("stop", "dropped")
     ]
+
+
+def test_interactive_codex_params_preserve_state_but_drop_unsupported_sampling(
+    tmp_path: Path,
+) -> None:
+    model = Model(
+        id="gpt-5.3-codex-spark",
+        name="GPT-5.3 Codex Spark",
+        api="openai-codex-responses",
+        provider="openai-codex",
+        base_url="https://chatgpt.com/backend-api",
+        reasoning=True,
+        context_window=128_000,
+        max_tokens=32_000,
+    )
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=model,
+        terminal=FakeTerminal(columns=120),
+        enable_tui=True,
+        session_path=str(tmp_path / "codex-params.jsonl"),
+    )
+    app.session.set_thinking_level("high")
+    mode = InteractiveMode(
+        app,
+        generation_params=GenerationParams(
+            temperature=0.2,
+            sources={"temperature": "cli"},
+        ),
+    )
+    before_messages = list(app.messages)
+    before_tokens = estimate_tokens(app.messages)
+
+    mode._run_params_command("temperature 0.4")
+    mode._run_params_command("reset")
+
+    assert mode.generation_params.temperature == 0.2
+    assert mode.generation_params.sources["temperature"] == "cli"
+    assert [(warning.param, warning.action) for warning in mode.generation_param_warnings] == [
+        ("temperature", "dropped")
+    ]
+    assert app.session.generation_param_overrides == GenerationParams()
+    assert app.session.thinking_level == "high"
+    assert app.messages == before_messages
+    assert estimate_tokens(app.messages) == before_tokens
 
 
 def test_interactive_mode_model_switch_refreshes_generation_capability_state(

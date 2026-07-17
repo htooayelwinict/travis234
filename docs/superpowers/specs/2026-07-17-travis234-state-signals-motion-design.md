@@ -53,7 +53,7 @@ The implementation may consume existing TUI-visible runtime state and events as 
 
 ## Visual behavior
 
-The existing `StatusLine` remains the single motion surface. A semantic state selects a small built-in frame sequence displayed before the existing status text.
+The existing `StatusLine` remains the single motion surface. A semantic state selects a small built-in frame sequence displayed after the existing status text. Motion never shifts the label horizontally.
 
 ### State priority
 
@@ -70,9 +70,11 @@ Only the winning state is visible. Parallel tools never create parallel spinners
 
 ### Motion profiles
 
-- **Working:** a restrained three-frame signal at four frames per second.
-- **Retry:** a once-per-second countdown supplied by the existing retry state.
-- **Success or error:** one short transition, followed by a static terminal glyph.
+- **Thinking/streaming:** the activity row reads `Thinking...`; three fixed suffix dots remain visible while one highlighted dot travels across them at four frames per second. The sequence is never rendered as a growing `.`/`..`/`...` prefix.
+- **Tool activity:** one fixed-width suffix spinner cell at four frames per second.
+- **Maintenance:** one fixed-width suffix pulse beside the dedicated operation label.
+- **Retry:** a once-per-second suffix countdown supplied by the existing retry state.
+- **Success or error:** one short suffix transition, followed by a static terminal glyph.
 - **Idle:** a static label with no scheduled callback.
 
 Theme semantic roles determine color. Motion does not introduce a separate palette. In `NO_COLOR`, `TERM=dumb`, disabled-motion mode, or any unsupported terminal condition, the same state remains readable through static text and glyphs.
