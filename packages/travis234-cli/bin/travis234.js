@@ -558,6 +558,6 @@ export {
   shouldUseIsolatedDockerConfig,
 };
 
-if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
+if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(__filename)) {
   process.exit(main());
 }

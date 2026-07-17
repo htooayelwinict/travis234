@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -22,6 +23,18 @@ test("package exposes travis234 binaries only", () => {
   assert.equal(packageJson.name, "@htooayelwinict/travis234");
   assert.deepEqual(packageJson.bin, { travis234: "bin/travis234.js" });
   assert.equal(fs.existsSync(path.join(packageRoot, packageJson.bin.travis234)), true);
+});
+
+test("npm bin symlink invokes the launcher entrypoint", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "travis234-cli-bin-"));
+  const launcher = path.join(root, "travis234");
+  fs.symlinkSync(path.join(packageRoot, packageJson.bin.travis234), launcher);
+
+  const result = spawnSync(launcher, ["--help"], { encoding: "utf8" });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^Travis234$/m);
+  assert.match(result.stdout, /^Usage:$/m);
 });
 
 test("package does not bundle a mandatory global agent prompt", () => {
