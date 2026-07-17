@@ -42,6 +42,38 @@ def test_generated_openrouter_capacities_match_pinned_pi_fixture() -> None:
     } == expected
 
 
+def test_subscription_claude_sampling_flags_are_pinned_to_anthropic_routes() -> None:
+    root = Path(__file__).resolve().parents[1]
+    catalog = json.loads(
+        (root / "travis/ai/builtin_models.json").read_text(encoding="utf-8")
+    )
+
+    restricted = {
+        "anthropic": [
+            "claude-fable-5",
+            "claude-opus-4-7",
+            "claude-opus-4-8",
+            "claude-sonnet-5",
+        ],
+        "github-copilot": [
+            "claude-opus-4.7",
+            "claude-opus-4.8",
+            "claude-sonnet-5",
+        ],
+    }
+    for provider, model_ids in restricted.items():
+        for model_id in model_ids:
+            record = catalog[provider][model_id]
+            assert record["api"] == "anthropic-messages"
+            assert record["compat"]["supportsTemperature"] is False
+            assert record["compat"]["supportsTopP"] is False
+
+    copilot_fable = catalog["github-copilot"]["claude-fable-5"]
+    assert copilot_fable["api"] == "openai-completions"
+    assert "supportsTemperature" not in copilot_fable["compat"]
+    assert "supportsTopP" not in copilot_fable["compat"]
+
+
 def test_openrouter_capability_refresh_is_model_agnostic() -> None:
     catalog = {
         "openrouter": {
