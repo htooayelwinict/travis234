@@ -147,6 +147,7 @@ class InteractiveTurnController:
         try:
             self.app.run_turn(
                 prompt,
+                stream_fn=self._stream_with_session_generation_params,
                 on_post_response_compaction_start=self._show_post_response_compaction_status,
             )
         except Exception as error:  # noqa: BLE001 - keep the TUI responsive if a turn fails outside agent handling

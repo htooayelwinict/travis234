@@ -1237,7 +1237,10 @@ def test_interactive_mode_params_command_displays_constructor_params(monkeypatch
     mode._run_params_command("")
 
     assert shown["kind"] == "model"
-    assert shown["message"] == "stepfun/step-3.7-flash: temperature=0.2 (cli), max_tokens=4096 (cli)"
+    assert shown["message"] == (
+        "stepfun/step-3.7-flash: thinking=off, "
+        "temperature=0.2 (cli), max_tokens=4096 (cli)"
+    )
 
 def test_interactive_mode_params_command_displays_generation_param_warnings(monkeypatch) -> None:
     class FakeSession:
@@ -1272,6 +1275,468 @@ def test_interactive_mode_params_command_displays_generation_param_warnings(monk
 
     assert shown["kind"] == "model"
     assert shown["message"] == (
-        "stepfun/step-3.7-flash: provider_sort=latency; "
+        "stepfun/step-3.7-flash: thinking=off, provider_sort=latency; "
         "warnings: provider_sort dropped"
     )
+
+
+def _create_params_mode(
+    tmp_path: Path,
+    *,
+    generation_params: GenerationParams | None = None,
+    reasoning: bool = False,
+) -> tuple[CodingApp, InteractiveMode]:
+    model = faux_model()
+    model.reasoning = reasoning
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=model,
+        terminal=FakeTerminal(columns=120),
+        enable_tui=True,
+        session_path=str(tmp_path / "params-session.jsonl"),
+    )
+    return app, InteractiveMode(app, generation_params=generation_params)
+
+
+def test_interactive_mode_params_direct_set_preserves_full_value_remainder(tmp_path: Path) -> None:
+    app, mode = _create_params_mode(tmp_path)
+
+    mode._run_params_command("temperature 0.2")
+    mode._run_params_command("stop END token,STOP token")
+
+    assert app.session.generation_param_overrides.temperature == 0.2
+    assert app.session.generation_param_overrides.stop == ("END token", "STOP token")
+    assert dict(app.session.generation_param_overrides.sources) == {
+        "temperature": "session",
+        "stop": "session",
+    }
+
+
+def test_interactive_mode_params_thinking_uses_existing_session_owner(tmp_path: Path) -> None:
+    app, mode = _create_params_mode(tmp_path, reasoning=True)
+
+    mode._run_params_command("thinking high")
+
+    assert app.session.thinking_level == "high"
+    assert app.session.generation_param_overrides == GenerationParams()
+
+
+def test_interactive_mode_params_reset_one_and_all_reveal_startup_values(tmp_path: Path) -> None:
+    startup = GenerationParams(
+        temperature=0.7,
+        max_tokens=4096,
+        sources={"temperature": "cli", "max_tokens": "cli"},
+    )
+    app, mode = _create_params_mode(tmp_path, generation_params=startup, reasoning=True)
+    mode._run_params_command("thinking high")
+    mode._run_params_command("temperature 0.2")
+    mode._run_params_command("top_p 0.9")
+
+    mode._run_params_command("reset temperature")
+
+    assert app.session.generation_param_overrides.temperature is None
+    assert mode.generation_params.temperature == 0.7
+    assert mode.generation_params.sources["temperature"] == "cli"
+
+    mode._run_params_command("reset")
+
+    assert app.session.generation_param_overrides == GenerationParams()
+    assert mode.generation_params.max_tokens == 4096
+    assert app.session.thinking_level == "high"
+
+
+def test_interactive_mode_params_rejects_active_turn_writes_but_allows_reads(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    app, mode = _create_params_mode(tmp_path)
+    shown: list[tuple[str, str]] = []
+    monkeypatch.setattr(mode, "_is_turn_active", lambda: True)
+    monkeypatch.setattr(
+        mode,
+        "_show_status",
+        lambda message, kind="status": shown.append((message, kind)),
+    )
+
+    mode._run_params_command("temperature 0.2")
+    mode._run_params_command("")
+
+    assert app.session.generation_param_overrides == GenerationParams()
+    assert shown[0][1] == "error"
+    assert "active" in shown[0][0].lower()
+    assert shown[1][1] == "model"
+    assert "thinking=off" in shown[1][0]
+
+
+@pytest.mark.parametrize("value", ["none", "null"])
+def test_interactive_mode_params_requires_explicit_reset_for_unset_values(
+    tmp_path: Path,
+    monkeypatch,
+    value: str,
+) -> None:
+    app, mode = _create_params_mode(tmp_path)
+    shown: dict[str, str] = {}
+    monkeypatch.setattr(
+        mode,
+        "_show_status",
+        lambda message, kind="status": shown.update(message=message, kind=kind),
+    )
+
+    mode._run_params_command(f"temperature {value}")
+
+    assert app.session.generation_param_overrides == GenerationParams()
+    assert shown["kind"] == "error"
+    assert "/params reset temperature" in shown["message"]
+
+
+def test_interactive_mode_params_rejects_unknown_names_and_thinking_reset(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    app, mode = _create_params_mode(tmp_path, reasoning=True)
+    shown: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        mode,
+        "_show_status",
+        lambda message, kind="status": shown.append((message, kind)),
+    )
+
+    mode._run_params_command("api_key sk-secret")
+    mode._run_params_command("reset thinking")
+
+    assert app.session.generation_param_overrides == GenerationParams()
+    assert app.session.thinking_level == "off"
+    assert shown[0][1] == "error"
+    assert "Unknown parameter 'api_key'" in shown[0][0]
+    assert "must be set explicitly" in shown[1][0]
+
+
+@pytest.mark.parametrize("value", ["none", "null"])
+def test_interactive_mode_params_thinking_requires_an_explicit_level(
+    tmp_path: Path,
+    monkeypatch,
+    value: str,
+) -> None:
+    app, mode = _create_params_mode(tmp_path, reasoning=True)
+    app.session.set_thinking_level("high")
+    shown: dict[str, str] = {}
+    monkeypatch.setattr(
+        mode,
+        "_show_status",
+        lambda message, kind="status": shown.update(message=message, kind=kind),
+    )
+
+    mode._run_params_command(f"thinking {value}")
+
+    assert app.session.thinking_level == "high"
+    assert shown["kind"] == "error"
+    assert "/params thinking <level>" in shown["message"]
+
+
+def test_interactive_mode_params_recomputes_capability_warnings_for_active_model(
+    tmp_path: Path,
+) -> None:
+    app, mode = _create_params_mode(
+        tmp_path,
+        generation_params=GenerationParams(provider_sort="latency"),
+    )
+    app.session.model.provider = "stepfun"
+
+    mode._refresh_generation_param_state()
+
+    assert [(warning.param, warning.action) for warning in mode.generation_param_warnings] == [
+        ("provider_sort", "dropped")
+    ]
+
+    app.session.model.provider = "openrouter"
+    mode._refresh_generation_param_state()
+
+    assert mode.generation_param_warnings == []
+
+
+def test_interactive_mode_params_warnings_follow_the_model_transport_api(tmp_path: Path) -> None:
+    model = Model(
+        id="custom-responses",
+        name="Custom Responses",
+        api="openai-responses",
+        provider="custom:responses",
+        base_url="https://example.test/v1",
+        context_window=32_000,
+        max_tokens=4096,
+    )
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=model,
+        terminal=FakeTerminal(columns=120),
+        enable_tui=True,
+        session_path=str(tmp_path / "params-api-mode.jsonl"),
+    )
+    mode = InteractiveMode(app, generation_params=GenerationParams(stop=("END",)))
+
+    assert [(warning.param, warning.action) for warning in mode.generation_param_warnings] == [
+        ("stop", "dropped")
+    ]
+
+
+def test_interactive_mode_model_switch_refreshes_generation_capability_state(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    app, mode = _create_params_mode(tmp_path)
+    refreshes = {"count": 0}
+    monkeypatch.setattr(
+        mode,
+        "_refresh_generation_param_state",
+        lambda: refreshes.update(count=refreshes["count"] + 1),
+    )
+
+    mode._show_model_switched(app.session.model)
+
+    assert refreshes == {"count": 1}
+
+
+def test_interactive_mode_session_rebind_refreshes_generation_param_state(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _app, mode = _create_params_mode(tmp_path)
+    refreshes = {"count": 0}
+    monkeypatch.setattr(
+        mode,
+        "_refresh_generation_param_state",
+        lambda: refreshes.update(count=refreshes["count"] + 1),
+    )
+
+    mode._rebind_session_ui()
+
+    assert refreshes == {"count": 1}
+
+
+def _stream_from_events(events):
+    stream = create_assistant_message_event_stream()
+    for event in events:
+        stream.push(event)
+    return stream
+
+
+def test_interactive_turn_applies_effective_generation_params_and_preserves_output_cap(
+    tmp_path: Path,
+) -> None:
+    captured_options = []
+
+    def stream_fn(model, context, options):
+        captured_options.append(options)
+        return _stream_from_events(text_response_events(model, "done"))
+
+    register_api_provider(ApiProvider(api="faux", stream=stream_fn, stream_simple=stream_fn))
+    model = faux_model()
+    model.max_tokens = 4096
+    startup = GenerationParams(
+        temperature=0.4,
+        top_p=0.9,
+        max_tokens=8192,
+        sources={"temperature": "cli", "top_p": "cli", "max_tokens": "cli"},
+    )
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=model,
+        terminal=FakeTerminal(columns=120),
+        enable_tui=True,
+        session_path=str(tmp_path / "params-turn.jsonl"),
+    )
+    mode = InteractiveMode(app, generation_params=startup)
+    mode._run_params_command("temperature 0.2")
+
+    mode._run_turn_thread("first turn", 0, 0)
+
+    first = captured_options[-1]
+    assert first.generation_params.temperature == 0.2
+    assert first.generation_params.top_p == 0.9
+    assert first.generation_params.max_tokens == 8192
+    assert first.max_tokens == 4096
+
+    mode._run_params_command("reset temperature")
+    mode._run_params_command("max_tokens 1024")
+    mode._run_turn_thread("second turn", 0, 0)
+
+    second = captured_options[-1]
+    assert second.generation_params.temperature == 0.4
+    assert second.generation_params.max_tokens == 1024
+    assert second.max_tokens == 1024
+
+
+def test_interactive_turn_applies_same_generation_params_to_tool_continuation(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "notes.txt").write_text("hello\n", encoding="utf-8")
+    captured_options = []
+
+    def stream_fn(model, context, options):
+        captured_options.append(options)
+        if len(captured_options) == 1:
+            events = tool_call_response_events(model, "read", {"path": "notes.txt"})
+        else:
+            events = text_response_events(model, "read complete")
+        return _stream_from_events(events)
+
+    register_api_provider(ApiProvider(api="faux", stream=stream_fn, stream_simple=stream_fn))
+    model = faux_model()
+    model.max_tokens = 4096
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=model,
+        terminal=FakeTerminal(columns=120),
+        enable_tui=True,
+        session_path=str(tmp_path / "params-tools.jsonl"),
+    )
+    mode = InteractiveMode(app)
+    mode._run_params_command("temperature 0.2")
+
+    mode._run_turn_thread("read notes.txt", 0, 0)
+
+    assert len(captured_options) == 2
+    assert [options.generation_params.temperature for options in captured_options] == [0.2, 0.2]
+
+
+def test_interactive_turn_applies_same_generation_params_to_auto_retry(
+    tmp_path: Path,
+) -> None:
+    captured_options = []
+
+    def stream_fn(model, context, options):
+        captured_options.append(options)
+        if len(captured_options) == 1:
+            error_message = AssistantMessage(
+                content=[TextContent(text="")],
+                api=model.api,
+                provider=model.provider,
+                model=model.id,
+                usage=empty_usage(),
+                stop_reason="error",
+                error_message="Provider finish_reason: network_error",
+                timestamp=now_ms(),
+            )
+            return _stream_from_events([ErrorEvent(reason="error", error=error_message)])
+        return _stream_from_events(text_response_events(model, "retry recovered"))
+
+    register_api_provider(ApiProvider(api="faux", stream=stream_fn, stream_simple=stream_fn))
+    model = faux_model()
+    model.max_tokens = 4096
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=model,
+        terminal=FakeTerminal(columns=120),
+        enable_tui=True,
+        session_path=str(tmp_path / "params-retry.jsonl"),
+    )
+    app.session.set_auto_retry_enabled(True)
+    app.session._max_retries = 1
+    app.session._retry_delay_ms = 0
+    mode = InteractiveMode(app)
+    mode._run_params_command("top_p 0.8")
+
+    mode._run_turn_thread("retry once", 0, 0)
+
+    assert len(captured_options) == 2
+    assert [options.generation_params.top_p for options in captured_options] == [0.8, 0.8]
+
+
+def test_interactive_turn_thinking_uses_existing_reasoning_option_path(tmp_path: Path) -> None:
+    captured_options = []
+
+    def stream_fn(model, context, options):
+        captured_options.append(options)
+        return _stream_from_events(text_response_events(model, "done"))
+
+    register_api_provider(ApiProvider(api="faux", stream=stream_fn, stream_simple=stream_fn))
+    model = faux_model()
+    model.reasoning = True
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=model,
+        terminal=FakeTerminal(columns=120),
+        enable_tui=True,
+        session_path=str(tmp_path / "params-thinking.jsonl"),
+    )
+    mode = InteractiveMode(app)
+    mode._run_params_command("thinking high")
+
+    mode._run_turn_thread("reason", 0, 0)
+
+    assert captured_options[-1].reasoning == "high"
+
+
+def test_interactive_generation_param_overrides_do_not_leak_between_sessions(
+    tmp_path: Path,
+) -> None:
+    captured_options = []
+
+    def stream_fn(model, context, options):
+        captured_options.append(options)
+        return _stream_from_events(text_response_events(model, "done"))
+
+    register_api_provider(ApiProvider(api="faux", stream=stream_fn, stream_simple=stream_fn))
+    first_app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=120),
+        enable_tui=True,
+        session_path=str(tmp_path / "first-params.jsonl"),
+    )
+    second_app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=120),
+        enable_tui=True,
+        session_path=str(tmp_path / "second-params.jsonl"),
+    )
+    first_mode = InteractiveMode(first_app)
+    second_mode = InteractiveMode(second_app)
+    first_mode._run_params_command("temperature 0.2")
+
+    first_mode._run_turn_thread("first", 0, 0)
+    second_mode._run_turn_thread("second", 0, 0)
+
+    assert captured_options[-2].generation_params.temperature == 0.2
+    assert captured_options[-1].generation_params.temperature is None
+
+
+def test_interactive_generation_params_do_not_change_compaction_model_options(
+    tmp_path: Path,
+) -> None:
+    captured_options = []
+
+    def stream_fn(model, context, options):
+        captured_options.append(options)
+        if len(captured_options) == 1:
+            events = text_response_events(model, "main response")
+            events[-1].message.usage.input = 200_000
+            events[-1].message.usage.total_tokens = 200_000
+            return _stream_from_events(events)
+        return _stream_from_events(
+            text_response_events(
+                model,
+                "## Historical Task Snapshot\nCompacted history remains isolated.",
+            )
+        )
+
+    register_api_provider(ApiProvider(api="faux", stream=stream_fn, stream_simple=stream_fn))
+    model = faux_model()
+    model.context_window = 100_000
+    model.max_tokens = 4096
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=model,
+        terminal=FakeTerminal(columns=120),
+        enable_tui=True,
+        context_length=100_000,
+        session_path=str(tmp_path / "params-compaction.jsonl"),
+    )
+    mode = InteractiveMode(app)
+    mode._run_params_command("temperature 0.2")
+
+    mode._run_turn_thread("trigger compaction", 0, 0)
+
+    assert len(captured_options) == 2
+    assert captured_options[0].generation_params.temperature == 0.2
+    assert captured_options[1].generation_params is None

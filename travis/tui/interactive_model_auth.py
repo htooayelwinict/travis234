@@ -13,8 +13,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
-from travis.ai.providers.capabilities import ProviderParamWarning
-from travis.ai.providers.params import GenerationParams, compact_generation_params_display
 from travis.compaction import estimate_tokens
 from travis.coding_agent.session_types import BashResult
 from travis.coding_agent.session_catalog import SessionInfo
@@ -47,9 +45,6 @@ from travis.tui.user_commands import (
 )
 
 from travis.tui.interactive_shutdown import OPENROUTER_MODEL_PICKER_LIMIT
-
-def _compact_generation_param_warnings(warnings: list[ProviderParamWarning]) -> str:
-    return ", ".join(f"{warning.param} {warning.action}" for warning in warnings)
 
 def _dedupe_models(models) -> list:
     seen: set[tuple[str, str]] = set()
@@ -193,31 +188,6 @@ class InteractiveModelAuth:
         if model is not None:
             self._switch_model(model)
 
-    def _run_params_command(self, query: str | None = None) -> None:
-        provider = getattr(self.app.session.model, "provider", "")
-        model_id = getattr(self.app.session.model, "id", "")
-        params = self.generation_params
-        if params is None:
-            self._show_status(f"{provider}/{model_id}: default generation parameters", kind="model")
-            return
-        display = compact_generation_params_display(params)
-        warning_display = _compact_generation_param_warnings(self.generation_param_warnings)
-        if query:
-            normalized = query.strip().lower()
-            pieces = [part for part in display.split(", ") if normalized in part.lower()]
-            warning_pieces = [part for part in warning_display.split(", ") if normalized in part.lower()]
-            if pieces:
-                display = ", ".join(pieces)
-            elif warning_pieces:
-                display = f"warnings: {', '.join(warning_pieces)}"
-            else:
-                display = f"no generation parameter matching {query}"
-            self._show_status(f"{provider}/{model_id}: {display}", kind="model")
-            return
-        if warning_display:
-            display = f"{display}; warnings: {warning_display}"
-        self._show_status(f"{provider}/{model_id}: {display}", kind="model")
-
     def _show_model_list(self, models) -> None:
         if not models:
             self._show_status("No models available. Configure TRAVIS234_WORKER_LLM_MODEL or models.json.", kind="error")
@@ -245,6 +215,7 @@ class InteractiveModelAuth:
                 {"provider": model.provider, "model": model.id},
             )
         self._show_status(f"Switched model to {model.provider}/{model.id}", kind="model")
+        self._refresh_generation_param_state()
         self._update_available_provider_count()
         self._refresh_footer()
         self.tui.request_render()
@@ -494,7 +465,6 @@ class InteractiveModelAuth:
 
 __all__ = (
     'InteractiveModelAuth',
-    '_compact_generation_param_warnings',
     '_dedupe_models',
     '_filter_model_candidates',
     '_match_oauth_provider',

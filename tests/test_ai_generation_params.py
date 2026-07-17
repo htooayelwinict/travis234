@@ -2,10 +2,15 @@ import pytest
 from types import MappingProxyType
 
 from travis.ai.providers.params import (
+    GENERATION_PARAM_FIELDS,
     GenerationParams,
     compact_generation_params_display,
+    generation_params_from_session_mapping,
+    generation_params_to_mapping,
     merge_generation_params,
     params_from_mapping,
+    remove_generation_param,
+    replace_generation_param,
 )
 
 
@@ -192,3 +197,86 @@ def test_compact_generation_params_display_is_secret_free_and_formats_plan_case(
         "max_tokens=4096, stop=1 sequence, provider_sort=latency"
     )
     assert "sk-secret" not in display
+
+
+def test_session_mapping_round_trip_is_normalized_and_source_labeled():
+    params = generation_params_from_session_mapping(
+        {
+            "temperature": 0.2,
+            "parallel_tool_calls": True,
+            "stop": ["END", "STOP"],
+        }
+    )
+
+    assert params is not None
+    assert generation_params_to_mapping(params) == {
+        "temperature": 0.2,
+        "parallel_tool_calls": True,
+        "stop": ["END", "STOP"],
+    }
+    assert dict(params.sources) == {
+        "temperature": "session",
+        "parallel_tool_calls": "session",
+        "stop": "session",
+    }
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        None,
+        [],
+        {"api_key": "sk-secret"},
+        {"temperature": None},
+        {"stop": []},
+        {"temperature": "not-a-number"},
+    ],
+)
+def test_invalid_session_snapshot_is_rejected(values):
+    assert generation_params_from_session_mapping(values) is None
+
+
+def test_empty_session_snapshot_is_a_valid_full_reset():
+    params = generation_params_from_session_mapping({})
+
+    assert params == GenerationParams()
+    assert generation_params_to_mapping(params) == {}
+
+
+def test_generation_param_fields_expose_only_safe_override_fields():
+    assert GENERATION_PARAM_FIELDS == (
+        "temperature",
+        "top_p",
+        "max_tokens",
+        "timeout_seconds",
+        "frequency_penalty",
+        "presence_penalty",
+        "seed",
+        "parallel_tool_calls",
+        "tool_choice",
+        "stop",
+        "provider_sort",
+    )
+    assert "provider_preferences" not in GENERATION_PARAM_FIELDS
+
+
+def test_replace_and_remove_generation_param_keep_only_explicit_fields():
+    params = replace_generation_param(GenerationParams(), "temperature", "0.2")
+    params = replace_generation_param(params, "stop", '["END", "STOP"]')
+
+    assert generation_params_to_mapping(remove_generation_param(params, "temperature")) == {
+        "stop": ["END", "STOP"]
+    }
+
+
+@pytest.mark.parametrize("value", ["", "none", "null", None])
+def test_replace_requires_explicit_reset_for_unset_values(value):
+    with pytest.raises(ValueError, match=r"/params reset temperature"):
+        replace_generation_param(GenerationParams(), "temperature", value)
+
+
+def test_replace_and_remove_reject_unknown_generation_parameters():
+    with pytest.raises(ValueError, match="unsupported generation parameter: api_key"):
+        replace_generation_param(GenerationParams(), "api_key", "sk-secret")
+    with pytest.raises(ValueError, match="unsupported generation parameter: api_key"):
+        remove_generation_param(GenerationParams(), "api_key")

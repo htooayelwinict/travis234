@@ -57,6 +57,7 @@ from travis.tui.theme_controller import ThemeController
 from travis.tui.interactive_command_dispatcher import *  # noqa: F403
 from travis.tui.interactive_extensions import *  # noqa: F403
 from travis.tui.interactive_model_auth import *  # noqa: F403
+from travis.tui.interactive_params import *  # noqa: F403
 from travis.tui.interactive_process_commands import *  # noqa: F403
 from travis.tui.interactive_session_commands import *  # noqa: F403
 from travis.tui.interactive_shutdown import *  # noqa: F403
@@ -99,6 +100,7 @@ class _InteractiveRuntime(
         InteractiveCommandDispatcher,
         InteractiveExtensions,
         InteractiveModelAuth,
+        InteractiveParams,
         InteractiveProcessCommands,
         InteractiveSessionCommands,
         InteractiveShutdown,
@@ -121,8 +123,10 @@ class _InteractiveRuntime(
         open_resume_picker: bool = False,
     ) -> None:
         self.app = app
-        self.generation_params = generation_params
+        self.startup_generation_params = generation_params or GenerationParams()
+        self.generation_params = self.startup_generation_params
         self.generation_param_warnings = list(generation_param_warnings or [])
+        self._refresh_generation_param_state()
         self._open_resume_picker = bool(open_resume_picker)
         self.tui = app.tui
         self.input_fn = input_fn or input

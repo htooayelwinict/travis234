@@ -20,6 +20,7 @@ _PARAM_FIELDS = (
     "stop",
     "provider_sort",
 )
+GENERATION_PARAM_FIELDS = _PARAM_FIELDS
 _UNSET_STRINGS = {"", "none", "null"}
 _TRUE_STRINGS = {"1", "true", "yes", "y", "on"}
 _FALSE_STRINGS = {"0", "false", "no", "n", "off"}
@@ -141,6 +142,78 @@ def compact_generation_params_display(params: GenerationParams) -> str:
         parts.append(f"{field_name}={formatted}")
 
     return ", ".join(parts) if parts else "default generation parameters"
+
+
+def generation_params_to_mapping(params: GenerationParams) -> dict[str, object]:
+    """Return the safe, normalized fields explicitly set on ``params``."""
+
+    values: dict[str, object] = {}
+    for field_name in GENERATION_PARAM_FIELDS:
+        value = getattr(params, field_name)
+        if value is None:
+            continue
+        if field_name == "stop":
+            if not value:
+                continue
+            values[field_name] = list(value)
+            continue
+        values[field_name] = value
+    return values
+
+
+def generation_params_from_session_mapping(values: object) -> GenerationParams | None:
+    """Validate a persisted override snapshot without accepting extra fields."""
+
+    if not isinstance(values, dict):
+        return None
+    if any(not isinstance(key, str) or key not in GENERATION_PARAM_FIELDS for key in values):
+        return None
+    if any(_is_unset(value) for value in values.values()):
+        return None
+    try:
+        parsed = params_from_mapping(values, source="session")
+    except (TypeError, ValueError):
+        return None
+    if set(generation_params_to_mapping(parsed)) != set(values):
+        return None
+    return parsed
+
+
+def replace_generation_param(
+    params: GenerationParams,
+    name: str,
+    raw_value: object,
+    *,
+    source: str = "session",
+) -> GenerationParams:
+    """Return an override snapshot with one validated field replaced."""
+
+    if name not in GENERATION_PARAM_FIELDS:
+        raise ValueError(f"unsupported generation parameter: {name}")
+    if _is_unset(raw_value):
+        raise ValueError(f"{name} requires a value; use /params reset {name}")
+    parsed = params_from_mapping({name: raw_value}, source=source)
+    parsed_values = generation_params_to_mapping(parsed)
+    if name not in parsed_values:
+        raise ValueError(f"{name} requires a value; use /params reset {name}")
+    candidate = generation_params_to_mapping(params)
+    candidate[name] = parsed_values[name]
+    return params_from_mapping(candidate, source=source)
+
+
+def remove_generation_param(
+    params: GenerationParams,
+    name: str,
+    *,
+    source: str = "session",
+) -> GenerationParams:
+    """Return an override snapshot without ``name``."""
+
+    if name not in GENERATION_PARAM_FIELDS:
+        raise ValueError(f"unsupported generation parameter: {name}")
+    candidate = generation_params_to_mapping(params)
+    candidate.pop(name, None)
+    return params_from_mapping(candidate, source=source)
 
 
 def _parse_value(field_name: str, value: Any) -> Any:
@@ -314,8 +387,13 @@ def _clean_source_label(value: Any) -> str:
 
 
 __all__ = [
+    "GENERATION_PARAM_FIELDS",
     "GenerationParams",
     "compact_generation_params_display",
+    "generation_params_from_session_mapping",
+    "generation_params_to_mapping",
     "merge_generation_params",
     "params_from_mapping",
+    "remove_generation_param",
+    "replace_generation_param",
 ]

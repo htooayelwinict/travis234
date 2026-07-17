@@ -13,6 +13,11 @@ from pathlib import Path
 from typing import Any
 
 from travis.agent.types import AgentMessage
+from travis.ai.providers.params import (
+    GenerationParams,
+    generation_params_from_session_mapping,
+    generation_params_to_mapping,
+)
 from travis.ai.types import (
     AssistantMessage,
     Cost,
@@ -46,6 +51,7 @@ class SessionContextSnapshot:
     thinking_level: str
     model: dict[str, str] | None
     session_name: str | None
+    generation_params: GenerationParams
 
 
 @dataclass
@@ -333,6 +339,15 @@ class SessionStore:
     def append_thinking_level_change(self, thinking_level: str) -> str:
         return self._append_entry({"type": "thinking_level_change", "thinkingLevel": thinking_level}, durable=True)
 
+    def append_generation_params_change(self, params: GenerationParams) -> str:
+        return self._append_entry(
+            {
+                "type": "generation_params_change",
+                "params": generation_params_to_mapping(params),
+            },
+            durable=True,
+        )
+
     def append_model_change(self, provider: str, model_id: str) -> str:
         return self._append_entry({"type": "model_change", "provider": provider, "modelId": model_id}, durable=True)
 
@@ -553,6 +568,7 @@ class SessionStore:
         thinking_level = default_thinking_level
         model: dict[str, str] | None = None
         session_name: str | None = None
+        generation_params = GenerationParams()
         compaction_entry: dict[str, Any] | None = None
 
         for entry in branch:
@@ -563,6 +579,10 @@ class SessionStore:
                 model = {"provider": entry.get("provider", ""), "modelId": entry.get("modelId", "")}
             elif entry_type == "session_info":
                 session_name = (entry.get("name") or "").strip() or None
+            elif entry_type == "generation_params_change":
+                restored_params = generation_params_from_session_mapping(entry.get("params"))
+                if restored_params is not None:
+                    generation_params = restored_params
             elif entry_type == "compaction" and entry.get("summary"):
                 compaction_entry = entry
 
@@ -593,6 +613,7 @@ class SessionStore:
             thinking_level=thinking_level,
             model=model,
             session_name=session_name,
+            generation_params=generation_params,
         )
 
     def append_checkpoint(self, entry: dict[str, Any]) -> str:

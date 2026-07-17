@@ -508,6 +508,10 @@ def test_interactive_mode_help_and_autocomplete_include_session_commands(tmp_pat
     assert "/import <path.jsonl> - Import and switch session." in rendered
     assert "/theme [name] - Select a discovered theme." in rendered
     assert "/processes - Inspect and control managed processes." in rendered
+    assert (
+        "/params [name [value] | reset [name]] - Show or change session model parameters."
+        in rendered
+    )
     suggestions = mode.create_base_autocomplete_provider().get_suggestions(
         ["/se"],
         0,
@@ -533,6 +537,20 @@ def test_interactive_mode_help_and_autocomplete_include_session_commands(tmp_pat
         {"signal": None, "force": False},
     )
     assert "processes" in [item["label"] for item in process_suggestions["items"]]
+    param_suggestions = mode.create_base_autocomplete_provider().get_suggestions(
+        ["/params te"],
+        0,
+        len("/params te"),
+        {"signal": None, "force": False},
+    )
+    assert [item["value"] for item in param_suggestions["items"]] == ["temperature"]
+    reset_suggestions = mode.create_base_autocomplete_provider().get_suggestions(
+        ["/params reset top"],
+        0,
+        len("/params reset top"),
+        {"signal": None, "force": False},
+    )
+    assert [item["value"] for item in reset_suggestions["items"]] == ["reset top_p"]
 
 
 def test_interactive_session_parity_commands_use_runtime_owners_without_model_turns(tmp_path) -> None:

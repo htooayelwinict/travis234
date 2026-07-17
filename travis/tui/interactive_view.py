@@ -53,6 +53,7 @@ from travis.tui.footer_data import _footer_usage_stats
 from travis.tui.interactive_custom_dialog import prompt_extension_custom as _prompt_extension_custom
 from travis.tui.interactive_extensions import _apply_hidden_thinking_label, _autocomplete_trigger_characters, _coerce_extension_component, _create_extension_widget_component, _dispose_extension_widget, _extension_dialog_aborted, _extension_dialog_label, _extension_dialog_secret, _resolve_extension_select_choice, _set_autocomplete_trigger_characters
 from travis.tui.motion import MotionState
+from travis.tui.interactive_params import _params_argument_completions
 
 def _short_status_text(text: str, *, limit: int) -> str:
     value = str(text or "").replace("\n", " ").strip()
@@ -153,7 +154,11 @@ class InteractiveView:
             {"name": "remove", "description": "Remove an installed resource package"},
             {"name": "update", "description": "Update installed resource packages"},
             {"name": "packages", "description": "List installed resource packages"},
-            {"name": "params", "description": "Show active provider generation parameters"},
+            {
+                "name": "params",
+                "description": "Show or change session model parameters",
+                "getArgumentCompletions": _params_argument_completions,
+            },
             {"name": "processes", "description": "Inspect and control managed processes"},
             {"name": "quit", "description": "Exit the interactive session"},
             {"name": "reload", "description": "Reload extensions, skills, prompts, and themes"},

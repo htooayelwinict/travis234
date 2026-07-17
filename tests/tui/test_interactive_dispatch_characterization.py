@@ -45,3 +45,14 @@ def test_builtin_command_classification_is_stable(prompt: str, expected: str) ->
     observed = next((name for name, matched in checks if matched), "agent-prompt")
 
     assert observed == expected
+
+
+def test_params_command_preserves_direct_set_value_remainder() -> None:
+    assert _parse_params_command("/params stop END token,STOP token") == (
+        "stop END token,STOP token"
+    )
+
+
+def test_params_command_does_not_steal_similar_slash_or_agent_prompts() -> None:
+    assert _parse_params_command("/parameters temperature 0.2") is None
+    assert _parse_params_command("please set params temperature 0.2") is None

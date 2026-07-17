@@ -413,7 +413,7 @@ class InteractiveSessionCommands:
             "/help - Show this help.",
             "/model - Switch model.",
             "/models - List available models.",
-            "/params - Show active provider generation parameters.",
+            "/params [name [value] | reset [name]] - Show or change session model parameters.",
             "/login - Configure provider authentication.",
             "/logout - Remove provider authentication.",
             "/compact or /compress - Safely compress conversation context.",

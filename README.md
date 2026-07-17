@@ -155,6 +155,7 @@ The npm package exposes only the `travis234` command and launches the release co
 |---|---|
 | `/login` | Authenticate with a supported provider |
 | `/model` | Search and select the active model |
+| `/params [name [value] \| reset [name]]` | Inspect or change durable model parameters for the active session |
 | `/session` | Inspect the current persistent session and context usage |
 | `/name`, `/fork`, `/clone`, `/tree` | Name, branch, clone, or navigate the JSONL v3 session tree |
 | `/resume`, `/new` | Switch to another indexed session or start a new one |
@@ -171,6 +172,26 @@ The npm package exposes only the `travis234` command and launches the release co
 | `/exit` | Shut down cleanly and terminate owned work |
 
 User `!command` and `!!command` run asynchronously. Output from `!command` is added to context; `!!command` output remains outside model context.
+
+### Session generation parameters
+
+`/params` is a direct, non-picker session control. It reports the active provider/model, thinking level, effective generation parameters, value sources, and any provider-capability warnings.
+
+```text
+/params
+/params temperature
+/params temperature 0.2
+/params thinking high
+/params stop END,STOP
+/params reset temperature
+/params reset
+```
+
+The editable generation fields are `temperature`, `top_p`, `max_tokens`, `timeout_seconds`, `frequency_penalty`, `presence_penalty`, `seed`, `parallel_tool_calls`, `tool_choice`, `stop`, and `provider_sort`. `thinking` uses the model-aware session reasoning control and stays independent from the generation override map.
+
+Generation changes are local to the active JSONL session, survive resume and branch operations, and apply on the next Agent turn. A resumed session wins only for fields explicitly changed there; untouched fields continue to inherit the current provider, dotenv, and startup CLI configuration. `/params reset <name>` removes one session override and reveals the inherited value, while `/params reset` removes every generation override without changing thinking. Use explicit `reset` syntax—`none`, `null`, and empty values are rejected.
+
+Writes are rejected while an Agent turn is active, but read-only `/params` queries remain available. Valid settings that the selected provider cannot use remain saved and are reported as `dropped`; switching to a compatible model can activate them later. Context and output safety remain authoritative, so request-time limits may lower `max_tokens`. These session overrides affect the interactive main Agent turn, including its tool continuations and retries; compaction and auxiliary summarizer calls keep their existing parameter policy.
 
 ### Terminal history and selection
 

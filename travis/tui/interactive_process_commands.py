@@ -197,6 +197,7 @@ class InteractiveProcessCommands:
         self._populate_existing_history()
         self.built_in_header.set_text(self._startup_text())
         self.footer.cwd = str(self.app.cwd)
+        self._refresh_generation_param_state()
         self.setup_autocomplete_provider()
         if self._initialized:
             self._unsubscribe_session_events = self.app.session.subscribe(

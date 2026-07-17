@@ -23,6 +23,7 @@ from travis.agent.types import AgentMessage
 from travis.agent.types import BeforeToolCallResult
 from travis.agent.types import MessageEndEvent, MessageStartEvent
 from travis.ai.model_resolver import ScopedModel
+from travis.ai.providers.params import GenerationParams
 from travis.ai.models import (
     clamp_thinking_level,
     get_supported_thinking_levels,
@@ -98,6 +99,7 @@ from travis.coding_agent.session_turns import SessionTurnController
 from travis.coding_agent.session_subagents import SessionSubagentController
 from travis.coding_agent.subagent_trace import SessionSubagentTraceController
 from travis.coding_agent.session_models import SessionModelController
+from travis.coding_agent.session_generation_params import SessionGenerationParams
 from travis.coding_agent.session_persistence import SessionPersistence
 from travis.coding_agent.session_bash import SessionBashController
 from travis.coding_agent.session_policy_controller import SessionPolicyController
@@ -112,6 +114,7 @@ class _SessionRuntime(
         SessionSubagentController,
         SessionSubagentTraceController,
         SessionModelController,
+        SessionGenerationParams,
         SessionPersistence,
         SessionBashController,
         SessionPolicyController,
@@ -249,6 +252,7 @@ class _SessionRuntime(
         )
         self._compaction_manager = compaction_manager
         self._session_name: str | None = None
+        self._generation_param_overrides = GenerationParams()
         self._retry_enabled = retry_enabled
         self._max_retries = max(0, max_retries)
         self._retry_delay_ms = max(0, retry_delay_ms)
@@ -274,6 +278,7 @@ class _SessionRuntime(
         if restored_context:
             thinking_level = restored_context.thinking_level
             self._session_name = restored_context.session_name
+            self._generation_param_overrides = restored_context.generation_params
 
         if tools is not None:
             base_tools = tools

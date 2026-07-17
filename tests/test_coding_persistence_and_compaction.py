@@ -1,6 +1,194 @@
 from __future__ import annotations
 
 from tests._support_coding_agent import *  # noqa: F403
+from travis.ai.providers.params import (
+    GenerationParams,
+    generation_params_to_mapping,
+    params_from_mapping,
+)
+
+
+def test_generation_param_snapshots_restore_latest_valid_active_branch(tmp_path: Path) -> None:
+    store = SessionStore(str(tmp_path / "session.jsonl"), cwd=str(tmp_path))
+    first = store.append_generation_params_change(
+        params_from_mapping({"temperature": "0.2"}, source="session")
+    )
+    store.append_generation_params_change(
+        params_from_mapping(
+            {"temperature": "0.4", "max_tokens": "4096"},
+            source="session",
+        )
+    )
+
+    assert generation_params_to_mapping(store.build_context().generation_params) == {
+        "temperature": 0.4,
+        "max_tokens": 4096,
+    }
+
+    store.branch(first)
+
+    assert generation_params_to_mapping(store.build_context().generation_params) == {
+        "temperature": 0.2
+    }
+
+
+def test_generation_param_empty_snapshot_resets_and_invalid_snapshot_keeps_last_valid(
+    tmp_path: Path,
+) -> None:
+    store = SessionStore(str(tmp_path / "session.jsonl"), cwd=str(tmp_path))
+    store.append_generation_params_change(
+        params_from_mapping({"temperature": "0.2"}, source="session")
+    )
+    store._append_entry(  # noqa: SLF001 - exercise defensive replay of malformed JSONL state.
+        {
+            "type": "generation_params_change",
+            "params": {"api_key": "sk-secret"},
+        },
+        durable=True,
+    )
+
+    assert store.build_context().generation_params.temperature == 0.2
+
+    store.append_generation_params_change(GenerationParams())
+
+    assert generation_params_to_mapping(store.build_context().generation_params) == {}
+
+
+def test_generation_param_snapshot_is_non_message_state(tmp_path: Path) -> None:
+    store = SessionStore(str(tmp_path / "session.jsonl"), cwd=str(tmp_path))
+    store.append_generation_params_change(
+        params_from_mapping({"temperature": "0.2"}, source="session")
+    )
+    store.append_message(UserMessage("hello"))
+
+    snapshot = store.build_context()
+
+    assert len(snapshot.messages) == 1
+    assert isinstance(snapshot.messages[0], UserMessage)
+    assert snapshot.messages[0].content == "hello"
+    assert generation_params_to_mapping(snapshot.generation_params) == {"temperature": 0.2}
+
+
+def test_generation_param_snapshot_survives_branch_copy_and_export(tmp_path: Path) -> None:
+    store = SessionStore(str(tmp_path / "source.jsonl"), cwd=str(tmp_path))
+    store.append_generation_params_change(
+        params_from_mapping({"temperature": "0.2"}, source="session")
+    )
+    leaf_id = store.append_message(UserMessage("hello"))
+
+    branch_path = store.create_branched_session(
+        leaf_id,
+        path=str(tmp_path / "branch.jsonl"),
+    )
+    export_path = store.export_to_jsonl(str(tmp_path / "export.jsonl"))
+
+    branched = SessionStore(branch_path, cwd=str(tmp_path))
+    exported = SessionStore(export_path, cwd=str(tmp_path))
+    assert generation_params_to_mapping(branched.build_context().generation_params) == {
+        "temperature": 0.2
+    }
+    assert generation_params_to_mapping(exported.build_context().generation_params) == {
+        "temperature": 0.2
+    }
+
+
+def test_agent_session_generation_overrides_resume_and_follow_active_branch(tmp_path: Path) -> None:
+    session_path = tmp_path / "session.jsonl"
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        session_path=str(session_path),
+    )
+    branch_point = session._session_store.append_message(UserMessage("before params"))  # noqa: SLF001
+
+    session.set_generation_param_override("temperature", "0.2")
+    changed_leaf = session.get_session_leaf_id()
+
+    assert session.generation_param_overrides.temperature == 0.2
+    assert dict(session.generation_param_overrides.sources) == {"temperature": "session"}
+
+    resumed = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        session_path=str(session_path),
+    )
+    assert resumed.generation_param_overrides.temperature == 0.2
+
+    resumed.branch(branch_point)
+    assert resumed.generation_param_overrides == GenerationParams()
+
+    assert changed_leaf is not None
+    resumed.branch(changed_leaf)
+    assert resumed.generation_param_overrides.temperature == 0.2
+
+
+def test_agent_session_generation_override_resets_are_idempotent(tmp_path: Path) -> None:
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        session_path=str(tmp_path / "session.jsonl"),
+    )
+
+    original_count = len(session.session_entries)
+    session.reset_generation_param_override("temperature")
+    session.reset_generation_param_overrides()
+    assert len(session.session_entries) == original_count
+
+    session.set_generation_param_override("temperature", "0.2")
+    changed_count = len(session.session_entries)
+    session.set_generation_param_override("temperature", "0.2")
+    assert len(session.session_entries) == changed_count
+
+    session.reset_generation_param_override("temperature")
+    assert session.generation_param_overrides == GenerationParams()
+    reset_count = len(session.session_entries)
+    session.reset_generation_param_overrides()
+    assert len(session.session_entries) == reset_count
+
+
+def test_agent_session_generation_override_persistence_failure_is_atomic(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        session_path=str(tmp_path / "session.jsonl"),
+    )
+    session.set_generation_param_override("temperature", "0.2")
+
+    def fail_append(_params: GenerationParams) -> str:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(
+        session._session_store,  # noqa: SLF001 - verify append-before-publish atomicity.
+        "append_generation_params_change",
+        fail_append,
+    )
+
+    with pytest.raises(OSError, match="disk full"):
+        session.set_generation_param_override("temperature", "0.4")
+
+    assert session.generation_param_overrides.temperature == 0.2
+
+
+def test_agent_session_tree_navigation_restores_generation_overrides(tmp_path: Path) -> None:
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        session_path=str(tmp_path / "session.jsonl"),
+    )
+    session._session_store.append_message(UserMessage("root"))  # noqa: SLF001
+    session.set_generation_param_override("temperature", "0.2")
+    params_leaf = session.get_session_leaf_id()
+    session._session_store.append_message(UserMessage("after params"))  # noqa: SLF001
+    session.set_generation_param_override("temperature", "0.4")
+
+    assert params_leaf is not None
+    result = session.navigate_tree(params_leaf)
+
+    assert result == {"cancelled": False}
+    assert session.generation_param_overrides.temperature == 0.2
 
 
 def test_agent_session_extension_command_can_register_provider_override_without_reload(tmp_path: Path) -> None:

@@ -274,6 +274,7 @@ class SessionPersistence:
         self.agent.state.messages = snapshot.messages
         self.agent.state.thinking_level = snapshot.thinking_level
         self._session_name = snapshot.session_name
+        self._restore_generation_param_overrides(snapshot.generation_params)
 
     def navigate_tree(self, target_id: str, options: dict | None = None) -> dict:
         if self._session_store is None:
@@ -387,6 +388,7 @@ class SessionPersistence:
         self.agent.state.messages = snapshot.messages
         self.agent.state.thinking_level = snapshot.thinking_level
         self._session_name = snapshot.session_name
+        self._restore_generation_param_overrides(snapshot.generation_params)
         self._extension_runner.emit(
             {
                 "type": "session_tree",
