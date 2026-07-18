@@ -18,27 +18,23 @@ from travis.agent.types import (
 )
 from travis.ai.model_resolver import ScopedModel
 from travis.ai.model_cost import cost_from_mapping
-from travis.ai.models import (
-    clamp_thinking_level,
-    get_supported_thinking_levels,
-)
+from travis.ai.models import clamp_thinking_level, get_supported_thinking_levels
 from travis.ai.types import AssistantMessage, Cost, ImageContent, Message, Model, TextContent, UserMessage, now_ms
 from travis.ai.types import ToolCall, ToolResultMessage, Usage
 from travis.compaction.compressor import LEGACY_SUMMARY_PREFIX, SUMMARY_END_MARKER, SUMMARY_PREFIX, estimate_tokens
 from travis.compaction.timing import CompactionManager
 from travis.coding_agent.branch_summarization import generate_branch_summary
 from travis.coding_agent.artifacts import ArtifactRegistry
-from travis.coding_agent.compaction_adapter import (
-    SessionCompactionAdapter,
-    compaction_summary_with_details,
-)
-from travis.coding_agent.compaction_coordinator import (
-    CompactionCoordinator,
-    CompactionTransactionCoordinator,
-)
+from travis.coding_agent.compaction_adapter import SessionCompactionAdapter, compaction_summary_with_details
+from travis.coding_agent.compaction_coordinator import CompactionCoordinator, CompactionTransactionCoordinator
 from travis.coding_agent.config import get_packaged_context_paths
 from travis.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
 from travis.coding_agent.execution_backend import select_execution_backend
+from travis.coding_agent.extension_host import (
+    ExtensionCommandContextProxy,
+    call_extension_command,
+)
+from travis.coding_agent.extension_messages import send_extension_user_message
 from travis.coding_agent.mailbox import CodingTurnMailbox, MailboxKind
 from travis.coding_agent.message_utils import (
     bash_execution_text as _bash_execution_to_text,
@@ -224,6 +220,9 @@ class SessionExtensionController:
         bindings = bindings or {}
         if _has_binding(bindings, "uiContext", "ui_context"):
             self._extension_ui_context = _binding_value(bindings, "uiContext", "ui_context")
+            self._extension_has_ui = self._extension_ui_context is not None
+        if _has_binding(bindings, "hasUI", "has_ui"):
+            self._extension_has_ui = bool(_binding_value(bindings, "hasUI", "has_ui"))
         if _has_binding(bindings, "mode"):
             self._extension_mode = str(_binding_value(bindings, "mode") or "print")
         if _has_binding(bindings, "commandContextActions", "command_context_actions"):
@@ -252,7 +251,11 @@ class SessionExtensionController:
             self.set_active_tools_by_name(self.get_active_tool_names())
 
     def _apply_extension_bindings(self) -> None:
-        self._extension_runner.set_ui_context(self._extension_ui_context, self._extension_mode)
+        self._extension_runner.set_ui_context(
+            self._extension_ui_context,
+            self._extension_mode,
+            has_ui=self._extension_has_ui,
+        )
         self._extension_runner.bind_command_context(self._extension_command_context_actions)
         self._extension_runner.set_abort_handler(self._extension_abort_handler)
         self._extension_runner.set_shutdown_handler(self._extension_shutdown_handler)
@@ -309,6 +312,7 @@ class SessionExtensionController:
             registration.close()
         self._extension_provider_registrations.clear()
         self._artifacts.close(remove_files=True)
+        self._extension_runner.dispose()
 
     def _try_execute_extension_command(self, text: str) -> list[AgentMessage] | None:
         parsed = self._parse_extension_command(text)
@@ -316,10 +320,11 @@ class SessionExtensionController:
             return None
         command, args = parsed
         def run_command(_signal: AbortSignal):
-            try:
-                return command.handler(args, self._extension_command_context())
-            except TypeError:
-                return command.handler(args)
+            return call_extension_command(
+                command.handler,
+                args,
+                self._extension_command_context(),
+            )
 
         result = self._with_command_abort_signal(run_command)
         return result if isinstance(result, list) else []
@@ -345,8 +350,8 @@ class SessionExtensionController:
             f'Extension command "/{command.name}" cannot be queued. Use prompt() or execute the command when not streaming.'
         )
 
-    def _extension_command_context(self) -> ExtensionCommandContext:
-        return ExtensionCommandContext(
+    def _extension_command_context(self) -> ExtensionCommandContextProxy:
+        action_context = ExtensionCommandContext(
             cwd=self.cwd,
             _get_system_prompt=lambda: self.system_prompt,
             _get_system_prompt_options=lambda: self._system_prompt_options_snapshot(),
@@ -372,8 +377,12 @@ class SessionExtensionController:
             _get_subagent_result=self._extension_get_subagent_result,
             _cancel_subagent=self._extension_cancel_subagent,
         )
+        return ExtensionCommandContextProxy(
+            self._extension_runner.create_command_context(),
+            action_context,
+        )
 
-    def create_replaced_session_context(self) -> ExtensionCommandContext:
+    def create_replaced_session_context(self) -> ExtensionCommandContextProxy:
         return self._extension_command_context()
 
     def _extension_command_infos(self) -> list[dict]:
@@ -675,16 +684,7 @@ class SessionExtensionController:
         content: str | list[TextContent | ImageContent],
         options: dict | None = None,
     ) -> list[AgentMessage] | None:
-        options = options or {}
-        text = _text_from_user_message_content(content)
-        deliver_as = options.get("deliverAs", options.get("deliver_as"))
-        if deliver_as == "steer":
-            self.steer(text)
-            return None
-        if deliver_as == "followUp" or deliver_as == "follow_up":
-            self.follow_up(text)
-            return None
-        return self.prompt(text)
+        return send_extension_user_message(self.prompt, content, options)
 
     def _system_prompt_options_snapshot(self) -> BuildSystemPromptOptions:
         active_tool_names = self.get_active_tool_names()

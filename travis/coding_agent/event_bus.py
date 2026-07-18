@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import sys
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -23,9 +24,9 @@ class EventBusController:
             try:
                 result = handler(data)
                 if inspect.isawaitable(result):
-                    _settle_awaitable(result)
+                    _settle_awaitable(result, channel)
             except Exception as error:  # noqa: BLE001 - Travis isolates event handler failures.
-                print(f"Event handler error ({channel}): {error}")
+                print(f"Event handler error ({channel}): {error}", file=sys.stderr)
 
     def on(self, channel: str, handler: EventHandler) -> Callable[[], None]:
         owner = self._active_owners[-1] if self._active_owners else None
@@ -72,10 +73,20 @@ def create_event_bus() -> EventBusController:
 
 
 
-def _settle_awaitable(awaitable: object) -> None:
+def _settle_awaitable(awaitable: object, channel: str) -> None:
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         asyncio.run(awaitable)  # type: ignore[arg-type]
         return
-    loop.create_task(awaitable)  # type: ignore[arg-type]
+    task = loop.create_task(awaitable)  # type: ignore[arg-type]
+
+    def observe(completed: asyncio.Task[object]) -> None:
+        try:
+            completed.result()
+        except asyncio.CancelledError:
+            return
+        except Exception as error:  # noqa: BLE001 - async bus failures stay isolated and observable.
+            print(f"Event handler error ({channel}): {error}", file=sys.stderr)
+
+    task.add_done_callback(observe)

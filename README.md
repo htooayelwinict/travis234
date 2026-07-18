@@ -10,7 +10,7 @@ TRAVIS234 // NEURAL TERMINAL ONLINE
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-39e6c7?style=for-the-badge&labelColor=10182b"></a>
   <img alt="Python 3.13" src="https://img.shields.io/badge/Python-3.13-63a7ff?style=for-the-badge&labelColor=10182b">
-  <img alt="Version 2.3.2" src="https://img.shields.io/badge/version-2.3.2-bd6cff?style=for-the-badge&labelColor=10182b">
+  <img alt="Version 2.3.3" src="https://img.shields.io/badge/version-2.3.3-bd6cff?style=for-the-badge&labelColor=10182b">
   <img alt="Terminal first" src="https://img.shields.io/badge/interface-terminal-ff7ac6?style=for-the-badge&labelColor=10182b">
 </p>
 
@@ -298,13 +298,9 @@ Travis234 discovers extensions from two locations:
 .travis234/extensions/          # scoped to the current workspace
 ```
 
-Install the optional first-party Hypa adapter with:
+Run `/reload` after adding or changing extension code; the TUI process does not need to restart.
 
-```bash
-travis234 --install-extension hypa
-```
-
-The installer never overwrites an existing extension directory. Run `/reload` after adding or changing extension code; the TUI process does not need to restart.
+You can ask Travis234 to create or repair an extension in plain language. The agent is shown the installed extension guide when the request concerns Travis234 extensions, so it can read the exact runtime API, write the Python file, validate it with `python -m py_compile`, ask you to run or run `/reload` as appropriate, and diagnose any reported error. No extension-authoring skill is required. A good first request is: “Create a project extension that adds a `/review` command, validate it, reload it, and help me test it.”
 
 Extensions can register typed, long-form CLI flags:
 
@@ -324,13 +320,22 @@ Authorized extension flags appear in `--help`. Boolean flags never consume the f
 
 Flag values are process-local, are reapplied when the app replaces its active session, and are not written to settings or session history. Project-only flag schemas require explicit or saved trust before they become valid CLI options. Registering a flag adds no core context-envelope tokens; context grows only if the extension uses that value to enable prompt text, tools, or another context-bearing resource.
 
-Extensions execute with Travis234's permissions, so install only trusted code. Unknown workspaces fail closed: project settings, extensions, skills, prompts, themes, and project system-prompt files stay disabled until trust is resolved. Use `--approve` or `--no-approve` for a process-only CLI decision, or `/trust` to save a folder/parent decision; `/trust` never executes project code by itself. Global resources under `~/.travis234/agent/` remain available during trust resolution. Travis JavaScript extensions do not run directly in the Python runtime and require a Python adapter. See [the extension guide](travis/resources/docs/extensions.md) for the supported lifecycle and APIs.
+The Python extension host runs in TUI, print, JSON, and RPC modes and rebinds session replacements before their startup lifecycle. Async slash commands execute exactly once outside model turns; TUI shortcuts receive raw key input, and live extension tools use the canonical extension context. Non-interactive hosts expose `has_ui=False` and keep JSON/RPC stdout machine-readable. See [the extension guide](travis/resources/docs/extensions.md) for lifecycle details, supported UI behavior, source/staleness rules, and intentional Pi divergences.
+
+Extensions execute with Travis234's permissions, so install only trusted code. Unknown workspaces fail closed: project settings, extensions, skills, prompts, themes, and project system-prompt files stay disabled until trust is resolved. Use `--approve` or `--no-approve` for a process-only CLI decision, or `/trust` to save a folder/parent decision; `/trust` never executes project code by itself. Global resources under `~/.travis234/agent/` remain available during trust resolution. Travis JavaScript extensions do not run directly in the Python runtime and require a Python adapter.
 
 Resource files use safe YAML frontmatter. Discovery merges `.gitignore`, `.ignore`, and `.fdignore`; an explicitly named file remains an operator-selected exception. Leading `/template` prompts expand shell-quoted `$ARGUMENTS`, `$1`, and related Pi placeholders before provider submission. When `enableSkillCommands` is enabled, `/skill:<name>` injects only the selected skill. Discovered themes are reloadable, and extension UI code can select them with `setTheme`.
 
 Packages can be local directories, `git+https://...@revision` sources, or pinned Python requirements. Global commands use `travis234 install|remove|update|list`; add `--local` for trusted project scope. Installs replace atomically, ordinary startup never auto-updates packages, and package subprocesses do not receive model-provider, worker, compression, OAuth, or ambient token credentials.
 
 ## Skills and state
+
+Every PyPI wheel includes two read-only fallback skills:
+
+- `subagent-delegation` for bounded reviewer or worker delegation;
+- `web-search` for source-backed web research.
+
+They are discovered lazily and add only their compact name, description, and path to the system prompt until selected. Project and global skill directories retain their existing precedence, so a same-named user skill takes precedence over the packaged fallback. `--no-skills` disables both packaged and user-discovered skills.
 
 Travis234 keeps application state outside project workspaces:
 

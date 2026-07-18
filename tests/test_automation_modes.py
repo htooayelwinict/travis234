@@ -44,6 +44,20 @@ def test_print_mode_outputs_only_final_text(faux_app) -> None:
     assert output.getvalue() == "final answer\n"
 
 
+def test_print_mode_binds_extensions_before_the_first_turn(faux_app) -> None:
+    seen: list[tuple[str, bool, str]] = []
+    faux_app.session.extension_runner.on(
+        "session_start",
+        lambda event, context: seen.append(
+            (context.mode, context.has_ui, str(event["reason"]))
+        ),
+    )
+
+    assert run_print_mode(faux_app, "hello", io.StringIO()) == 0
+
+    assert seen == [("print", False, "startup")]
+
+
 def test_json_mode_emits_ordered_machine_events(faux_app) -> None:
     output = io.StringIO()
 
@@ -62,6 +76,20 @@ def test_json_mode_emits_ordered_machine_events(faux_app) -> None:
     assert frames[-1]["stopReason"] == "stop"
     assert frames[-1]["text"] == "final answer"
     assert all("\x1b" not in line for line in lines)
+
+
+def test_json_mode_binds_extensions_without_polluting_machine_output(faux_app) -> None:
+    seen: list[tuple[str, bool]] = []
+    faux_app.session.extension_runner.on(
+        "session_start",
+        lambda _event, context: seen.append((context.mode, context.has_ui)),
+    )
+    output = io.StringIO()
+
+    assert run_json_mode(faux_app, "hello", output) == 0
+
+    assert seen == [("json", False)]
+    assert all(isinstance(json.loads(line), dict) for line in output.getvalue().splitlines())
 
 
 def test_machine_serializer_camel_cases_and_drops_sensitive_transport_fields() -> None:

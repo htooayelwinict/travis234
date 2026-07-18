@@ -8,6 +8,10 @@ from typing import Mapping, TextIO
 
 from travis.ai.types import AssistantMessage, TextContent
 from travis.coding_agent.automation import serialize_machine_value
+from travis.coding_agent.extension_host import (
+    ExtensionHostAdapter,
+    noninteractive_extension_bindings,
+)
 
 _MUTATING_METHODS = {
     "prompt",
@@ -33,6 +37,9 @@ class RpcServer:
         self._closed = False
 
     def run(self) -> int:
+        extension_host = self._create_extension_host()
+        if extension_host is not None:
+            extension_host.start()
         subscribe = getattr(self.app.session, "subscribe", None)
         unsubscribe = subscribe(self._on_session_event) if callable(subscribe) else None
         try:
@@ -48,7 +55,23 @@ class RpcServer:
                 worker.join()
             if callable(unsubscribe):
                 unsubscribe()
+            if extension_host is not None:
+                extension_host.dispose()
         return 0
+
+    def _create_extension_host(self) -> ExtensionHostAdapter | None:
+        if not callable(getattr(self.app, "subscribe_session_rebound", None)):
+            return None
+        if not callable(getattr(self.app.session, "bind_extensions", None)):
+            return None
+        return ExtensionHostAdapter(
+            self.app,
+            mode="rpc",
+            bindings_factory=lambda session: noninteractive_extension_bindings(
+                self.app,
+                session,
+            ),
+        )
 
     def _handle_line(self, line: str) -> None:
         try:
@@ -98,9 +121,9 @@ class RpcServer:
                 self._start_turn(
                     request_id,
                     (
-                        (lambda: self.app.run_turn(text, image_paths=images))
+                        (lambda: self.app.run_turn(text, image_paths=images, input_source="rpc"))
                         if images
-                        else (lambda: self.app.run_turn(text))
+                        else (lambda: self.app.run_turn(text, input_source="rpc"))
                     ),
                 )
             elif method == "continue":

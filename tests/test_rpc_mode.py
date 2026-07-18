@@ -54,6 +54,19 @@ def test_rpc_prompt_correlates_events_and_result(faux_app) -> None:
     }
 
 
+def test_rpc_binds_extensions_without_polluting_machine_output(faux_app) -> None:
+    seen: list[tuple[str, bool]] = []
+    faux_app.session.extension_runner.on(
+        "session_start",
+        lambda _event, context: seen.append((context.mode, context.has_ui)),
+    )
+
+    frames = _run_rpc(faux_app, [{"id": "state", "method": "get_state"}])
+
+    assert seen == [("rpc", False)]
+    assert frames[-1]["id"] == "state"
+
+
 @pytest.mark.parametrize(
     ("raw_frame", "code"),
     [
@@ -85,7 +98,8 @@ def test_rpc_abort_is_accepted_while_prompt_owns_active_turn() -> None:
                 agent=SimpleNamespace(abort=lambda: aborted.set()),
             )
 
-        def run_turn(self, _prompt):
+        def run_turn(self, _prompt, *, input_source="interactive"):
+            assert input_source == "rpc"
             started.set()
             assert aborted.wait(timeout=2)
             return []

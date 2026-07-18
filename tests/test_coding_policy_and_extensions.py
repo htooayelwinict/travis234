@@ -421,11 +421,13 @@ def test_agent_session_awaits_context_and_tool_extension_handlers(tmp_path: Path
     runner.on("tool_call", tool_call_handler)
     runner.on("tool_result", tool_result_handler)
     runner.on("tool_execution_start", tool_execution_handler)
+    runner.on("tool_execution_update", tool_execution_handler)
     runner.on("tool_execution_end", tool_execution_handler)
     runner.on_error(errors.append)
 
     def execute(tool_call_id, args, signal=None, on_update=None, ctx=None):
         executions.append(dict(args))
+        on_update(AgentToolResult(content=[TextContent(text="partial result")], details={}))
         return AgentToolResult(content=[TextContent(text="base result")], details={})
 
     definition = ToolDefinition(
@@ -458,6 +460,7 @@ def test_agent_session_awaits_context_and_tool_extension_handlers(tmp_path: Path
     assert seen.count("call:call-1") == 1
     assert seen.count("result:call-1") == 1
     assert "tool_execution_start" in seen
+    assert "tool_execution_update" in seen
     assert "tool_execution_end" in seen
     assert seen.count("context") == 2
     assert errors == []
@@ -1233,10 +1236,16 @@ def test_extension_runner_context_handlers_chain_messages() -> None:
 def test_agent_session_provider_extension_hooks_are_wired_into_stream_options(tmp_path: Path) -> None:
     model = faux_model()
     payloads: list[object] = []
+    headers: list[object] = []
     response_events: list[dict[str, object]] = []
 
     async def stream_fn(model, context, options):
         payloads.append(await options.on_payload({"body": "base"}) if options.on_payload else None)
+        headers.append(
+            await options.on_headers({"x-base": "yes"}, model)
+            if options.on_headers
+            else None
+        )
         if options.on_response:
             await options.on_response({"status": 202, "headers": {"x-test": "yes"}})
         return create_faux_provider(lambda m, c: text_response_events(m, "done")).stream_simple(model, context, options)
@@ -1246,12 +1255,17 @@ def test_agent_session_provider_extension_hooks_are_wired_into_stream_options(tm
         "before_provider_request",
         lambda event: {"body": f"{event['payload']['body']}:patched"},
     )
+    def add_extension_header(event):
+        event["headers"]["x-extension"] = event["headers"]["x-base"]
+
+    runner.on("before_provider_headers", add_extension_header)
     runner.on("after_provider_response", lambda event: response_events.append(event))
     session = AgentSession(cwd=str(tmp_path), model=model, extension_runner=runner)
 
     session.prompt("hi", stream_fn=stream_fn)
 
     assert payloads == [{"body": "base:patched"}]
+    assert headers == [{"x-base": "yes", "x-extension": "yes"}]
     assert response_events == [
         {"type": "after_provider_response", "status": 202, "headers": {"x-test": "yes"}}
     ]

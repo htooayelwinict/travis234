@@ -218,6 +218,8 @@ class SessionModelController:
             self._extension_runner.emit(
                 {
                     "type": "thinking_level_select",
+                    "previousLevel": previous,
+                    "level": effective_level,
                     "previousThinkingLevel": previous,
                     "thinkingLevel": effective_level,
                     "source": "api",
@@ -265,7 +267,7 @@ class SessionModelController:
     def _clamp_thinking_level(self, level: str, _available_levels: list[str]) -> str:
         return clamp_thinking_level(self.model, level) if self.model else "off"
 
-    def set_model(self, model: Model) -> None:
+    def set_model(self, model: Model, *, source: str = "set") -> None:
         previous_model = self.model
         thinking_level = self._get_thinking_level_for_model_switch()
         self.agent.state.model = model
@@ -280,7 +282,7 @@ class SessionModelController:
                 "type": "model_select",
                 "previousModel": previous_model,
                 "model": model,
-                "source": "api",
+                "source": source,
             }
         )
 
@@ -320,7 +322,7 @@ class SessionModelController:
 
         next_scoped = scoped_models[next_index]
         thinking_level = self._get_thinking_level_for_model_switch(next_scoped.thinking_level)
-        self.set_model(next_scoped.model)
+        self.set_model(next_scoped.model, source="cycle")
         self.set_thinking_level(thinking_level)
         return ModelCycleResult(model=next_scoped.model, thinking_level=self.thinking_level, is_scoped=True)
 
@@ -345,7 +347,7 @@ class SessionModelController:
 
         next_model = available_models[next_index]
         thinking_level = self._get_thinking_level_for_model_switch()
-        self.set_model(next_model)
+        self.set_model(next_model, source="cycle")
         self.set_thinking_level(thinking_level)
         return ModelCycleResult(model=next_model, thinking_level=self.thinking_level, is_scoped=False)
 

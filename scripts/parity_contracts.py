@@ -53,11 +53,6 @@ def _hermes(name: str, evidence: str) -> ContractEntry:
     )
 
 
-_EXTENSION_EVIDENCE = (
-    "tests/test_extension_event_parity.py::"
-    "test_extension_runner_declares_all_pinned_pi_events"
-)
-
 _PI_EXTENSION_EVENTS = (
     "project_trust",
     "resources_discover",
@@ -93,6 +88,141 @@ _PI_EXTENSION_EVENTS = (
     "user_bash",
     "input",
 )
+
+_PI_EXTENSION_EVENT_EVIDENCE = {
+    "project_trust": (
+        "tests/test_project_trust.py::"
+        "test_extension_runner_project_trust_uses_first_decision"
+    ),
+    "resources_discover": (
+        "tests/test_coding_resources_and_services.py::"
+        "test_agent_session_reload_emits_lifecycle_and_rediscover_resources"
+    ),
+    "session_start": (
+        "tests/test_coding_policy_and_extensions.py::"
+        "test_agent_session_emits_session_start_once_when_extensions_are_bound"
+    ),
+    "session_info_changed": (
+        "tests/test_extension_event_parity.py::"
+        "test_session_state_owners_emit_missing_pi_selection_events"
+    ),
+    "session_before_switch": (
+        "tests/test_coding_policy_and_extensions.py::"
+        "test_extension_runner_lifecycle_handlers_follow_travis234_emit_semantics"
+    ),
+    "session_before_fork": (
+        "tests/test_coding_exports_and_boundaries.py::"
+        "test_agent_session_runtime_fork_creates_branched_session_with_selected_text"
+    ),
+    "session_before_compact": (
+        "tests/test_compaction_integration.py::"
+        "test_manual_compaction_accepts_extension_summary_and_persists_post_event"
+    ),
+    "session_compact": (
+        "tests/test_compaction_integration.py::"
+        "test_manual_compaction_accepts_extension_summary_and_persists_post_event"
+    ),
+    "session_shutdown": (
+        "tests/test_coding_policy_and_extensions.py::"
+        "test_extension_runner_lifecycle_handlers_follow_travis234_emit_semantics"
+    ),
+    "session_before_tree": (
+        "tests/test_coding_exports_and_boundaries.py::"
+        "test_agent_session_navigate_tree_writes_extension_summary_and_label"
+    ),
+    "session_tree": (
+        "tests/test_coding_exports_and_boundaries.py::"
+        "test_agent_session_navigate_tree_writes_extension_summary_and_label"
+    ),
+    "context": (
+        "tests/test_coding_policy_and_extensions.py::"
+        "test_agent_session_awaits_context_and_tool_extension_handlers"
+    ),
+    "before_provider_request": (
+        "tests/test_coding_policy_and_extensions.py::"
+        "test_agent_session_provider_extension_hooks_are_wired_into_stream_options"
+    ),
+    "before_provider_headers": (
+        "tests/test_coding_policy_and_extensions.py::"
+        "test_agent_session_provider_extension_hooks_are_wired_into_stream_options"
+    ),
+    "after_provider_response": (
+        "tests/test_coding_policy_and_extensions.py::"
+        "test_agent_session_provider_extension_hooks_are_wired_into_stream_options"
+    ),
+    "before_agent_start": (
+        "tests/test_extension_event_parity.py::"
+        "test_before_agent_start_context_sees_chained_system_prompt"
+    ),
+    "agent_start": (
+        "tests/test_coding_policy_and_extensions.py::"
+        "test_agent_session_forwards_awaited_runtime_lifecycle_events_to_extensions"
+    ),
+    "agent_end": (
+        "tests/test_coding_policy_and_extensions.py::"
+        "test_agent_session_forwards_awaited_runtime_lifecycle_events_to_extensions"
+    ),
+    "agent_settled": (
+        "tests/test_reference_runtime_contract.py::"
+        "test_direct_session_emits_agent_settled_after_the_provider_run"
+    ),
+    "turn_start": (
+        "tests/test_coding_policy_and_extensions.py::"
+        "test_agent_session_forwards_awaited_runtime_lifecycle_events_to_extensions"
+    ),
+    "turn_end": (
+        "tests/test_coding_policy_and_extensions.py::"
+        "test_agent_session_forwards_awaited_runtime_lifecycle_events_to_extensions"
+    ),
+    "message_start": (
+        "tests/test_coding_policy_and_extensions.py::"
+        "test_agent_session_forwards_awaited_runtime_lifecycle_events_to_extensions"
+    ),
+    "message_update": (
+        "tests/test_coding_policy_and_extensions.py::"
+        "test_agent_session_forwards_awaited_runtime_lifecycle_events_to_extensions"
+    ),
+    "message_end": (
+        "tests/test_coding_policy_and_extensions.py::"
+        "test_agent_session_message_end_extension_replaces_assistant_message"
+    ),
+    "tool_execution_start": (
+        "tests/test_coding_policy_and_extensions.py::"
+        "test_agent_session_awaits_context_and_tool_extension_handlers"
+    ),
+    "tool_execution_update": (
+        "tests/test_coding_policy_and_extensions.py::"
+        "test_agent_session_awaits_context_and_tool_extension_handlers"
+    ),
+    "tool_execution_end": (
+        "tests/test_coding_policy_and_extensions.py::"
+        "test_agent_session_awaits_context_and_tool_extension_handlers"
+    ),
+    "model_select": (
+        "tests/test_extension_event_parity.py::"
+        "test_model_select_reports_cycle_and_restore_sources"
+    ),
+    "thinking_level_select": (
+        "tests/test_extension_event_parity.py::"
+        "test_session_state_owners_emit_missing_pi_selection_events"
+    ),
+    "tool_call": (
+        "tests/test_coding_policy_and_extensions.py::"
+        "test_agent_session_awaits_context_and_tool_extension_handlers"
+    ),
+    "tool_result": (
+        "tests/test_coding_policy_and_extensions.py::"
+        "test_agent_session_tool_result_extension_modifies_result_before_context"
+    ),
+    "user_bash": (
+        "tests/test_tui_runtime_compaction_and_models.py::"
+        "test_interactive_mode_bang_uses_user_bash_extension_result"
+    ),
+    "input": (
+        "tests/test_coding_policy_and_extensions.py::"
+        "test_agent_session_input_extension_transforms_and_handles_prompt"
+    ),
+}
 
 
 PI_CONTRACTS = (
@@ -152,7 +282,7 @@ PI_CONTRACTS = (
         "tests/test_agent_loop.py::test_invoked_tool_failure_runs_after_hook_once",
     ),
     *(
-        _pi(event, "extension_event", _EXTENSION_EVIDENCE)
+        _pi(event, "extension_event", _PI_EXTENSION_EVENT_EVIDENCE[event])
         for event in _PI_EXTENSION_EVENTS
     ),
     _pi(

@@ -196,6 +196,7 @@ class _SessionRuntime(
         if getattr(self._extension_runner, "_model_registry", None) is None:
             self._extension_runner._model_registry = self.model_registry  # noqa: SLF001
         self._extension_ui_context: object | None = None
+        self._extension_has_ui = False
         self._extension_mode = "print"
         self._extension_command_context_actions: object | None = None
         self._extension_abort_handler: Callable[[], object] | None = None

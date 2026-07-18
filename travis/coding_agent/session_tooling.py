@@ -42,7 +42,11 @@ from travis.coding_agent.compaction_coordinator import (
     CompactionTransactionCoordinator,
 )
 from travis.coding_agent.config import get_packaged_context_paths
-from travis.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
+from travis.coding_agent.extensions import (
+    ExtensionRunner,
+    emit_session_shutdown_event,
+    wrap_registered_tool,
+)
 from travis.coding_agent.execution_backend import select_execution_backend
 from travis.coding_agent.mailbox import CodingTurnMailbox, MailboxKind
 from travis.coding_agent.message_utils import (
@@ -190,9 +194,9 @@ class SessionToolController:
         for registered in self._extension_runner.get_all_registered_tools():
             definition_by_name[registered.definition.name] = registered.definition
             source_info_by_name[registered.definition.name] = registered.source_info
-            tool_by_name[registered.definition.name] = wrap_tool_definition(
-                registered.definition,
-                lambda: ToolContext(cwd=self.cwd, model=self.model),
+            tool_by_name[registered.definition.name] = wrap_registered_tool(
+                registered,
+                self._extension_runner,
             )
 
         self._tool_definition_by_name = {

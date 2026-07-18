@@ -27,10 +27,10 @@ It mounts only the selected `--cwd` as `/workspace`, stores sandbox state in `~/
 
 On startup, the package restores bundled skills only when they are missing:
 
-- `~/.travis234/agent/skills/web-search/SKILL.md`
-- bundled package skills such as `subagent-delegation`
+- `subagent-delegation` for bounded reviewer or worker delegation
+- `web-search` for source-backed web research
 
-Existing user files are never overwritten.
+Existing user files are never overwritten: a same-named user skill takes precedence over its bundled fallback. The container also carries these skills in the installed Python resources, where Travis234 discovers them lazily if no user copy exists.
 
 ## Options
 
@@ -45,13 +45,9 @@ The host `.env` file is not mounted or passed automatically. Use `/login` inside
 
 ## Extensions
 
-Travis234 discovers global extensions from `~/.travis234/agent/extensions/` and project extensions from `.travis234/extensions/`. The Python CLI installs the optional first-party Hypa adapter with `travis234 --install-extension hypa`. Through this Docker launcher, pass the option to the in-container CLI:
+Travis234 discovers global extensions from `~/.travis234/agent/extensions/` and project extensions from `.travis234/extensions/`. Use `/reload` in a running TUI after adding or changing an extension. Extensions execute with Travis234's permissions; install only trusted code. Unknown workspaces do not load project settings or executable resources until trust is resolved. Use `--approve` or `--no-approve` for a process-only decision, or `/trust` and then `/reload` for a saved decision. Travis JavaScript extensions do not run directly in the Python extension runtime and require a Python adapter.
 
-```bash
-travis234 --cwd . -- --install-extension hypa
-```
-
-The installer refuses to replace existing code. Use `/reload` in a running TUI after adding or changing an extension. Extensions execute with Travis234's permissions; install only trusted code. Unknown workspaces do not load project settings or executable resources until trust is resolved. Use `--approve` or `--no-approve` for a process-only decision, or `/trust` and then `/reload` for a saved decision. Travis JavaScript extensions do not run directly in the Python extension runtime and require a Python adapter.
+You can describe the extension you want in ordinary language. The agent is shown the installed extension guide for extension work and can use it to create or repair the Python extension, validate it with `python -m py_compile`, reload it with `/reload`, and test the new command or tool with you. No extension-authoring skill is required. For example: “Create a project extension that adds a `/review` command, validate it, reload it, and help me test it.”
 
 ## Sessions
 

@@ -1,10 +1,22 @@
 # Travis234 verification record
 
-Verification date: 2026-07-15 (Asia/Yangon)
+Verification date: 2026-07-18 (Asia/Yangon)
 
 The current working tree is verified directly from the filesystem. The qualification workflow does not depend on Git metadata or invoke Git commands.
 
-## Subscription provider wire compatibility — 2026-07-18
+## Extension runtime and packaged resources — 2.3.3
+
+- Full Python source suite: 1,790 passed in 119.31 seconds.
+- npm launcher suite: 21 passed; npm pack dry-run contained exactly the five declared files for `@htooayelwinict/travis234@2.3.3`.
+- Repository hygiene: all seven reported categories are zero. Python compileall and Twine checks passed.
+- Acceptance parity: Pi reported 74 parity, four documented safety divergences, and zero invalid contracts; Hermes reported 11 parity, zero divergence, and zero invalid contracts.
+- `uv build --clear` produced `travis234-2.3.3-py3-none-any.whl` and `travis234-2.3.3.tar.gz`.
+- A clean Python 3.13 wheel install passed dependency checks, console help, packaged-resource discovery, and faux print/JSON turns. The installed wheel contains the authoritative extension guide and the `subagent-delegation` and `web-search` fallback skills; obsolete Hypa resources are absent.
+- The no-cache `travis234:2.3.3-release-smoke` build passed the complete unprivileged container qualification, including extension flags, print/JSON/RPC, trust isolation, sessions and compaction, managed processes, npm, and clean shutdown.
+- Extension parity changes are confined to extension source/generation guards, host bindings, event/action adapters, TUI command and shortcut dispatch, non-interactive host wiring, and explicit extension/RPC input-source labels. Core agent-loop ordering, bounded tool execution, session persistence, context-envelope construction, and compaction ownership remain unchanged.
+- Packaged skills are read-only lazy defaults. Existing project/global/explicit skill sources retain first-wins precedence, and `--no-skills` disables packaged discovery.
+
+## Prior subscription provider wire compatibility — 2026-07-18
 
 - Focused provider-wire module: 17 passed in 0.52 seconds.
 - Complete provider contract group: 125 passed in 3.16 seconds, including OpenRouter routing/sampling preservation and Copilot route-containment controls.

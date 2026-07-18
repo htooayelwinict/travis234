@@ -1299,6 +1299,71 @@ def test_travis234_extension_define_tool_and_registered_tool_wrappers(tmp_path: 
     assert seen == {"tool_call_id": "call-1", "args": {"value": "x"}, "cwd": str(tmp_path)}
     assert [wrapped.name for wrapped in wrap_registered_tools([registered], runner)] == ["probe"]
 
+
+def test_live_extension_tool_registry_injects_the_canonical_extension_context(tmp_path: Path) -> None:
+    import inspect
+
+    from travis.agent.async_utils import run_sync
+    from travis.agent.types import AgentToolResult
+    from travis.coding_agent import AgentSession, ExtensionRunner
+    from travis.coding_agent.tools.types import ToolDefinition
+
+    seen: list[object] = []
+
+    def execute(tool_call_id, args, signal=None, on_update=None, ctx=None):
+        seen.append(ctx)
+        return AgentToolResult(content=[TextContent(text="ok")], details=None)
+
+    runner = ExtensionRunner(cwd=str(tmp_path))
+    runner.register_tool(
+        ToolDefinition(
+            name="extension-probe",
+            label="extension-probe",
+            description="Inspect the live extension context",
+            parameters={"type": "object"},
+            execute=execute,
+        )
+    )
+    session = AgentSession(cwd=str(tmp_path), model=faux_model(), extension_runner=runner)
+    session.bind_extensions({"uiContext": object(), "hasUI": True, "mode": "tui"})
+    session.refresh_tools(include_all_extension_tools=True)
+    tool = next(tool for tool in session.agent.state.tools if tool.name == "extension-probe")
+
+    result = tool.execute("call-1", {})
+    if inspect.isawaitable(result):
+        result = run_sync(result)
+
+    assert result.content[0].text == "ok"
+    assert len(seen) == 1
+    context = seen[0]
+    assert context.cwd == str(tmp_path)
+    assert context.mode == "tui"
+    assert context.has_ui is True
+    assert context.model_registry is session.model_registry
+    assert context.get_context_usage() == session.get_context_usage()
+
+
+def test_post_bind_extension_tool_registration_refreshes_the_live_registry(tmp_path: Path) -> None:
+    from travis.agent.types import AgentToolResult
+    from travis.coding_agent import AgentSession, ExtensionRunner
+    from travis.coding_agent.tools.types import ToolDefinition
+
+    runner = ExtensionRunner(cwd=str(tmp_path))
+    session = AgentSession(cwd=str(tmp_path), model=faux_model(), extension_runner=runner)
+    definition = ToolDefinition(
+        name="dynamic-probe",
+        label="dynamic-probe",
+        description="Dynamically registered extension tool",
+        parameters={"type": "object"},
+        execute=lambda *_args: AgentToolResult(content=[], details=None),
+    )
+
+    runner.register_tool(definition)
+    assert "dynamic-probe" in {tool["name"] for tool in session.get_all_tools()}
+
+    runner.unregister_tool("dynamic-probe")
+    assert "dynamic-probe" not in {tool["name"] for tool in session.get_all_tools()}
+
 def test_travis234_extension_tool_event_type_guards_are_public() -> None:
     from travis.coding_agent import (
         is_bash_tool_result,

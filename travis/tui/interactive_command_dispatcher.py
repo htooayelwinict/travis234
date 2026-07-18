@@ -194,6 +194,8 @@ class InteractiveCommandDispatcher:
                 prompt_component.set_history(self.prompt_history)
                 prompt_component.on_escape = self._handle_editor_escape
                 prompt_component.on_escape = self._handle_editor_escape
+                if not self._line_input_mode:
+                    prompt_component.on_extension_shortcut = self._dispatch_extension_shortcut
                 prompt_component.set_autocomplete_provider(self.autocomplete_provider)
                 self.active_editor = prompt_component
                 self.editor_container.add(prompt_component)
@@ -225,16 +227,6 @@ class InteractiveCommandDispatcher:
                 self.tui.set_focus(None)
                 self.editor_container.remove(prompt_component)
                 self.active_editor = None
-                if self._dispatch_extension_shortcut(prompt):
-                    if self._shutdown_requested:
-                        self._set_motion_signal("termination", MotionState.TERMINATING)
-                        self.status.set_message("Exiting")
-                        self._refresh_footer()
-                        self.tui.request_render()
-                        return 0
-                    self._refresh_footer()
-                    self.tui.request_render()
-                    continue
                 self.editor_text = ""
                 self.tui.scroll_to_bottom()
                 if prompt:
@@ -360,6 +352,9 @@ class InteractiveCommandDispatcher:
             if self._session_commands is not None:
                 self._session_commands.close(timeout=SESSION_COMMAND_SHUTDOWN_TIMEOUT_SECONDS)
                 self._session_commands = None
+            if self._extension_commands is not None:
+                self._extension_commands.close(timeout=SESSION_COMMAND_SHUTDOWN_TIMEOUT_SECONDS)
+                self._extension_commands = None
             if self._unsubscribe_session_events is not None:
                 self._unsubscribe_session_events()
                 self._unsubscribe_session_events = None
@@ -375,6 +370,9 @@ class InteractiveCommandDispatcher:
             if self._unsubscribe_app_session_rebound is not None:
                 self._unsubscribe_app_session_rebound()
                 self._unsubscribe_app_session_rebound = None
+            if self._extension_host is not None:
+                self._extension_host.dispose()
+                self._extension_host = None
             if self._unsubscribe_process_events is not None:
                 self._unsubscribe_process_events()
                 self._unsubscribe_process_events = None

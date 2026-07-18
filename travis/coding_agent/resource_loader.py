@@ -12,7 +12,7 @@ from types import ModuleType
 from pathlib import Path
 
 from travis.agent.async_utils import resolve, run_sync
-from travis.coding_agent.config import get_agent_dir
+from travis.coding_agent.config import get_agent_dir, get_packaged_skills_path
 from travis.coding_agent.event_bus import EventBusController, create_event_bus
 from travis.coding_agent.extensions import ExtensionRunner
 from travis.coding_agent.object_utils import settings_value as _settings_value
@@ -361,7 +361,12 @@ class DefaultResourceLoader:
         }
         extension_paths = [resource.path for resource in resolved_paths.extensions if resource.enabled]
         self._update_extensions(extension_paths, preloaded_result=pretrust_extensions)
-        self.last_skill_paths = _merge_paths(self.cwd, skill_paths, self.additional_skill_paths)
+        packaged_skill_paths = [] if self.no_skills else [get_packaged_skills_path()]
+        self.last_skill_paths = _merge_paths(
+            self.cwd,
+            skill_paths,
+            [*self.additional_skill_paths, *packaged_skill_paths],
+        )
         self.last_prompt_paths = _merge_paths(self.cwd, prompt_paths, self.additional_prompt_template_paths)
         self.last_theme_paths = _merge_paths(self.cwd, theme_paths, self.additional_theme_paths)
         self._update_skills_from_paths(self.last_skill_paths, metadata_by_path)
@@ -506,16 +511,13 @@ class DefaultResourceLoader:
         extension_path: str,
     ) -> None:
         pending_start = len(runtime.pending_provider_registrations)
-        runtime._loading_extension_path = extension_path  # noqa: SLF001
-        try:
-            owner_scope = getattr(runtime.events, "owner", None)
-            scope = owner_scope(runtime._event_bus_owner) if callable(owner_scope) else nullcontext()  # noqa: SLF001
-            with scope:
-                result = factory(runtime)
-                if inspect.isawaitable(result):
-                    run_sync(resolve(result))
-        finally:
-            runtime._loading_extension_path = None  # noqa: SLF001
+        owner_scope = getattr(runtime.events, "owner", None)
+        scope = owner_scope(runtime._event_bus_owner) if callable(owner_scope) else nullcontext()  # noqa: SLF001
+        api = runtime.create_extension_api(extension_path)
+        with scope, runtime.source_scope(extension_path):
+            result = factory(api)  # type: ignore[arg-type]
+            if inspect.isawaitable(result):
+                run_sync(resolve(result))
         for pending_index in range(pending_start, len(runtime._pending_provider_registrations)):  # noqa: SLF001
             name, config, _old_path = runtime._pending_provider_registrations[pending_index]  # noqa: SLF001
             runtime._pending_provider_registrations[pending_index] = (name, config, extension_path)  # noqa: SLF001

@@ -229,6 +229,7 @@ class SessionTurnController:
         images: list[ImageContent] | None = None,
         image_paths: Sequence[str] | None = None,
         expand_prompt_templates: bool = True,
+        input_source: str = "interactive",
     ) -> list[AgentMessage]:
         current_text = text
         current_images = images
@@ -247,7 +248,7 @@ class SessionTurnController:
             input_result = self._extension_runner.emit_input(
                 current_text,
                 current_images,
-                "interactive",
+                input_source,
                 streaming_behavior if self.is_streaming else None,
             )
             if input_result.get("action") == "handled":

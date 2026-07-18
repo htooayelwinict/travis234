@@ -12,10 +12,7 @@ def test_python_distribution_names_only_travis234() -> None:
     project = metadata["project"]
     assert project["name"] == "travis234"
     assert project["scripts"] == {"travis234": "travis.cli:main"}
-    assert metadata["tool"]["setuptools"]["package-data"]["travis"] == [
-        "resources/**/*.md",
-        "resources/extensions/**/*.py",
-    ]
+    assert metadata["tool"]["setuptools"]["package-data"]["travis"] == ["resources/**/*.md"]
 
 
 def test_npm_distribution_names_only_travis234() -> None:
@@ -24,6 +21,36 @@ def test_npm_distribution_names_only_travis234() -> None:
     package = json.loads((ROOT / "packages/travis234-cli/package.json").read_text(encoding="utf-8"))
     assert package["name"] == "@htooayelwinict/travis234"
     assert package["bin"] == {"travis234": "bin/travis234.js"}
+
+
+def test_release_versions_are_aligned() -> None:
+    import json
+
+    expected = "2.3.3"
+    python_metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    workspace = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+    npm_package = json.loads(
+        (ROOT / "packages/travis234-cli/package.json").read_text(encoding="utf-8")
+    )
+    config_source = (ROOT / "travis/coding_agent/config.py").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert python_metadata["project"]["version"] == expected
+    assert workspace["version"] == expected
+    assert npm_package["version"] == expected
+    assert f'VERSION = "{expected}"' in config_source
+    assert f"Version {expected}" in readme
+    assert f"version-{expected}-" in readme
+
+
+def test_packaged_builtin_skills_match_npm_distribution() -> None:
+    python_skills = ROOT / "travis" / "resources" / "skills"
+    npm_skills = ROOT / "packages" / "travis234-cli" / "skills"
+
+    for name in ("subagent-delegation", "web-search"):
+        assert (python_skills / name / "SKILL.md").read_bytes() == (
+            npm_skills / name / "SKILL.md"
+        ).read_bytes()
 
 
 def test_repository_has_one_sandbox_launcher_implementation() -> None:

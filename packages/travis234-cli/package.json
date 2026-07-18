@@ -1,6 +1,6 @@
 {
   "name": "@htooayelwinict/travis234",
-  "version": "2.3.2",
+  "version": "2.3.3",
   "description": "Docker launcher for the Travis234 terminal coding agent.",
   "type": "module",
   "license": "MIT",

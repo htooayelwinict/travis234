@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Mapping, Sequence, TextIO
 
 from travis.ai.types import AssistantMessage, TextContent
+from travis.coding_agent.extension_host import (
+    ExtensionHostAdapter,
+    noninteractive_extension_bindings,
+)
 
 _SENSITIVE_KEYS = {
     "apikey",
@@ -32,11 +36,20 @@ def run_print_mode(
     *,
     image_paths: Sequence[str] = (),
 ) -> int:
-    messages = (
-        app.run_turn(prompt, image_paths=list(image_paths))
-        if image_paths
-        else app.run_turn(prompt)
-    ) or []
+    extension_host = ExtensionHostAdapter(
+        app,
+        mode="print",
+        bindings_factory=lambda session: noninteractive_extension_bindings(app, session),
+    )
+    extension_host.start()
+    try:
+        messages = (
+            app.run_turn(prompt, image_paths=list(image_paths))
+            if image_paths
+            else app.run_turn(prompt)
+        ) or []
+    finally:
+        extension_host.dispose()
     assistant = _last_assistant(messages) or _last_assistant(_app_messages(app))
     if assistant is None:
         return 0
@@ -55,6 +68,12 @@ def run_json_mode(
     *,
     image_paths: Sequence[str] = (),
 ) -> int:
+    extension_host = ExtensionHostAdapter(
+        app,
+        mode="json",
+        bindings_factory=lambda session: noninteractive_extension_bindings(app, session),
+    )
+    extension_host.start()
     _write_frame(
         output,
         {
@@ -91,6 +110,7 @@ def run_json_mode(
         )
     finally:
         unsubscribe()
+        extension_host.dispose()
     assistant = _last_assistant(messages or []) or _last_assistant(_app_messages(app))
     if assistant is None:
         _write_frame(output, {"type": "result", "stopReason": "error", "text": ""})

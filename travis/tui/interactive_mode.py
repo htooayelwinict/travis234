@@ -19,6 +19,7 @@ from travis.ai.providers.capabilities import ProviderParamWarning
 from travis.ai.providers.params import GenerationParams, compact_generation_params_display
 from travis.compaction import estimate_tokens
 from travis.coding_agent.agent_session import BashResult
+from travis.coding_agent.extension_host import ExtensionHostAdapter
 from travis.coding_agent.session_catalog import SessionInfo
 from travis.coding_agent.session_commands import SessionCommandExecutor
 from travis.coding_agent.source_info import SourceInfo
@@ -112,8 +113,6 @@ class _InteractiveRuntime(
     """Internal TUI runtime assembled from focused behavior owners."""
 
     MAX_WIDGET_LINES = 10
-    IMMEDIATE_EXTENSION_COMMANDS = {"agents", "cancel-agent"}
-
     def __init__(
         self,
         app,
@@ -196,6 +195,7 @@ class _InteractiveRuntime(
         self.autocomplete_provider_wrappers: list[Callable[[object], object]] = []
         self.autocomplete_provider: object | None = None
         self._session_commands: SessionCommandExecutor | None = None
+        self._extension_commands: SessionCommandExecutor | None = None
         self._turn_future: Future[object] | None = None
         self._turn_thread: threading.Thread | None = None
         self._turn_lock = threading.RLock()
@@ -206,6 +206,7 @@ class _InteractiveRuntime(
         self._unsubscribe_tui_scroll_change: Callable[[], None] | None = None
         self._unsubscribe_app_session_rebound: Callable[[], None] | None = None
         self._unsubscribe_process_events: Callable[[], None] | None = None
+        self._extension_host: ExtensionHostAdapter | None = None
         self._notified_processes: set[str] = set()
         self._process_cursors: dict[str, int] = {}
         self._user_command_components: dict[str, BashExecutionComponent] = {}
@@ -268,10 +269,12 @@ class _InteractiveRuntime(
         self._last_idle_ctrl_c_at = 0.0
         self._agent_abort_requested = False
         self._last_compaction_failure_notice_key: tuple[str, str] | None = None
-        subscribe_rebound = getattr(app, "subscribe_session_rebound", None)
-        if callable(subscribe_rebound):
-            self._unsubscribe_app_session_rebound = subscribe_rebound(
-                lambda _session: self.tui.post(self._rebind_session_ui)
+        if callable(getattr(app, "subscribe_session_rebound", None)):
+            self._extension_host = ExtensionHostAdapter(
+                app,
+                mode="tui",
+                bindings_factory=self._extension_bindings,
+                on_rebound=lambda _session: self.tui.post(self._rebind_session_ui),
             )
         self.setup_autocomplete_provider()
         self._theme_render_ready = True
@@ -287,8 +290,6 @@ class InteractiveMode(RuntimeFacade):
     """Stable public facade over the composed interactive runtime."""
 
     MAX_WIDGET_LINES = 10
-    IMMEDIATE_EXTENSION_COMMANDS = {"agents", "cancel-agent"}
-
     def __init__(self, *args, **kwargs) -> None:
         object.__setattr__(self, "_runtime", _InteractiveRuntime(*args, **kwargs))
 

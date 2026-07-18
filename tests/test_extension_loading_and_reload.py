@@ -300,3 +300,126 @@ def test_resource_loader_awaits_async_extension_factories(tmp_path: Path) -> Non
     result = loader.get_extensions()
     assert result["errors"] == []
     assert result["runtime"].get_registered_command("async-ready") is not None
+
+
+def test_extension_factory_api_preserves_source_and_expires_on_reload(tmp_path: Path) -> None:
+    captured: list[object] = []
+
+    def extension_factory(travis) -> None:
+        captured.append(travis)
+
+    loader = DefaultResourceLoader(
+        cwd=str(tmp_path),
+        agent_dir=str(tmp_path / "agent"),
+        extension_factories=[extension_factory],
+    )
+    loader.reload()
+    old_api = captured[-1]
+    old_events = old_api.events
+    old_api.register_command("late", {"handler": lambda *_args: None})
+    command = loader.get_extensions()["runtime"].get_registered_command("late")
+
+    assert command is not None
+    assert command.source_info.path == "<inline:1>"
+
+    loader.reload()
+
+    try:
+        old_api.register_command("stale", {"handler": lambda *_args: None})
+        assert False, "expected an extension API captured before reload to become stale"
+    except RuntimeError as error:
+        assert "stale" in str(error)
+    try:
+        old_events.emit("stale", None)
+        assert False, "expected an event bus captured before reload to become stale"
+    except RuntimeError as error:
+        assert "stale" in str(error)
+
+
+def test_extension_handler_failure_reports_its_source_path(tmp_path: Path) -> None:
+    extension_path = tmp_path / "extension.py"
+    extension_path.write_text(
+        "def extension(travis):\n"
+        "    def explode(event, context):\n"
+        "        raise RuntimeError('source probe')\n"
+        "    travis.on('session_start', explode)\n",
+        encoding="utf-8",
+    )
+    loader = DefaultResourceLoader(
+        cwd=str(tmp_path),
+        agent_dir=str(tmp_path / "agent"),
+        project_trusted=True,
+        additional_extension_paths=[str(extension_path)],
+    )
+    loader.reload()
+    runner = loader.get_extensions()["runtime"]
+    errors: list[dict[str, object]] = []
+    runner.on_error(errors.append)
+
+    runner.emit({"type": "session_start", "reason": "startup"})
+
+    assert errors == [
+        {
+            "extensionPath": str(extension_path),
+            "event": "session_start",
+            "error": "source probe",
+        }
+    ]
+
+
+def test_extension_factory_session_action_fails_before_binding(tmp_path: Path) -> None:
+    def extension_factory(travis) -> None:
+        travis.send_message({"customType": "probe", "content": "too early"})
+
+    loader = DefaultResourceLoader(
+        cwd=str(tmp_path),
+        agent_dir=str(tmp_path / "agent"),
+        extension_factories=[extension_factory],
+    )
+
+    loader.reload()
+
+    assert loader.get_extensions()["errors"] == [
+        {
+            "path": "<inline:1>",
+            "error": "Extension session action 'send_message' is unavailable before the session is bound",
+        }
+    ]
+
+
+def test_queued_provider_failure_isolated_with_extension_source(tmp_path: Path) -> None:
+    def extension_factory(travis) -> None:
+        travis.register_provider(
+            "broken-provider",
+            {
+                "baseUrl": "https://provider.example.test",
+                "apiKey": "test-key",
+                "models": [{"id": "broken", "name": "Broken"}],
+            },
+        )
+
+    loader = DefaultResourceLoader(
+        cwd=str(tmp_path),
+        agent_dir=str(tmp_path / "agent"),
+        extension_factories=[extension_factory],
+    )
+    loader.reload()
+    runner = loader.get_extensions()["runtime"]
+    errors: list[dict[str, object]] = []
+
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        resource_loader=loader,
+        extension_runner=runner,
+    )
+    runner.on_error(errors.append)
+
+    assert session.extension_runner is runner
+    assert errors == [
+        {
+            "extensionPath": "<inline:1>",
+            "event": "register_provider",
+            "error": 'Provider broken-provider, model broken: no "api" specified.',
+        }
+    ]

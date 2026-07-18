@@ -46,33 +46,13 @@ def _use_registered_model_runtime(monkeypatch) -> ModelRegistry:
     return registry
 
 
-def test_cli_installs_first_party_hypa_as_optional_global_extension(monkeypatch, tmp_path, capsys) -> None:
-    agent_dir = tmp_path / "agent"
-    monkeypatch.setenv(ENV_AGENT_DIR, str(agent_dir))
+def test_obsolete_hypa_installer_surface_is_absent() -> None:
+    root = Path(__file__).resolve().parents[1]
 
-    exit_code = cli.main(["--install-extension", "hypa"])
-
-    installed = agent_dir / "extensions" / "hypa"
-    assert exit_code == 0
-    assert (installed / "__init__.py").is_file()
-    assert (installed / "hypa_tools.py").is_file()
-    assert "Installed hypa extension" in capsys.readouterr().out
-    assert not (Path(cli.__file__).parent / "coding_agent" / "builtin_extensions").exists()
-
-
-def test_cli_extension_install_refuses_to_replace_existing_user_code(monkeypatch, tmp_path, capsys) -> None:
-    agent_dir = tmp_path / "agent"
-    installed = agent_dir / "extensions" / "hypa"
-    installed.mkdir(parents=True)
-    marker = installed / "__init__.py"
-    marker.write_text("# user-owned\n", encoding="utf-8")
-    monkeypatch.setenv(ENV_AGENT_DIR, str(agent_dir))
-
-    exit_code = cli.main(["--install-extension", "hypa"])
-
-    assert exit_code == 1
-    assert marker.read_text(encoding="utf-8") == "# user-owned\n"
-    assert "already exists" in capsys.readouterr().err
+    assert "--install-extension" not in cli._build_parser(include_prompt=True).format_help()
+    assert not (root / "travis/resources/extensions/hypa").exists()
+    for readme_path in (root / "README.md", root / "packages/travis234-cli/README.md"):
+        assert "hypa" not in readme_path.read_text(encoding="utf-8").lower()
 
 
 def test_package_install_dispatches_before_agent_start_and_preserves_source(
@@ -214,7 +194,7 @@ def test_cli_rpc_mode_dispatches_stdio_without_interactive_trust(monkeypatch, tm
     assert captured["trust_context"].has_ui is False
 
 
-def test_readmes_document_optional_extension_install_and_reload() -> None:
+def test_readmes_document_extension_discovery_and_reload() -> None:
     app_root = Path(__file__).resolve().parents[1]
     readmes = [
         (app_root / "README.md").read_text(encoding="utf-8"),
@@ -222,11 +202,37 @@ def test_readmes_document_optional_extension_install_and_reload() -> None:
     ]
 
     for readme in readmes:
-        assert "travis234 --install-extension hypa" in readme
         assert "~/.travis234/agent/extensions/" in readme
         assert ".travis234/extensions/" in readme
         assert "`/reload`" in readme
         assert "Travis JavaScript extensions do not run directly" in readme
+
+
+def test_readmes_document_agent_driven_extension_authoring() -> None:
+    app_root = Path(__file__).resolve().parents[1]
+    readmes = [
+        (app_root / "README.md").read_text(encoding="utf-8"),
+        (app_root / "packages/travis234-cli/README.md").read_text(encoding="utf-8"),
+    ]
+
+    for readme in readmes:
+        assert "installed extension guide" in readme
+        assert "No extension-authoring skill is required" in readme
+        assert "python -m py_compile" in readme
+        assert "`/reload`" in readme
+
+
+def test_readmes_document_both_bundled_skills_and_override_behavior() -> None:
+    app_root = Path(__file__).resolve().parents[1]
+    readmes = [
+        (app_root / "README.md").read_text(encoding="utf-8"),
+        (app_root / "packages/travis234-cli/README.md").read_text(encoding="utf-8"),
+    ]
+
+    for readme in readmes:
+        assert "`subagent-delegation`" in readme
+        assert "`web-search`" in readme
+        assert "same-named user skill takes precedence" in readme
 
 
 def test_readme_documents_process_wait_and_async_user_shell() -> None:

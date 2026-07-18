@@ -22,6 +22,7 @@ from travis.compaction import estimate_tokens
 from travis.coding_agent.session_types import BashResult
 from travis.coding_agent.session_catalog import SessionInfo
 from travis.coding_agent.session_commands import SessionCommandExecutor
+from travis.coding_agent.extension_host import settle_extension_result
 from travis.coding_agent.processes.types import ProcessEvent, ProcessSnapshot, ProcessState
 from travis.coding_agent.tools.bash import BashExecOptions, get_shell_env
 from travis.coding_agent.tools.output_spool import OutputSpool
@@ -49,6 +50,8 @@ from travis.tui.user_commands import (
     UserCommandHandle,
 )
 from travis.tui.motion import MotionState
+from travis.tui.keybindings import get_keybindings
+from travis.tui.keys import matches_key
 
 
 _PACKAGE_COMMANDS = frozenset({"/install", "/remove", "/update", "/packages"})
@@ -281,7 +284,9 @@ def _apply_hidden_thinking_label(component, label: str) -> None:
 class InteractiveExtensions:
     """Owns a focused interactive runtime concern."""
 
-    def _extension_bindings(self) -> dict[str, object]:
+    def _extension_bindings(self, session=None) -> dict[str, object]:
+        active_session = session or self.app.session
+
         def report_error(error: dict[str, object]) -> None:
             path = str(error.get("extensionPath") or "<extension>")
             message = str(error.get("error") or "unknown extension error")
@@ -290,15 +295,16 @@ class InteractiveExtensions:
 
         return {
             "uiContext": _ExtensionShortcutUI(self),
+            "hasUI": True,
             "mode": "tui",
-            "abortHandler": self.app.session.agent.abort,
+            "abortHandler": active_session.agent.abort,
             "shutdownHandler": self._request_shutdown,
             "onError": report_error,
             "commandContextActions": {
-                "waitForIdle": self.app.session.agent.wait_for_idle,
+                "waitForIdle": active_session.agent.wait_for_idle,
                 "newSession": lambda options=None: self.app.session_runtime.new_session(options),
                 "fork": lambda entry_id, options=None: self.app.session_runtime.fork(entry_id, options),
-                "navigateTree": lambda target_id, options=None: self.app.session.navigate_tree(target_id, options),
+                "navigateTree": lambda target_id, options=None: active_session.navigate_tree(target_id, options),
                 "switchSession": lambda session_path, options=None: self.app.session_runtime.switch_session(
                     session_path,
                     options,
@@ -489,23 +495,29 @@ class InteractiveExtensions:
             self.tui.request_render()
         return True
 
-    def _dispatch_extension_shortcut(self, prompt: str) -> bool:
-        if not prompt:
+    def _dispatch_extension_shortcut(self, data: str) -> bool:
+        if not data:
             return False
         runner = getattr(self.app.session, "extension_runner", None)
         if runner is None or not hasattr(runner, "get_shortcuts"):
             return False
-        shortcut = runner.get_shortcuts({}).get(prompt.lower())
+        shortcuts = runner.get_shortcuts(get_keybindings().get_resolved_bindings())
+        shortcut = next(
+            (registered for key, registered in shortcuts.items() if matches_key(data, key)),
+            None,
+        )
         if shortcut is None:
             return False
         try:
-            result = shortcut.handler(self._extension_shortcut_context())
-            if inspect.isawaitable(result):
-                import asyncio
-
-                asyncio.run(result)
+            settle_extension_result(shortcut.handler(self._extension_shortcut_context()))
         except Exception as error:  # noqa: BLE001 - extension shortcut failures should not crash the TUI
-            self.history.add(Text(f"Shortcut handler error: {error}"))
+            runner.emit_error(
+                {
+                    "extensionPath": shortcut.extension_path,
+                    "event": "shortcut",
+                    "error": str(error),
+                }
+            )
         return True
 
     def _dispatch_extension_command(self, prompt: str) -> bool:
@@ -517,17 +529,57 @@ class InteractiveExtensions:
         if parsed is None:
             return False
         command, _args = parsed
-        if getattr(command, "name", "") not in self.IMMEDIATE_EXTENSION_COMMANDS:
-            return False
+        command_name = str(getattr(command, "name", "extension"))
+        source_info = getattr(command, "source_info", None)
+        extension_path = str(getattr(source_info, "path", "<python-extension>"))
+        future = self._extension_command_executor().submit(
+            f"extension:{command_name}",
+            lambda: execute_command(prompt),
+        )
+        future.add_done_callback(
+            lambda completed: self.tui.post(
+                lambda: self._finish_extension_command(
+                    completed,
+                    command_name=command_name,
+                    extension_path=extension_path,
+                )
+            )
+        )
+        return True
+
+    def _extension_command_executor(self) -> SessionCommandExecutor:
+        if self._extension_commands is None:
+            self._extension_commands = SessionCommandExecutor(
+                thread_name="travis-extension-commands",
+                daemon=True,
+            )
+        return self._extension_commands
+
+    def _finish_extension_command(
+        self,
+        future: Future[object],
+        *,
+        command_name: str,
+        extension_path: str,
+    ) -> None:
         status = "ok"
         try:
-            execute_command(prompt)
-        except Exception as error:  # noqa: BLE001 - command failures should render, not crash the TUI
+            future.result()
+        except Exception as error:  # noqa: BLE001 - command failures render without ending the TUI.
             status = "error"
-            self.history.add(StatusLine(f"Command failed: {error}", kind="error"))
+            self.history.add(
+                StatusLine(
+                    f"Extension command /{command_name} failed ({extension_path}): {error}",
+                    kind="error",
+                )
+            )
         if self.app.event_trace is not None:
-            self.app.event_trace.write("extension_command", {"status": status})
-        return True
+            self.app.event_trace.write(
+                "extension_command",
+                {"status": status},
+            )
+        self._refresh_footer()
+        self.tui.request_render()
 
     def _is_registered_extension_command(self, prompt: str) -> bool:
         parse_command = getattr(self.app.session, "_parse_extension_command", None)

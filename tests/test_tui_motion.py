@@ -581,7 +581,7 @@ def test_extension_ui_status_accepts_semantic_working_state(tmp_path) -> None:
 
     try:
         mode.init()
-        assert mode._dispatch_extension_shortcut("ctrl+m") is True
+        assert mode._dispatch_extension_shortcut("\x1b[109;5u") is True
         assert mode.extension_statuses == {"monitor": "Scanning workspace"}
         assert mode.motion_controller.state is MotionState.EXTENSION
     finally:

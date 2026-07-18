@@ -551,6 +551,7 @@ class CodingApp:
         stream_fn=None,
         on_post_response_compaction_start: Callable[[], object] | None = None,
         image_paths: list[str] | tuple[str, ...] | None = None,
+        input_source: str = "interactive",
     ):
         turn_id = uuid.uuid4().hex[:12]
         started = time.monotonic()
@@ -572,6 +573,7 @@ class CodingApp:
                 prompt,
                 stream_fn=stream_fn,
                 image_paths=image_paths,
+                input_source=input_source,
             )
             if self._recover_output_cap(stream_fn=stream_fn):
                 return new_messages

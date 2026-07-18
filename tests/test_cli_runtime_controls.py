@@ -234,6 +234,35 @@ def test_coding_app_applies_extension_flags_to_initial_and_replacement_sessions(
         app.close()
 
 
+def test_session_replacement_invalidates_captured_extension_api(tmp_path: Path) -> None:
+    from travis.coding_agent.resource_loader import DefaultResourceLoader
+
+    captured: list[object] = []
+    loader = DefaultResourceLoader(
+        cwd=str(tmp_path),
+        agent_dir=str(tmp_path / "agent"),
+        extension_factories=[lambda api: captured.append(api)],
+    )
+    loader.reload({"projectTrustOverride": False})
+    old_api = captured[-1]
+
+    app = CodingApp(
+        cwd=str(tmp_path),
+        agent_dir=str(tmp_path / "agent"),
+        model=faux_model(),
+        enable_tui=False,
+        project_trust_override=False,
+        initial_resource_loader=loader,
+    )
+    try:
+        app.new_session()
+
+        with pytest.raises(RuntimeError, match="stale"):
+            old_api.get_commands()
+    finally:
+        app.close()
+
+
 def test_replacement_missing_cli_flag_schema_keeps_current_session(tmp_path: Path) -> None:
     from travis.coding_agent.extensions import ExtensionFlagValidationError
     from travis.coding_agent.resource_loader import DefaultResourceLoader
@@ -351,7 +380,11 @@ def test_explicit_skill_is_temporary_and_untrusted_project_skill_stays_blocked(
     )
     try:
         skills = app.session._resource_loader.get_skills()["skills"]
-        assert [skill.name for skill in skills] == ["operator-skill"]
+        assert [skill.name for skill in skills] == [
+            "operator-skill",
+            "subagent-delegation",
+            "web-search",
+        ]
         assert skills[0].source_info.source == "local"
         assert skills[0].source_info.scope == "temporary"
         assert skills[0].source_info.origin == "top-level"

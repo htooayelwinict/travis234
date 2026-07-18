@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "travis234"
-version = "2.3.2"
+version = "2.3.3"
 description = "Terminal coding agent with persistent sessions and bounded tool execution."
 readme = "README.md"
 license = "MIT"
@@ -37,7 +37,6 @@ include = ["travis*"]
 "travis.ai" = ["builtin_models.json"]
 "travis" = [
   "resources/**/*.md",
-  "resources/extensions/**/*.py",
 ]
 
 [tool.pytest.ini_options]

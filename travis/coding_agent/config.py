@@ -19,7 +19,7 @@ try:
     VERSION = metadata.version(PACKAGE_NAME)
 except metadata.PackageNotFoundError:
     # Source checkouts can be imported before the editable package is installed.
-    VERSION = "2.3.2"
+    VERSION = "2.3.3"
 
 
 def expand_tilde_path(path: str) -> str:
@@ -39,6 +39,12 @@ def get_packaged_context_paths() -> tuple[str, ...]:
         _packaged_resource_path("docs"),
         _packaged_resource_path("examples"),
     )
+
+
+def get_packaged_skills_path() -> str:
+    """Return the installed read-only built-in skills directory."""
+
+    return _packaged_resource_path("skills")
 
 
 def get_share_viewer_url(gist_id: str) -> str:

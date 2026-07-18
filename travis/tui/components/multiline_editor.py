@@ -33,12 +33,15 @@ class Editor(Input):
         )
         self.max_visible_lines = max(1, int(max_visible_lines))
         self._sticky_visual_column: int | None = None
+        self.on_extension_shortcut: Callable[[str], bool] | None = None
 
     def set_value(self, value: str) -> None:
         super().set_value(value)
         self._sticky_visual_column = None
 
     def handle_input(self, data: str) -> None:
+        if self.on_extension_shortcut is not None and self.on_extension_shortcut(data):
+            return
         if data in self._INSERT_NEWLINE_KEYS:
             self._insert_newline()
             return

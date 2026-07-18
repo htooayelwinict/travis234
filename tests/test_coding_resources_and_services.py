@@ -3,6 +3,70 @@ from __future__ import annotations
 import travis.coding_agent.system_prompt as system_prompt_module
 
 from tests._support_coding_agent import *  # noqa: F403
+from travis.coding_agent.resource_loader import DefaultResourceLoader
+from travis.coding_agent.skills import format_skills_for_prompt
+
+
+def test_packaged_builtin_skills_load_as_lazy_defaults(tmp_path: Path) -> None:
+    loader = DefaultResourceLoader(
+        cwd=str(tmp_path),
+        agent_dir=str(tmp_path / "agent"),
+        project_trusted=False,
+    )
+
+    loader.reload({"projectTrustOverride": False})
+
+    skills = {skill.name: skill for skill in loader.get_skills()["skills"]}
+    assert set(skills) == {"subagent-delegation", "web-search"}
+    skill_prompt = format_skills_for_prompt(list(skills.values()))
+    assert "subagent-delegation" in skill_prompt
+    assert "web-search" in skill_prompt
+    assert "# Subagent Delegation" not in skill_prompt
+    assert "# Web Search" not in skill_prompt
+
+
+def test_no_skills_omits_packaged_builtin_skills(tmp_path: Path) -> None:
+    loader = DefaultResourceLoader(
+        cwd=str(tmp_path),
+        agent_dir=str(tmp_path / "agent"),
+        project_trusted=False,
+        no_skills=True,
+    )
+
+    loader.reload({"projectTrustOverride": False})
+
+    assert loader.get_skills()["skills"] == []
+
+
+def test_user_skill_overrides_packaged_builtin_with_same_name(tmp_path: Path) -> None:
+    agent_dir = tmp_path / "agent"
+    user_skill = agent_dir / "skills" / "web-search" / "SKILL.md"
+    user_skill.parent.mkdir(parents=True)
+    user_skill.write_text(
+        "---\n"
+        "name: web-search\n"
+        "description: User-owned search policy\n"
+        "---\n"
+        "# User Search\n",
+        encoding="utf-8",
+    )
+    loader = DefaultResourceLoader(
+        cwd=str(tmp_path),
+        agent_dir=str(agent_dir),
+        project_trusted=False,
+    )
+
+    loader.reload({"projectTrustOverride": False})
+
+    skills = {skill.name: skill for skill in loader.get_skills()["skills"]}
+    assert set(skills) == {"subagent-delegation", "web-search"}
+    assert skills["web-search"].file_path == str(user_skill.resolve())
+    assert any(
+        diagnostic.type == "collision"
+        and diagnostic.collision
+        and diagnostic.collision.get("winnerPath") == str(user_skill.resolve())
+        for diagnostic in loader.get_skills()["diagnostics"]
+    )
 
 
 def test_settings_manager_in_memory_ports_travis234_defaults_setters_and_migration() -> None:
@@ -799,7 +863,11 @@ def test_resource_loader_resolves_package_skills_prompts_and_themes(
     skills = loader.get_skills()["skills"]
     prompts = loader.get_prompts()["prompts"]
     themes = loader.get_themes()["themes"]
-    assert [skill.name for skill in skills] == ["audit-skill"]
+    assert [skill.name for skill in skills] == [
+        "audit-skill",
+        "subagent-delegation",
+        "web-search",
+    ]
     assert skills[0].description == "Inspect code carefully"
     assert skills[0].source_info.origin == "package"
     assert [prompt.name for prompt in prompts] == ["review"]
@@ -850,7 +918,11 @@ def test_default_resource_loader_uses_travis234_settings_manager_resource_paths(
     loader = DefaultResourceLoader(cwd=str(project), agent_dir=str(agent_dir), settings_manager=settings)
     loader.reload()
 
-    assert [skill.name for skill in loader.get_skills()["skills"]] == ["configured-audit"]
+    assert [skill.name for skill in loader.get_skills()["skills"]] == [
+        "configured-audit",
+        "subagent-delegation",
+        "web-search",
+    ]
     assert [prompt.name for prompt in loader.get_prompts()["prompts"]] == ["review"]
     assert [theme.name for theme in loader.get_themes()["themes"]] == ["configured"]
 
@@ -879,7 +951,11 @@ def test_default_resource_loader_loads_app_owned_agent_skills(tmp_path: Path, mo
     loader.reload()
 
     skills = loader.get_skills()["skills"]
-    assert [skill.name for skill in skills] == ["systematic-debugging"]
+    assert [skill.name for skill in skills] == [
+        "systematic-debugging",
+        "subagent-delegation",
+        "web-search",
+    ]
     assert skills[0].source_info.scope == "user"
     assert skills[0].source_info.base_dir == str(agent_dir)
     assert str(user_skill_dir / "SKILL.md") in format_skills_for_prompt(skills)
@@ -1008,7 +1084,11 @@ def test_create_agent_session_services_ports_travis234_settings_resource_wiring(
     result = create_agent_session_from_services({"services": services, "model": faux_model()})
 
     assert services["settingsManager"] is settings
-    assert [skill.name for skill in services["resourceLoader"].get_skills()["skills"]] == ["service-audit"]
+    assert [skill.name for skill in services["resourceLoader"].get_skills()["skills"]] == [
+        "service-audit",
+        "subagent-delegation",
+        "web-search",
+    ]
     assert result.session.settings_manager is settings
     assert result.extensions_result is services["resourceLoader"].get_extensions()
     assert result.session.execute_bash("printf user").output == "service-prefixuser"

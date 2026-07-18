@@ -99,7 +99,10 @@ class InteractiveView:
         self._update_available_provider_count()
         self._refresh_footer()
         self.tui.start()
-        self.app.session.bind_extensions(self._extension_bindings())
+        if self._extension_host is not None:
+            self._extension_host.start()
+        else:
+            self.app.session.bind_extensions(self._extension_bindings())
         self.setup_autocomplete_provider()
         if self.app.event_trace is not None:
             self.app.event_trace.write(

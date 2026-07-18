@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable
 import copy
 import inspect
+from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
@@ -78,6 +80,12 @@ class RegisteredCommand:
     handler: Callable[..., object]
     source_info: SourceInfo
     get_argument_completions: Callable[[str], object] | None = None
+
+
+@dataclass(frozen=True)
+class RegisteredExtensionHandler:
+    handler: ExtensionHandler
+    extension_path: str
 
 
 
@@ -240,9 +248,15 @@ def is_tool_call_event_type(tool_name: str, event: object) -> bool:
 class ExtensionContextView:
     """Lazy context passed to extension event handlers."""
 
-    def __init__(self, runner: "ExtensionRunner", generation: int) -> None:
+    def __init__(
+        self,
+        runner: "ExtensionRunner",
+        generation: int,
+        system_prompt_getter: Callable[[], str] | None = None,
+    ) -> None:
         self._runner = runner
         self._generation = generation
+        self._system_prompt_getter = system_prompt_getter
 
     def _assert_active(self) -> None:
         if self._generation != self._runner._context_generation:
@@ -324,7 +338,8 @@ class ExtensionContextView:
 
     def get_system_prompt(self) -> str:
         self._assert_active()
-        return str(self._runner._get_system_prompt())
+        getter = self._system_prompt_getter or self._runner._get_system_prompt
+        return str(getter())
 
 
     def spawn_subagent(self, role: str, goal: str, options: object | None = None) -> object:
@@ -385,6 +400,108 @@ class ExtensionCommandContextView(ExtensionContextView):
         return self._runner._reload()
 
 
+class SourceScopedEventBus:
+    """Generation-guarded view of the shared extension event bus."""
+
+    def __init__(self, api: "SourceScopedExtensionAPI") -> None:
+        self._api = api
+
+    def __getattr__(self, name: str) -> object:
+        self._api._assert_active()
+        target = getattr(self._api._runner.events, name)
+        if not callable(target):
+            return target
+
+        def delegated(*args: object, **kwargs: object) -> object:
+            self._api._assert_active()
+            owner_scope = getattr(self._api._runner.events, "owner", None)
+            scope = (
+                owner_scope(self._api._runner._event_bus_owner)
+                if callable(owner_scope)
+                else nullcontext()
+            )
+            with scope, self._api._runner.source_scope(self._api.extension_path):
+                return target(*args, **kwargs)
+
+        return delegated
+
+
+class SourceScopedExtensionAPI:
+    """Thin source and generation guard around the shared extension runner."""
+
+    _CORE_ACTIONS = frozenset(
+        {
+            "send_message",
+            "send_user_message",
+            "append_entry",
+            "set_session_name",
+            "get_session_name",
+            "set_label",
+            "get_active_tools",
+            "get_all_tools",
+            "set_active_tools",
+            "refresh_tools",
+            "get_commands",
+            "exec",
+            "set_model",
+            "get_thinking_level",
+            "set_thinking_level",
+            "spawn_subagent",
+            "list_subagents",
+            "get_subagent_result",
+            "cancel_subagent",
+            "abort",
+            "shutdown",
+        }
+    )
+    _COMMAND_ACTIONS = frozenset(
+        {
+            "wait_for_idle",
+            "new_session",
+            "fork",
+            "navigate_tree",
+            "switch_session",
+            "reload",
+        }
+    )
+
+    def __init__(self, runner: "ExtensionRunner", extension_path: str) -> None:
+        self._runner = runner
+        self.extension_path = extension_path
+        self._generation = runner._context_generation
+        self._events = SourceScopedEventBus(self)
+
+    def _assert_active(self) -> None:
+        if self._generation != self._runner._context_generation:
+            raise RuntimeError(self._runner._stale_context_message)
+
+    @property
+    def events(self) -> SourceScopedEventBus:
+        self._assert_active()
+        return self._events
+
+    def __getattr__(self, name: str) -> object:
+        self._assert_active()
+        target = getattr(self._runner, name)
+        if not callable(target):
+            return target
+
+        def delegated(*args: object, **kwargs: object) -> object:
+            self._assert_active()
+            if name in self._CORE_ACTIONS and not self._runner._core_bound:
+                raise RuntimeError(
+                    f"Extension session action '{name}' is unavailable before the session is bound"
+                )
+            if name in self._COMMAND_ACTIONS and not self._runner._command_context_bound:
+                raise RuntimeError(
+                    f"Extension host action '{name}' is unavailable before the session host is bound"
+                )
+            with self._runner.source_scope(self.extension_path):
+                return target(*args, **kwargs)
+
+        return delegated
+
+
 class ExtensionRunner:
     """Small extension runner matching the AgentSession-facing Travis runner API."""
 
@@ -402,14 +519,23 @@ class ExtensionRunner:
         self._flag_values: dict[str, bool | str] = {}
         self._message_renderers: dict[str, Callable[..., object]] = {}
         self._shortcuts: dict[str, ExtensionShortcut] = {}
-        self._handlers: dict[str, list[ExtensionHandler]] = {}
+        self._reported_shortcut_conflicts: set[tuple[str, str]] = set()
+        self._handlers: dict[str, list[RegisteredExtensionHandler]] = {}
         self._error_listeners: list[ExtensionErrorListener] = []
+        self._pending_errors: list[dict[str, object]] = []
         self._pending_provider_registrations: list[tuple[str, dict[str, Any], str]] = []
         self._loading_extension_path: str | None = None
+        self._source_path: ContextVar[str | None] = ContextVar(
+            f"travis_extension_source_{id(self)}",
+            default=None,
+        )
         self._register_provider: Callable[[str, dict[str, Any]], None] | None = None
         self._unregister_provider: Callable[[str], None] | None = None
         self._ui_context: object | None = None
+        self._has_ui = False
         self._mode = "print"
+        self._core_bound = False
+        self._command_context_bound = False
         self._wait_for_idle: Callable[[], object] = lambda: None
         self._new_session: Callable[[object | None], object] = lambda options=None: {"cancelled": False}
         self._fork: Callable[[str, object | None], object] = lambda entry_id, options=None: {"cancelled": False}
@@ -468,13 +594,34 @@ class ExtensionRunner:
         self._context_generation = 0
         self._stale_context_message = _STALE_CONTEXT_MESSAGE
 
+    def create_extension_api(self, extension_path: str) -> SourceScopedExtensionAPI:
+        return SourceScopedExtensionAPI(self, extension_path)
+
+    @contextmanager
+    def source_scope(self, extension_path: str):
+        token = self._source_path.set(extension_path)
+        try:
+            yield
+        finally:
+            self._source_path.reset(token)
+
+    def _current_extension_path(self, fallback: str = "<python-extension>") -> str:
+        return self._source_path.get() or self._loading_extension_path or fallback
+
     @property
     def mode(self) -> str:
         return self._mode
 
-    def set_ui_context(self, ui_context: object | None = None, mode: str = "print") -> None:
+    def set_ui_context(
+        self,
+        ui_context: object | None = None,
+        mode: str = "print",
+        *,
+        has_ui: bool | None = None,
+    ) -> None:
         self._ui_context = ui_context
         self._mode = mode
+        self._has_ui = ui_context is not None if has_ui is None else bool(has_ui)
 
 
     def get_ui_context(self) -> object | None:
@@ -482,10 +629,11 @@ class ExtensionRunner:
 
 
     def has_ui(self) -> bool:
-        return self._ui_context is not None
+        return self._has_ui
 
 
     def bind_command_context(self, actions: object | None = None) -> None:
+        self._command_context_bound = actions is not None
         if actions is None:
             self._wait_for_idle = lambda: None
             self._new_session = lambda options=None: {"cancelled": False}
@@ -646,6 +794,7 @@ class ExtensionRunner:
                 register_provider or (lambda name, config: None),
                 unregister_provider or (lambda name: None),
             )
+        self._core_bound = True
 
 
     def send_message(self, message: dict[str, Any], options: object | None = None) -> object:
@@ -729,8 +878,15 @@ class ExtensionRunner:
         return self._cancel_subagent(task_id, reason)
 
 
-    def create_context(self) -> ExtensionContextView:
-        return ExtensionContextView(self, self._context_generation)
+    def create_context(
+        self,
+        system_prompt_getter: Callable[[], str] | None = None,
+    ) -> ExtensionContextView:
+        return ExtensionContextView(
+            self,
+            self._context_generation,
+            system_prompt_getter=system_prompt_getter,
+        )
 
 
     def create_command_context(self) -> ExtensionCommandContextView:
@@ -750,13 +906,23 @@ class ExtensionRunner:
         self._unregister_provider = unregister_provider
         pending = list(self._pending_provider_registrations)
         self._pending_provider_registrations.clear()
-        for name, config, _extension_path in pending:
-            self.register_provider(name, config)
+        for name, config, extension_path in pending:
+            try:
+                with self.source_scope(extension_path):
+                    self.register_provider(name, config, extension_path)
+            except Exception as error:  # noqa: BLE001 - one invalid extension provider stays isolated.
+                self.emit_error(
+                    {
+                        "extensionPath": extension_path,
+                        "event": "register_provider",
+                        "error": str(error),
+                    }
+                )
 
 
     def register_provider(self, name: str, config: dict[str, Any], extension_path: str = "<python-extension>") -> None:
-        if extension_path == "<python-extension>" and self._loading_extension_path is not None:
-            extension_path = self._loading_extension_path
+        if extension_path == "<python-extension>":
+            extension_path = self._current_extension_path()
         if self._register_provider is None:
             self._pending_provider_registrations.append((name, dict(config), extension_path))
             return
@@ -784,15 +950,19 @@ class ExtensionRunner:
 
 
     def on(self, event_type: str, handler: ExtensionHandler) -> Callable[[], None]:
+        registration = RegisteredExtensionHandler(
+            handler=handler,
+            extension_path=self._current_extension_path(),
+        )
         handlers = self._handlers.setdefault(event_type, [])
-        handlers.append(handler)
+        handlers.append(registration)
 
         def unsubscribe() -> None:
             current_handlers = self._handlers.get(event_type)
             if not current_handlers:
                 return
             try:
-                current_handlers.remove(handler)
+                current_handlers.remove(registration)
             except ValueError:
                 return
             if not current_handlers:
@@ -812,6 +982,11 @@ class ExtensionRunner:
 
     def on_error(self, listener: ExtensionErrorListener) -> Callable[[], None]:
         self._error_listeners.append(listener)
+        if self._pending_errors:
+            pending = list(self._pending_errors)
+            self._pending_errors.clear()
+            for error in pending:
+                listener(dict(error))
 
         def unsubscribe() -> None:
             try:
@@ -823,8 +998,25 @@ class ExtensionRunner:
 
 
     def emit_error(self, error: dict[str, object]) -> None:
+        if not self._error_listeners:
+            self._pending_errors.append(dict(error))
+            return
         for listener in list(self._error_listeners):
             listener(error)
+
+    def _emit_handler_error(
+        self,
+        registration: RegisteredExtensionHandler,
+        event_type: str,
+        error: object,
+    ) -> None:
+        self.emit_error(
+            {
+                "extensionPath": registration.extension_path,
+                "event": event_type,
+                "error": str(error),
+            }
+        )
 
 
     def has_handlers(self, event_type: str) -> bool:
@@ -841,17 +1033,11 @@ class ExtensionRunner:
 
         context = self.create_context()
         result: object = None
-        for handler in list(self._handlers.get(event_type, [])):
+        for registration in list(self._handlers.get(event_type, [])):
             try:
-                handler_result = await _call_extension_handler_async(handler, event, context)
+                handler_result = await _call_extension_handler_async(registration.handler, event, context)
             except Exception as error:  # noqa: BLE001 - preserves the established extension error forwarding.
-                self.emit_error(
-                    {
-                        "extensionPath": "<python-extension>",
-                        "event": event_type,
-                        "error": str(error),
-                    }
-                )
+                self._emit_handler_error(registration, event_type, error)
                 continue
 
             if event_type in _SESSION_BEFORE_EVENTS and handler_result:
@@ -868,17 +1054,11 @@ class ExtensionRunner:
     ) -> dict[str, object] | None:
         """Return the first decisive bootstrap-extension trust response."""
 
-        for handler in list(self._handlers.get("project_trust", [])):
+        for registration in list(self._handlers.get("project_trust", [])):
             try:
-                result = await _call_extension_handler_async(handler, event, context)
+                result = await _call_extension_handler_async(registration.handler, event, context)
             except Exception as error:  # noqa: BLE001 - trust handlers fail closed and report diagnostics.
-                self.emit_error(
-                    {
-                        "extensionPath": "<python-extension>",
-                        "event": "project_trust",
-                        "error": str(error),
-                    }
-                )
+                self._emit_handler_error(registration, "project_trust", error)
                 continue
             if not isinstance(result, dict):
                 continue
@@ -892,21 +1072,15 @@ class ExtensionRunner:
     def emit_resources_discover(self, cwd: str, reason: str) -> dict[str, list[dict[str, str]]]:
         discovered = {"skillPaths": [], "promptPaths": [], "themePaths": []}
         context = self.create_context()
-        for handler in list(self._handlers.get("resources_discover", [])):
+        for registration in list(self._handlers.get("resources_discover", [])):
             try:
                 result = _call_extension_handler(
-                    handler,
+                    registration.handler,
                     {"type": "resources_discover", "cwd": cwd, "reason": reason},
                     context,
                 )
             except Exception as error:  # noqa: BLE001 - preserves the established extension error forwarding.
-                self.emit_error(
-                    {
-                        "extensionPath": "<python-extension>",
-                        "event": "resources_discover",
-                        "error": str(error),
-                    }
-                )
+                self._emit_handler_error(registration, "resources_discover", error)
                 continue
             if not isinstance(result, dict):
                 continue
@@ -919,7 +1093,7 @@ class ExtensionRunner:
                 if not isinstance(values, list):
                     continue
                 discovered[output_key].extend(
-                    {"path": path, "extensionPath": "<python-extension>"}
+                    {"path": path, "extensionPath": registration.extension_path}
                     for path in values
                     if isinstance(path, str)
                 )
@@ -928,17 +1102,11 @@ class ExtensionRunner:
 
     def emit_user_bash(self, event: ExtensionEvent) -> object:
         context = self.create_context()
-        for handler in list(self._handlers.get("user_bash", [])):
+        for registration in list(self._handlers.get("user_bash", [])):
             try:
-                result = _call_extension_handler(handler, event, context)
+                result = _call_extension_handler(registration.handler, event, context)
             except Exception as error:  # noqa: BLE001 - preserves the established extension error forwarding.
-                self.emit_error(
-                    {
-                        "extensionPath": "<python-extension>",
-                        "event": "user_bash",
-                        "error": str(error),
-                    }
-                )
+                self._emit_handler_error(registration, "user_bash", error)
                 continue
             if result:
                 return result
@@ -955,7 +1123,7 @@ class ExtensionRunner:
         current_text = text
         current_images = images
         context = self.create_context()
-        for handler in list(self._handlers.get("input", [])):
+        for registration in list(self._handlers.get("input", [])):
             try:
                 event = {
                     "type": "input",
@@ -965,15 +1133,9 @@ class ExtensionRunner:
                 }
                 if streaming_behavior is not None:
                     event["streamingBehavior"] = streaming_behavior
-                result = _call_extension_handler(handler, event, context)
+                result = _call_extension_handler(registration.handler, event, context)
             except Exception as error:  # noqa: BLE001 - preserves the established extension error forwarding.
-                self.emit_error(
-                    {
-                        "extensionPath": "<python-extension>",
-                        "event": "input",
-                        "error": str(error),
-                    }
-                )
+                self._emit_handler_error(registration, "input", error)
                 continue
             if not isinstance(result, dict):
                 continue
@@ -982,9 +1144,11 @@ class ExtensionRunner:
                 return {"action": "handled"}
             if action == "transform":
                 current_text = str(result.get("text", current_text))
-                if "images" in result:
+                if result.get("images") is not None:
                     current_images = result.get("images")
-        return {"action": "transform", "text": current_text, "images": current_images}
+        if current_text != text or current_images is not images:
+            return {"action": "transform", "text": current_text, "images": current_images}
+        return {"action": "continue"}
 
 
     def emit_message_end(self, event: ExtensionEvent) -> object:
@@ -994,21 +1158,15 @@ class ExtensionRunner:
         current_message = event.get("message")
         modified = False
         context = self.create_context()
-        for handler in list(self._handlers.get("message_end", [])):
+        for registration in list(self._handlers.get("message_end", [])):
             try:
                 result = await _call_extension_handler_async(
-                    handler,
+                    registration.handler,
                     {**event, "message": current_message},
                     context,
                 )
             except Exception as error:  # noqa: BLE001 - preserves the established extension error forwarding.
-                self.emit_error(
-                    {
-                        "extensionPath": "<python-extension>",
-                        "event": "message_end",
-                        "error": str(error),
-                    }
-                )
+                self._emit_handler_error(registration, "message_end", error)
                 continue
             if not isinstance(result, dict) or "message" not in result:
                 continue
@@ -1016,7 +1174,7 @@ class ExtensionRunner:
             if getattr(replacement, "role", None) != getattr(current_message, "role", None):
                 self.emit_error(
                     {
-                        "extensionPath": "<python-extension>",
+                        "extensionPath": registration.extension_path,
                         "event": "message_end",
                         "error": "message_end handlers must return a message with the same role",
                     }
@@ -1034,17 +1192,15 @@ class ExtensionRunner:
         current_event = dict(event)
         modified = False
         context = self.create_context()
-        for handler in list(self._handlers.get("tool_result", [])):
+        for registration in list(self._handlers.get("tool_result", [])):
             try:
-                result = await _call_extension_handler_async(handler, dict(current_event), context)
-            except Exception as error:  # noqa: BLE001 - preserves the established extension error forwarding.
-                self.emit_error(
-                    {
-                        "extensionPath": "<python-extension>",
-                        "event": "tool_result",
-                        "error": str(error),
-                    }
+                result = await _call_extension_handler_async(
+                    registration.handler,
+                    dict(current_event),
+                    context,
                 )
+            except Exception as error:  # noqa: BLE001 - preserves the established extension error forwarding.
+                self._emit_handler_error(registration, "tool_result", error)
                 continue
             if not isinstance(result, dict):
                 continue
@@ -1067,8 +1223,12 @@ class ExtensionRunner:
     async def async_emit_tool_call(self, event: ExtensionEvent) -> dict[str, object] | None:
         result: dict[str, object] | None = None
         context = self.create_context()
-        for handler in list(self._handlers.get("tool_call", [])):
-            handler_result = await _call_extension_handler_async(handler, event, context)
+        for registration in list(self._handlers.get("tool_call", [])):
+            handler_result = await _call_extension_handler_async(
+                registration.handler,
+                event,
+                context,
+            )
             if not isinstance(handler_result, dict):
                 continue
             result = handler_result
@@ -1082,23 +1242,17 @@ class ExtensionRunner:
 
     async def async_emit_before_provider_headers(self, headers: dict[str, object]) -> dict[str, object]:
         context = self.create_context()
-        for handler in list(self._handlers.get("before_provider_headers", [])):
+        for registration in list(self._handlers.get("before_provider_headers", [])):
             try:
                 # The shared object is the contract. Handler return values do
                 # not replace it; assigning None requests header deletion.
                 await _call_extension_handler_async(
-                    handler,
+                    registration.handler,
                     {"type": "before_provider_headers", "headers": headers},
                     context,
                 )
             except Exception as error:  # noqa: BLE001 - header observers are fail-open.
-                self.emit_error(
-                    {
-                        "extensionPath": "<python-extension>",
-                        "event": "before_provider_headers",
-                        "error": str(error),
-                    }
-                )
+                self._emit_handler_error(registration, "before_provider_headers", error)
         return headers
 
 
@@ -1112,11 +1266,11 @@ class ExtensionRunner:
         current_system_prompt = system_prompt
         messages: list[object] = []
         system_prompt_modified = False
-        context = self.create_context()
-        for handler in list(self._handlers.get("before_agent_start", [])):
+        context = self.create_context(lambda: current_system_prompt)
+        for registration in list(self._handlers.get("before_agent_start", [])):
             try:
                 result = _call_extension_handler(
-                    handler,
+                    registration.handler,
                     {
                         "type": "before_agent_start",
                         "prompt": prompt,
@@ -1127,13 +1281,7 @@ class ExtensionRunner:
                     context,
                 )
             except Exception as error:  # noqa: BLE001 - preserves the established extension error forwarding.
-                self.emit_error(
-                    {
-                        "extensionPath": "<python-extension>",
-                        "event": "before_agent_start",
-                        "error": str(error),
-                    }
-                )
+                self._emit_handler_error(registration, "before_agent_start", error)
                 continue
             if not isinstance(result, dict):
                 continue
@@ -1158,21 +1306,15 @@ class ExtensionRunner:
     async def async_emit_context(self, messages: list[object]) -> list[object]:
         current_messages = copy.deepcopy(list(messages))
         context = self.create_context()
-        for handler in list(self._handlers.get("context", [])):
+        for registration in list(self._handlers.get("context", [])):
             try:
                 result = await _call_extension_handler_async(
-                    handler,
+                    registration.handler,
                     {"type": "context", "messages": current_messages},
                     context,
                 )
             except Exception as error:  # noqa: BLE001 - preserves the established extension error forwarding.
-                self.emit_error(
-                    {
-                        "extensionPath": "<python-extension>",
-                        "event": "context",
-                        "error": str(error),
-                    }
-                )
+                self._emit_handler_error(registration, "context", error)
                 continue
             if isinstance(result, dict) and isinstance(result.get("messages"), list):
                 current_messages = result["messages"]
@@ -1185,21 +1327,15 @@ class ExtensionRunner:
     async def async_emit_before_provider_request(self, payload: object) -> object:
         current_payload = payload
         context = self.create_context()
-        for handler in list(self._handlers.get("before_provider_request", [])):
+        for registration in list(self._handlers.get("before_provider_request", [])):
             try:
                 result = await _call_extension_handler_async(
-                    handler,
+                    registration.handler,
                     {"type": "before_provider_request", "payload": current_payload},
                     context,
                 )
             except Exception as error:  # noqa: BLE001 - preserves the established extension error forwarding.
-                self.emit_error(
-                    {
-                        "extensionPath": "<python-extension>",
-                        "event": "before_provider_request",
-                        "error": str(error),
-                    }
-                )
+                self._emit_handler_error(registration, "before_provider_request", error)
                 continue
             if result is not None:
                 current_payload = result
@@ -1207,17 +1343,19 @@ class ExtensionRunner:
 
 
     def register_tool(self, definition: ToolDefinition, source_info: SourceInfo | None = None) -> None:
-        extension_path = self._loading_extension_path or f"<extension:{definition.name}>"
+        extension_path = self._current_extension_path(f"<extension:{definition.name}>")
         self._registered_tools[definition.name] = RegisteredTool(
             definition=definition,
             source_info=source_info
             or definition.source_info
             or create_synthetic_source_info(extension_path, source="extension"),
         )
+        self._refresh_tools()
 
 
     def unregister_tool(self, name: str) -> None:
-        self._registered_tools.pop(name, None)
+        if self._registered_tools.pop(name, None) is not None:
+            self._refresh_tools()
 
 
     def clear_tools(self) -> None:
@@ -1246,9 +1384,9 @@ class ExtensionRunner:
             source_info=source_info
             if isinstance(source_info, SourceInfo)
             else create_synthetic_source_info(
-                    self._loading_extension_path or f"<extension-command:{invocation_name}>",
-                    source="extension",
-                ),
+                self._current_extension_path(f"<extension-command:{invocation_name}>"),
+                source="extension",
+            ),
             get_argument_completions=options.get("getArgumentCompletions")
             if callable(options.get("getArgumentCompletions"))
             else options.get("get_argument_completions")
@@ -1272,7 +1410,7 @@ class ExtensionRunner:
     def register_flag(self, name: str, options: dict[str, object]) -> None:
         existing = self._registered_flags.get(name)
         if existing is not None:
-            conflicting_path = self._loading_extension_path or "<python-extension>"
+            conflicting_path = self._current_extension_path()
             if existing.extension_path != conflicting_path:
                 conflict = ExtensionFlagConflict(name, existing.extension_path, conflicting_path)
                 if conflict not in self._flag_conflicts:
@@ -1284,7 +1422,7 @@ class ExtensionRunner:
             type=flag_type,
             description=str(options["description"]) if options.get("description") is not None else None,
             default=options.get("default") if isinstance(options.get("default"), (bool, str)) else None,
-            extension_path=self._loading_extension_path or "<python-extension>",
+            extension_path=self._current_extension_path(),
         )
         self._registered_flags[name] = flag
         if flag.default is not None and name not in self._flag_values:
@@ -1330,17 +1468,51 @@ class ExtensionRunner:
         if not callable(handler):
             raise ValueError("Registered shortcut requires a callable handler")
         normalized = shortcut.lower()
+        self._reported_shortcut_conflicts = {
+            conflict
+            for conflict in self._reported_shortcut_conflicts
+            if conflict[0] != normalized
+        }
         self._shortcuts[normalized] = ExtensionShortcut(
             key=normalized,
             handler=handler,
             description=str(options["description"]) if options.get("description") is not None else None,
-            extension_path=self._loading_extension_path or "<python-extension>",
+            extension_path=self._current_extension_path(),
         )
 
 
     def get_shortcuts(self, resolved_keybindings: dict[str, object] | None = None) -> dict[str, ExtensionShortcut]:
-        _ = resolved_keybindings
-        return dict(self._shortcuts)
+        if not resolved_keybindings:
+            return dict(self._shortcuts)
+
+        protected: dict[str, list[str]] = {}
+        for binding, value in resolved_keybindings.items():
+            keys = value if isinstance(value, list) else [value]
+            for key in keys:
+                normalized = str(key).lower()
+                if normalized:
+                    protected.setdefault(normalized, []).append(str(binding))
+
+        available: dict[str, ExtensionShortcut] = {}
+        for key, shortcut in self._shortcuts.items():
+            bindings = protected.get(key)
+            if not bindings:
+                available[key] = shortcut
+                continue
+            conflict = (key, shortcut.extension_path)
+            if conflict not in self._reported_shortcut_conflicts:
+                self._reported_shortcut_conflicts.add(conflict)
+                self.emit_error(
+                    {
+                        "extensionPath": shortcut.extension_path,
+                        "event": "shortcut_conflict",
+                        "error": (
+                            f"Shortcut {key} conflicts with protected keybinding "
+                            f"{', '.join(bindings)} and was ignored"
+                        ),
+                    }
+                )
+        return available
 
 
 

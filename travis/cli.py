@@ -6,13 +6,10 @@ import argparse
 from dataclasses import dataclass
 from dataclasses import field
 from dataclasses import replace
-from importlib import resources
 import json
 import os
 from pathlib import Path
-import shutil
 import sys
-import tempfile
 
 from travis.ai.env_config import ModelConfig, get_default_model_for_provider, load_dotenv_values, load_model_config
 from travis.ai.model_resolver import ScopedModel, resolve_cli_model, resolve_model_scope
@@ -301,38 +298,6 @@ def _hydrate_models_for_list(config: ModelConfig, model_registry) -> None:
     )
 
 
-def _copy_extension_resources(source, destination: Path) -> None:
-    destination.mkdir(exist_ok=True)
-    for item in source.iterdir():
-        if item.name == "__pycache__" or item.name.endswith((".pyc", ".pyo")):
-            continue
-        target = destination / item.name
-        if item.is_dir():
-            _copy_extension_resources(item, target)
-            continue
-        with item.open("rb") as source_file, target.open("wb") as target_file:
-            shutil.copyfileobj(source_file, target_file)
-
-
-def _install_first_party_extension(name: str, agent_dir: str) -> Path:
-    source = resources.files("travis").joinpath("resources", "extensions", name)
-    if not source.is_dir():
-        raise ValueError(f"unknown first-party extension: {name}")
-    parent = Path(agent_dir).expanduser() / "extensions"
-    destination = parent / name
-    if destination.exists():
-        raise FileExistsError(f"extension destination already exists: {destination}")
-    parent.mkdir(parents=True, exist_ok=True)
-    temporary = Path(tempfile.mkdtemp(prefix=f".{name}-", dir=parent))
-    try:
-        _copy_extension_resources(source, temporary)
-        temporary.rename(destination)
-    except BaseException:
-        shutil.rmtree(temporary, ignore_errors=True)
-        raise
-    return destination
-
-
 def _select_project_trust_option(prompt: str, choices: list[str] | tuple[str, ...]) -> str | None:
     print(prompt)
     for index, choice in enumerate(choices, start=1):
@@ -491,11 +456,6 @@ def _build_parser(
     parser.add_argument("--export", help="Export a session JSONL file to standalone HTML and exit")
     parser.add_argument("--event-trace", help="Write a sanitized evaluation lifecycle JSONL trace")
     parser.add_argument("--conversation-log", help="Write an authorized, secret-redacted turn transcript")
-    parser.add_argument(
-        "--install-extension",
-        choices=("hypa",),
-        help="Install an optional first-party extension into the Travis234 agent directory and exit",
-    )
     if extension_runtime is not None:
         add_extension_flags(parser, extension_runtime)
     return parser
@@ -516,8 +476,7 @@ def main(argv: list[str] | None = None) -> int:
     bootstrap_parser = _build_parser(include_prompt=False)
     bootstrap_args, _bootstrap_unknown = bootstrap_parser.parse_known_args(resolved_argv)
     core_only_action = bool(
-        bootstrap_args.install_extension
-        or bootstrap_args.export
+        bootstrap_args.export
         or bootstrap_args.list_models
         or bootstrap_args.list_providers
     )
@@ -534,15 +493,6 @@ def main(argv: list[str] | None = None) -> int:
         parser = bootstrap_parser
         args = bootstrap_args
         args.prompt = []
-
-    if args.install_extension:
-        try:
-            installed = _install_first_party_extension(args.install_extension, get_agent_dir())
-        except (OSError, ValueError) as error:
-            print(f"Error: {error}", file=sys.stderr)
-            return 1
-        print(f"Installed {args.install_extension} extension: {installed}")
-        return 0
 
     if args.export:
         output_path = args.prompt[0] if args.prompt else None

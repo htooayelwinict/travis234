@@ -29,6 +29,18 @@ def test_packaged_context_resources_exist() -> None:
     assert all(path.exists() for path in resources)
 
 
+def test_packaged_builtin_skills_exist() -> None:
+    from travis.coding_agent.config import get_packaged_skills_path
+
+    skills_root = Path(get_packaged_skills_path())
+
+    assert skills_root.is_dir()
+    assert {path.parent.name for path in skills_root.glob("*/SKILL.md")} == {
+        "subagent-delegation",
+        "web-search",
+    }
+
+
 def test_session_directory_has_an_independent_hard_cutover_override(
     tmp_path: Path,
     monkeypatch,
