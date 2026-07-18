@@ -138,7 +138,7 @@ def test_vendored_highlighter_allows_language_pi_but_not_former_app_names() -> N
 def test_focused_repository_layout() -> None:
     assert (ROOT / "travis" / "__init__.py").is_file()
     assert not (ROOT / "appV2.3.1").exists()
-    assert (ROOT / "appv231").is_dir()
+    assert not (ROOT / "travis" / "appv231").exists()
     assert (ROOT / "PI_HERMES_TRAVIS_CROSS_CHECK_REPORT.md").is_file()
 
 

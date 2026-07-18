@@ -284,18 +284,18 @@ def test_runtime_has_no_model_steering_policy_modules() -> None:
     assert not (policy_dir / "package_consent.py").exists()
 
 
-def test_reference_oracles_are_present_but_outside_the_runtime_tree() -> None:
+def test_reference_oracles_are_optional_and_outside_runtime_and_release_trees() -> None:
     root = Path(__file__).parents[1]
+    oracle_names = ("pi", "hermes-agent", "appv231")
+    docker_ignored = set((root / ".dockerignore").read_text(encoding="utf-8").splitlines())
 
-    assert (root / "pi").is_dir()
-    assert (root / "hermes-agent").is_dir()
-    assert (root / "appv231").is_dir()
     assert (root / "PI_HERMES_TRAVIS_CROSS_CHECK_REPORT.md").is_file()
-    assert all(not path.is_relative_to(root / "travis") for path in (
-        root / "pi",
-        root / "hermes-agent",
-        root / "appv231",
-    ))
+    assert set(oracle_names) <= docker_ignored
+    assert all(not (root / "travis" / name).exists() for name in oracle_names)
+    for oracle in (root / name for name in oracle_names):
+        if oracle.exists():
+            assert oracle.is_dir()
+            assert not oracle.is_relative_to(root / "travis")
 
 
 def test_travis_runtime_has_no_artificial_iteration_halt() -> None:

@@ -4,6 +4,7 @@ from tests._support_tui import *  # noqa: F403
 from travis.ai.providers._shared import blank_assistant_message
 from travis.compaction import SUMMARY_PREFIX
 from travis.compaction.compressor import estimate_tokens
+from travis.tui import BashExecutionComponent
 
 
 def test_interactive_mode_serializes_bang_bash_after_streaming_turn(tmp_path) -> None:
@@ -49,7 +50,18 @@ def test_interactive_mode_serializes_bang_bash_after_streaming_turn(tmp_path) ->
     try:
         assert app.session.has_pending_bash_messages is False
         assert app.session.get_steering_messages() == []
-        assert _wait_until(lambda: mode.status._message == "Running bash")
+
+        def bash_completed_while_turn_waits() -> bool:
+            return any(
+                isinstance(component, BashExecutionComponent)
+                and component.command == "printf streamed"
+                and component.status == "complete"
+                and "streamed" in component.get_output()
+                for component in mode.history.children
+            )
+
+        assert _wait_until(bash_completed_while_turn_waits)
+        assert first_stream_finished.is_set() is False
         first_stream_released.set()
         assert first_stream_finished.wait(timeout=2)
     finally:
@@ -70,11 +82,11 @@ def test_interactive_mode_keeps_agent_output_above_status_footer(tmp_path) -> No
 
     mode.run()
 
-    rendered = app.tui.render(100)
-    prompt_index = next(index for index, line in enumerate(rendered) if "hi" in strip_ansi(line))
+    rendered = [strip_ansi(line) for line in app.tui.render(100)]
+    prompt_index = next(index for index, line in enumerate(rendered) if "hi" in line)
     reply_index = next(index for index, line in enumerate(rendered) if line == "ordered reply")
     status_index = next(index for index, line in enumerate(rendered) if line.startswith("status:"))
-    footer_index = next(index for index, line in enumerate(rendered) if "faux-model" in strip_ansi(line))
+    footer_index = next(index for index, line in enumerate(rendered) if "faux-model" in line)
 
     assert prompt_index < reply_index < status_index < footer_index
 

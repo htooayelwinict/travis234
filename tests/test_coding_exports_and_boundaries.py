@@ -1620,6 +1620,7 @@ def test_bash_shell_env_provides_managed_python_shim_without_runtime_venv(
     python3.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     python3.chmod(0o755)
     runtime_python_bin = str(Path(sys.executable).parent)
+    monkeypatch.setattr(sys, "prefix", str(tmp_path / "runtime-venv"))
     monkeypatch.setenv(ENV_AGENT_DIR, str(agent_dir))
     monkeypatch.setenv("PATH", os.pathsep.join([runtime_python_bin, str(system_bin)]))
 
