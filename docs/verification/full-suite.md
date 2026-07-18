@@ -6,7 +6,7 @@ The current working tree is verified directly from the filesystem. The qualifica
 
 ## Extension runtime and packaged resources — 2.3.3
 
-- Full Python source suite: 1,790 passed in 119.31 seconds.
+- Full Python source suite: 1,791 passed. The clean-runner release workflow provisions its bounded pytest dependency explicitly.
 - npm launcher suite: 21 passed; npm pack dry-run contained exactly the five declared files for `@htooayelwinict/travis234@2.3.3`.
 - Repository hygiene: all seven reported categories are zero. Python compileall and Twine checks passed.
 - Acceptance parity: Pi reported 74 parity, four documented safety divergences, and zero invalid contracts; Hermes reported 11 parity, zero divergence, and zero invalid contracts.

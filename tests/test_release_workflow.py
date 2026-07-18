@@ -30,6 +30,15 @@ def test_release_tests_use_deterministic_no_color_baseline() -> None:
     assert test_job["env"]["NO_COLOR"] == "1"
 
 
+def test_release_test_job_provisions_pytest_on_a_clean_runner() -> None:
+    test_job = _workflow()["jobs"]["test"]
+    test_step = next(
+        step for step in test_job["steps"] if step.get("name") == "Run Python tests"
+    )
+
+    assert 'uv run --with "pytest>=8,<10" pytest' in test_step["run"]
+
+
 def test_release_smoke_build_is_no_cache_and_never_pushes() -> None:
     workflow = _workflow()
     smoke_build = next(
