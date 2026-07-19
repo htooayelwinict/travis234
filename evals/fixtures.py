@@ -733,10 +733,10 @@ test('npm metadata is publishable', () => assert.equal(pkg.private, false));
 from pathlib import Path
 from fixture_app import __version__
 
-def test_all_versions_are_2_3_3():
+def test_all_versions_are_2_3_4():
     package = Path("package.json").read_text()
-    assert __version__ == "2.3.3"
-    assert '"version":"2.3.3"' in package.replace(" ", "")
+    assert __version__ == "2.3.4"
+    assert '"version":"2.3.4"' in package.replace(" ", "")
 
 def test_image_is_non_root_and_installs_node_and_npm():
     dockerfile = Path("Dockerfile").read_text()

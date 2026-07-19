@@ -26,7 +26,7 @@ def test_npm_distribution_names_only_travis234() -> None:
 def test_release_versions_are_aligned() -> None:
     import json
 
-    expected = "2.3.3"
+    expected = "2.3.4"
     python_metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     workspace = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
     npm_package = json.loads(

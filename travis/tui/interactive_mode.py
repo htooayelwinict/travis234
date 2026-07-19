@@ -274,6 +274,7 @@ class _InteractiveRuntime(
                 app,
                 mode="tui",
                 bindings_factory=self._extension_bindings,
+                before_rebind=lambda _session: self._reset_extension_ui(),
                 on_rebound=lambda _session: self.tui.post(self._rebind_session_ui),
             )
         self.setup_autocomplete_provider()

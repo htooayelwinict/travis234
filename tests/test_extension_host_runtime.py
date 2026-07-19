@@ -7,9 +7,11 @@ from pathlib import Path
 
 import pytest
 
+from travis.app import CodingApp
 from travis.ai.providers.faux import faux_model
 from travis.coding_agent import AgentSession
 from travis.coding_agent.extensions import ExtensionRunner
+from travis.tui import FakeTerminal, InteractiveMode
 
 
 def test_extension_ui_object_can_be_present_without_reporting_ui_available(tmp_path: Path) -> None:
@@ -89,8 +91,15 @@ class _FakeApp:
 
 def test_extension_host_adapter_binds_initial_and_replacement_before_rebound_callback() -> None:
     module = importlib.import_module("travis.coding_agent.extension_host")
-    first = _FakeSession("first")
-    replacement = _FakeSession("replacement")
+    events: list[tuple[str, str]] = []
+
+    class RecordingSession(_FakeSession):
+        def bind_extensions(self, bindings: dict[str, object]) -> None:
+            events.append(("bind", self.name))
+            super().bind_extensions(bindings)
+
+    first = RecordingSession("first")
+    replacement = RecordingSession("replacement")
     app = _FakeApp(first)
     seen: list[tuple[str, str]] = []
 
@@ -98,20 +107,73 @@ def test_extension_host_adapter_binds_initial_and_replacement_before_rebound_cal
         app,
         mode="tui",
         bindings_factory=lambda session: {"sessionName": session.name},
-        on_rebound=lambda session: seen.append(
-            (session.name, str(session.bindings[-1]["mode"]))
+        before_rebind=lambda session: events.append(("before", session.name)),
+        on_rebound=lambda session: (
+            events.append(("after", session.name)),
+            seen.append((session.name, str(session.bindings[-1]["mode"]))),
         ),
     )
     adapter.start()
+    assert events == [("bind", "first")]
+
+    events.clear()
     app.replace(replacement)
 
     assert first.bindings == [{"sessionName": "first", "mode": "tui"}]
     assert replacement.bindings == [{"sessionName": "replacement", "mode": "tui"}]
     assert seen == [("replacement", "tui")]
+    assert events == [
+        ("before", "replacement"),
+        ("bind", "replacement"),
+        ("after", "replacement"),
+    ]
 
     adapter.dispose()
     app.replace(_FakeSession("after-dispose"))
     assert seen == [("replacement", "tui")]
+
+
+def test_interactive_session_replacement_discards_stale_extension_terminal_listener(
+    tmp_path: Path,
+) -> None:
+    extension_path = tmp_path / ".travis234" / "extensions" / "listener.py"
+    extension_path.parent.mkdir(parents=True)
+    extension_path.write_text(
+        "def extension(travis):\n"
+        "    def started(_event, ctx):\n"
+        "        def listener(data):\n"
+        "            if ctx.has_ui:\n"
+        "                ctx.ui.set_status('listener-generation', data)\n"
+        "            return None\n"
+        "        ctx.ui.on_terminal_input(listener)\n"
+        "    travis.on('session_start', started)\n",
+        encoding="utf-8",
+    )
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=100, rows=30),
+        enable_tui=True,
+        agent_dir=str(tmp_path / "agent"),
+        project_trust_override=True,
+    )
+    mode = InteractiveMode(app, input_fn=lambda _prompt: "/exit")
+
+    try:
+        mode.init()
+        assert len(mode._terminal_input_listeners) == 1
+        old_listener = mode._terminal_input_listeners[0]
+
+        app.new_session()
+        mode.tui.drain_dispatcher()
+
+        assert mode._dispatch_terminal_input("x") == (False, "x")
+        assert len(mode._terminal_input_listeners) == 1
+        assert old_listener not in mode._terminal_input_listeners
+        assert mode.extension_statuses == {"listener-generation": "x"}
+    finally:
+        mode.footer_data_provider.dispose()
+        app.close()
 
 
 def test_extension_host_adapter_ignores_embedding_without_extension_session() -> None:

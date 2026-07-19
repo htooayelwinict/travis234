@@ -87,11 +87,13 @@ class ExtensionHostAdapter:
         *,
         mode: str,
         bindings_factory: Callable[[object], dict[str, object] | None],
+        before_rebind: Callable[[object], object] | None = None,
         on_rebound: Callable[[object], object] | None = None,
     ) -> None:
         self._app = app
         self._mode = mode
         self._bindings_factory = bindings_factory
+        self._before_rebind = before_rebind
         self._on_rebound = on_rebound
         self._started = False
         self._unsubscribe: Callable[[], None] | None = None
@@ -121,6 +123,8 @@ class ExtensionHostAdapter:
         bind_extensions(bindings)
 
     def _handle_rebound(self, session: object) -> None:
+        if self._before_rebind is not None:
+            self._before_rebind(session)
         self.bind(session)
         if self._on_rebound is not None:
             self._on_rebound(session)
