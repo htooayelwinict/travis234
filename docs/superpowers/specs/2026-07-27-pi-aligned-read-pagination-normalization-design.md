@@ -1,6 +1,6 @@
 # Pi-Aligned Read Pagination Normalization Design
 
-**Status:** Approved for implementation planning  
+**Status:** Approved for implementation planning
 **Date:** 2026-07-27
 
 ## Problem
