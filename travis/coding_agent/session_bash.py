@@ -109,7 +109,9 @@ class SessionBashController:
             artifact_registry=self._artifacts,
             artifact_kind="user-bash-output",
         )
-        self._bash_signal = AbortSignal()
+        signal = AbortSignal()
+        with self._bash_signals_lock:
+            self._bash_signals.add(signal)
 
         def handle_data(data: bytes) -> None:
             output.append(data)
@@ -122,7 +124,7 @@ class SessionBashController:
             result = operations.exec(
                 resolved_command,
                 self.cwd,
-                BashExecOptions(on_data=handle_data, signal=self._bash_signal),
+                BashExecOptions(on_data=handle_data, signal=signal),
             )
             exit_code = result.get("exit_code")
         except RuntimeError as error:
@@ -131,7 +133,8 @@ class SessionBashController:
                 raise
         finally:
             output.finish()
-            self._bash_signal = None
+            with self._bash_signals_lock:
+                self._bash_signals.discard(signal)
         snapshot = output.snapshot(persist_if_truncated=True)
         output.close()
         bash_result = BashResult(
@@ -145,8 +148,10 @@ class SessionBashController:
         return bash_result
 
     def abort_bash(self) -> None:
-        if self._bash_signal is not None:
-            self._bash_signal.abort()
+        with self._bash_signals_lock:
+            signals = tuple(self._bash_signals)
+        for signal in signals:
+            signal.abort()
 
     def record_bash_result(self, command: str, result: BashResult, options: dict | None = None) -> None:
         options = options or {}

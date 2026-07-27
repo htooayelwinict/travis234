@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from dataclasses import replace
@@ -217,7 +218,8 @@ class _SessionRuntime(
         self._turn_mailbox = CodingTurnMailbox()
         self._pending_next_turn_messages: list[AgentMessage] = []
         self._pending_bash_messages: list[BashExecutionMessage] = []
-        self._bash_signal: AbortSignal | None = None
+        self._bash_signals: set[AbortSignal] = set()
+        self._bash_signals_lock = threading.RLock()
         self._command_signal: AbortSignal | None = None
         self._scoped_models = list(scoped_models or [])
         self._convert_to_llm = convert_to_llm or default_convert_to_llm

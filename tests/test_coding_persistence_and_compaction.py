@@ -1379,6 +1379,120 @@ def test_agent_session_abort_bash_cancels_running_command(tmp_path: Path) -> Non
     assert result_holder[0].cancelled is True
     assert session.is_bash_running is False
 
+
+def test_agent_session_abort_bash_cancels_every_concurrent_command(
+    tmp_path: Path,
+) -> None:
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+    started = {
+        "first": threading.Event(),
+        "second": threading.Event(),
+    }
+    results: dict[str, BashResult] = {}
+    errors: list[BaseException] = []
+
+    def exec_command(command: str, cwd: str, options) -> dict[str, int | None]:
+        del cwd
+        started[command].set()
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            if options.signal and options.signal.aborted:
+                raise RuntimeError("aborted")
+            time.sleep(0.005)
+        return {"exit_code": 0}
+
+    def run(command: str) -> None:
+        try:
+            results[command] = session.execute_bash(
+                command,
+                options={"operations": BashOperations(exec=exec_command)},
+            )
+        except BaseException as error:  # noqa: BLE001
+            errors.append(error)
+
+    threads = [
+        threading.Thread(target=run, args=("first",)),
+        threading.Thread(target=run, args=("second",)),
+    ]
+    for thread in threads:
+        thread.start()
+
+    assert started["first"].wait(timeout=2)
+    assert started["second"].wait(timeout=2)
+    assert session.is_bash_running is True
+
+    session.abort_bash()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert errors == []
+    assert set(results) == {"first", "second"}
+    assert all(result.cancelled is True for result in results.values())
+    assert session.is_bash_running is False
+
+
+def test_agent_session_bash_completion_keeps_other_command_registered(
+    tmp_path: Path,
+) -> None:
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+    started = {
+        "first": threading.Event(),
+        "second": threading.Event(),
+    }
+    release = {
+        "first": threading.Event(),
+        "second": threading.Event(),
+    }
+
+    def exec_command(command: str, cwd: str, options) -> dict[str, int | None]:
+        del cwd, options
+        started[command].set()
+        assert release[command].wait(timeout=2)
+        return {"exit_code": 0}
+
+    threads = [
+        threading.Thread(
+            target=session.execute_bash,
+            args=(command,),
+            kwargs={"options": {"operations": BashOperations(exec=exec_command)}},
+        )
+        for command in ("first", "second")
+    ]
+    for thread in threads:
+        thread.start()
+
+    assert all(event.wait(timeout=2) for event in started.values())
+    assert session.is_bash_running is True
+    release["first"].set()
+    threads[0].join(timeout=2)
+
+    assert not threads[0].is_alive()
+    assert threads[1].is_alive()
+    assert session.is_bash_running is True
+
+    release["second"].set()
+    threads[1].join(timeout=2)
+    assert not threads[1].is_alive()
+    assert session.is_bash_running is False
+
+
+def test_agent_session_bash_error_unregisters_its_signal(tmp_path: Path) -> None:
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+
+    def exec_command(command: str, cwd: str, options) -> dict[str, int | None]:
+        del command, cwd, options
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        session.execute_bash(
+            "fail",
+            options={"operations": BashOperations(exec=exec_command)},
+        )
+
+    assert session.is_bash_running is False
+
+
 def test_agent_session_auto_retry_events_for_transient_provider_error(tmp_path: Path) -> None:
     model = faux_model()
     calls = {"n": 0}

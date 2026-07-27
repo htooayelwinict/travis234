@@ -102,7 +102,8 @@ class SessionModelController:
 
     @property
     def is_bash_running(self) -> bool:
-        return self._bash_signal is not None
+        with self._bash_signals_lock:
+            return bool(self._bash_signals)
 
     def get_steering_messages(self) -> list[str]:
         return [item.text for item in self._turn_mailbox.snapshot("steering")]

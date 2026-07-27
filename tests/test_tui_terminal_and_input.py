@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from tests._support_tui import *  # noqa: F403
+from travis.agent.types import AbortSignal
 
 
 def test_visible_width_strips_ansi() -> None:
@@ -1314,14 +1315,17 @@ def test_interactive_mode_editor_escape_aborts_active_turn_bash(tmp_path, monkey
     aborts: list[str] = []
 
     monkeypatch.setattr(mode, "_is_turn_active", lambda: True)
-    app.session._bash_signal = object()
+    fake_signal = AbortSignal()
+    with app.session._bash_signals_lock:
+        app.session._bash_signals.add(fake_signal)
     monkeypatch.setattr(app.session.agent, "abort", lambda: aborts.append("agent"))
     monkeypatch.setattr(app.session, "abort_bash", lambda: aborts.append("bash"))
 
     try:
         mode._handle_editor_escape()
     finally:
-        app.session._bash_signal = None
+        with app.session._bash_signals_lock:
+            app.session._bash_signals.discard(fake_signal)
 
     assert aborts == ["agent"]
     assert mode.status._message == "Aborting"
