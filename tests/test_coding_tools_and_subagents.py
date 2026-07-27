@@ -116,6 +116,76 @@ def test_read_tool_rejects_mixed_line_and_byte_pagination(tmp_path: Path) -> Non
             {"path": "mixed.txt", "offset": 1, "byte_offset": 0},
         )
 
+
+def test_read_tool_prepares_mixed_mimo_pagination_as_pi_lines(tmp_path: Path) -> None:
+    from travis.coding_agent.tools.read import create_read_tool
+
+    target = tmp_path / "SKILL.md"
+    target.write_text("line1\nline2\nline3\n", encoding="utf-8")
+    tool = create_read_tool(str(tmp_path))
+
+    assert tool.prepare_arguments is not None
+    line_only = {"path": "SKILL.md", "offset": 2, "limit": 1}
+    assert tool.prepare_arguments(line_only) is line_only
+
+    mixed = {
+        "path": "SKILL.md",
+        "offset": 1,
+        "limit": 2000,
+        "byte_offset": 0,
+        "byte_limit": 50000,
+    }
+    prepared = tool.prepare_arguments(mixed)
+
+    assert prepared == {"path": "SKILL.md", "offset": 1, "limit": 2000}
+    assert mixed == {
+        "path": "SKILL.md",
+        "offset": 1,
+        "limit": 2000,
+        "byte_offset": 0,
+        "byte_limit": 50000,
+    }
+    result = tool.execute("mimo-skill-read", prepared)
+    assert result.content[0].text.splitlines() == ["line1", "line2", "line3"]
+
+
+def test_read_tool_prepares_mixed_mimo_pagination_as_artifact_bytes(tmp_path: Path) -> None:
+    from travis.coding_agent.artifacts import ArtifactRegistry
+    from travis.coding_agent.tools.read import create_read_tool
+
+    target = tmp_path / "single-line.log"
+    target.write_bytes(b"BEGIN_SPOOL" + (b"x" * 80_000) + b"END_SPOOL")
+    artifacts = ArtifactRegistry()
+    artifact = artifacts.register(target, kind="command-output", remove_on_close=False)
+    tool = create_read_tool(str(tmp_path), artifacts=artifacts)
+
+    assert tool.prepare_arguments is not None
+    byte_only = {"path": artifact.id, "byte_offset": 0, "byte_limit": 64}
+    assert tool.prepare_arguments(byte_only) is byte_only
+
+    mixed = {
+        "path": artifact.id,
+        "offset": 1,
+        "limit": 2000,
+        "byte_offset": 0,
+        "byte_limit": 50000,
+    }
+    prepared = tool.prepare_arguments(mixed)
+
+    assert prepared == {
+        "path": artifact.id,
+        "byte_offset": 0,
+        "byte_limit": 50000,
+    }
+    result = tool.execute("mimo-artifact-read", prepared)
+    assert result.content[0].text.startswith("BEGIN_SPOOL")
+    assert result.details["byteRange"] == {
+        "start": 0,
+        "endExclusive": 50000,
+        "totalBytes": target.stat().st_size,
+    }
+
+
 def test_read_tool_schema_and_execution_accept_travis234_number_limits(tmp_path: Path) -> None:
     target = tmp_path / "f.txt"
     target.write_text("\n".join(f"line{i}" for i in range(1, 11)), encoding="utf-8")

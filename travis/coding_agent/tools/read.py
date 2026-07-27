@@ -109,6 +109,33 @@ def _format_dimension_note(result: ReadImageResizeResult) -> str | None:
     )
 
 
+def _prepare_read_arguments(
+    input_args: object,
+    artifacts: ArtifactRegistry | None,
+) -> object:
+    if not isinstance(input_args, dict):
+        return input_args
+    line_mode = "offset" in input_args or "limit" in input_args
+    byte_mode = "byte_offset" in input_args or "byte_limit" in input_args
+    if not line_mode or not byte_mode:
+        return input_args
+
+    prepared = dict(input_args)
+    path = prepared.get("path")
+    artifact_path = (
+        artifacts.resolve_read(path)
+        if artifacts is not None and isinstance(path, str)
+        else None
+    )
+    if artifact_path is not None:
+        prepared.pop("offset", None)
+        prepared.pop("limit", None)
+    else:
+        prepared.pop("byte_offset", None)
+        prepared.pop("byte_limit", None)
+    return prepared
+
+
 def _execute_read(
     cwd: str,
     workspace: WorkspaceCapability,
@@ -400,6 +427,7 @@ def create_read_tool_definition(
         execute=lambda tid, args, signal=None, on_update=None, ctx=None: _execute_read(
             cwd, workspace, artifacts, ops, auto_resize_images, resize, tid, args, signal, on_update, ctx
         ),
+        prepare_arguments=lambda args: _prepare_read_arguments(args, artifacts),
         render_call=_render_read_call,
         render_result=_render_read_result,
     )
