@@ -194,6 +194,28 @@ def _push_decoded(stream: object, request: PreparedProviderRequest, lines: Itera
     return final_message
 
 
+def _wait_for_retry_delay(delay_seconds: float, signal: object) -> None:
+    delay = max(0.0, float(delay_seconds))
+    if signal_aborted(signal):
+        raise RuntimeError("Request was aborted")
+    if delay == 0:
+        return
+    add_callback = getattr(signal, "add_callback", None)
+    if not callable(add_callback):
+        time.sleep(delay)
+        if signal_aborted(signal):
+            raise RuntimeError("Request was aborted")
+        return
+
+    aborted = threading.Event()
+    unsubscribe = add_callback(aborted.set)
+    try:
+        if aborted.wait(delay):
+            raise RuntimeError("Request was aborted")
+    finally:
+        unsubscribe()
+
+
 def _run_sse(
     stream: object,
     model: Model,
@@ -254,9 +276,7 @@ def _run_sse(
                 if attempt >= max_retries:
                     raise
                 delay = _BASE_RETRY_DELAY_SECONDS * (2**attempt)
-            if signal_aborted(signal):
-                raise RuntimeError("Request was aborted")
-            time.sleep(delay)
+            _wait_for_retry_delay(delay, signal)
     raise RuntimeError("Failed after retries")
 
 
