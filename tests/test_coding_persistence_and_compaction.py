@@ -1542,6 +1542,57 @@ def test_agent_session_auto_retry_events_for_transient_provider_error(tmp_path: 
     assert retry_events[1].attempt == 1
     assert session.retry_attempt == 0
 
+
+@pytest.mark.parametrize(
+    "error_message",
+    [
+        "getaddrinfo failed for provider.example",
+        "request failed with ENOTFOUND provider.example",
+        "temporary DNS failure: EAI_AGAIN",
+    ],
+)
+def test_agent_session_retries_dns_resolution_failures(
+    tmp_path: Path,
+    error_message: str,
+) -> None:
+    model = faux_model()
+    calls = {"count": 0}
+
+    def stream_fn(model, context, options):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            stream = create_assistant_message_event_stream()
+            error = AssistantMessage(
+                content=[TextContent(text="")],
+                api=model.api,
+                provider=model.provider,
+                model=model.id,
+                usage=empty_usage(),
+                stop_reason="error",
+                error_message=error_message,
+            )
+            stream.push(ErrorEvent(reason="error", error=error))
+            return stream
+        return create_faux_provider(
+            lambda active_model, active_context: text_response_events(
+                active_model,
+                "Recovered",
+            )
+        ).stream_simple(model, context, options)
+
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=model,
+        retry_enabled=True,
+        max_retries=1,
+        retry_delay_ms=0,
+    )
+
+    session.prompt("Test DNS retry", stream_fn=stream_fn)
+
+    assert calls["count"] == 2
+
+
 def test_agent_session_auto_retry_adds_malformed_tool_args_correction_context(tmp_path: Path) -> None:
     model = faux_model()
     captured_contexts: list[Context] = []
@@ -1803,7 +1854,7 @@ def test_agent_session_does_not_retry_travis234_non_retryable_provider_limit_err
             model=model.id,
             usage=empty_usage(),
             stop_reason="error",
-            error_message="rate limit: insufficient_quota billing",
+            error_message="rate limit: insufficient_quota billing after EAI_AGAIN",
         )
         stream.push(ErrorEvent(reason="error", error=error))
         return stream
