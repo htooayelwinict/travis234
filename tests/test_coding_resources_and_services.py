@@ -401,6 +401,32 @@ def test_default_resource_loader_discovers_context_and_system_prompt_files(tmp_p
     assert project_loader.get_append_system_prompt() == ["project append"]
 
 
+def test_context_discovery_skips_directory_named_agents_md_and_uses_next_file(
+    tmp_path: Path,
+) -> None:
+    from travis.coding_agent import load_project_context_files
+
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".git").mkdir()
+    (project / "AGENTS.md").mkdir()
+    (project / "CLAUDE.md").write_text("project context", encoding="utf-8")
+
+    context_files = load_project_context_files(
+        cwd=str(project),
+        agent_dir=str(agent_dir),
+    )
+
+    assert context_files == [
+        {
+            "path": str((project / "CLAUDE.md").resolve()),
+            "content": "project context",
+        }
+    ]
+
+
 def test_project_context_stops_at_the_nearest_git_worktree_root(tmp_path: Path) -> None:
     from travis.coding_agent import load_project_context_files
 

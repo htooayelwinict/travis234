@@ -47,11 +47,12 @@ def load_context_file_from_dir(directory: str | Path) -> dict[str, str] | None:
     base = Path(directory).expanduser().resolve()
     for name in _CONTEXT_FILE_NAMES:
         candidate = base / name
-        if candidate.exists():
-            try:
-                return {"path": str(candidate), "content": candidate.read_text(encoding="utf-8")}
-            except OSError:
-                return None
+        if not candidate.is_file():
+            continue
+        try:
+            return {"path": str(candidate), "content": candidate.read_text(encoding="utf-8")}
+        except OSError:
+            continue
     return None
 
 
