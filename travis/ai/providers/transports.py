@@ -1534,7 +1534,15 @@ class BedrockConverseStreamTransport:
                 normalized = target_model.id.lower().replace("_", "-").replace(".", "-")
                 adaptive = any(
                     value in normalized
-                    for value in ("opus-4-6", "opus-4-7", "opus-4-8", "sonnet-4-6", "sonnet-5", "fable-5")
+                    for value in (
+                        "opus-4-6",
+                        "opus-4-7",
+                        "opus-4-8",
+                        "opus-5",
+                        "sonnet-4-6",
+                        "sonnet-5",
+                        "fable-5",
+                    )
                 )
                 if adaptive:
                     mapped_effort = "low" if effort in {"minimal", "low"} else effort

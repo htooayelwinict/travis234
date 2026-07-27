@@ -887,6 +887,21 @@ def test_markdown_streaming_table_header_without_data_rows_is_stable() -> None:
     assert all("\x1b[" not in strip_ansi(line) for line in rendered)
 
 
+def test_markdown_ragged_table_rows_do_not_crash_the_streaming_renderer() -> None:
+    from travis.tui import Markdown
+
+    rendered = Markdown(
+        "| Component | Change |\n"
+        "| --- | --- |\n"
+        "| retryable | Status set: `{429} \\ | |\n"
+        "| cancellation |\n"
+    ).render(80)
+
+    plain = strip_ansi("\n".join(rendered))
+    assert "| retryable" in plain
+    assert "| cancellation" in plain
+
+
 def test_footer_responsive_priorities_keep_context_pressure_before_detail() -> None:
     footer = FooterComponent(
         cwd="/very/long/project",

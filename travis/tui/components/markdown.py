@@ -211,7 +211,7 @@ def _render_table(
     default_role: str,
     hyperlinks_enabled: bool,
 ) -> list[str]:
-    normalized_rows = [row + [""] * max(0, len(header) - len(row)) for row in rows]
+    normalized_rows = [(row + [""] * max(0, len(header) - len(row)))[: len(header)] for row in rows]
     column_widths = [
         max([visible_width(header[column]), *(visible_width(row[column]) for row in normalized_rows)])
         for column in range(len(header))

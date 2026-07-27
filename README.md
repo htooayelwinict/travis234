@@ -264,6 +264,25 @@ TRAVIS234_WORKER_LLM_MODEL=xiaomi/mimo-v2.5
 TRAVIS234_WORKER_LLM_CONTEXT_WINDOW=1048576
 ```
 
+OpenAI-compatible routers and proxies do not need catalog entries of their own. Keep the
+`openrouter` transport contract and replace only the endpoint, credential, and model ID.
+For example, a local 9Router installation exposes its compatible API at
+`http://localhost:20128/v1`:
+
+```dotenv
+TRAVIS234_WORKER_LLM_PROVIDER=openrouter
+TRAVIS234_WORKER_LLM_BASE_URL=http://localhost:20128/v1
+TRAVIS234_WORKER_LLM_API_KEY=local-placeholder
+TRAVIS234_WORKER_LLM_MODEL=anthropic/claude-opus-5
+```
+
+Use the proxy's exact model ID. When it matches an OpenRouter catalog ID, Travis234 keeps
+the catalog's reasoning and capacity metadata while sending requests to the overridden
+endpoint. For proxy-only aliases such as `kr/...`, also set
+`TRAVIS234_WORKER_LLM_CONTEXT_WINDOW` and `TRAVIS234_WORKER_LLM_MAX_TOKENS`; unknown IDs
+otherwise receive conservative fallback limits. A local proxy with authentication disabled
+still needs a non-secret placeholder because provider authentication fails closed.
+
 For a custom or newly released model whose catalog metadata is unavailable, set `TRAVIS234_WORKER_LLM_CONTEXT_WINDOW` to the provider's documented size. Footer telemetry and automatic compaction use this value as their denominator.
 
 Model-driven subprocesses do not inherit provider credentials by default. A trusted project command can receive an exact allowlisted variable through `TRAVIS234_TOOL_ENV_PASSTHROUGH`. Human-authored `!command` remains an operator shell and inherits the operator environment.

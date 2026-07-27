@@ -53,11 +53,13 @@ def test_subscription_claude_sampling_flags_are_pinned_to_anthropic_routes() -> 
             "claude-fable-5",
             "claude-opus-4-7",
             "claude-opus-4-8",
+            "claude-opus-5",
             "claude-sonnet-5",
         ],
         "github-copilot": [
             "claude-opus-4.7",
             "claude-opus-4.8",
+            "claude-opus-5",
             "claude-sonnet-5",
         ],
     }
@@ -72,6 +74,38 @@ def test_subscription_claude_sampling_flags_are_pinned_to_anthropic_routes() -> 
     assert copilot_fable["api"] == "openai-completions"
     assert "supportsTemperature" not in copilot_fable["compat"]
     assert "supportsTopP" not in copilot_fable["compat"]
+
+
+def test_claude_opus_5_catalog_routes_match_current_pi_metadata() -> None:
+    root = Path(__file__).resolve().parents[1]
+    catalog = json.loads(
+        (root / "travis/ai/builtin_models.json").read_text(encoding="utf-8")
+    )
+
+    expected_routes = {
+        "anthropic": ("claude-opus-5", "anthropic-messages", 128_000),
+        "github-copilot": ("claude-opus-5", "anthropic-messages", 64_000),
+        "cloudflare-ai-gateway": ("claude-opus-5", "anthropic-messages", 128_000),
+        "opencode": ("claude-opus-5", "anthropic-messages", 128_000),
+        "openrouter": ("anthropic/claude-opus-5", "openai-completions", 128_000),
+        "vercel-ai-gateway": ("anthropic/claude-opus-5", "anthropic-messages", 128_000),
+    }
+    for provider, (model_id, api, max_tokens) in expected_routes.items():
+        record = catalog[provider][model_id]
+        assert record["api"] == api
+        assert record["reasoning"] is True
+        assert record["thinkingLevelMap"]["xhigh"] == "xhigh"
+        assert record["thinkingLevelMap"]["max"] == "max"
+        assert record["contextWindow"] == 1_000_000
+        assert record["maxTokens"] == max_tokens
+
+    bedrock = catalog["amazon-bedrock"]
+    assert "anthropic.claude-opus-5" not in bedrock
+    for prefix in ("global", "us", "eu", "jp", "au"):
+        record = bedrock[f"{prefix}.anthropic.claude-opus-5"]
+        assert record["api"] == "bedrock-converse-stream"
+        assert record["contextWindow"] == 1_000_000
+        assert record["maxTokens"] == 128_000
 
 
 def test_openrouter_capability_refresh_is_model_agnostic() -> None:

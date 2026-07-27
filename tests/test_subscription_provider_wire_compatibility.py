@@ -118,9 +118,11 @@ def test_copilot_fable_completions_route_is_outside_anthropic_guard() -> None:
         ("anthropic", "claude-fable-5"),
         ("anthropic", "claude-opus-4-7"),
         ("anthropic", "claude-opus-4-8"),
+        ("anthropic", "claude-opus-5"),
         ("anthropic", "claude-sonnet-5"),
         ("github-copilot", "claude-opus-4.7"),
         ("github-copilot", "claude-opus-4.8"),
+        ("github-copilot", "claude-opus-5"),
         ("github-copilot", "claude-sonnet-5"),
     ],
 )
