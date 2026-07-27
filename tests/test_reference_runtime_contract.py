@@ -2184,6 +2184,204 @@ def test_codex_auto_websocket_reuses_session_and_sends_only_context_delta(monkey
     codex_runtime_module.close_codex_websocket_sessions()
 
 
+class _OpenWebSocketState:
+    name = "OPEN"
+
+
+class _FakeCodexConnection:
+    state = _OpenWebSocketState()
+
+    def __init__(self, responses: list[dict[str, object]]) -> None:
+        self.responses = list(responses)
+        self.sent: list[dict[str, object]] = []
+        self.closed = False
+
+    def send(self, data: str) -> None:
+        self.sent.append(json.loads(data))
+
+    def recv(self, timeout=None):
+        del timeout
+        return json.dumps(self.responses.pop(0))
+
+    def close(self, code=1000, reason="done") -> None:
+        del code, reason
+        self.closed = True
+
+
+def _completed_codex_response(response_id: str) -> dict[str, object]:
+    return {
+        "type": "response.completed",
+        "response": {
+            "id": response_id,
+            "status": "completed",
+            "output": [],
+            "usage": {
+                "input_tokens": 1,
+                "output_tokens": 0,
+                "total_tokens": 1,
+            },
+        },
+    }
+
+
+_MISSING_CODEX_CONTINUATION = {
+    "type": "error",
+    "error": {
+        "code": "previous_response_not_found",
+        "message": "Previous response was not found",
+    },
+}
+
+
+def test_codex_missing_continuation_retries_once_with_full_input(monkeypatch) -> None:
+    payload = base64.urlsafe_b64encode(
+        json.dumps(
+            {"https://api.openai.com/auth": {"chatgpt_account_id": "account-123"}}
+        ).encode()
+    ).decode().rstrip("=")
+    token = f"header.{payload}.signature"
+    first_connection = _FakeCodexConnection(
+        [_completed_codex_response("response-1"), _MISSING_CODEX_CONTINUATION]
+    )
+    recovery_connection = _FakeCodexConnection(
+        [_completed_codex_response("response-2")]
+    )
+    connections = iter([first_connection, recovery_connection])
+    handshakes = 0
+
+    def connect(url, headers, timeout):
+        nonlocal handshakes
+        del url, headers, timeout
+        handshakes += 1
+        return next(connections)
+
+    codex_runtime_module.close_codex_websocket_sessions()
+    monkeypatch.setattr(codex_runtime_module, "_connect_websocket", connect)
+    model = next(
+        item
+        for item in load_builtin_models()
+        if item.provider == "openai-codex" and item.id == "gpt-5.4"
+    )
+    provider = TravisProvider(
+        ModelConfig(
+            enabled=True,
+            api_key=token,
+            model=model.id,
+            base_url=model.base_url,
+            timeout_seconds=5,
+            temperature=0,
+            top_p=None,
+            frequency_penalty=None,
+            presence_penalty=None,
+            seed=None,
+            provider=model.provider,
+        )
+    )
+    options = SimpleNamespace(
+        api_key=token,
+        transport="auto",
+        session_id="missing-continuation-session",
+        websocket_connect_timeout_ms=250,
+    )
+
+    first = provider.stream(
+        model,
+        Context(messages=[UserMessage(content="first")]),
+        options,
+    ).result_sync()
+    second = provider.stream(
+        model,
+        Context(
+            messages=[
+                UserMessage(content="first"),
+                first,
+                UserMessage(content="second"),
+            ]
+        ),
+        options,
+    ).result_sync()
+
+    assert second.stop_reason == "stop"
+    assert second.response_id == "response-2"
+    assert handshakes == 2
+    assert first_connection.sent[1]["previous_response_id"] == "response-1"
+    assert "previous_response_id" not in recovery_connection.sent[0]
+    assert len(recovery_connection.sent[0]["input"]) > len(first_connection.sent[1]["input"])
+    codex_runtime_module.close_codex_websocket_sessions()
+
+
+def test_codex_repeated_missing_continuation_stops_after_one_retry(monkeypatch) -> None:
+    payload = base64.urlsafe_b64encode(
+        json.dumps(
+            {"https://api.openai.com/auth": {"chatgpt_account_id": "account-123"}}
+        ).encode()
+    ).decode().rstrip("=")
+    token = f"header.{payload}.signature"
+    first_connection = _FakeCodexConnection(
+        [_completed_codex_response("response-1"), _MISSING_CODEX_CONTINUATION]
+    )
+    recovery_connection = _FakeCodexConnection([_MISSING_CODEX_CONTINUATION])
+    connections = iter([first_connection, recovery_connection])
+    handshakes = 0
+
+    def connect(url, headers, timeout):
+        nonlocal handshakes
+        del url, headers, timeout
+        handshakes += 1
+        return next(connections)
+
+    codex_runtime_module.close_codex_websocket_sessions()
+    monkeypatch.setattr(codex_runtime_module, "_connect_websocket", connect)
+    model = next(
+        item
+        for item in load_builtin_models()
+        if item.provider == "openai-codex" and item.id == "gpt-5.4"
+    )
+    provider = TravisProvider(
+        ModelConfig(
+            enabled=True,
+            api_key=token,
+            model=model.id,
+            base_url=model.base_url,
+            timeout_seconds=5,
+            temperature=0,
+            top_p=None,
+            frequency_penalty=None,
+            presence_penalty=None,
+            seed=None,
+            provider=model.provider,
+        )
+    )
+    options = SimpleNamespace(
+        api_key=token,
+        transport="auto",
+        session_id="repeated-missing-continuation-session",
+        websocket_connect_timeout_ms=250,
+    )
+
+    first = provider.stream(
+        model,
+        Context(messages=[UserMessage(content="first")]),
+        options,
+    ).result_sync()
+    result = provider.stream(
+        model,
+        Context(
+            messages=[
+                UserMessage(content="first"),
+                first,
+                UserMessage(content="second"),
+            ]
+        ),
+        options,
+    ).result_sync()
+
+    assert result.stop_reason == "error"
+    assert "Previous response was not found" in (result.error_message or "")
+    assert handshakes == 2
+    codex_runtime_module.close_codex_websocket_sessions()
+
+
 def test_codex_auto_websocket_failure_falls_back_to_sse_for_the_session(monkeypatch) -> None:
     payload = base64.urlsafe_b64encode(
         json.dumps(

@@ -29,6 +29,7 @@ _WEBSOCKET_CACHE_TTL_SECONDS = 5 * 60.0
 _WEBSOCKET_MAX_AGE_SECONDS = 55 * 60.0
 _WEBSOCKET_BETA = "responses_websockets=2026-02-06"
 _CONNECTION_LIMIT_CODE = "websocket_connection_limit_reached"
+_PREVIOUS_RESPONSE_NOT_FOUND_CODE = "previous_response_not_found"
 _ALLOWED_TOOL_CALL_PROVIDERS = {"openai", "openai-codex", "opencode"}
 
 
@@ -536,11 +537,19 @@ def run_codex_request(
     websocket_disabled = transport != "sse" and session_id in _sse_fallback_sessions
     if transport != "sse" and not websocket_disabled:
         retried_connection_limit = False
+        retried_missing_continuation = False
         while True:
             state = {"started": False}
             try:
                 return _run_websocket(stream, model, options, request, state)[0]
             except CodexAPIError as error:
+                if (
+                    not signal_aborted(getattr(options, "signal", None))
+                    and error.code == _PREVIOUS_RESPONSE_NOT_FOUND_CODE
+                    and not retried_missing_continuation
+                ):
+                    retried_missing_continuation = True
+                    continue
                 if not state["started"] and error.code == _CONNECTION_LIMIT_CODE and not retried_connection_limit:
                     retried_connection_limit = True
                     continue
