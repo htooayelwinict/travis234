@@ -89,6 +89,19 @@ test("package includes the lazy tactical investigation skill", () => {
   assert.match(skill, /tmux/i);
 });
 
+test("package includes the lazy DFIR and incident triage skill", () => {
+  const skill = fs.readFileSync(
+    path.join(packageRoot, "skills", "triaging-security-incidents", "SKILL.md"),
+    "utf8",
+  );
+
+  assert.match(skill, /description: Use when/i);
+  assert.match(skill, /SHA-256/i);
+  assert.match(skill, /volatile/i);
+  assert.match(skill, /timeline/i);
+  assert.match(skill, /containment/i);
+});
+
 test("release image combines Python 3.13 and Node 20 without passwordless sudo", () => {
   const dockerfile = fs.readFileSync(path.resolve(packageRoot, "..", "..", "Dockerfile.release"), "utf8");
 
