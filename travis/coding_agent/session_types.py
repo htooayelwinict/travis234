@@ -72,6 +72,7 @@ from travis.coding_agent.system_prompt import BuildSystemPromptOptions, build_sy
 from travis.coding_agent.subagents import (
     CallableSubagentBackend,
     CodexExecBackend,
+    OFFSEC_SUBAGENT_TOOLS,
     SubagentResult,
     SubagentSupervisor,
     SubagentTask,
@@ -95,8 +96,8 @@ _SUBAGENT_TOOL_NAMES = [
     "expand_subagent_result",
     "cancel_subagent",
 ]
-_DEFAULT_SUBAGENT_ALLOWED_TOOLS = ("read", "grep", "find", "ls")
-_SKILL_SUBAGENT_ALLOWED_TOOL_NAMES = {"read", "grep", "find", "ls", "bash"}
+_DEFAULT_SUBAGENT_ALLOWED_TOOLS = OFFSEC_SUBAGENT_TOOLS
+_SKILL_SUBAGENT_ALLOWED_TOOL_NAMES = set(OFFSEC_SUBAGENT_TOOLS)
 _MODEL_SUBAGENT_TIMEOUT_SECONDS_DEFAULT = 300
 _MODEL_SUBAGENT_TIMEOUT_SECONDS_MAX = 300
 _MODEL_SUBAGENT_SPAWN_LIMIT_PER_TURN = 3
@@ -128,41 +129,6 @@ _SUBAGENT_OPT_OUT_TERMS = (
     "don't use subagent",
     "don't use subagents",
 )
-_SUBAGENT_FILE_MUTATION_GOAL_PATTERN = re.compile(
-    r"\b(?:write|create|edit|modify|update|delete|remove|save|append|overwrite)\b"
-    r"[\s\S]{0,120}?"
-    r"(?:"
-    r"[\w./-]+\.(?:md|txt|json|ya?ml|py|js|ts|tsx|jsx|html|css|toml|ini|cfg|env|sh|rs|go|java|c|cpp|h|hpp|sql|csv|xml)"
-    r"|\b(?:file|files|document|documents|artifact|artifacts)\b"
-    r")",
-    re.IGNORECASE,
-)
-_SUBAGENT_FILE_MUTATION_NEGATION_PREFIX_PATTERN = re.compile(
-    r"(?:"
-    r"\bdo\s+not\b"
-    r"|\bdon't\b"
-    r"|\bnever\b"
-    r"|\bmust\s+not\b"
-    r"|\bshould\s+not\b"
-    r"|\bwithout\b"
-    r"|\bavoid\b"
-    r"|\bno\s+need\s+to\b"
-    r")"
-    r"(?:\s+\w+){0,6}\s*$",
-    re.IGNORECASE,
-)
-
-
-def _subagent_goal_requests_file_mutation(goal: str) -> bool:
-    text = str(goal or "")
-    for match in _SUBAGENT_FILE_MUTATION_GOAL_PATTERN.finditer(text):
-        prefix = text[max(0, match.start() - 80) : match.start()]
-        if _SUBAGENT_FILE_MUTATION_NEGATION_PREFIX_PATTERN.search(prefix):
-            continue
-        return True
-    return False
-
-
 def _prompt_requests_subagent_tools(text: str) -> bool:
     lowered = re.sub(r"\s+", " ", str(text or "").lower())
     if any(term in lowered for term in _SUBAGENT_OPT_OUT_TERMS):
@@ -176,10 +142,7 @@ _SPAWN_SUBAGENT_SCHEMA = {
         "role": {"type": "string", "description": "Short child-agent role name, e.g. reviewer or researcher."},
         "goal": {
             "type": "string",
-            "description": (
-                "Bounded read-only task for the child agent. Do not ask the child to write, edit, create, "
-                "delete, or save files; if the user requested an artifact, the child should inspect and the parent should write it."
-            ),
+            "description": "Bounded OffSec objective for the child agent, including workspace artifacts when needed.",
         },
         "backend": {"type": "string", "description": "Subagent backend to use. Defaults to internal."},
         "wait": {"type": "boolean", "description": "Wait for the child result before returning. Defaults to true."},
@@ -581,8 +544,6 @@ __all__ = (
     '_SKILL_SUBAGENT_ALLOWED_TOOL_NAMES',
     '_SPAWN_SUBAGENT_SCHEMA',
     '_SUBAGENT_EXPANSION_BUDGETS',
-    '_SUBAGENT_FILE_MUTATION_GOAL_PATTERN',
-    '_SUBAGENT_FILE_MUTATION_NEGATION_PREFIX_PATTERN',
     '_SUBAGENT_OPT_IN_TERMS',
     '_SUBAGENT_OPT_OUT_TERMS',
     '_SUBAGENT_RESULT_SUMMARY_LIMIT',
@@ -592,7 +553,6 @@ __all__ = (
     '_TASK_ID_SCHEMA',
     '_THINKING_LEVELS',
     '_prompt_requests_subagent_tools',
-    '_subagent_goal_requests_file_mutation',
     '_tool_result_text',
     'default_convert_to_llm',
 )

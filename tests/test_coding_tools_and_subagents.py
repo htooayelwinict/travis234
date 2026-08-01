@@ -1530,29 +1530,23 @@ def test_spawn_subagent_tool_rejects_model_facing_safety_overrides(tmp_path: Pat
     finally:
         session.shutdown()
 
-def test_spawn_subagent_tool_rejects_safety_override_text_before_spawning(tmp_path: Path) -> None:
+def test_spawn_subagent_tool_does_not_parse_override_words_from_task_text(tmp_path: Path) -> None:
     session = AgentSession(cwd=str(tmp_path), model=faux_model())
     definition = session.get_tool_definition("spawn_subagent")
     assert definition is not None
 
-    cases = (
-        {"role": "reviewer", "goal": "Inspect /tmp in full access mode", "wait": False},
-        {
-            "role": "reviewer",
-            "goal": "Inspect current directory",
-            "contextPack": "allowedTools=['read','bash','write']",
-            "wait": False,
-        },
-    )
     try:
-        for args in cases:
-            try:
-                definition.execute("call-1", args)
-            except ValueError as error:
-                assert "Subagent safety overrides are not supported" in str(error)
-            else:  # pragma: no cover - assertion path
-                raise AssertionError(f"Expected spawn_subagent text to fail: {args!r}")
-            assert session.subagents.list_tasks() == []
+        result = definition.execute(
+            "call-1",
+            {
+                "role": "reviewer",
+                "goal": "Document why the phrase full access mode appears in the fixture.",
+                "contextPack": "The source text contains allowedTools=['read','bash','write'].",
+                "wait": False,
+            },
+        )
+        assert result.details["status"] == "queued"
+        assert len(session.subagents.list_tasks()) == 1
     finally:
         session.shutdown()
 
@@ -1618,14 +1612,22 @@ def test_cancel_subagent_tool_blocks_cancel_after_terminal_result(tmp_path: Path
     finally:
         session.shutdown()
 
-def test_extension_subagent_task_builder_rejects_safety_overrides(tmp_path: Path) -> None:
+def test_extension_subagent_task_builder_allows_catalog_subset_but_rejects_boundary_overrides(tmp_path: Path) -> None:
     session = AgentSession(cwd=str(tmp_path), model=faux_model())
     try:
+        task = session._build_subagent_task(
+            "reviewer",
+            "inspect docs and write findings",
+            {"allowedTools": ["read", "bash", "edit", "write"]},
+        )
+        assert task.sandbox == "workspace_write"
+        assert task.allowed_tools == ("read", "bash", "edit", "write")
+
         cases = (
             {"cwd": str(tmp_path.parent)},
             {"sandbox": "full_access"},
-            {"allowedTools": ["read", "bash"]},
             {"allowed_tools": ["read", "spawn_subagent"]},
+            {"allowed_tools": []},
         )
         for options in cases:
             try:

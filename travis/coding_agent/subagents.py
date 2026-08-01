@@ -25,7 +25,17 @@ from typing import Callable, Literal, Protocol, Sequence
 SubagentStatus = Literal["queued", "running", "completed", "failed", "cancelled", "timeout"]
 SubagentSandbox = Literal["read_only", "workspace_write", "full_access"]
 
-_READ_ONLY_TOOLS = ("read", "grep", "find", "ls")
+OFFSEC_SUBAGENT_TOOLS = (
+    "read",
+    "grep",
+    "find",
+    "ls",
+    "bash",
+    "process",
+    "edit",
+    "write",
+    "tmux",
+)
 _SUBAGENT_STATUSES = {"queued", "running", "completed", "failed", "cancelled", "timeout"}
 _SANDBOX_FLAGS: dict[str, str] = {
     "read_only": "read-only",
@@ -64,16 +74,15 @@ class SubagentTask:
     cwd: str
     backend: str = "internal"
     id: str = field(default_factory=_new_id)
-    sandbox: SubagentSandbox = "read_only"
+    sandbox: SubagentSandbox = "workspace_write"
     model: str | None = None
     reasoning: str | None = None
-    allowed_tools: tuple[str, ...] = _READ_ONLY_TOOLS
+    allowed_tools: tuple[str, ...] = OFFSEC_SUBAGENT_TOOLS
     context_pack: str = ""
     timeout_seconds: int = 1800
     return_contract: str = (
-        "Return a concise summary, key findings, evidence, changed files, and blockers. "
-        "Every factual claim in your summary must be backed by observed evidence. "
-        "If evidence is missing or ambiguous, mark the claim as uncertain."
+        "Return a concise summary, confirmed findings, evidence, failed attempts, changed files, "
+        "artifacts, live tmux sessions, and blockers. Mark unsupported claims as uncertain."
     )
     parent_session_id: str | None = None
     parent_turn_id: str | None = None
@@ -137,6 +146,12 @@ class SubagentTask:
             "- Do not drop leading project directories from paths in the Goal; preserve prefixes such as travis/.\n"
             "- Allowed tools are the complete tool catalog for this child. Do not use any tool names outside Allowed tools.\n"
             "- For file discovery, use find or ls.\n"
+            "- Use bash for finite commands that should finish promptly.\n"
+            "- Use bash plus process for interactive PTY work that needs follow-up input during this child run.\n"
+            "- Use tmux for listeners, reverse connections, OOB callbacks, relays, servers, or waits that must survive this child.\n"
+            "- You may create and modify workspace files with edit/write.\n"
+            "- Do not assign or modify a file owned by another concurrently running child; report ownership conflicts.\n"
+            "- Do not spawn subagents; execute the bounded Goal directly.\n"
             "- Every factual claim in your summary must be backed by observed evidence from the available tools or context pack.\n"
             "- If evidence is missing or ambiguous, mark the claim as uncertain and state what evidence is missing.\n"
             "- Do not infer behavior from filenames, conventions, or expectations alone.\n"
@@ -433,9 +448,9 @@ class CodexExecBackend:
 
     def run(self, task: SubagentTask) -> SubagentResult:
         started = _now_ms()
-        if task.allowed_tools != _READ_ONLY_TOOLS:
+        if any(name not in OFFSEC_SUBAGENT_TOOLS for name in task.allowed_tools):
             ended = _now_ms()
-            error_text = "Codex backend does not enforce custom allowed tools."
+            error_text = "Codex backend received a tool outside the OffSec child catalog."
             return SubagentResult(
                 task_id=task.id,
                 backend=self.name,
