@@ -23,10 +23,11 @@ def test_npm_distribution_uses_offsec_name_and_travis_binary() -> None:
     assert package["bin"] == {"travis234": "bin/travis234.js"}
 
 
-def test_release_versions_are_aligned() -> None:
+def test_offsec_release_uses_python_and_npm_compatible_prerelease_versions() -> None:
     import json
 
-    expected = "2.3.5"
+    python_expected = "2.4.0.dev1"
+    npm_expected = "2.4.0-offsec.1"
     python_metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     workspace = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
     npm_package = json.loads(
@@ -35,12 +36,12 @@ def test_release_versions_are_aligned() -> None:
     config_source = (ROOT / "travis/coding_agent/config.py").read_text(encoding="utf-8")
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
-    assert python_metadata["project"]["version"] == expected
-    assert workspace["version"] == expected
-    assert npm_package["version"] == expected
-    assert f'VERSION = "{expected}"' in config_source
-    assert f"Version {expected}" in readme
-    assert f"version-{expected}-" in readme
+    assert python_metadata["project"]["version"] == python_expected
+    assert workspace["version"] == npm_expected
+    assert npm_package["version"] == npm_expected
+    assert f'VERSION = "{python_expected}"' in config_source
+    assert f"Version {python_expected}" in readme
+    assert f"version-{python_expected}-" in readme
 
 
 def test_packaged_builtin_skills_match_npm_distribution() -> None:

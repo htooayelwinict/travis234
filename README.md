@@ -10,7 +10,7 @@ TRAVIS234 // NEURAL TERMINAL ONLINE
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-39e6c7?style=for-the-badge&labelColor=10182b"></a>
   <img alt="Python 3.13" src="https://img.shields.io/badge/Python-3.13-63a7ff?style=for-the-badge&labelColor=10182b">
-  <img alt="Version 2.3.5" src="https://img.shields.io/badge/version-2.3.5-bd6cff?style=for-the-badge&labelColor=10182b">
+  <img alt="Version 2.4.0.dev1" src="https://img.shields.io/badge/version-2.4.0.dev1-bd6cff?style=for-the-badge&labelColor=10182b">
 </p>
 
 # Travis234 OffSec
@@ -187,4 +187,4 @@ docker build --no-cache -f Dockerfile.release -t travis234-offsec:smoke .
 python evals/container_smoke.py --image travis234-offsec:smoke
 ```
 
-Version 2.3.5. Licensed under [MIT](LICENSE); see [NOTICE.md](NOTICE.md).
+Version 2.4.0.dev1. Licensed under [MIT](LICENSE); see [NOTICE.md](NOTICE.md).
