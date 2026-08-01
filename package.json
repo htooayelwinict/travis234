@@ -1,6 +1,6 @@
 {
   "name": "travis234-offsec-workspace",
-  "version": "2.4.0-offsec.1",
+  "version": "1.0.2",
   "private": true,
   "type": "module",
   "scripts": {

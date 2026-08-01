@@ -54,5 +54,6 @@ def test_package_metadata_has_one_python_authority() -> None:
 
     assert pyproject["project"]["name"] == "travis234-offsec"
     assert pyproject["project"]["version"] == "2.4.0.dev1"
+    assert package_json["version"] == "1.0.2"
     assert pyproject["project"]["scripts"] == {"travis234": "travis.cli:main"}
     assert "travisConfig" not in package_json
