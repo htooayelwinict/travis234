@@ -51,7 +51,9 @@ COPY pyproject.toml README.md LICENSE NOTICE.md ./
 COPY travis ./travis
 
 RUN /opt/travis234-venv/bin/python -m pip install --no-cache-dir --upgrade pip \
-    && /opt/travis234-venv/bin/python -m pip install --no-cache-dir .
+    && /opt/travis234-venv/bin/python -m pip install --no-cache-dir . \
+    && ln -s /opt/travis234-venv/bin/python /usr/local/bin/python \
+    && ln -s /opt/travis234-venv/bin/travis234 /usr/local/bin/travis234
 
 USER travis
 WORKDIR /workspace

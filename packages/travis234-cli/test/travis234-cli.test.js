@@ -130,6 +130,8 @@ test("release image combines Kali, Python venv, and Node 20 without passwordless
   }
   assert.match(dockerfile, /VIRTUAL_ENV=\/opt\/travis234-venv/);
   assert.match(dockerfile, /cp --dereference --remove-destination/);
+  assert.match(dockerfile, /ln -s \/opt\/travis234-venv\/bin\/python \/usr\/local\/bin\/python/);
+  assert.match(dockerfile, /ln -s \/opt\/travis234-venv\/bin\/travis234 \/usr\/local\/bin\/travis234/);
   assert.match(dockerfile, /COPY --from=node-runtime \/usr\/local\/bin\/node \/usr\/local\/bin\/node/);
   assert.match(dockerfile, /COPY --from=node-runtime \/usr\/local\/lib\/node_modules \/usr\/local\/lib\/node_modules/);
   assert.match(dockerfile, /ENTRYPOINT \["travis234"\]/);
@@ -151,6 +153,8 @@ test("local development image creates the travis user with limited package sudo"
   }
   assert.match(dockerfile, /\bsudo\b/);
   assert.match(dockerfile, /\bnpm\b/);
+  assert.match(dockerfile, /ln -s \/opt\/travis234-venv\/bin\/python \/usr\/local\/bin\/python/);
+  assert.match(dockerfile, /ln -s \/opt\/travis234-venv\/bin\/travis234 \/usr\/local\/bin\/travis234/);
   assert.match(dockerfile, /useradd .* travis/);
   assert.match(dockerfile, /env_keep \+= "DEBIAN_FRONTEND"/);
   assert.match(dockerfile, /travis ALL=.*NOPASSWD:.*apt-get/);
