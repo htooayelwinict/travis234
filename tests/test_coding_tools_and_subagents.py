@@ -3,6 +3,7 @@ from __future__ import annotations
 from tests._support_coding_agent import *  # noqa: F403
 from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import ProcessOwner
+from travis.coding_agent.session_types import _SUBAGENT_TOOL_NAMES
 from travis.coding_agent.subagents import OFFSEC_SUBAGENT_TOOLS
 from travis.coding_agent.tools import all_tool_names
 
@@ -1547,6 +1548,53 @@ def test_internal_child_inherits_process_service_targets_and_unique_owner(tmp_pa
     finally:
         parent.shutdown()
         service.close()
+
+
+def test_real_internal_child_writes_edits_and_reports_changed_file(tmp_path: Path) -> None:
+    calls = {"count": 0}
+
+    def stream_fn(active_model, context, options):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            events = tool_call_response_events(
+                active_model,
+                "write",
+                {"path": "evidence/child.txt", "content": "draft\n"},
+                call_id="child-write",
+            )
+        elif calls["count"] == 2:
+            events = tool_call_response_events(
+                active_model,
+                "edit",
+                {
+                    "path": "evidence/child.txt",
+                    "edits": [{"oldText": "draft", "newText": "CHILD-EDIT-OK"}],
+                },
+                call_id="child-edit",
+            )
+        elif calls["count"] == 3:
+            events = tool_call_response_events(
+                active_model,
+                "bash",
+                {"command": 'test "$(cat evidence/child.txt)" = CHILD-EDIT-OK'},
+                call_id="child-verify",
+            )
+        else:
+            events = text_response_events(active_model, "Confirmed CHILD-EDIT-OK in evidence/child.txt.")
+        return create_faux_provider(lambda _model, _context: events).stream_simple(active_model, context, options)
+
+    parent = AgentSession(cwd=str(tmp_path), model=faux_model(), stream_fn=stream_fn)
+    task = parent._build_subagent_task("evidence-writer", "write and verify the child evidence file")
+    try:
+        result = parent._run_internal_subagent(task)
+
+        assert (tmp_path / "evidence/child.txt").read_text(encoding="utf-8") == "CHILD-EDIT-OK\n"
+        assert result.status == "completed"
+        assert result.files_changed == ["evidence/child.txt"]
+        assert [entry["toolName"] for entry in result.tool_trace] == ["write", "edit", "bash"]
+        assert all(name not in task.allowed_tools for name in _SUBAGENT_TOOL_NAMES)
+    finally:
+        parent.shutdown()
 
 def test_spawn_subagent_tool_rejects_model_facing_safety_overrides(tmp_path: Path) -> None:
     session = AgentSession(cwd=str(tmp_path), model=faux_model())

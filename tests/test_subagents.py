@@ -432,6 +432,51 @@ def test_supervisor_rejects_malformed_task_id_references():
             raise AssertionError(f"Expected malformed task id in {name} to fail")
 
 
+def test_supervisor_runs_three_disjoint_workspace_writes_concurrently(tmp_path):
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    barrier = threading.Barrier(3)
+    entered: list[str] = []
+    entered_lock = threading.Lock()
+
+    def backend(task):
+        with entered_lock:
+            entered.append(task.id)
+        barrier.wait(timeout=2)
+        relative = f"evidence/{task.role}.txt"
+        (tmp_path / relative).write_text(task.id, encoding="utf-8")
+        return SubagentResult(
+            task_id=task.id,
+            backend=task.backend,
+            role=task.role,
+            status="completed",
+            summary=f"Wrote {relative}",
+            files_changed=[relative],
+        )
+
+    supervisor = SubagentSupervisor(max_threads=3, max_depth=1)
+    supervisor.register_backend(CallableSubagentBackend("internal", backend))
+    tasks = [
+        SubagentTask(id=f"subagent-{name}", role=name, goal=f"write evidence/{name}.txt", cwd=str(tmp_path))
+        for name in ("a", "b", "c")
+    ]
+    try:
+        task_ids = [supervisor.spawn(task) for task in tasks]
+        results = [supervisor.wait(task_id, timeout=3) for task_id in task_ids]
+
+        assert set(entered) == set(task_ids)
+        assert [result.status for result in results] == ["completed"] * 3
+        assert {
+            path
+            for result in results
+            for path in result.files_changed
+        } == {"evidence/a.txt", "evidence/b.txt", "evidence/c.txt"}
+        for task in tasks:
+            assert (evidence / f"{task.role}.txt").read_text(encoding="utf-8") == task.id
+    finally:
+        supervisor.shutdown(wait=True)
+
+
 def test_supervisor_timeout_keeps_capacity_until_backend_finishes(tmp_path):
     started = threading.Event()
     release = threading.Event()

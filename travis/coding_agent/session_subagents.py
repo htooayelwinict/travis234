@@ -87,7 +87,7 @@ from travis.coding_agent.tools.types import (
 )
 
 from travis.coding_agent.session_types import _CANCEL_SUBAGENT_SCHEMA, _DEFAULT_SUBAGENT_ALLOWED_TOOLS, _EXPAND_SUBAGENT_RESULT_SCHEMA, _LIST_SUBAGENTS_SCHEMA, _MODEL_SUBAGENT_SPAWN_LIMIT_PER_TURN, _SKILL_SUBAGENT_ALLOWED_TOOL_NAMES, _SPAWN_SUBAGENT_SCHEMA, _SUBAGENT_RESULT_SUMMARY_LIMIT, _TASK_ID_SCHEMA
-from travis.coding_agent.subagent_trace import _coerce_subagent_timeout_seconds, _expanded_subagent_result_details, _format_subagent_expansion, _model_subagent_timeout_seconds_arg, _optional_timeout_arg, _public_subagent_result_details, _reject_unexpected_args, _required_text_arg, _subagent_expansion_budget_arg, _subagent_expansion_offset_arg, _subagent_expansion_section_arg, _task_id_arg
+from travis.coding_agent.subagent_trace import _coerce_subagent_timeout_seconds, _expanded_subagent_result_details, _format_subagent_expansion, _model_subagent_timeout_seconds_arg, _optional_timeout_arg, _public_subagent_result_details, _reject_unexpected_args, _required_text_arg, _subagent_changed_files, _subagent_expansion_budget_arg, _subagent_expansion_offset_arg, _subagent_expansion_section_arg, _task_id_arg
 
 class SessionSubagentController:
     """Owns a focused AgentSession runtime concern."""
@@ -438,6 +438,7 @@ class SessionSubagentController:
                 status=status,
                 summary=summary or "Internal subagent completed without a final message.",
                 final_response=summary,
+                files_changed=_subagent_changed_files(task, tool_trace),
                 errors=errors,
                 tool_trace=tool_trace,
                 child_session_id=child.session_id,

@@ -297,3 +297,32 @@ def test_real_tmux_round_trip(tmp_path: Path) -> None:
         assert started.details["sessionName"] in listed.details["sessions"]
     finally:
         definition.execute("stop", {"action": "stop", "name": name})
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is not installed")
+def test_child_tmux_session_is_visible_to_parent_in_same_workspace(tmp_path: Path) -> None:
+    name = f"child-{uuid.uuid4().hex[:8]}"
+    parent = create_tmux_tool_definition(str(tmp_path))
+    child = create_tmux_tool_definition(str(tmp_path))
+    try:
+        started = child.execute(
+            "start",
+            {
+                "action": "start",
+                "name": name,
+                "command": "printf 'CHILD-TMUX-OK\\n'; sleep 5",
+            },
+        )
+        deadline = time.monotonic() + 2
+        output = ""
+        while "CHILD-TMUX-OK" not in output and time.monotonic() < deadline:
+            output = result_text(
+                parent.execute("capture", {"action": "capture", "name": name, "lines": 50})
+            )
+            time.sleep(0.05)
+        listed = parent.execute("list", {"action": "list"})
+
+        assert "CHILD-TMUX-OK" in output
+        assert started.details["sessionName"] in listed.details["sessions"]
+    finally:
+        parent.execute("stop", {"action": "stop", "name": name})
