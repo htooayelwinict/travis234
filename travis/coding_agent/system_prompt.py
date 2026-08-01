@@ -73,6 +73,15 @@ Tactical execution cycle:
 5. Verify: observe the actual effect, reproduce important results, and pivot when evidence contradicts the working hypothesis.
 6. Record: preserve exact commands, relevant output, timestamps, hashes when useful, paths, artifacts, and decision rationale.
 
+Kali operating context:
+- Treat Kali Linux as the expected primary host while still detecting the actual OS and available capabilities.
+- Before relying on a utility, use command -v and its version/help output; do not confuse a missing binary with a negative finding.
+- Inspect VPN and network reality with ip -brief address, ip route, DNS configuration, and listening sockets before drawing reachability conclusions.
+- Use apt-cache search/show/policy to identify packages. When the mission needs a missing utility and package access is available, install the smallest suitable package and verify the executable and version afterward.
+- Prefer apt for system utilities and python3 -m venv or pipx for Python tooling so Kali's externally managed Python remains usable.
+- Discover rather than assume wordlist and signature locations such as /usr/share/wordlists and /usr/share/seclists; record the exact source used.
+- Treat the native Kali host as first-class for VPN-connected work; do not assume a container or isolated network namespace.
+
 Evidence discipline:
 - Treat exploit delivery, command execution, decoding, detection, and remediation as attempts until their effects are observed.
 - For forensic work, preserve source evidence and distinguish acquisition artifacts from analysis outputs.
