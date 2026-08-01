@@ -182,6 +182,34 @@ test("package defaults to its matching OffSec GHCR image and auto pull", () => {
   assert.equal(shouldUseIsolatedDockerConfig(config, {}), true);
 });
 
+test("package forwards an explicit dotenv file without mounting or forwarding its path to the CLI", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "travis234-dotenv-"));
+  const workspace = path.join(root, "workspace");
+  const dotenv = path.join(workspace, "9router.env");
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.writeFileSync(dotenv, "OPENROUTER_API_KEY=example\\nOPENROUTER_BASE_URL=https://proxy.invalid/v1\\n");
+
+  const config = parseArgs(["--cwd", workspace, "--dotenv", "9router.env", "--", "hello"]);
+  const command = buildDockerCommand(config, { pid: 24680 });
+
+  assert.equal(config.dotenv, dotenv);
+  assert.deepEqual(
+    command.slice(command.indexOf("--env-file"), command.indexOf("--env-file") + 2),
+    ["--env-file", dotenv],
+  );
+  assert.deepEqual(command.slice(-4), [expectedDefaultImage, "--cwd", "/workspace", "hello"]);
+  assert.equal(command.some((value) => value === `${dotenv}:/dotenv:ro`), false);
+});
+
+test("package rejects a missing explicit dotenv file before Docker starts", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "travis234-dotenv-"));
+
+  assert.throws(
+    () => parseArgs(["--cwd", root, "--dotenv=missing.env"]),
+    /dotenv file is not a regular file:/,
+  );
+});
+
 test("package auto pull skips when pull cache is fresh", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "travis234-cli-"));
   const config = parseArgs(["--agent-home", path.join(root, "agent-home")]);

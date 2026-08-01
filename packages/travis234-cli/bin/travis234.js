@@ -42,6 +42,7 @@ function parseArgs(argv, runtime = {}) {
   const homeDir = runtime.homeDir || os.homedir();
   const config = {
     cwd: runtime.cwd || process.cwd(),
+    dotenv: null,
     image: env.TRAVIS234_IMAGE || env.TRAVIS234_SANDBOX_IMAGE || DEFAULT_IMAGE,
     agentHome: env.TRAVIS234_SANDBOX_HOME || path.join(homeDir, ".travis234", "sandbox-home"),
     network: true,
@@ -65,6 +66,14 @@ function parseArgs(argv, runtime = {}) {
     }
     if (arg.startsWith("--cwd=")) {
       config.cwd = arg.slice("--cwd=".length);
+      continue;
+    }
+    if (arg === "--dotenv") {
+      config.dotenv = requireValue(argv, ++index, arg);
+      continue;
+    }
+    if (arg.startsWith("--dotenv=")) {
+      config.dotenv = arg.slice("--dotenv=".length);
       continue;
     }
     if (arg === "--image") {
@@ -126,14 +135,29 @@ function parseArgs(argv, runtime = {}) {
     config.appArgs.push(arg);
   }
 
+  const cwd = resolvePath(config.cwd, homeDir);
   return {
     ...config,
-    cwd: resolvePath(config.cwd, homeDir),
+    cwd,
+    dotenv: resolveDotenvPath(config.dotenv, cwd, homeDir),
     agentHome: resolvePath(config.agentHome, homeDir),
     agentsFiles: config.agentsFiles.map((value) => resolvePath(value, homeDir)),
     skillsPaths: config.skillsPaths.map((value) => resolvePath(value, homeDir)),
     appArgs: sanitizeAppArgs(config.appArgs),
   };
+}
+
+function resolveDotenvPath(value, cwd, homeDir) {
+  if (!value) {
+    return null;
+  }
+  const resolved = value.startsWith("~/")
+    ? resolvePath(value, homeDir)
+    : path.resolve(cwd, value);
+  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+    throw new Error(`dotenv file is not a regular file: ${resolved}`);
+  }
+  return resolved;
 }
 
 function requireValue(argv, index, flag) {
@@ -157,11 +181,11 @@ function sanitizeAppArgs(args) {
       skipNext = false;
       continue;
     }
-    if (arg === "--cwd" || arg === "--dotenv") {
+    if (arg === "--cwd") {
       skipNext = true;
       continue;
     }
-    if (arg.startsWith("--cwd=") || arg.startsWith("--dotenv=")) {
+    if (arg.startsWith("--cwd=")) {
       continue;
     }
     stripped.push(arg);
@@ -211,6 +235,9 @@ function buildDockerCommand(config, runtime = {}) {
     "-e",
     "DEBIAN_FRONTEND=noninteractive",
   ];
+  if (config.dotenv) {
+    command.push("--env-file", config.dotenv);
+  }
   if (!config.network) {
     command.push("--network=none");
   }
@@ -479,6 +506,7 @@ Usage:
 
 Options:
   --cwd <path>          Host workspace to mount as /workspace. Defaults to current directory.
+  --dotenv <path>       Explicit dotenv file to pass as Docker environment; never mounted or persisted.
   --image <name>        Docker image. Defaults to TRAVIS234_IMAGE, TRAVIS234_SANDBOX_IMAGE, or the installed OffSec release image.
   --agent-home <path>   Sandbox state directory. Defaults to ~/.travis234/sandbox-home.
   --agents-file <path>  Copy an explicit AGENTS.md-style file into sandbox context.

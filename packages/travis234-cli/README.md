@@ -29,6 +29,18 @@ Host-native Python is preferred when a lab VPN route or local evidence must be
 visible directly. The Kali container is optional and must already have network
 reachability supplied by the operator's environment.
 
+For an OpenAI-compatible proxy such as 9router, explicitly pass a dotenv file:
+
+```bash
+npx @htooayelwinict/travis234-offsec \
+  --cwd ~/agent-work \
+  --dotenv ~/.config/travis/9router.env
+```
+
+The launcher passes only that selected file through Docker `--env-file`; it does
+not mount the dotenv file or persist its contents. Without `--dotenv`, npx does
+not forward host provider credentials.
+
 ## Launcher options
 
 Launcher flags precede `--`; all following arguments go to Travis234:
@@ -36,6 +48,7 @@ Launcher flags precede `--`; all following arguments go to Travis234:
 ```bash
 travis234 --cwd /path/to/workspace
 travis234 --cwd . --dry-run
+travis234 --cwd . --dotenv ~/.config/travis/9router.env
 travis234 --cwd . --no-pull
 travis234 --cwd . --pull
 travis234 --cwd . --image ghcr.io/htooayelwinict/travis234-offsec:2.4.0-offsec.1
