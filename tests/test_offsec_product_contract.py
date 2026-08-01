@@ -166,3 +166,30 @@ def test_triaging_security_incidents_skill_contract() -> None:
     ):
         assert required in text
     assert len(text.split()) < 500
+
+
+def test_validating_security_findings_skill_contract() -> None:
+    paths = (
+        ROOT / "skills/validating-security-findings/SKILL.md",
+        ROOT / "travis/resources/skills/validating-security-findings/SKILL.md",
+        ROOT / "packages/travis234-cli/skills/validating-security-findings/SKILL.md",
+    )
+    texts = [path.read_text(encoding="utf-8") for path in paths]
+
+    assert len({text.encode("utf-8") for text in texts}) == 1
+    text = texts[0]
+    assert "description: Use when" in text
+    for required in (
+        "independently",
+        "positive control",
+        "negative control",
+        "exit code",
+        "target-derived evidence",
+        "exploitability",
+        "impact",
+        "confidence",
+        "limitations",
+        "Verdict",
+    ):
+        assert required in text
+    assert len(text.split()) < 500

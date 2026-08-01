@@ -22,16 +22,19 @@ def test_packaged_builtin_skills_load_as_lazy_defaults(tmp_path: Path) -> None:
         "investigating-security-targets",
         "subagent-delegation",
         "triaging-security-incidents",
+        "validating-security-findings",
         "web-search",
     }
     skill_prompt = format_skills_for_prompt(list(skills.values()))
     assert "subagent-delegation" in skill_prompt
     assert "investigating-security-targets" in skill_prompt
     assert "triaging-security-incidents" in skill_prompt
+    assert "validating-security-findings" in skill_prompt
     assert "web-search" in skill_prompt
     assert "# Subagent Delegation" not in skill_prompt
     assert "# Investigating Security Targets" not in skill_prompt
     assert "# Triaging Security Incidents" not in skill_prompt
+    assert "# Validating Security Findings" not in skill_prompt
     assert "# Web Search" not in skill_prompt
 
 
@@ -73,6 +76,7 @@ def test_user_skill_overrides_packaged_builtin_with_same_name(tmp_path: Path) ->
         "investigating-security-targets",
         "subagent-delegation",
         "triaging-security-incidents",
+        "validating-security-findings",
         "web-search",
     }
     assert skills["web-search"].file_path == str(user_skill.resolve())
@@ -953,6 +957,7 @@ def test_resource_loader_resolves_package_skills_prompts_and_themes(
         "investigating-security-targets",
         "subagent-delegation",
         "triaging-security-incidents",
+        "validating-security-findings",
         "web-search",
     ]
     assert skills[0].description == "Inspect code carefully"
@@ -1010,6 +1015,7 @@ def test_default_resource_loader_uses_travis234_settings_manager_resource_paths(
         "investigating-security-targets",
         "subagent-delegation",
         "triaging-security-incidents",
+        "validating-security-findings",
         "web-search",
     ]
     assert [prompt.name for prompt in loader.get_prompts()["prompts"]] == ["review"]
@@ -1045,6 +1051,7 @@ def test_default_resource_loader_loads_app_owned_agent_skills(tmp_path: Path, mo
         "investigating-security-targets",
         "subagent-delegation",
         "triaging-security-incidents",
+        "validating-security-findings",
         "web-search",
     ]
     assert skills[0].source_info.scope == "user"
@@ -1180,6 +1187,7 @@ def test_create_agent_session_services_ports_travis234_settings_resource_wiring(
         "investigating-security-targets",
         "subagent-delegation",
         "triaging-security-incidents",
+        "validating-security-findings",
         "web-search",
     ]
     assert result.session.settings_manager is settings

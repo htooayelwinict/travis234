@@ -39,6 +39,7 @@ def test_packaged_builtin_skills_exist() -> None:
         "investigating-security-targets",
         "subagent-delegation",
         "triaging-security-incidents",
+        "validating-security-findings",
         "web-search",
     }
 

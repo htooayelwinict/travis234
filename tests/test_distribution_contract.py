@@ -51,6 +51,7 @@ def test_packaged_builtin_skills_match_npm_distribution() -> None:
         "investigating-security-targets",
         "subagent-delegation",
         "triaging-security-incidents",
+        "validating-security-findings",
         "web-search",
     ):
         assert (python_skills / name / "SKILL.md").read_bytes() == (
