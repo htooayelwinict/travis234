@@ -184,6 +184,7 @@ class SessionToolController:
             "find": {"workspace": self._workspace},
             "ls": {"workspace": self._workspace},
             "bash": bash_options,
+            "tmux": {"workspace": self._workspace},
         }
 
     def _refresh_tool_registry(self) -> None:

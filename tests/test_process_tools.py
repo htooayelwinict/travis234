@@ -548,7 +548,15 @@ def test_agent_session_exposes_process_only_when_service_is_injected(tmp_path: P
         assert plain.get_tool_definition("process") is None
         assert "process" not in plain.get_active_tool_names()
         assert managed.get_tool_definition("process") is not None
-        assert managed.get_active_tool_names()[:5] == ["read", "bash", "process", "edit", "write"]
+        assert managed.get_active_tool_names() == [
+            "read",
+            "bash",
+            "process",
+            "tmux",
+            "edit",
+            "write",
+        ]
+        assert "Manage named long-lived tmux sessions" in managed.system_prompt
     finally:
         plain.shutdown()
         managed.shutdown()

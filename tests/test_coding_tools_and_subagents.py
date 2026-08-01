@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from tests._support_coding_agent import *  # noqa: F403
+from travis.coding_agent.tools import all_tool_names
 
 
 def test_truncate_head_line_limit() -> None:
@@ -1461,9 +1462,33 @@ def test_travis234_extension_tool_event_type_guards_are_public() -> None:
     assert is_tool_call_event_type("read", bash_call) is False
 
 def test_tool_factory_bundles(tmp_path: Path) -> None:
-    assert {t.name for t in create_coding_tools(str(tmp_path))} == {"read", "bash", "edit", "write"}
+    assert {t.name for t in create_coding_tools(str(tmp_path))} == {
+        "read",
+        "bash",
+        "tmux",
+        "edit",
+        "write",
+    }
     assert {t.name for t in create_read_only_tools(str(tmp_path))} == {"read", "grep", "find", "ls"}
-    assert len(create_all_tools(str(tmp_path))) == 7
+    assert len(create_all_tools(str(tmp_path))) == 8
+
+
+def test_tmux_is_builtin_and_default(tmp_path: Path) -> None:
+    assert "tmux" in all_tool_names
+    assert create_tool_definition("tmux", str(tmp_path)).name == "tmux"
+
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+    try:
+        assert session.get_active_tool_names() == [
+            "read",
+            "bash",
+            "tmux",
+            "edit",
+            "write",
+        ]
+        assert "Manage named long-lived tmux sessions" in session.system_prompt
+    finally:
+        session.shutdown()
 
 def test_agent_session_keeps_subagent_tools_opt_in_by_default(tmp_path: Path) -> None:
     session = AgentSession(cwd=str(tmp_path), model=faux_model())
