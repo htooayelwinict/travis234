@@ -21,6 +21,7 @@ TRAVIS234 // NEURAL TERMINAL ONLINE
 
 <p align="center">
   <a href="#quick-start">Quick start</a> ·
+  <a href="#travis234-offsec">OffSec</a> ·
   <a href="#inside-the-runtime">Architecture</a> ·
   <a href="#extensions">Extensions</a> ·
   <a href="#context-and-compaction">Compaction</a> ·
@@ -66,6 +67,50 @@ Travis234 is designed for developers who want an agent to carry a task—not one
     </td>
   </tr>
 </table>
+
+## Travis234 OffSec
+
+### A persistent AI terminal for investigation work
+
+Travis234 OffSec is the Kali-ready product lane for DFIR, authorized labs,
+security research, and private-environment investigation. It keeps the same
+persistent session and compaction runtime while working where the evidence,
+tools, and network routes already live.
+
+| Work where the evidence is | Keep the investigation moving |
+| --- | --- |
+| Run host-native on Kali for VPN routes, private ranges, local artifacts, and installed tools. | Use managed PTYs, follow-up input, tmux, long-running processes, persistent sessions, and compaction for work that exceeds one context window. |
+
+| Bring your model and provider | Sandbox when it fits |
+| --- | --- |
+| Use supported providers or an OpenAI-compatible proxy such as 9router. Model choice improves reasoning; Travis234 keeps process and session control dependable. | Launch a prebuilt unprivileged Kali image through npx when a disposable environment is useful. |
+
+Install host-native on Kali:
+
+```bash
+uv tool install --python 3.13 travis234-offsec
+travis234 --cwd ~/casework
+```
+
+Or launch the Kali sandbox:
+
+```bash
+npx @htooayelwinict/travis234-offsec --cwd ~/casework
+```
+
+For an OpenAI-compatible proxy in the sandbox, explicitly supply its dotenv
+file. On Docker Desktop, use `host.docker.internal` rather than `localhost` in
+the proxy base URL:
+
+```bash
+npx @htooayelwinict/travis234-offsec \
+  --cwd ~/casework \
+  --dotenv ~/.config/travis/9router.env
+```
+
+The operator supplies the workspace, network route, target scope, credentials,
+and authorization. Use the host-native path when a VPN route or local evidence
+must be visible directly. See the [OffSec operator manual](https://github.com/htooayelwinict/travis234/blob/offsec-agent/docs/offsec/manual.md).
 
 ## Quick start
 
