@@ -71,7 +71,7 @@ from travis.coding_agent.session_store import (
 )
 from travis.coding_agent.settings_manager import SettingsManager
 from travis.coding_agent.source_info import SourceInfo, create_synthetic_source_info
-from travis.coding_agent.system_prompt import BuildSystemPromptOptions, build_system_prompt
+from travis.coding_agent.system_prompt import BuildSystemPromptOptions, build_system_prompt, normalize_targets
 from travis.coding_agent.subagents import (
     CallableSubagentBackend,
     CodexExecBackend,
@@ -135,6 +135,7 @@ class _SessionRuntime(
         convert_to_llm: Optional[Callable[[list[AgentMessage]], list[Message]]] = None,
         custom_prompt: str | None = None,
         append_system_prompt: str | None = None,
+        targets: tuple[str, ...] | list[str] | None = None,
         transform_context=None,
         thinking_level: str = "off",
         scoped_models: list[ScopedModel] | None = None,
@@ -166,6 +167,7 @@ class _SessionRuntime(
         model_change_listener: Callable[[Model, Model], None] | None = None,
     ) -> None:
         self.cwd = cwd
+        self.targets = normalize_targets(targets)
         self.model_registry = model_registry or ModelRegistry.create(AuthStorage.create())
         self.model_registry.ensure_model(model)
         self.auth_storage = self.model_registry.auth_storage
@@ -397,6 +399,7 @@ def create_agent_session(
     allowed_tool_names: list[str] | None = None,
     excluded_tool_names: list[str] | None = None,
     convert_to_llm: Optional[Callable[[list[AgentMessage]], list[Message]]] = None,
+    targets: tuple[str, ...] | list[str] | None = None,
     extension_runner: ExtensionRunner | None = None,
     session_start_event: dict[str, object] | None = None,
     defer_session_start: bool = False,
@@ -414,6 +417,7 @@ def create_agent_session(
         allowed_tool_names=allowed_tool_names,
         excluded_tool_names=excluded_tool_names,
         convert_to_llm=convert_to_llm,
+        targets=targets,
         extension_runner=extension_runner,
         session_start_event=session_start_event,
         defer_session_start=defer_session_start,

@@ -2,13 +2,47 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date as _date
+from html import escape
 from pathlib import Path
 from typing import Optional
 
 from travis.coding_agent.config import get_packaged_context_paths
 from travis.coding_agent.resource_loader import Skill, format_skills_for_prompt
+
+
+MAX_TARGETS = 32
+MAX_TARGET_LENGTH = 2048
+
+
+def normalize_targets(values: Sequence[str] | None) -> tuple[str, ...]:
+    normalized: list[str] = []
+    for value in values or ():
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("target must be a non-empty string")
+        target = value.strip()
+        if len(target) > MAX_TARGET_LENGTH:
+            raise ValueError(
+                f"target must be at most {MAX_TARGET_LENGTH} characters"
+            )
+        if target not in normalized:
+            normalized.append(target)
+    if len(normalized) > MAX_TARGETS:
+        raise ValueError(f"at most {MAX_TARGETS} targets may be supplied")
+    return tuple(normalized)
+
+
+def _targets_section(targets: Sequence[str]) -> str:
+    if not targets:
+        return ""
+    rendered = "\n".join(f"- {escape(target)}" for target in targets)
+    return (
+        "\n\nOperator-authorized targets:\n"
+        f"{rendered}\n"
+        "Treat these labels as engagement context, not as proof of reachability or impact."
+    )
 
 
 @dataclass
@@ -21,6 +55,7 @@ class BuildSystemPromptOptions:
     append_system_prompt: str | None = None
     context_files: list[tuple[str, str]] = field(default_factory=list)  # (path, content)
     skills: list[Skill] = field(default_factory=list)
+    targets: tuple[str, ...] = ()
 
 
 _PREAMBLE = (
@@ -40,6 +75,7 @@ def build_system_prompt(options: BuildSystemPromptOptions) -> str:
         custom_prompt_has_read = options.selected_tools is None or "read" in options.selected_tools
         if custom_prompt_has_read and options.skills:
             prompt += format_skills_for_prompt(options.skills)
+        prompt += _targets_section(normalize_targets(options.targets))
         prompt += f"\nCurrent date: {today}"
         prompt += f"\nCurrent working directory: {prompt_cwd}"
         return prompt
@@ -86,6 +122,7 @@ def build_system_prompt(options: BuildSystemPromptOptions) -> str:
     prompt += _context_section(options.context_files)
     if has_read and options.skills:
         prompt += format_skills_for_prompt(options.skills)
+    prompt += _targets_section(normalize_targets(options.targets))
     prompt += f"\nCurrent date: {today}"
     prompt += f"\nCurrent working directory: {prompt_cwd}"
     return prompt

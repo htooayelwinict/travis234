@@ -21,6 +21,7 @@ from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.session_catalog import SessionCatalog
 from travis.coding_agent.session_store import SessionContextSnapshot, SessionStore
 from travis.coding_agent.settings_manager import SettingsManager
+from travis.coding_agent.system_prompt import normalize_targets
 from travis.coding_agent.tools import create_all_tool_definitions
 
 
@@ -196,10 +197,14 @@ def create_agent_session_from_services(options: dict[str, Any]) -> CreateAgentSe
     runtime = extensions_result.get("runtime")
     active_tool_names, allowed_tool_names = _resolve_tool_options(options)
     provider_retry_settings = _provider_retry_settings(services["settingsManager"])
+    raw_targets = options.get("targets", options.get("target"))
+    if isinstance(raw_targets, str):
+        raw_targets = [raw_targets]
     session = AgentSession(
         cwd=services["cwd"],
         agent_dir=services.get("agentDir"),
         model=model,
+        targets=normalize_targets(raw_targets),
         thinking_level=thinking_level or "off",
         scoped_models=options.get("scopedModels", options.get("scoped_models")),
         active_tool_names=active_tool_names,

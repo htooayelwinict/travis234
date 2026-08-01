@@ -32,6 +32,7 @@ from travis.coding_agent.project_trust import ProjectTrustContext
 from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.session_catalog import SessionCatalog, SessionCatalogError
 from travis.coding_agent.settings_manager import SettingsManager
+from travis.coding_agent.system_prompt import MAX_TARGET_LENGTH, normalize_targets
 from travis.tui.interactive_mode import InteractiveMode
 
 
@@ -46,6 +47,17 @@ def _positive_int_arg(value: str) -> int:
     if parsed <= 0:
         raise argparse.ArgumentTypeError("must be a positive integer")
     return parsed
+
+
+def _target_arg(value: str) -> str:
+    target = value.strip()
+    if not target:
+        raise argparse.ArgumentTypeError("target must be non-empty")
+    if len(target) > MAX_TARGET_LENGTH:
+        raise argparse.ArgumentTypeError(
+            f"target must be at most {MAX_TARGET_LENGTH} characters"
+        )
+    return target
 
 
 def _split_repeatable_csv(values: list[str] | None) -> list[str]:
@@ -334,6 +346,14 @@ def _build_parser(
         help="Dotenv file for Travis234 worker, compression, and provider settings; defaults to nearest .env in --cwd or parents",
     )
     parser.add_argument("--provider", help="Provider name for --model resolution")
+    parser.add_argument(
+        "--target",
+        dest="targets",
+        action="append",
+        type=_target_arg,
+        metavar="TARGET",
+        help="Operator-authorized target label; may be repeated",
+    )
     parser.add_argument("--model", help='Model pattern or ID, including optional "provider/id" form')
     parser.add_argument("--models", help="Comma-separated model patterns for scoped cycling")
     parser.add_argument("--thinking", help="Set thinking level: off, minimal, low, medium, high, xhigh, max")
@@ -640,6 +660,11 @@ def main(argv: list[str] | None = None) -> int:
         project_trust_context = ProjectTrustContext(has_ui=False, select=None)
 
     args.image_paths = image_paths
+    try:
+        targets = normalize_targets(args.targets)
+    except ValueError as error:
+        _dispose_loaded_extension_runtime(resource_loader)
+        parser.error(str(error))
     selected_tool_names = _split_repeatable_csv(args.tools)
     excluded_tool_names = _split_repeatable_csv(args.exclude_tools)
     allowed_tool_names = (
@@ -734,6 +759,7 @@ def main(argv: list[str] | None = None) -> int:
             project_trust_override=args.project_trust_override,
             project_trust_context=project_trust_context,
             model_registry=model_registry,
+            targets=targets,
             allowed_tool_names=allowed_tool_names,
             excluded_tool_names=excluded_tool_names,
             additional_extension_paths=extension_paths,

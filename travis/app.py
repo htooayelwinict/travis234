@@ -31,6 +31,7 @@ from travis.coding_agent.extensions import (
     apply_extension_flag_values,
 )
 from travis.coding_agent.settings_manager import SettingsManager
+from travis.coding_agent.system_prompt import normalize_targets
 from travis.coding_agent.auth_storage import AuthStorage
 from travis.coding_agent.model_registry import ModelRegistry
 from travis.coding_agent.processes.completions import ProcessCompletionStore
@@ -113,6 +114,7 @@ class CodingApp:
         session_id: str | None = None,
         agent_dir: str | None = None,
         model_registry: ModelRegistry | None = None,
+        targets: tuple[str, ...] | list[str] | None = None,
         allowed_tool_names: list[str] | None = None,
         excluded_tool_names: list[str] | None = None,
         additional_extension_paths: list[str] | None = None,
@@ -126,6 +128,7 @@ class CodingApp:
         conversation_log=None,
     ) -> None:
         self.cwd = str(Path(cwd).expanduser().resolve())
+        self.targets = normalize_targets(targets)
         self.event_trace = event_trace
         self.conversation_log = conversation_log
         self._agent_dir = str(Path(agent_dir or get_agent_dir()).expanduser().resolve())
@@ -285,6 +288,7 @@ class CodingApp:
         session = AgentSession(
             cwd=resolved_cwd,
             model=model,
+            targets=self.targets,
             transform_context=self._transform_context,
             thinking_level=thinking_level,
             scoped_models=self._scoped_models,

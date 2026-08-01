@@ -706,6 +706,7 @@ class SessionExtensionController:
             append_system_prompt=self._append_system_prompt,
             context_files=list(self._context_files),
             skills=self._resource_loader.get_skills()["skills"] if self._resource_loader else [],
+            targets=self.targets,
         )
 
     def _register_extension_provider(self, name: str, config: dict) -> None:

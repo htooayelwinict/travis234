@@ -3,6 +3,7 @@ from __future__ import annotations
 import travis.coding_agent.system_prompt as system_prompt_module
 
 from tests._support_coding_agent import *  # noqa: F403
+from travis.coding_agent import create_agent_session
 from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.skills import format_skills_for_prompt
 
@@ -187,6 +188,50 @@ def test_build_system_prompt_includes_tools_and_cwd(tmp_path: Path) -> None:
     assert "Use read to examine files instead of cat or sed." in prompt
     assert "Be concise in your responses" in prompt
     assert str(tmp_path).replace("\\", "/") in prompt
+
+
+def test_target_normalization_is_bounded_deduplicated_and_ordered() -> None:
+    assert system_prompt_module.normalize_targets(None) == ()
+    assert system_prompt_module.normalize_targets(
+        [" 10.10.10.10 ", "lab.local", "10.10.10.10"]
+    ) == ("10.10.10.10", "lab.local")
+    with pytest.raises(ValueError, match="at most 32 targets"):
+        system_prompt_module.normalize_targets([f"target-{index}" for index in range(33)])
+    with pytest.raises(ValueError, match="at most 2048 characters"):
+        system_prompt_module.normalize_targets(["x" * 2049])
+
+
+def test_agent_session_projects_targets_without_changing_cwd(tmp_path: Path) -> None:
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        targets=("10.10.10.10", "https://lab.local/a?x=1&y=2"),
+    )
+    try:
+        assert "Operator-authorized targets:" in session.system_prompt
+        assert "- 10.10.10.10" in session.system_prompt
+        assert "https://lab.local/a?x=1&amp;y=2" in session.system_prompt
+        assert f"Current working directory: {tmp_path}" in session.system_prompt
+        assert session.targets == (
+            "10.10.10.10",
+            "https://lab.local/a?x=1&y=2",
+        )
+    finally:
+        session.shutdown()
+
+
+def test_agent_session_factory_preserves_targets(tmp_path: Path) -> None:
+    result = create_agent_session(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        targets=["lab.local", "lab.local"],
+    )
+    session = result.session
+    try:
+        assert session.targets == ("lab.local",)
+        assert "- lab.local" in session.system_prompt
+    finally:
+        session.shutdown()
 
 def test_default_system_prompt_identifies_travis_and_prefers_file_tools(tmp_path: Path) -> None:
     prompt = build_system_prompt(BuildSystemPromptOptions(cwd=str(tmp_path)))

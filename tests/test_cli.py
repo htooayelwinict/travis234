@@ -342,6 +342,36 @@ def _seed_cli_session(agent_dir: Path, cwd: Path, *, session_id: str = "saved") 
     return Path(path)
 
 
+def test_cli_propagates_repeatable_targets_to_app(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+    _install_session_cli_fakes(monkeypatch, captured)
+
+    assert cli.main(
+        [
+            "--cwd",
+            str(tmp_path),
+            "--no-session",
+            "--plain",
+            "--target",
+            "10.10.10.10",
+            "--target",
+            "https://lab.local/path",
+            "inspect",
+        ]
+    ) == 0
+    assert captured["app_kwargs"]["targets"] == (
+        "10.10.10.10",
+        "https://lab.local/path",
+    )
+
+
+def test_cli_rejects_blank_target() -> None:
+    with pytest.raises(SystemExit, match="2"):
+        cli._build_parser(include_prompt=True).parse_args(
+            ["--target", "   ", "inspect"]
+        )
+
+
 def test_cli_trust_flags_are_mutually_exclusive() -> None:
     with pytest.raises(SystemExit, match="2"):
         cli.main(["--approve", "--no-approve", "--no-session", "prompt"])

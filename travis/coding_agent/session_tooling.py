@@ -242,6 +242,7 @@ class SessionToolController:
                 append_system_prompt=self._append_system_prompt,
                 context_files=self._context_files,
                 skills=self._resource_loader.get_skills()["skills"] if self._resource_loader else [],
+                targets=self.targets,
             )
         )
 

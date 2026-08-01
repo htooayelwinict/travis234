@@ -284,6 +284,36 @@ def test_coding_app_switch_session_rebinds_session_local_state_transactionally(t
     assert rebound == [app.session]
 
 
+def test_coding_app_preserves_targets_across_session_switch(tmp_path: Path) -> None:
+    first_cwd = tmp_path / "first"
+    second_cwd = tmp_path / "second"
+    first_cwd.mkdir()
+    model = faux_model()
+    agent_dir = tmp_path / "agent"
+    catalog = SessionCatalog(str(agent_dir))
+    initial_path, initial_id = catalog.new_session_path(str(first_cwd), "initial-targets")
+    target_path, _target_id = catalog.new_session_path(str(second_cwd), "target-targets")
+    _seed_restorable_app_session(Path(target_path), second_cwd, model)
+    app = CodingApp(
+        cwd=str(first_cwd),
+        model=model,
+        enable_tui=False,
+        session_path=initial_path,
+        session_id=initial_id,
+        agent_dir=str(agent_dir),
+        targets=("lab.local", "10.10.10.10"),
+    )
+    try:
+        app.switch_session(target_path)
+
+        assert app.targets == ("lab.local", "10.10.10.10")
+        assert app.session.targets == app.targets
+        assert "- lab.local" in app.session.system_prompt
+        assert "- 10.10.10.10" in app.session.system_prompt
+    finally:
+        app.close()
+
+
 def test_coding_app_failed_switch_keeps_original_session_and_subscriptions(tmp_path: Path, monkeypatch) -> None:
     model = faux_model()
     agent_dir = tmp_path / "agent"
