@@ -708,7 +708,6 @@ class SessionExtensionController:
             skills=self._resource_loader.get_skills()["skills"] if self._resource_loader else [],
             targets=self.targets,
         )
-
     def _register_extension_provider(self, name: str, config: dict) -> None:
         _validate_extension_provider_config(name, config)
         previous_registration = self._extension_provider_registrations.pop(name, None)

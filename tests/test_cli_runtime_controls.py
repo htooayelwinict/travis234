@@ -382,7 +382,10 @@ def test_explicit_skill_is_temporary_and_untrusted_project_skill_stays_blocked(
         skills = app.session._resource_loader.get_skills()["skills"]
         assert [skill.name for skill in skills] == [
             "operator-skill",
+            "investigating-security-targets",
             "subagent-delegation",
+            "triaging-security-incidents",
+            "validating-security-findings",
             "web-search",
         ]
         assert skills[0].source_info.source == "local"

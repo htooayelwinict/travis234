@@ -132,6 +132,7 @@ def test_agent_session_exposes_default_coding_tools_for_greeting(tmp_path: Path)
     assert set(seen["tools"]) == {
         "read",
         "bash",
+        "tmux",
         "edit",
         "write",
     }
@@ -151,6 +152,7 @@ def test_agent_session_keeps_default_coding_tools_for_repo_inspection_prompt(tmp
     assert set(seen["tools"]) == {
         "read",
         "bash",
+        "tmux",
         "edit",
         "write",
     }
@@ -1324,16 +1326,18 @@ def test_agent_session_extension_command_context_exposes_system_prompt_options(t
     assert [options.selected_tools for options in seen_options] == [
         [
             "read",
-                "bash",
-                "edit",
-                "write",
+            "bash",
+            "tmux",
+            "edit",
+            "write",
             "mutated_tool",
         ],
         [
             "read",
-                "bash",
-                "edit",
-                "write",
+            "bash",
+            "tmux",
+            "edit",
+            "write",
             "mutated_tool",
         ],
     ]
@@ -1417,7 +1421,13 @@ def test_agent_session_create_replaced_session_context_rebinds_message_senders(t
 
     assert ctx.cwd == str(tmp_path)
     assert ctx.get_session_name() is None
-    assert [tool["name"] for tool in ctx.get_all_tools()][:4] == ["read", "bash", "edit", "write"]
+    assert [tool["name"] for tool in ctx.get_all_tools()][:5] == [
+        "read",
+        "bash",
+        "tmux",
+        "edit",
+        "write",
+    ]
     assert custom_messages[-1].role == "custom"
     assert custom_messages[-1].custom_type == "replacement-note"
     assert user_messages is not None
@@ -1453,6 +1463,7 @@ def test_agent_session_extension_command_context_exposes_session_and_tool_metada
     assert seen["active_before"] == [
         "read",
         "bash",
+        "tmux",
         "edit",
         "write",
     ]
