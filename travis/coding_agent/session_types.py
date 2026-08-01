@@ -110,6 +110,8 @@ _SUBAGENT_OPT_IN_TERMS = (
     "/subagents",
     "subagent",
     "subagents",
+    "child",
+    "children",
     "child agent",
     "child-agent",
     "delegate",

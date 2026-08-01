@@ -3,7 +3,7 @@ from __future__ import annotations
 from tests._support_coding_agent import *  # noqa: F403
 from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import ProcessOwner
-from travis.coding_agent.session_types import _SUBAGENT_TOOL_NAMES
+from travis.coding_agent.session_types import _SUBAGENT_TOOL_NAMES, _prompt_requests_subagent_tools
 from travis.coding_agent.subagents import OFFSEC_SUBAGENT_TOOLS
 from travis.coding_agent.tools import all_tool_names
 
@@ -1509,6 +1509,15 @@ def test_agent_session_keeps_subagent_tools_opt_in_by_default(tmp_path: Path) ->
     assert expected.isdisjoint(set(session.get_active_tool_names()))
     assert expected <= {tool["name"] for tool in session.get_all_tools()}
     assert "spawn_subagent" not in session.system_prompt
+
+
+def test_parallel_children_prompt_activates_parent_subagent_tools() -> None:
+    prompt = (
+        "Spawn exactly three parallel children with disjoint ownership: "
+        "evidence/a.txt, evidence/b.txt, and evidence/c.txt."
+    )
+
+    assert _prompt_requests_subagent_tools(prompt) is True
 
 
 def test_internal_child_inherits_process_service_targets_and_unique_owner(tmp_path: Path) -> None:
