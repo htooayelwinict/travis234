@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from tests._support_coding_agent import *  # noqa: F403
+from travis.coding_agent.processes.service import ProcessSessionService
+from travis.coding_agent.processes.types import ProcessOwner
+from travis.coding_agent.subagents import OFFSEC_SUBAGENT_TOOLS
 from travis.coding_agent.tools import all_tool_names
 
 
@@ -1505,6 +1508,45 @@ def test_agent_session_keeps_subagent_tools_opt_in_by_default(tmp_path: Path) ->
     assert expected.isdisjoint(set(session.get_active_tool_names()))
     assert expected <= {tool["name"] for tool in session.get_all_tools()}
     assert "spawn_subagent" not in session.system_prompt
+
+
+def test_internal_child_inherits_process_service_targets_and_unique_owner(tmp_path: Path) -> None:
+    child_stream = create_faux_provider(
+        lambda model, _context: text_response_events(model, "child complete")
+    ).stream_simple
+    service = ProcessSessionService(directory=tmp_path / "processes")
+    parent_owner = ProcessOwner("app-fixed", str(tmp_path), "agent")
+    parent = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        stream_fn=child_stream,
+        process_service=service,
+        process_owner=parent_owner,
+        targets=("lab.local",),
+    )
+    captured: dict[str, object] = {}
+
+    def recording_factory(**kwargs):
+        captured.update(kwargs)
+        return AgentSession(**kwargs)
+
+    parent._session_factory = recording_factory
+    task = parent._build_subagent_task("shell-worker", "run an interactive command")
+    try:
+        result = parent._run_internal_subagent(task)
+        assert result.status == "completed"
+        assert result.summary == "child complete"
+        child_owner = captured["process_owner"]
+        assert captured["process_service"] is service
+        assert captured["targets"] == ("lab.local",)
+        assert captured["allowed_tool_names"] == list(OFFSEC_SUBAGENT_TOOLS)
+        assert child_owner != parent_owner
+        assert child_owner.workspace_key == parent_owner.workspace_key
+        assert child_owner.origin == "agent"
+        assert child_owner.app_instance_id == f"app-fixed:subagent:{task.id}"
+    finally:
+        parent.shutdown()
+        service.close()
 
 def test_spawn_subagent_tool_rejects_model_facing_safety_overrides(tmp_path: Path) -> None:
     session = AgentSession(cwd=str(tmp_path), model=faux_model())

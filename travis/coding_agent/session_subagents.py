@@ -383,10 +383,20 @@ class SessionSubagentController:
     def _subagent_tool_result(self, content: str, details: dict[str, object]) -> AgentToolResult:
         return AgentToolResult(content=[TextContent(text=content)], details=details)
 
+    def _subagent_process_owner(self, task: SubagentTask) -> ProcessOwner | None:
+        if self.process_owner is None:
+            return None
+        return replace(
+            self.process_owner,
+            app_instance_id=f"{self.process_owner.app_instance_id}:subagent:{task.id}",
+            origin="agent",
+        )
+
     def _run_internal_subagent(self, task: SubagentTask) -> SubagentResult:
         started = int(time.time() * 1000)
         tool_trace: list[dict[str, object]] = []
         trace_by_call_id: dict[str, dict[str, object]] = {}
+        child_owner = self._subagent_process_owner(task)
         child = self._session_factory(
             cwd=task.cwd,
             model=self.model,
@@ -394,6 +404,9 @@ class SessionSubagentController:
             allowed_tool_names=list(task.allowed_tools),
             thinking_level=self.thinking_level,
             stream_fn=self._stream_fn,
+            targets=self.targets,
+            process_service=self.process_service if child_owner is not None else None,
+            process_owner=child_owner,
         )
         child.agent.subscribe(self._subagent_tool_trace_listener(task, child, tool_trace, trace_by_call_id))
         child.agent._after_tool_call = self._subagent_after_tool_call_tracer(  # noqa: SLF001 - parent observes delegated child tools.

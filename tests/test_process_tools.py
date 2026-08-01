@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import sys
@@ -23,6 +24,7 @@ from travis.coding_agent.processes.types import (
     ProcessSnapshot,
     ProcessState,
 )
+from travis.coding_agent.subagents import OFFSEC_SUBAGENT_TOOLS
 from travis.coding_agent.tools import process as process_tool_module
 from travis.coding_agent.tools.bash import BashOperations, create_bash_tool, create_bash_tool_definition
 from travis.coding_agent.tools.process import PROCESS_SCHEMA, create_process_tool, create_process_tool_definition
@@ -631,6 +633,79 @@ def test_agent_loop_continues_after_bash_yields_without_waiting_for_exit(tmp_pat
         assert tool_result.details["status"] == "running"
     finally:
         session.shutdown()
+        service.close()
+
+
+def test_internal_child_can_send_follow_up_input_to_managed_pty(tmp_path: Path) -> None:
+    model = faux_model()
+    service = ProcessSessionService(directory=tmp_path / ".processes")
+    parent_owner = ProcessOwner("app", str(tmp_path.resolve()), "agent")
+    calls = {"count": 0}
+    command = python_command(
+        "import sys; print('READY', flush=True); value=input(); print('PTY-CHILD-OK:' + value, flush=True)"
+    )
+
+    def stream_fn(active_model, context, options):
+        calls["count"] += 1
+        tool_results = [message for message in context.messages if message.role == "toolResult"]
+        if calls["count"] == 1:
+            events = tool_call_response_events(
+                active_model,
+                "bash",
+                {"command": command, "stdin": "open", "tty": True, "yield_time_ms": 0},
+                call_id="child-bash",
+            )
+        elif calls["count"] == 2:
+            started = tool_results[-1]
+            events = tool_call_response_events(
+                active_model,
+                "process",
+                {
+                    "action": "write",
+                    "session_id": started.details["sessionId"],
+                    "input": "FOLLOW-UP",
+                    "yield_time_ms": 0,
+                },
+                call_id="child-write",
+            )
+        elif calls["count"] == 3:
+            written = tool_results[-1]
+            events = tool_call_response_events(
+                active_model,
+                "process",
+                {
+                    "action": "wait",
+                    "session_id": written.details["sessionId"],
+                    "cursor": written.details["nextCursor"],
+                    "wait_time_ms": 60_000,
+                },
+                call_id="child-wait",
+            )
+        else:
+            events = text_response_events(active_model, "Confirmed PTY-CHILD-OK:FOLLOW-UP")
+        return create_faux_provider(lambda _model, _context: events).stream_simple(active_model, context, options)
+
+    parent = AgentSession(
+        cwd=str(tmp_path),
+        model=model,
+        stream_fn=stream_fn,
+        process_service=service,
+        process_owner=parent_owner,
+    )
+    task = parent._build_subagent_task("pty-worker", "run the interactive PTY check")
+    child_owner = parent._subagent_process_owner(task)
+    try:
+        result = parent._run_internal_subagent(task)
+
+        assert result.status == "completed"
+        assert [entry["toolName"] for entry in result.tool_trace] == ["bash", "process", "process"]
+        assert "PTY-CHILD-OK:FOLLOW-UP" in json.dumps(result.tool_trace)
+        assert child_owner is not None
+        assert len(service.list(child_owner)) == 1
+        assert service.list(parent_owner) == ()
+        assert tuple(task.allowed_tools) == OFFSEC_SUBAGENT_TOOLS
+    finally:
+        parent.shutdown()
         service.close()
 
 
