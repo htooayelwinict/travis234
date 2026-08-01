@@ -12,9 +12,9 @@ def test_config_uses_python_distribution_metadata(monkeypatch) -> None:
         patch.setattr(metadata, "version", lambda distribution: "9.8.7")
         reloaded = importlib.reload(config)
 
-        assert reloaded.PACKAGE_NAME == "travis234"
+        assert reloaded.PACKAGE_NAME == "travis234-offsec"
         assert reloaded.APP_NAME == "travis234"
-        assert reloaded.APP_TITLE == "Travis234"
+        assert reloaded.APP_TITLE == "Travis234 OffSec"
         assert reloaded.VERSION == "9.8.7"
 
     importlib.reload(config)

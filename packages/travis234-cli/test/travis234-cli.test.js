@@ -20,7 +20,7 @@ import {
 } from "../bin/travis234.js";
 
 test("package exposes travis234 binaries only", () => {
-  assert.equal(packageJson.name, "@htooayelwinict/travis234");
+  assert.equal(packageJson.name, "@htooayelwinict/travis234-offsec");
   assert.deepEqual(packageJson.bin, { travis234: "bin/travis234.js" });
   assert.equal(fs.existsSync(path.join(packageRoot, packageJson.bin.travis234)), true);
 });

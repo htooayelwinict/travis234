@@ -1448,8 +1448,8 @@ def test_coding_agent_package_exports_travis_config_paths(tmp_path: Path, monkey
     )
 
     assert APP_NAME == "travis234"
-    assert APP_TITLE == "Travis234"
-    assert PACKAGE_NAME == "travis234"
+    assert APP_TITLE == "Travis234 OffSec"
+    assert PACKAGE_NAME == "travis234-offsec"
     assert CONFIG_DIR_NAME == ".travis234"
     assert ENV_AGENT_DIR == "TRAVIS234_CODING_AGENT_DIR"
     assert get_agent_dir() == str(agent_dir)

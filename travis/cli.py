@@ -1,4 +1,4 @@
-"""CLI entrypoint for the Travis234 terminal coding agent."""
+"""CLI entrypoint for the Travis234 OffSec terminal agent."""
 
 from __future__ import annotations
 
@@ -321,7 +321,7 @@ def _build_parser(
     extension_runtime: ExtensionRunner | None = None,
 ) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run the Travis234 terminal coding agent",
+        description="Travis234 OffSec terminal agent",
         add_help=False,
     )
     parser.add_argument("-h", "--help", action="store_true", help="Show this help message and exit")

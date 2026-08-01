@@ -7,9 +7,9 @@ import os
 from pathlib import Path
 
 
-PACKAGE_NAME = "travis234"
+PACKAGE_NAME = "travis234-offsec"
 APP_NAME = "travis234"
-APP_TITLE = "Travis234"
+APP_TITLE = "Travis234 OffSec"
 CONFIG_DIR_NAME = ".travis234"
 ENV_AGENT_DIR = "TRAVIS234_CODING_AGENT_DIR"
 ENV_SESSION_DIR = "TRAVIS234_CODING_AGENT_SESSION_DIR"

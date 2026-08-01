@@ -51,7 +51,7 @@ def run_container_smoke(image: str) -> None:
                 "--help",
             ]
         )
-        if "--profile" not in extension_help or "Container extension profile" not in extension_help:
+        if "--smoke-channel" not in extension_help or "Container smoke channel" not in extension_help:
             raise RuntimeError("container extension flag help is missing its registered schema")
         installed_modes = _run_mounted_python(
             image,
@@ -156,8 +156,8 @@ def prepare_extension_flag_smoke(workspace: Path) -> Path:
     extension = workspace / "extension-flag-smoke.py"
     extension.write_text(
         "def extension(travis):\n"
-        "    travis.register_flag('profile', "
-        "{'type': 'string', 'description': 'Container extension profile'})\n",
+        "    travis.register_flag('smoke-channel', "
+        "{'type': 'string', 'description': 'Container smoke channel'})\n",
         encoding="utf-8",
     )
     extension.chmod(0o644)
