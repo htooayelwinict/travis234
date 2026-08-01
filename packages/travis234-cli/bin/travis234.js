@@ -8,11 +8,14 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const PUBLIC_IMAGE_PREFIX = "ghcr.io/htooayelwinict/travis234-offsec:";
+const PACKAGE_VERSION = JSON.parse(
+  fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"),
+).version;
 const DEFAULT_IMAGE =
   process.env.TRAVIS234_IMAGE ||
   process.env.TRAVIS234_SANDBOX_IMAGE ||
-  "ghcr.io/htooayelwinict/travis234-offsec:production";
-const PUBLIC_IMAGE_PREFIX = "ghcr.io/htooayelwinict/travis234-offsec:";
+  `${PUBLIC_IMAGE_PREFIX}${PACKAGE_VERSION}`;
 const DEFAULT_PULL_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const CONTAINER_WORKSPACE = "/workspace";
 const CONTAINER_HOME = "/travis-home";
@@ -476,7 +479,7 @@ Usage:
 
 Options:
   --cwd <path>          Host workspace to mount as /workspace. Defaults to current directory.
-  --image <name>        Docker image. Defaults to TRAVIS234_IMAGE, TRAVIS234_SANDBOX_IMAGE, or ghcr.io/htooayelwinict/travis234:production.
+  --image <name>        Docker image. Defaults to TRAVIS234_IMAGE, TRAVIS234_SANDBOX_IMAGE, or the installed OffSec release image.
   --agent-home <path>   Sandbox state directory. Defaults to ~/.travis234/sandbox-home.
   --agents-file <path>  Copy an explicit AGENTS.md-style file into sandbox context.
   --with-skills <path>  Copy an extra skill file or directory into the sandbox agent/skills directory.

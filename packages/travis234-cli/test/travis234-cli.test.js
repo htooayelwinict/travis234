@@ -10,6 +10,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const packageRoot = path.resolve(__dirname, "..");
 const packageJson = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
+const expectedDefaultImage = `ghcr.io/htooayelwinict/travis234-offsec:${packageJson.version}`;
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 import {
   buildDockerCommand,
@@ -171,13 +172,13 @@ test("ghcr workflow targets travis234-offsec production image", () => {
   assert.match(workflow, /file: Dockerfile\.release/);
 });
 
-test("package defaults to travis234 production GHCR image and auto pull", () => {
+test("package defaults to its matching OffSec GHCR image and auto pull", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "travis234-cli-"));
   const config = parseArgs(["--agent-home", path.join(root, "agent-home")]);
 
-  assert.equal(config.image, "ghcr.io/htooayelwinict/travis234-offsec:production");
+  assert.equal(config.image, expectedDefaultImage);
   assert.equal(config.pull, "auto");
-  assert.deepEqual(buildPullCommand(config), ["docker", "pull", "ghcr.io/htooayelwinict/travis234-offsec:production"]);
+  assert.deepEqual(buildPullCommand(config), ["docker", "pull", expectedDefaultImage]);
   assert.equal(shouldUseIsolatedDockerConfig(config, {}), true);
 });
 
@@ -198,7 +199,7 @@ test("package auto pull runs when pull cache is stale", () => {
 
   assert.deepEqual(
     buildPullCommand(config, { nowMs: 1000 + 6 * 60 * 60 * 1000 + 1 }),
-    ["docker", "pull", "ghcr.io/htooayelwinict/travis234-offsec:production"],
+    ["docker", "pull", expectedDefaultImage],
   );
 });
 
@@ -213,7 +214,7 @@ test("package pull flags override auto pull cache", () => {
   assert.deepEqual(buildPullCommand(forceConfig, { nowMs: 2000 }), [
     "docker",
     "pull",
-    "ghcr.io/htooayelwinict/travis234-offsec:production",
+    expectedDefaultImage,
   ]);
   assert.deepEqual(buildPullCommand(skipConfig, { nowMs: 1000 + 6 * 60 * 60 * 1000 + 1 }), []);
 });
@@ -240,8 +241,8 @@ test("package builds install-capable docker command for npx-style use", () => {
   assert.ok(command.includes(`${workspace}:/workspace:rw`));
   assert.ok(command.includes(`${config.agentHome}:/travis-home:rw`));
   assert.equal(command.some((value) => value === "/:/workspace:rw" || value.includes("docker.sock")), false);
-  assert.ok(command.includes("ghcr.io/htooayelwinict/travis234-offsec:production"));
-  assert.deepEqual(command.slice(-4), ["ghcr.io/htooayelwinict/travis234-offsec:production", "--cwd", "/workspace", "hello"]);
+  assert.ok(command.includes(expectedDefaultImage));
+  assert.deepEqual(command.slice(-4), [expectedDefaultImage, "--cwd", "/workspace", "hello"]);
 });
 
 test("package does not forward host provider credentials into the sandbox", () => {
@@ -278,7 +279,7 @@ test("package forwards session modes while mounting persistent app-owned state",
     assert.ok(command.includes("TRAVIS234_CODING_AGENT_DIR=/travis-home/agent"));
     assert.deepEqual(
       command.slice(-(appArgs.length + 3)),
-      ["ghcr.io/htooayelwinict/travis234-offsec:production", "--cwd", "/workspace", ...appArgs],
+      [expectedDefaultImage, "--cwd", "/workspace", ...appArgs],
     );
   }
 });
