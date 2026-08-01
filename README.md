@@ -59,6 +59,46 @@ See the [operator manual](docs/offsec/manual.md) for setup and terminal usage an
 the [seven-scenario TUI protocol](docs/offsec/tui-test-protocol.md) for exact
 installed-entrypoint qualification.
 
+## Build and run on a Kali host
+
+For a VPN-attached lab, build and run the branch directly on the Kali host. This
+uses the normal Python package, not Docker, so the agent shares Kali's VPN route,
+tooling, and network namespace.
+
+```bash
+git clone --branch offsec-agent --single-branch \
+  https://github.com/htooayelwinict/travis234.git travis234-offsec
+cd travis234-offsec
+
+# Requires Python 3.13 and uv. Sync the project and run from source.
+uv sync
+mkdir -p ~/agent-work
+uv run travis234 --cwd ~/agent-work --target 10.10.10.10
+```
+
+Build the distributable wheel and install it as a normal host command:
+
+```bash
+uv build
+uv tool install --python 3.13 --force dist/travis234_offsec-*.whl
+travis234 --cwd ~/agent-work --target 10.10.10.10
+```
+
+For a repeatable local Kali image instead, build it from the checkout and log in
+inside the container with `/login`:
+
+```bash
+docker build --no-cache -f Dockerfile.release -t travis234-offsec:local .
+docker run --rm -it \
+  -v "$HOME/agent-work:/workspace" \
+  -v "$HOME/.travis234/sandbox-home:/travis-home" \
+  travis234-offsec:local --cwd /workspace --target 10.10.10.10
+```
+
+The host-native option is the right choice when the target is reachable only over
+the Kali host's VPN. The Docker option is useful for a self-contained Kali tool
+environment; it does not automatically inherit a host-only VPN route.
+
 ## Tactical runtime
 
 The agent follows Orient, Acquire, Analyze, Act, Verify, and Record. It separates
