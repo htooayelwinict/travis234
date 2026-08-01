@@ -1,97 +1,88 @@
-# travis234
+# @htooayelwinict/travis234-offsec
 
-Thin npm launcher for the travis234 Docker sandbox.
+Thin npm launcher for the Travis234 OffSec Kali image.
 
-## Usage
+## Start
 
-Run with `npx`:
-
-```bash
-npx @htooayelwinict/travis234 --cwd .
-```
-
-Or install globally:
+Run directly with `npx`:
 
 ```bash
-npm install -g @htooayelwinict/travis234
-travis234 --cwd .
+npx @htooayelwinict/travis234-offsec --cwd ~/agent-work -- --target 10.129.1.23
 ```
 
-The launcher pulls and runs:
+Or install the launcher globally:
 
-```text
-ghcr.io/htooayelwinict/travis234:production
+```bash
+npm install -g @htooayelwinict/travis234-offsec
+travis234 --cwd ~/agent-work -- --target 10.129.1.23
 ```
 
-It mounts only the selected `--cwd` as `/workspace`, stores sandbox state in `~/.travis234/sandbox-home`, copies a user-created host `~/.travis234/agent/AGENTS.md` into the sandbox agent context when present, and copies host `~/.travis234/agent/skills` into the sandbox.
+The launcher pulls `ghcr.io/htooayelwinict/travis234-offsec:production`, mounts
+only the chosen `--cwd` read-write at `/workspace`, and mounts
+`~/.travis234/sandbox-home` at `/travis-home`. Sessions therefore persist at
+`/travis-home/agent/sessions/` when a disposable container exits. The host `.env`
+and provider credentials are not mounted or forwarded; use `/login` inside the
+TUI. The image runs as the unprivileged `travis` user.
 
-On startup, the package restores bundled skills only when they are missing:
+Host-native Python is preferred when a lab VPN route or local evidence must be
+visible directly. The Kali container is optional and must already have network
+reachability supplied by the operator's environment.
 
-- `subagent-delegation` for bounded reviewer or worker delegation
-- `web-search` for source-backed web research
+## Launcher options
 
-Existing user files are never overwritten: a same-named user skill takes precedence over its bundled fallback. The container also carries these skills in the installed Python resources, where Travis234 discovers them lazily if no user copy exists.
-
-## Options
+Launcher flags precede `--`; all following arguments go to Travis234:
 
 ```bash
 travis234 --cwd /path/to/workspace
 travis234 --cwd . --dry-run
 travis234 --cwd . --no-pull
-travis234 --cwd . --image ghcr.io/htooayelwinict/travis234:production
-```
-
-The host `.env` file is not mounted or passed automatically. Use `/login` inside the TUI for API keys.
-
-## Extensions
-
-Travis234 discovers global extensions from `~/.travis234/agent/extensions/` and project extensions from `.travis234/extensions/`. Use `/reload` in a running TUI after adding or changing an extension. Extensions execute with Travis234's permissions; install only trusted code. Unknown workspaces do not load project settings or executable resources until trust is resolved. Use `--approve` or `--no-approve` for a process-only decision, or `/trust` and then `/reload` for a saved decision. Travis JavaScript extensions do not run directly in the Python extension runtime and require a Python adapter.
-
-You can describe the extension you want in ordinary language. The agent is shown the installed extension guide for extension work and can use it to create or repair the Python extension, validate it with `python -m py_compile`, reload it with `/reload`, and test the new command or tool with you. No extension-authoring skill is required. For example: “Create a project extension that adds a `/review` command, validate it, reload it, and help me test it.”
-
-## Sessions
-
-The launcher mounts `~/.travis234/sandbox-home` at `/travis-home`, so JSONL
-sessions persist when the disposable container exits.
-
-```bash
+travis234 --cwd . --pull
+travis234 --cwd . --image ghcr.io/htooayelwinict/travis234-offsec:production
 travis234 --cwd . -- --continue
 travis234 --cwd . -- --resume
 travis234 --cwd . -- --session <path-or-session-id>
 travis234 --cwd . -- --no-session
 ```
 
-Default startup creates a new persistent session. Inside the TUI, use `/resume`
-to switch, `/new` to start fresh, and `/session` to inspect the active file and
-session ID.
+The selected workspace is never replaced with a broad host mount. The launcher
+copies a user-created `~/.travis234/agent/AGENTS.md` into container agent context
+when present and copies user skills from `~/.travis234/agent/skills/`.
 
-## Managed commands
+## Terminal strategy
 
-Coding-agent `bash` calls use a default 10-second yield. The yield does not kill
-the command and does not change the command timeout. A command still running at
-the end of that window returns an opaque `proc_...` handle. An omitted execution
-timeout lets the job run until natural exit, explicit process control, an output
-limit, or travis234 shutdown.
+The agent uses `bash` for finite commands, `bash` plus `process` for an interactive
+PTY and follow-up input in the current app session, and `tmux` for listeners,
+callbacks, relays, servers, long waits, or work that must survive turns.
 
-Use `process.poll` for quick or interactive incremental observation. Use
-`process.wait` to wait from 1 to 900 seconds for terminal state without returning
-on every output chunk. The wait duration does not change the command timeout. If
-the wait deadline expires first, it returns `running`; the command is not killed,
-and another wait can continue from the returned cursor.
+`process.wait` waits for terminal state and does not change the command timeout.
+If its deadline expires, the command is not killed; wait again from the returned
+cursor. Output is bounded to 64 MiB per process and reports `output_limit` when a
+producer crosses that bound. Travis234 cannot reattach a running process after an application restart.
+User `!command` and `!!command` run asynchronously; `!!`
+output is excluded from model context.
 
-Live sanitized output is bounded to 64 MiB per process and 512 MiB app-wide by
-default. Crossing a spool limit stops only that producer and reports `failed`
-with `output_limit`; elapsed time alone never produces that failure. Terminal
-metadata and output are recoverable for seven days, subject to a bounded 256 MiB
-completion store. travis234 cannot reattach a running process after an application restart
-or container restart.
+See the full [operator manual](../../docs/offsec/manual.md) and
+[seven-scenario TUI protocol](../../docs/offsec/tui-test-protocol.md).
 
-The agent can poll, wait, write input, resize an opt-in PTY, interrupt, terminate,
-kill, and list workspace-owned processes. `/processes` refreshes and controls both
-agent and user jobs. Ctrl-C targets the focused user command first, then one active
-agent turn, and only uses the idle-TUI exit behavior when neither is active.
+## Skills
 
-User `!command` and `!!command` run asynchronously; `!!` output remains excluded
-from model context. Extension `user_bash` handlers preserve their
-payload and launch order, run on the command worker, and custom operations must
-honor cancellation.
+The package seeds bundled `investigating-security-targets`,
+`triaging-security-incidents`, `validating-security-findings`,
+`subagent-delegation`, and `web-search` skills only when missing. A same-named user skill takes precedence
+over its bundled fallback. Installed Python resources
+carry the same lazy skill set.
+
+## Extensions
+
+Global extensions are discovered from `~/.travis234/agent/extensions/`; project
+extensions are discovered from `.travis234/extensions/`. Use `/reload` after a
+change. Travis JavaScript extensions do not run directly in the Python extension
+runtime and require a Python adapter.
+
+Ask the agent to author one in ordinary language. It sees the installed extension guide,
+can validate it with `python -m py_compile`, and can use `/reload` to test
+it. No extension-authoring skill is required.
+
+Explicit `--extension PATH`, `--skill PATH`, `--prompt-template PATH`, and
+`--theme PATH` flags are forwarded after `--`. Session modes and controls are
+forwarded the same way.

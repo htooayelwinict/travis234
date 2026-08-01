@@ -87,7 +87,7 @@ def test_cli_and_tui_use_the_travis234_product_name() -> None:
         encoding="utf-8"
     )
 
-    assert "Run the Travis234 terminal coding agent" in cli_text
+    assert 'description="Travis234 OffSec terminal agent"' in cli_text
     assert '"Travis234 TUI\\n"' in session_commands
     assert "travis travis+travis" not in cli_text + session_commands
 
