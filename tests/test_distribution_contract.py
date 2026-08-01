@@ -27,7 +27,7 @@ def test_offsec_release_uses_python_and_npm_compatible_prerelease_versions() -> 
     import json
 
     python_expected = "2.4.0.dev1"
-    npm_expected = "1.0.2"
+    npm_expected = "2.4.0-offsec.2"
     python_metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     workspace = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
     npm_package = json.loads(
