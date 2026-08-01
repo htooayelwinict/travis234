@@ -1,4 +1,4 @@
-name: travis234 release image
+name: travis234-offsec release image
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
       ref:
         description: "Git ref to build into the image"
         required: false
-        default: "main"
+        default: "offsec-agent"
       image_tag:
         description: "GHCR image tag"
         required: false
@@ -19,7 +19,7 @@ permissions:
   packages: write
 
 env:
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/travis234
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/travis234-offsec
 
 jobs:
   test:
@@ -64,9 +64,9 @@ jobs:
           load: true
           push: false
           no-cache: true
-          tags: travis234:hardening-smoke
+          tags: travis234-offsec:refactor-smoke
       - name: Run installed image smoke
-        run: python evals/container_smoke.py --image travis234:hardening-smoke
+        run: python evals/container_smoke.py --image travis234-offsec:refactor-smoke
 
   build-and-push:
     needs: [test, image-smoke]
@@ -89,7 +89,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push Travis234 image
+      - name: Build and push Travis234 OffSec image
         uses: docker/build-push-action@v7
         with:
           context: .

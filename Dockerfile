@@ -1,21 +1,38 @@
-FROM python:3.13-slim
+FROM node:20-bookworm-slim AS node-runtime
+
+FROM kalilinux/kali-rolling:latest
 
 ENV PYTHONUNBUFFERED=1 \
     TRAVIS234_NO_VENV_REEXEC=1 \
     DEBIAN_FRONTEND=noninteractive \
     HOME=/travis-home \
-    TRAVIS234_CODING_AGENT_DIR=/travis-home/agent
+    TRAVIS234_CODING_AGENT_DIR=/travis-home/agent \
+    VIRTUAL_ENV=/opt/travis234-venv \
+    PATH="/opt/travis234-venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         bash \
         ca-certificates \
         curl \
+        file \
         git \
-        nodejs \
-        npm \
+        iproute2 \
+        jq \
+        libstdc++6 \
+        netcat-openbsd \
+        nmap \
+        openssl \
+        python3 \
+        python3-pip \
+        python3-venv \
         ripgrep \
+        socat \
         sudo \
+        tmux \
+    && python3 -m venv /opt/travis234-venv \
+    && cp --dereference --remove-destination \
+        /usr/bin/python3 /opt/travis234-venv/bin/python3 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --home-dir /travis-home --shell /bin/bash travis \
     && mkdir -p /workspace /travis-home/agent /opt/travis234 \
@@ -23,13 +40,18 @@ RUN apt-get update \
     && printf 'Defaults:travis env_keep += "DEBIAN_FRONTEND"\ntravis ALL=(root) NOPASSWD: /usr/bin/apt-get, /usr/bin/apt, /usr/bin/dpkg\n' > /etc/sudoers.d/travis-packages \
     && chmod 0440 /etc/sudoers.d/travis-packages
 
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+
 WORKDIR /opt/travis234
 
 COPY pyproject.toml README.md LICENSE NOTICE.md ./
 COPY travis ./travis
 
-RUN python -m pip install --no-cache-dir --upgrade pip \
-    && python -m pip install --no-cache-dir .
+RUN /opt/travis234-venv/bin/python -m pip install --no-cache-dir --upgrade pip \
+    && /opt/travis234-venv/bin/python -m pip install --no-cache-dir .
 
 USER travis
 WORKDIR /workspace

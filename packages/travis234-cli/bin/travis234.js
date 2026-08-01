@@ -11,8 +11,8 @@ const __dirname = path.dirname(__filename);
 const DEFAULT_IMAGE =
   process.env.TRAVIS234_IMAGE ||
   process.env.TRAVIS234_SANDBOX_IMAGE ||
-  "ghcr.io/htooayelwinict/travis234:production";
-const PUBLIC_IMAGE_PREFIX = "ghcr.io/htooayelwinict/travis234:";
+  "ghcr.io/htooayelwinict/travis234-offsec:production";
+const PUBLIC_IMAGE_PREFIX = "ghcr.io/htooayelwinict/travis234-offsec:";
 const DEFAULT_PULL_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const CONTAINER_WORKSPACE = "/workspace";
 const CONTAINER_HOME = "/travis-home";

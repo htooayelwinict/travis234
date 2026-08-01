@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import yaml
@@ -90,7 +91,7 @@ def test_container_smoke_prepares_extension_flag_fixture(tmp_path: Path) -> None
     extension = prepare_extension_flag_smoke(tmp_path)
 
     source = extension.read_text(encoding="utf-8")
-    assert "register_flag('profile'" in source
+    assert "register_flag('smoke-channel'" in source
     assert "'type': 'string'" in source
 
 
@@ -103,3 +104,13 @@ def test_container_qualification_exercises_compaction_and_process_cleanup(tmp_pa
     assert result.automatic_compaction is True
     assert result.managed_process_reaped is True
     assert result.credential_env_absent is True
+    assert result.tmux_round_trip is (shutil.which("tmux") is not None)
+
+
+def test_container_smoke_requires_kali_tactical_executables() -> None:
+    from evals.container_smoke import REQUIRED_EXECUTABLES
+
+    assert set(REQUIRED_EXECUTABLES) == {
+        "python", "node", "npm", "npx", "bash", "curl", "file", "git", "ip",
+        "jq", "nc", "nmap", "openssl", "rg", "socat", "tmux",
+    }

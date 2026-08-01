@@ -10,6 +10,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const packageRoot = path.resolve(__dirname, "..");
 const packageJson = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 import {
   buildDockerCommand,
   buildPullCommand,
@@ -115,11 +116,20 @@ test("package includes the lazy security finding validation skill", () => {
   assert.match(skill, /confidence/i);
 });
 
-test("release image combines Python 3.13 and Node 20 without passwordless sudo", () => {
+test("release image combines Kali, Python venv, and Node 20 without passwordless sudo", () => {
   const dockerfile = fs.readFileSync(path.resolve(packageRoot, "..", "..", "Dockerfile.release"), "utf8");
 
   assert.match(dockerfile, /^FROM node:20-bookworm-slim AS node-runtime$/m);
-  assert.match(dockerfile, /^FROM python:3\.13-slim$/m);
+  assert.match(dockerfile, /^FROM kalilinux\/kali-rolling:latest$/m);
+  for (const packageName of [
+    "bash", "ca-certificates", "curl", "file", "git", "iproute2", "jq",
+    "libstdc++6", "netcat-openbsd", "nmap", "openssl", "python3", "python3-pip",
+    "python3-venv", "ripgrep", "socat", "tmux",
+  ]) {
+    assert.match(dockerfile, new RegExp(`\\b${escapeRegExp(packageName)}\\b`));
+  }
+  assert.match(dockerfile, /VIRTUAL_ENV=\/opt\/travis234-venv/);
+  assert.match(dockerfile, /cp --dereference --remove-destination/);
   assert.match(dockerfile, /COPY --from=node-runtime \/usr\/local\/bin\/node \/usr\/local\/bin\/node/);
   assert.match(dockerfile, /COPY --from=node-runtime \/usr\/local\/lib\/node_modules \/usr\/local\/lib\/node_modules/);
   assert.match(dockerfile, /ENTRYPOINT \["travis234"\]/);
@@ -131,9 +141,15 @@ test("release image combines Python 3.13 and Node 20 without passwordless sudo",
 test("local development image creates the travis user with limited package sudo", () => {
   const dockerfile = fs.readFileSync(path.resolve(packageRoot, "..", "..", "Dockerfile"), "utf8");
 
-  assert.match(dockerfile, /^FROM python:3\.13-slim/m);
+  assert.match(dockerfile, /^FROM kalilinux\/kali-rolling:latest$/m);
+  for (const packageName of [
+    "bash", "ca-certificates", "curl", "file", "git", "iproute2", "jq",
+    "libstdc++6", "netcat-openbsd", "nmap", "openssl", "python3", "python3-pip",
+    "python3-venv", "ripgrep", "socat", "tmux",
+  ]) {
+    assert.match(dockerfile, new RegExp(`\\b${escapeRegExp(packageName)}\\b`));
+  }
   assert.match(dockerfile, /\bsudo\b/);
-  assert.match(dockerfile, /\bnodejs\b/);
   assert.match(dockerfile, /\bnpm\b/);
   assert.match(dockerfile, /useradd .* travis/);
   assert.match(dockerfile, /env_keep \+= "DEBIAN_FRONTEND"/);
@@ -142,11 +158,12 @@ test("local development image creates the travis user with limited package sudo"
   assert.match(dockerfile, /USER travis/);
 });
 
-test("ghcr workflow targets travis234 production image", () => {
+test("ghcr workflow targets travis234-offsec production image", () => {
   const workflow = fs.readFileSync(path.resolve(packageRoot, "..", "..", ".github", "workflows", "travis234-release-image.yml"), "utf8");
 
-  assert.match(workflow, /^name: travis234 release image/m);
-  assert.match(workflow, /IMAGE_NAME: ghcr\.io\/\$\{\{ github\.repository_owner \}\}\/travis234/);
+  assert.match(workflow, /^name: travis234-offsec release image/m);
+  assert.match(workflow, /default: "offsec-agent"/);
+  assert.match(workflow, /IMAGE_NAME: ghcr\.io\/\$\{\{ github\.repository_owner \}\}\/travis234-offsec/);
   assert.match(workflow, /file: Dockerfile\.release/);
 });
 
@@ -154,9 +171,9 @@ test("package defaults to travis234 production GHCR image and auto pull", () => 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "travis234-cli-"));
   const config = parseArgs(["--agent-home", path.join(root, "agent-home")]);
 
-  assert.equal(config.image, "ghcr.io/htooayelwinict/travis234:production");
+  assert.equal(config.image, "ghcr.io/htooayelwinict/travis234-offsec:production");
   assert.equal(config.pull, "auto");
-  assert.deepEqual(buildPullCommand(config), ["docker", "pull", "ghcr.io/htooayelwinict/travis234:production"]);
+  assert.deepEqual(buildPullCommand(config), ["docker", "pull", "ghcr.io/htooayelwinict/travis234-offsec:production"]);
   assert.equal(shouldUseIsolatedDockerConfig(config, {}), true);
 });
 
@@ -177,7 +194,7 @@ test("package auto pull runs when pull cache is stale", () => {
 
   assert.deepEqual(
     buildPullCommand(config, { nowMs: 1000 + 6 * 60 * 60 * 1000 + 1 }),
-    ["docker", "pull", "ghcr.io/htooayelwinict/travis234:production"],
+    ["docker", "pull", "ghcr.io/htooayelwinict/travis234-offsec:production"],
   );
 });
 
@@ -192,7 +209,7 @@ test("package pull flags override auto pull cache", () => {
   assert.deepEqual(buildPullCommand(forceConfig, { nowMs: 2000 }), [
     "docker",
     "pull",
-    "ghcr.io/htooayelwinict/travis234:production",
+    "ghcr.io/htooayelwinict/travis234-offsec:production",
   ]);
   assert.deepEqual(buildPullCommand(skipConfig, { nowMs: 1000 + 6 * 60 * 60 * 1000 + 1 }), []);
 });
@@ -219,8 +236,8 @@ test("package builds install-capable docker command for npx-style use", () => {
   assert.ok(command.includes(`${workspace}:/workspace:rw`));
   assert.ok(command.includes(`${config.agentHome}:/travis-home:rw`));
   assert.equal(command.some((value) => value === "/:/workspace:rw" || value.includes("docker.sock")), false);
-  assert.ok(command.includes("ghcr.io/htooayelwinict/travis234:production"));
-  assert.deepEqual(command.slice(-4), ["ghcr.io/htooayelwinict/travis234:production", "--cwd", "/workspace", "hello"]);
+  assert.ok(command.includes("ghcr.io/htooayelwinict/travis234-offsec:production"));
+  assert.deepEqual(command.slice(-4), ["ghcr.io/htooayelwinict/travis234-offsec:production", "--cwd", "/workspace", "hello"]);
 });
 
 test("package does not forward host provider credentials into the sandbox", () => {
@@ -228,7 +245,7 @@ test("package does not forward host provider credentials into the sandbox", () =
   const config = parseArgs(["--cwd", workspace], {
     env: {
       OPENROUTER_API_KEY: "host-secret",
-      TRAVIS234_IMAGE: "ghcr.io/htooayelwinict/travis234:production",
+      TRAVIS234_IMAGE: "ghcr.io/htooayelwinict/travis234-offsec:production",
     },
   });
   const command = buildDockerCommand(config, { uid: 501, gid: 20, pid: 24680 });
@@ -257,7 +274,7 @@ test("package forwards session modes while mounting persistent app-owned state",
     assert.ok(command.includes("TRAVIS234_CODING_AGENT_DIR=/travis-home/agent"));
     assert.deepEqual(
       command.slice(-(appArgs.length + 3)),
-      ["ghcr.io/htooayelwinict/travis234:production", "--cwd", "/workspace", ...appArgs],
+      ["ghcr.io/htooayelwinict/travis234-offsec:production", "--cwd", "/workspace", ...appArgs],
     );
   }
 });

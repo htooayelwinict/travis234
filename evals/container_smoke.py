@@ -8,11 +8,48 @@ from pathlib import Path
 
 
 CONSOLE_ENTRYPOINT = "travis234"
+REQUIRED_EXECUTABLES = (
+    "python",
+    "node",
+    "npm",
+    "npx",
+    "bash",
+    "curl",
+    "file",
+    "git",
+    "ip",
+    "jq",
+    "nc",
+    "nmap",
+    "openssl",
+    "rg",
+    "socat",
+    "tmux",
+)
+LEGACY_OFFSEC_FLAGS = (
+    "--profile",
+    "--agent-profile",
+    "--engagement",
+    "--challenge",
+    "--ctfd-url",
+    "--ctf-fixture-root",
+    "--offsec-worker-user",
+)
 
 
 def run_container_smoke(image: str) -> None:
     _run(["docker", "run", "--rm", "--entrypoint", "id", image, "-un"], expected="travis")
-    _run(["docker", "run", "--rm", "--entrypoint", CONSOLE_ENTRYPOINT, image, "--help"])
+    help_text = _run(
+        ["docker", "run", "--rm", "--entrypoint", CONSOLE_ENTRYPOINT, image, "--help"]
+    )
+    if "Travis234 OffSec" not in help_text:
+        raise RuntimeError("container CLI help is missing the Travis234 OffSec identity")
+    present_legacy_flags = [flag for flag in LEGACY_OFFSEC_FLAGS if flag in help_text]
+    if present_legacy_flags:
+        raise RuntimeError(
+            "container CLI help exposes legacy OffSec flags: "
+            + ", ".join(present_legacy_flags)
+        )
     _run(["docker", "run", "--rm", "--entrypoint", "node", image, "--version"])
     _run(["docker", "run", "--rm", "--entrypoint", "npm", image, "--version"])
     shell_env_script = (
@@ -20,7 +57,7 @@ def run_container_smoke(image: str) -> None:
         "from travis.coding_agent.tools.bash import get_shell_env;"
         "env=get_shell_env();"
         "print(json.dumps({name:shutil.which(name,path=env['PATH']) for name in "
-        "('python','node','npm','npx')}));"
+        f"{REQUIRED_EXECUTABLES!r}}}));"
         "import pytest"
     )
     shell_env = json.loads(

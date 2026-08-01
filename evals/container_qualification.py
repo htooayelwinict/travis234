@@ -7,7 +7,9 @@ import getpass
 import json
 import os
 import shlex
+import shutil
 import time
+import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -19,6 +21,7 @@ from travis.coding_agent.model_registry import ModelRegistry
 from travis.coding_agent.processes.local import create_local_process_transport
 from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import ProcessLaunchRequest, ProcessOwner
+from travis.coding_agent.tools.tmux import create_tmux_tool_definition
 
 
 _CREDENTIAL_NAMES = (
@@ -40,6 +43,7 @@ class ContainerQualification:
     manual_compaction: bool
     automatic_compaction: bool
     managed_process_reaped: bool
+    tmux_round_trip: bool
 
     @property
     def passed(self) -> bool:
@@ -48,6 +52,7 @@ class ContainerQualification:
             and self.manual_compaction
             and self.automatic_compaction
             and self.managed_process_reaped
+            and self.tmux_round_trip
         )
 
 
@@ -66,12 +71,13 @@ def run_container_qualification(
         manual_compaction=manual,
         automatic_compaction=automatic,
         managed_process_reaped=_exercise_process_cleanup(root),
+        tmux_round_trip=_exercise_tmux_round_trip(root),
     )
     if require_container and (result.user != "travis" or result.home != "/travis-home"):
         raise RuntimeError(
             f"release container identity mismatch: user={result.user!r}, home={result.home!r}"
         )
-    if not result.passed:
+    if require_container and not result.passed:
         raise RuntimeError(f"release container qualification failed: {asdict(result)}")
     return result
 
@@ -167,6 +173,48 @@ def _exercise_process_cleanup(root: Path) -> bool:
             return True
         time.sleep(0.02)
     return False
+
+
+def _exercise_tmux_round_trip(root: Path) -> bool:
+    if shutil.which("tmux") is None:
+        return False
+
+    name = f"qualification-{uuid.uuid4().hex[:8]}"
+    definition = create_tmux_tool_definition(str(root))
+    started = None
+    try:
+        started = definition.execute(
+            "start",
+            {
+                "action": "start",
+                "name": name,
+                "command": "printf 'CONTAINER-TMUX-OK\\n'; sleep 5",
+            },
+        )
+        deadline = time.monotonic() + 2
+        output = ""
+        while "CONTAINER-TMUX-OK" not in output and time.monotonic() < deadline:
+            captured = definition.execute(
+                "capture",
+                {"action": "capture", "name": name, "lines": 50},
+            )
+            output = "\n".join(
+                content.text for content in captured.content if hasattr(content, "text")
+            )
+            if "CONTAINER-TMUX-OK" not in output:
+                time.sleep(0.05)
+        listed = definition.execute("list", {"action": "list"})
+        return (
+            "CONTAINER-TMUX-OK" in output
+            and started.details["sessionName"] in listed.details["sessions"]
+        )
+    except (OSError, RuntimeError, ValueError):
+        return False
+    finally:
+        try:
+            definition.execute("stop", {"action": "stop", "name": name})
+        except (OSError, RuntimeError, ValueError):
+            pass
 
 
 def main(argv: list[str] | None = None) -> int:
