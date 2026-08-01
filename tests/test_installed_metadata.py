@@ -36,6 +36,7 @@ def test_packaged_builtin_skills_exist() -> None:
 
     assert skills_root.is_dir()
     assert {path.parent.name for path in skills_root.glob("*/SKILL.md")} == {
+        "investigating-security-targets",
         "subagent-delegation",
         "web-search",
     }

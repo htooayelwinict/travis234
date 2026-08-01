@@ -112,3 +112,30 @@ def test_bundled_delegation_guidance_matches_workspace_write_runtime() -> None:
         assert "Do not let children spawn more subagents" in text
         assert "Subagents must remain read-only" not in text
         assert "parent should write" not in text
+
+
+def test_investigating_security_targets_skill_contract() -> None:
+    paths = (
+        ROOT / "skills/investigating-security-targets/SKILL.md",
+        ROOT / "travis/resources/skills/investigating-security-targets/SKILL.md",
+        ROOT / "packages/travis234-cli/skills/investigating-security-targets/SKILL.md",
+    )
+    texts = [path.read_text(encoding="utf-8") for path in paths]
+
+    assert len({text.encode("utf-8") for text in texts}) == 1
+    text = texts[0]
+    assert "description: Use when" in text
+    for required in (
+        "ranked hypotheses",
+        "atomic test",
+        "observable",
+        "stop condition",
+        "command -v",
+        "bash plus process",
+        "tmux",
+        "Facts",
+        "Failed attempts",
+        "Verify",
+    ):
+        assert required in text
+    assert len(text.split()) < 500

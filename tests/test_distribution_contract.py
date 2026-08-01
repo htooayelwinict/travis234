@@ -47,7 +47,7 @@ def test_packaged_builtin_skills_match_npm_distribution() -> None:
     python_skills = ROOT / "travis" / "resources" / "skills"
     npm_skills = ROOT / "packages" / "travis234-cli" / "skills"
 
-    for name in ("subagent-delegation", "web-search"):
+    for name in ("investigating-security-targets", "subagent-delegation", "web-search"):
         assert (python_skills / name / "SKILL.md").read_bytes() == (
             npm_skills / name / "SKILL.md"
         ).read_bytes()

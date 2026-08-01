@@ -76,6 +76,19 @@ test("package web-search skill uses curl-only network retrieval", () => {
   assert.doesNotMatch(webSearchSkill, /xml\.etree/i);
 });
 
+test("package includes the lazy tactical investigation skill", () => {
+  const skill = fs.readFileSync(
+    path.join(packageRoot, "skills", "investigating-security-targets", "SKILL.md"),
+    "utf8",
+  );
+
+  assert.match(skill, /description: Use when/i);
+  assert.match(skill, /ranked hypotheses/i);
+  assert.match(skill, /atomic test/i);
+  assert.match(skill, /bash plus process/i);
+  assert.match(skill, /tmux/i);
+});
+
 test("release image combines Python 3.13 and Node 20 without passwordless sudo", () => {
   const dockerfile = fs.readFileSync(path.resolve(packageRoot, "..", "..", "Dockerfile.release"), "utf8");
 

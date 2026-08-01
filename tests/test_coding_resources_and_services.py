@@ -18,11 +18,13 @@ def test_packaged_builtin_skills_load_as_lazy_defaults(tmp_path: Path) -> None:
     loader.reload({"projectTrustOverride": False})
 
     skills = {skill.name: skill for skill in loader.get_skills()["skills"]}
-    assert set(skills) == {"subagent-delegation", "web-search"}
+    assert set(skills) == {"investigating-security-targets", "subagent-delegation", "web-search"}
     skill_prompt = format_skills_for_prompt(list(skills.values()))
     assert "subagent-delegation" in skill_prompt
+    assert "investigating-security-targets" in skill_prompt
     assert "web-search" in skill_prompt
     assert "# Subagent Delegation" not in skill_prompt
+    assert "# Investigating Security Targets" not in skill_prompt
     assert "# Web Search" not in skill_prompt
 
 
@@ -60,7 +62,7 @@ def test_user_skill_overrides_packaged_builtin_with_same_name(tmp_path: Path) ->
     loader.reload({"projectTrustOverride": False})
 
     skills = {skill.name: skill for skill in loader.get_skills()["skills"]}
-    assert set(skills) == {"subagent-delegation", "web-search"}
+    assert set(skills) == {"investigating-security-targets", "subagent-delegation", "web-search"}
     assert skills["web-search"].file_path == str(user_skill.resolve())
     assert any(
         diagnostic.type == "collision"
@@ -936,6 +938,7 @@ def test_resource_loader_resolves_package_skills_prompts_and_themes(
     themes = loader.get_themes()["themes"]
     assert [skill.name for skill in skills] == [
         "audit-skill",
+        "investigating-security-targets",
         "subagent-delegation",
         "web-search",
     ]
@@ -991,6 +994,7 @@ def test_default_resource_loader_uses_travis234_settings_manager_resource_paths(
 
     assert [skill.name for skill in loader.get_skills()["skills"]] == [
         "configured-audit",
+        "investigating-security-targets",
         "subagent-delegation",
         "web-search",
     ]
@@ -1024,6 +1028,7 @@ def test_default_resource_loader_loads_app_owned_agent_skills(tmp_path: Path, mo
     skills = loader.get_skills()["skills"]
     assert [skill.name for skill in skills] == [
         "systematic-debugging",
+        "investigating-security-targets",
         "subagent-delegation",
         "web-search",
     ]
@@ -1118,7 +1123,7 @@ def test_web_search_skill_allowed_tools_profile_enables_bash_for_child(
         task = session._build_subagent_task("web-search", "search latest result", None)
 
         assert task.allowed_tools == ("read", "bash")
-        assert task.sandbox == "read_only"
+        assert task.sandbox == "workspace_write"
     finally:
         session.shutdown()
 
@@ -1157,6 +1162,7 @@ def test_create_agent_session_services_ports_travis234_settings_resource_wiring(
     assert services["settingsManager"] is settings
     assert [skill.name for skill in services["resourceLoader"].get_skills()["skills"]] == [
         "service-audit",
+        "investigating-security-targets",
         "subagent-delegation",
         "web-search",
     ]
