@@ -39,9 +39,9 @@ def _targets_section(targets: Sequence[str]) -> str:
         return ""
     rendered = "\n".join(f"- {escape(target)}" for target in targets)
     return (
-        "\n\nOperator-authorized targets:\n"
+        "\n\nOperator targets:\n"
         f"{rendered}\n"
-        "Treat these labels as engagement context, not as proof of reachability or impact."
+        "Use these labels as operator-supplied engagement context."
     )
 
 
@@ -58,10 +58,55 @@ class BuildSystemPromptOptions:
     targets: tuple[str, ...] = ()
 
 
-_PREAMBLE = (
-    "You are an expert coding assistant operating inside Travis234, a coding agent harness. "
-    "You help users by reading files, executing commands, editing code, and writing new files."
-)
+_OFFSEC_PREAMBLE = """You are Travis234 OffSec, a tactical security investigation and operations agent inside Travis234. Execute operator-directed security work across offensive assessments, CTFs, DFIR cases, incident response, malware analysis, forensics, and security research without assuming one domain or playbook.
+
+Mission context:
+- Use operator-provided targets, objectives, artifacts, and engagement context when present.
+- When context is incomplete, inspect the conversation, workspace, host, and available evidence; infer the next useful tactical step instead of requiring a manifest.
+- Adapt the workflow to the mission: service discovery, exploitation, artifact triage, timeline reconstruction, malware behavior, containment analysis, or reporting as the evidence demands.
+
+Tactical execution cycle:
+1. Orient: identify the objective, available evidence, environment, constraints, and unknowns.
+2. Acquire: collect the smallest useful set of files, metadata, process state, network state, logs, or service observations.
+3. Analyze: maintain explicit Facts, Hypotheses, Tests, Evidence, Unknowns, and Failed attempts; rank competing explanations.
+4. Act: choose the cheapest discriminating test or highest-value reversible action and execute it with the appropriate tool.
+5. Verify: observe the actual effect, reproduce important results, and pivot when evidence contradicts the working hypothesis.
+6. Record: preserve exact commands, relevant output, timestamps, hashes when useful, paths, artifacts, and decision rationale.
+
+Evidence discipline:
+- Treat exploit delivery, command execution, decoding, detection, and remediation as attempts until their effects are observed.
+- For forensic work, preserve source evidence and distinguish acquisition artifacts from analysis outputs.
+- Separate confirmed findings from candidates and speculation.
+- Do not invent targets, credentials, findings, successful exploitation, attribution, or effects.
+- Do not claim a flag, shell, vulnerability, credential, or impact without observed evidence.
+- Finish with confirmed results, evidence references, failed approaches, changed artifacts, running tmux sessions, and blockers."""
+
+
+def _tool_strategy(tools: Sequence[str]) -> str:
+    selected = set(tools)
+    lines = ["", "", "Tool strategy:"]
+    if "bash" in selected:
+        lines.append("- Use bash for finite commands that should finish promptly.")
+    if {"bash", "process"} <= selected:
+        lines.append(
+            "- Use bash plus process for interactive programs that need a PTY, "
+            "follow-up input, control sequences, polling, or termination during this session."
+        )
+    if "tmux" in selected:
+        lines.append(
+            "- Use tmux for listeners, reverse connections, OOB callbacks, relays, servers, "
+            "long waits, and work that must survive turns; capture evidence and explicitly stop it when finished."
+        )
+    if selected & {"read", "grep", "find", "ls"}:
+        lines.append("- Use read, grep, find, and ls for evidence gathering when available.")
+    if selected & {"edit", "write"}:
+        lines.append("- Use edit and write for scripts, payloads, wordlists, notes, and reports.")
+    if "spawn_subagent" in selected:
+        lines.append(
+            "- Delegate independent objectives to subagents with disjoint file ownership; "
+            "review their evidence and do not duplicate the same work in the parent."
+        )
+    return "\n".join(lines) if len(lines) > 3 else ""
 
 
 def build_system_prompt(options: BuildSystemPromptOptions) -> str:
@@ -80,7 +125,11 @@ def build_system_prompt(options: BuildSystemPromptOptions) -> str:
         prompt += f"\nCurrent working directory: {prompt_cwd}"
         return prompt
 
-    tools = options.selected_tools if options.selected_tools is not None else ["read", "bash", "edit", "write"]
+    tools = (
+        options.selected_tools
+        if options.selected_tools is not None
+        else ["read", "bash", "tmux", "edit", "write"]
+    )
     visible_tools = [name for name in tools if options.tool_snippets.get(name)]
     if visible_tools:
         tools_list = "\n".join(f"- {name}: {options.tool_snippets[name]}" for name in visible_tools)
@@ -112,10 +161,11 @@ def build_system_prompt(options: BuildSystemPromptOptions) -> str:
 
     documentation_section = _documentation_section()
     prompt = (
-        f"{_PREAMBLE}\n\n"
+        f"{_OFFSEC_PREAMBLE}\n\n"
         f"Available tools:\n{tools_list}\n\n"
         "In addition to the tools above, you may have access to other custom tools depending on the project.\n\n"
         f"Guidelines:\n{guidelines_text}"
+        f"{_tool_strategy(tools)}"
         f"{documentation_section}"
     )
     prompt += append_section

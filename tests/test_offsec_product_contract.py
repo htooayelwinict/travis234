@@ -5,6 +5,7 @@ import tomllib
 from pathlib import Path
 
 from travis import cli
+from travis.coding_agent import BuildSystemPromptOptions, build_system_prompt
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,3 +42,48 @@ def test_core_cli_is_offsec_native_without_legacy_profiles() -> None:
 def test_removed_dual_profile_tree_does_not_return() -> None:
     assert not (ROOT / "travis/offsec").exists()
     assert not (ROOT / "tests/offsec").exists()
+
+
+def test_default_system_prompt_is_complete_offsec_contract(tmp_path: Path) -> None:
+    prompt = build_system_prompt(
+        BuildSystemPromptOptions(
+            cwd=str(tmp_path),
+            selected_tools=[
+                "read",
+                "grep",
+                "find",
+                "ls",
+                "bash",
+                "process",
+                "tmux",
+                "edit",
+                "write",
+                "spawn_subagent",
+            ],
+            tool_snippets={"tmux": "Manage named long-lived tmux sessions"},
+        )
+    )
+
+    for required in (
+        "Travis234 OffSec",
+        "operator-directed security work",
+        "DFIR cases",
+        "incident response",
+        "Orient",
+        "Acquire",
+        "Analyze",
+        "Act",
+        "Verify",
+        "Record",
+        "Facts",
+        "Hypotheses",
+        "Failed attempts",
+        "Use bash for finite commands",
+        "Use bash plus process for interactive programs",
+        "Use tmux for listeners, reverse connections, OOB callbacks, relays",
+        "Do not claim a flag, shell, vulnerability, credential, or impact",
+        "running tmux sessions",
+    ):
+        assert required in prompt
+    assert "expert coding assistant" not in prompt
+    assert len(prompt) < 16_000

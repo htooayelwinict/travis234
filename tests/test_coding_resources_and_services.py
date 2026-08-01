@@ -208,7 +208,7 @@ def test_agent_session_projects_targets_without_changing_cwd(tmp_path: Path) -> 
         targets=("10.10.10.10", "https://lab.local/a?x=1&y=2"),
     )
     try:
-        assert "Operator-authorized targets:" in session.system_prompt
+        assert "Operator targets:" in session.system_prompt
         assert "- 10.10.10.10" in session.system_prompt
         assert "https://lab.local/a?x=1&amp;y=2" in session.system_prompt
         assert f"Current working directory: {tmp_path}" in session.system_prompt
