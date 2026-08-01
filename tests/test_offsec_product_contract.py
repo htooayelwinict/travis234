@@ -94,3 +94,21 @@ def test_default_system_prompt_is_complete_offsec_contract(tmp_path: Path) -> No
         assert required in prompt
     assert "expert coding assistant" not in prompt
     assert len(prompt) < 16_000
+
+
+def test_bundled_delegation_guidance_matches_workspace_write_runtime() -> None:
+    skill_paths = (
+        ROOT / "skills/subagent-delegation/SKILL.md",
+        ROOT / "travis/resources/skills/subagent-delegation/SKILL.md",
+        ROOT / "packages/travis234-cli/skills/subagent-delegation/SKILL.md",
+    )
+
+    for path in skill_paths:
+        text = path.read_text(encoding="utf-8")
+        assert "workspace-write" in text
+        assert "bash plus process" in text
+        assert "tmux" in text
+        assert "disjoint" in text
+        assert "Do not let children spawn more subagents" in text
+        assert "Subagents must remain read-only" not in text
+        assert "parent should write" not in text

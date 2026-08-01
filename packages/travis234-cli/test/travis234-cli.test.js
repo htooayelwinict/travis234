@@ -43,9 +43,13 @@ test("package does not bundle a mandatory global agent prompt", () => {
   assert.equal(fs.existsSync(path.join(packageRoot, "agents", "AGENTS.md")), false);
   assert.doesNotMatch(subagentSkill, /\bLewis\b/i);
   assert.match(subagentSkill, /truncated child result is not a failed child result/i);
-  assert.match(subagentSkill, /subagents? (are|must remain) read-only/i);
-  assert.match(subagentSkill, /must not write files/i);
-  assert.match(subagentSkill, /child should inspect.*parent should write/is);
+  assert.match(subagentSkill, /workspace-write/i);
+  assert.match(subagentSkill, /bash plus process/i);
+  assert.match(subagentSkill, /tmux/i);
+  assert.match(subagentSkill, /disjoint/i);
+  assert.match(subagentSkill, /Do not let children spawn more subagents/i);
+  assert.doesNotMatch(subagentSkill, /Subagents must remain read-only/i);
+  assert.doesNotMatch(subagentSkill, /parent should write/i);
   assert.match(subagentSkill, /pre-read, find, list, grep, or resolve delegated target files/i);
   assert.match(subagentSkill, /do not re-read files in the parent/i);
   assert.match(subagentSkill, /forbidden fallback/i);

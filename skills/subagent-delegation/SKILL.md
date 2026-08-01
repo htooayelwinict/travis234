@@ -1,59 +1,44 @@
 ---
 name: subagent-delegation
-description: Use only when the user explicitly asks to spawn, delegate to, hand off to, or verify work through subagents, child agents, reviewer agents, explorer agents, research agents, web-search agents, or agent-to-agent workflows.
+description: Use when the user explicitly asks for subagents, child agents, delegation, handoff, parallel agents, reviewer agents, explorer agents, research agents, or agent-to-agent workflows.
 ---
 
 # Subagent Delegation
 
-Use this skill only when the user explicitly asks for subagents, delegation, handoff, reviewer/explorer/research child agents, `/delegate`, or `/subagents`.
+Use this skill only for the current request when the user explicitly asks for subagents, delegation, handoff, `/delegate`, or `/subagents`.
 
-## Default behavior
+## Delegation contract
 
-- Keep the parent agent normal unless this skill is explicitly triggered.
-- Use one delegation wave by default, with at most 3 child agents.
-- Do not launch a second wave unless the user explicitly asks for it after seeing the first child summaries.
-- Do not describe or plan "Wave 2", "Wave 3", or future waves in the same answer.
-- If the task is larger than 3 children can cover, process only the first bounded slice and ask the user whether to continue.
+- Use one wave with at most 3 children. A later wave requires a new explicit user request.
+- Give each child one bounded objective, a clear stop condition, a small output budget, and disjoint file ownership.
+- Children use a workspace-write catalog containing `read`, `grep`, `find`, `ls`, `bash`, `process`, `edit`, `write`, and `tmux`.
+- Use bash for finite commands, bash plus process for interactive PTY work, and tmux for listeners, reverse connections, OOB callbacks, relays, servers, and cross-turn waits.
 - Do not let children spawn more subagents.
-- Do not write files unless the user explicitly asks for written artifacts.
+- Avoid duplicate investigation and overlapping mutation ownership among concurrent children.
+- Pass exact user-provided paths or names to the child. Do not pre-read, find, list, grep, or resolve delegated target files in the parent.
+- Never turn a vague request into an unbounded whole-workspace sweep. Ask for a concrete scope when none is available.
 
-## Scope control
+## Child prompt
 
-- If the requested scope is vague, ask one concise clarification instead of broadening it.
-- For phrases like "those files" or "those md files", use only exact files already named in the current conversation or visible parent output.
-- If no exact file list is available, ask which files or directory to use.
-- Never convert a vague request into a whole-repo or whole-workspace sweep.
-- Never run whole-workspace file-count or whole-workspace discovery commands such as `find /workspace -type f`.
-- Avoid unbounded discovery commands. Prefer a named directory and a capped listing, for example `find docs -maxdepth 1 -name '*.md' | head -20`.
-- If there are more than 12 candidate files, ask the user to narrow scope before spawning children.
+Every child receives this Subagent system contract:
 
-## Child task contract
+- Current working directory: the child's selected workspace.
+- Use paths relative to the Current working directory unless the goal supplies an absolute path.
+- Do not drop leading project directories from paths in the Goal.
+- Allowed tools are the child's complete tool catalog. Do not use tools outside it.
+- For file discovery, use `find` or `ls`.
+- You may create or modify only your assigned workspace files with `edit` and `write`.
+- Use evidence to separate confirmed findings, hypotheses, unknowns, and failed attempts.
+- After two failed attempts for the same path or unavailable tool, stop repeating it and report the blocker.
+- Report changed files, evidence, failed attempts, artifacts, live tmux sessions, and blockers.
+- Do not include full tool traces in the final response.
 
-Before spawning, the parent must give each child:
+## Parent integration
 
-- A role.
-- Exact paths or one narrow directory.
-- A clear stop condition.
-- A small output budget.
-- A requirement to report status, blockers, and a concise summary.
+The parent reviews changed files, evidence, failed attempts, artifacts, live tmux sessions, and blockers before integrating results. Resolve ownership conflicts before accepting overlapping changes.
 
-Child instructions must say:
+A truncated child result is not a failed child result. Use `expand_subagent_result` for bounded child output instead of duplicating the child's investigation. Do not re-read files in the parent merely to reconstruct truncated child output. If expansion remains insufficient, page it with `offset`.
 
-- Make one diagnostic attempt after a missing path or failed tool call, then stop and report the blocker.
-- Do not retry the same tool call with the same arguments.
-- Do not scan parent directories outside the assigned scope.
-- Do not include full tool traces in the final answer.
+Forbidden fallback: do not say "Let me read the key files directly" after a bounded child result. The only allowed recovery paths are to use the available summary, expand the result, page the expansion, report the blocker, or—after explicit user authorization—spawn a narrower follow-up child task.
 
-## Parent reporting
-
-After children finish, report only:
-
-- Child task id.
-- Child role.
-- Child status.
-- Concise child summary.
-- Any blocker or guardrail status.
-
-If a child hits a guardrail or cancellation, report it and stop. Do not retry automatically.
-
-Do not compensate for child failure by directly scanning the remaining parent scope. Report the child status and ask the user for the next step.
+Report each child task id, role, status, concise summary, changed files, and blockers. Cancellation, timeout, duplicate suppression, and the three-child limit remain terminal runtime outcomes; do not conceal them or retry automatically.
