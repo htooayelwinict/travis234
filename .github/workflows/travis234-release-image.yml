@@ -9,8 +9,13 @@ on:
         default: "offsec-agent"
       image_tag:
         description: "GHCR image tag"
+        required: true
+        type: string
+      publish_production:
+        description: "Also update the production image tag"
         required: false
-        default: "production"
+        default: false
+        type: boolean
   release:
     types: [published]
 
@@ -74,6 +79,7 @@ jobs:
     env:
       TRAVIS234_REF: ${{ inputs.ref || github.event.release.tag_name || github.ref_name }}
       IMAGE_TAG: ${{ inputs.image_tag || github.event.release.tag_name || 'production' }}
+      PUBLISH_PRODUCTION: ${{ github.event_name == 'release' || inputs.publish_production == true }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -83,6 +89,18 @@ jobs:
         uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
+      - name: Resolve image tags
+        id: image-tags
+        shell: bash
+        run: |
+          {
+            echo "tags<<EOF"
+            echo "${IMAGE_NAME}:${IMAGE_TAG}"
+            if [ "$PUBLISH_PRODUCTION" = "true" ]; then
+              echo "${IMAGE_NAME}:production"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
       - name: Log in to GHCR
         uses: docker/login-action@v4
         with:
@@ -97,6 +115,4 @@ jobs:
           push: true
           no-cache: true
           platforms: linux/amd64,linux/arm64
-          tags: |
-            ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-            ${{ env.IMAGE_NAME }}:production
+          tags: ${{ steps.image-tags.outputs.tags }}

@@ -26,6 +26,22 @@ def test_release_push_depends_on_tests_and_smoke() -> None:
     assert build["with"]["no-cache"] is True
 
 
+def test_manual_prerelease_tag_does_not_also_publish_production() -> None:
+    workflow = _workflow()
+    dispatch_inputs = workflow[True]["workflow_dispatch"]["inputs"]
+    assert dispatch_inputs["image_tag"]["required"] is True
+    assert "default" not in dispatch_inputs["image_tag"]
+
+    push = workflow["jobs"]["build-and-push"]
+    assert push["env"]["PUBLISH_PRODUCTION"] == (
+        "${{ github.event_name == 'release' || inputs.publish_production == true }}"
+    )
+    tag_step = next(step for step in push["steps"] if step.get("id") == "image-tags")
+    assert '"$PUBLISH_PRODUCTION" = "true"' in tag_step["run"]
+    build = push["steps"][-1]
+    assert build["with"]["tags"] == "${{ steps.image-tags.outputs.tags }}"
+
+
 def test_release_tests_use_deterministic_no_color_baseline() -> None:
     test_job = _workflow()["jobs"]["test"]
     assert test_job["env"]["NO_COLOR"] == "1"
