@@ -2385,9 +2385,11 @@ def test_tui_diff_render_keeps_complete_history_and_addresses_only_visible_tail(
     assert len(first.lines) == 9
     assert len(second.lines) == 9
     assert first.lines[:2] == ["history 0", "history 1"]
+    assert second.lines[:2] == ["history 0", "history 1"]
     assert second.lines[-1] == "status: Running"
     assert "\x1b[6;1H" not in terminal.writes[-1]
     assert "\x1b[9;1H" not in terminal.writes[-1]
+
 
 def test_interactive_mode_renders_real_prompt_loop(tmp_path) -> None:
     register_api_provider(create_faux_provider(lambda m, c: text_response_events(m, "tui reply")))

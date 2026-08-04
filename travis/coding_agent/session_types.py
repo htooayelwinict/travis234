@@ -105,7 +105,13 @@ _SUBAGENT_RESULT_SUMMARY_LIMIT = 1000
 _SUBAGENT_VISIBLE_SUMMARY_LIMIT = 320
 _SUBAGENT_TOOL_TRACE_DISPLAY_LIMIT = 3
 _SUBAGENT_EXPANSION_BUDGETS = {"short": 1200, "medium": 6000, "long": 12000}
-_DEFAULT_ACTIVE_TOOL_NAMES = ["read", "bash", "tmux", "edit", "write"]
+_DEFAULT_ACTIVE_TOOL_NAMES = [
+    "read",
+    "bash",
+    "tmux",
+    "edit",
+    "write",
+]
 _SUBAGENT_OPT_IN_TERMS = (
     "/subagents",
     "subagent",
@@ -120,6 +126,16 @@ _SUBAGENT_OPT_IN_TERMS = (
     "wait_subagent",
     "reviewer agent",
     "researcher agent",
+    "multiple agents",
+    "multi-agent",
+    "multi agent",
+    "parallel agent",
+    "parallel agents",
+    "parallel worker",
+    "parallel workers",
+    "split the work",
+    "independent review",
+    "independent reviews",
 )
 _SUBAGENT_OPT_OUT_TERMS = (
     "without subagent",

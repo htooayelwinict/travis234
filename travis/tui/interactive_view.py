@@ -80,6 +80,14 @@ class InteractiveView:
         self.tui.add(self.widget_container_below)
         self.tui.add(self.status)
         self.tui.add(self.footer_container)
+        self.tui.set_input_tail_components(
+            [
+                self.editor_container,
+                self.widget_container_below,
+                self.status,
+                self.footer_container,
+            ]
+        )
         if self._unsubscribe_session_events is None:
             self._unsubscribe_session_events = self.app.session.subscribe(
                 lambda event: self.tui.post(lambda: self._handle_session_event(event))

@@ -1494,30 +1494,39 @@ def test_tmux_is_builtin_and_default(tmp_path: Path) -> None:
     finally:
         session.shutdown()
 
-def test_agent_session_keeps_subagent_tools_opt_in_by_default(tmp_path: Path) -> None:
+def test_agent_session_keeps_subagent_tools_on_demand_with_delegation_guidance(tmp_path: Path) -> None:
     session = AgentSession(cwd=str(tmp_path), model=faux_model())
-
-    expected = {
-        "spawn_subagent",
-        "wait_subagent",
-        "list_subagents",
-        "get_subagent_result",
-        "expand_subagent_result",
-        "cancel_subagent",
-    }
-
-    assert expected.isdisjoint(set(session.get_active_tool_names()))
-    assert expected <= {tool["name"] for tool in session.get_all_tools()}
-    assert "spawn_subagent" not in session.system_prompt
+    try:
+        assert set(_SUBAGENT_TOOL_NAMES).isdisjoint(set(session.get_active_tool_names()))
+        assert set(_SUBAGENT_TOOL_NAMES) <= {tool["name"] for tool in session.get_all_tools()}
+        assert "Delegation is available for independent, bounded tasks." in session.system_prompt
+        assert "use `spawn_subagent`" in session.system_prompt
+    finally:
+        session.shutdown()
 
 
-def test_parallel_children_prompt_activates_parent_subagent_tools() -> None:
-    prompt = (
-        "Spawn exactly three parallel children with disjoint ownership: "
-        "evidence/a.txt, evidence/b.txt, and evidence/c.txt."
-    )
+def test_parallel_delegation_language_activates_parent_subagent_tools() -> None:
+    assert _prompt_requests_subagent_tools("Review this change with multiple agents.") is True
+    assert _prompt_requests_subagent_tools("Split this into parallel workers.") is True
+    assert _prompt_requests_subagent_tools("Use a multi-agent review.") is True
+    assert _prompt_requests_subagent_tools("Do this without subagents.") is False
 
-    assert _prompt_requests_subagent_tools(prompt) is True
+
+def test_parallel_delegation_temporarily_exposes_subagent_tools_to_the_model(tmp_path: Path) -> None:
+    seen_tool_names: list[str] = []
+
+    def script(model, context):
+        seen_tool_names.extend(tool.name for tool in context.tools or [])
+        return text_response_events(model, "review complete")
+
+    register_api_provider(create_faux_provider(script))
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+    try:
+        session.prompt("Review this change with multiple agents.")
+        assert set(_SUBAGENT_TOOL_NAMES) <= set(seen_tool_names)
+        assert set(_SUBAGENT_TOOL_NAMES).isdisjoint(set(session.get_active_tool_names()))
+    finally:
+        session.shutdown()
 
 
 def test_internal_child_inherits_process_service_targets_and_unique_owner(tmp_path: Path) -> None:

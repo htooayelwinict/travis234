@@ -357,6 +357,16 @@ def test_subagent_task_prompt_requires_evidence_bound_claims(tmp_path):
 
     assert "Every factual claim in your summary must be backed by observed evidence" in prompt
     assert "If evidence is missing or ambiguous, mark the claim as uncertain" in prompt
+
+
+def test_subagent_task_prompt_requires_execution_before_success(tmp_path):
+    task = SubagentTask(role="writer", goal="write evidence/result.txt", cwd=str(tmp_path))
+
+    prompt = task.prompt()
+
+    assert "Execute the Goal now. Do not answer with a plan, acknowledgement, or intent." in prompt
+    assert "make the required tool calls before producing any final response" in prompt
+    assert "Do not finish successfully until you have verified the requested outcome with a tool." in prompt
     assert "Do not infer behavior from filenames, conventions, or expectations alone" in prompt
     assert "Evidence:" in prompt
 
