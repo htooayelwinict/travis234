@@ -63,21 +63,27 @@ Terminal selection is deliberate:
 - Use `bash` for finite commands expected to finish promptly.
 - Use `bash` plus `process` for an interactive program in the current session.
   The process service can poll, wait, send follow-up input or keystrokes, resize a
-  PTY, interrupt, terminate, and kill the spawned shell.
+  PTY, interrupt, terminate, and kill the spawned shell. For planned interaction,
+  launch with `tty=true` and `yield_time_ms=0`; a PTY implicitly keeps input
+  available. `eof=true` is only valid for pipe stdin. Send an explicit Ctrl-D
+  keystroke with `write_raw` only when the program expects it.
 - Use `tmux` for listeners, reverse connections, OOB callbacks, relays, servers,
   long waits, or work that must survive agent turns. Capture evidence and stop the
   session explicitly.
 
-`process.wait` waits for terminal state for 1 to 900 seconds and does not change
-the command timeout. When its wait deadline expires, the command is not killed;
-another wait can continue from the returned cursor. Output is bounded to 64 MiB
-per process by default, and a producer crossing the limit reports `output_limit`.
-Travis234 cannot reattach a running process after an application restart, which
-is why turn-persistent work belongs in tmux. User `!command` and `!!command` run
-asynchronously; `!!` output stays outside model context.
+Each model-facing `process.wait` observes terminal state for 1 to 60 seconds and
+does not change `bash.timeout`. When its deadline expires, the command is not
+killed; another wait continues from the exact returned `nextCursor`. Internal
+user-command waiting may use longer service intervals without changing this
+public tool contract. Output is bounded to 64 MiB per process by default, and a
+producer crossing the limit reports `output_limit`. Managed `proc_*` handles
+survive agent turns but not application restarts; tmux is the supported
+cross-turn and cross-application durable terminal. User `!command` and
+`!!command` run asynchronously; `!!` output stays outside model context.
 
-The tmux tool returns a resolved workspace-namespaced session name. Copy that
-exact value when inspecting it natively, for example:
+The tmux tool reports both the logical name and a resolved workspace-namespaced
+session name. Follow-up tmux tool calls accept either value. Copy the exact
+resolved value when inspecting it natively, for example:
 
 ```bash
 tmux attach -t travis234-a1b2c3d4e5f6-callback-check
@@ -85,7 +91,9 @@ tmux capture-pane -p -t travis234-a1b2c3d4e5f6-callback-check -S -200
 ```
 
 `a1b2c3d4e5f6` is only an example workspace digest. Do not guess it; use the
-resolved name returned by the tool.
+resolved name returned by the tool. A resolved name from another workspace is
+rejected. Started panes retain their final output after the command exits, so
+capture the evidence and stop the session explicitly when finished.
 
 ## Delegation
 
@@ -104,7 +112,8 @@ over the bundled fallback.
 
 Use `/session` to inspect the active JSONL session, `/compact [focus]` to compact
 older context, `/resume` to choose a session, and `--continue` to resume the most
-recent compatible session at startup. `/exit` closes owned managed processes.
+recent compatible session at startup. `/exit` closes all app-owned managed
+processes, including child-owned subagent jobs.
 Detached tmux sessions are explicit external work and must be stopped when done.
 
 ## Extensions

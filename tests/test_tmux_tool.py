@@ -80,6 +80,8 @@ def test_tmux_executes_all_actions_with_direct_argument_vectors(tmp_path: Path) 
             (0, "", ""),
             (0, "", ""),
             (0, "", ""),
+            (0, "", ""),
+            (0, "", ""),
             (0, "TMUX-OK\n", ""),
             (0, f"{session_name}\nforeign-session\n", ""),
             (0, "", ""),
@@ -111,6 +113,24 @@ def test_tmux_executes_all_actions_with_direct_argument_vectors(tmp_path: Path) 
             session_name,
             "-c",
             str(tmp_path.resolve()),
+        ],
+        [
+            "/usr/bin/tmux",
+            "set-option",
+            "-w",
+            "-t",
+            session_name,
+            "remain-on-exit",
+            "on",
+        ],
+        [
+            "/usr/bin/tmux",
+            "respawn-pane",
+            "-k",
+            "-t",
+            session_name,
+            "-c",
+            str(tmp_path.resolve()),
             "--",
             "nc -lvnp 4444",
         ],
@@ -134,6 +154,95 @@ def test_tmux_executes_all_actions_with_direct_argument_vectors(tmp_path: Path) 
     assert result_text(captured) == "TMUX-OK\n"
     assert listed.details == {"action": "list", "sessions": [session_name]}
     assert stopped.details["sessionName"] == session_name
+
+
+def test_tmux_accepts_its_returned_resolved_name_for_followup_actions(
+    tmp_path: Path,
+) -> None:
+    digest = hashlib.sha256(str(tmp_path.resolve()).encode("utf-8")).hexdigest()[:12]
+    resolved = f"travis234-{digest}-callback"
+    definition, recorder = recorded_tmux_definition(
+        tmp_path,
+        [
+            (1, "", "can't find session"),
+            (0, "", ""),
+            (0, "", ""),
+            (0, "", ""),
+            (0, "", ""),
+            (0, "TMUX-RESOLVED-NAME-OK\n", ""),
+            (0, "", ""),
+            (0, "", ""),
+        ],
+    )
+
+    started = definition.execute(
+        "start",
+        {"action": "start", "name": "callback", "command": "sleep 10"},
+    )
+    captured = definition.execute(
+        "capture",
+        {"action": "capture", "name": started.details["sessionName"]},
+    )
+    stopped = definition.execute(
+        "stop",
+        {"action": "stop", "name": started.details["sessionName"]},
+    )
+
+    assert "Logical name: callback." in result_text(started)
+    assert f"Resolved native name: {resolved}." in result_text(started)
+    assert result_text(captured) == "TMUX-RESOLVED-NAME-OK\n"
+    assert captured.details["name"] == "callback"
+    assert captured.details["sessionName"] == resolved
+    assert stopped.details["name"] == "callback"
+    assert stopped.details["sessionName"] == resolved
+    targets = [call[call.index("-t") + 1] for call in recorder.calls if "-t" in call]
+    assert targets == [resolved] * 7
+
+
+def test_tmux_rejects_a_resolved_name_from_another_workspace(tmp_path: Path) -> None:
+    definition, recorder = recorded_tmux_definition(tmp_path)
+
+    with pytest.raises(ValueError, match="belongs to another workspace"):
+        definition.execute(
+            "capture",
+            {
+                "action": "capture",
+                "name": "travis234-deadbeefcafe-callback",
+            },
+        )
+
+    assert recorder.calls == []
+
+
+def test_tmux_accepts_a_returned_resolved_name_for_the_longest_logical_name(
+    tmp_path: Path,
+) -> None:
+    logical_name = "x" * 48
+    digest = hashlib.sha256(str(tmp_path.resolve()).encode("utf-8")).hexdigest()[:12]
+    resolved = f"travis234-{digest}-{logical_name}"
+    definition, _ = recorded_tmux_definition(
+        tmp_path,
+        [
+            (1, "", "can't find session"),
+            (0, "", ""),
+            (0, "", ""),
+            (0, "", ""),
+            (0, "", ""),
+            (0, "", ""),
+        ],
+    )
+
+    started = definition.execute(
+        "start",
+        {"action": "start", "name": logical_name, "command": "sleep 10"},
+    )
+    stopped = definition.execute(
+        "stop",
+        {"action": "stop", "name": started.details["sessionName"]},
+    )
+
+    assert started.details["sessionName"] == resolved
+    assert stopped.details["sessionName"] == resolved
 
 
 @pytest.mark.parametrize("name", ["", "two words", "bad:name", "../escape", "x" * 49])
@@ -201,6 +310,39 @@ def test_tmux_start_requires_existing_directory(tmp_path: Path) -> None:
             },
         )
     assert recorder.calls == []
+
+
+@pytest.mark.parametrize(
+    "responses",
+    [
+        [
+            (1, "", "can't find session"),
+            (0, "", ""),
+            (2, "", "set-option failed"),
+            (0, "", ""),
+        ],
+        [
+            (1, "", "can't find session"),
+            (0, "", ""),
+            (0, "", ""),
+            (2, "", "respawn-pane failed"),
+            (0, "", ""),
+        ],
+    ],
+)
+def test_tmux_start_cleans_up_when_persistent_pane_setup_fails(
+    tmp_path: Path,
+    responses: list[tuple[int, str, str]],
+) -> None:
+    definition, recorder = recorded_tmux_definition(tmp_path, responses)
+
+    with pytest.raises(RuntimeError, match="tmux command failed"):
+        definition.execute(
+            "start",
+            {"action": "start", "name": "callback", "command": "sleep 10"},
+        )
+
+    assert recorder.calls[-1][1:3] == ["kill-session", "-t"]
 
 
 def test_tmux_reports_missing_executable_without_running(tmp_path: Path) -> None:
@@ -295,6 +437,35 @@ def test_real_tmux_round_trip(tmp_path: Path) -> None:
         listed = definition.execute("list", {"action": "list"})
         assert "TMUX-SMOKE-OK" in output
         assert started.details["sessionName"] in listed.details["sessions"]
+    finally:
+        definition.execute("stop", {"action": "stop", "name": name})
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is not installed")
+def test_real_tmux_preserves_fast_command_output_until_explicit_stop(
+    tmp_path: Path,
+) -> None:
+    name = f"fast-{uuid.uuid4().hex[:8]}"
+    definition = create_tmux_tool_definition(str(tmp_path))
+    try:
+        definition.execute(
+            "start",
+            {
+                "action": "start",
+                "name": name,
+                "command": "printf 'TMUX-FAST-OK\\n'",
+            },
+        )
+        time.sleep(0.2)
+
+        captured = definition.execute(
+            "capture",
+            {"action": "capture", "name": name, "lines": 50},
+        )
+        listed = definition.execute("list", {"action": "list"})
+
+        assert "TMUX-FAST-OK" in result_text(captured)
+        assert captured.details["sessionName"] in listed.details["sessions"]
     finally:
         definition.execute("stop", {"action": "stop", "name": name})
 

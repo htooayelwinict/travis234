@@ -152,9 +152,10 @@ def test_builtin_tool_definitions_match_travis234_prompt_metadata(tmp_path: Path
     prompt_metadata = {
             "bash": (
                 "Execute bash commands (ls, grep, find, etc.)",
-                [
-                    "Leave stdin closed for normal commands, searches, tests, and servers. Set stdin=open only before using process write or write_raw on that command.",
-                ],
+                    [
+                        "Leave stdin closed for normal commands, searches, tests, and servers. Set stdin=open only before using process write or write_raw on that command.",
+                        "For planned interactive follow-up, launch bash with tty=true and yield_time_ms=0.",
+                    ],
             ),
         "grep": ("Search file contents for patterns (respects .gitignore)", []),
         "find": ("Find files by glob pattern (respects .gitignore)", []),

@@ -26,8 +26,8 @@ def test_npm_distribution_uses_offsec_name_and_travis_binary() -> None:
 def test_offsec_release_uses_python_and_npm_compatible_prerelease_versions() -> None:
     import json
 
-    python_expected = "2.4.0.dev1"
-    npm_expected = "2.4.0-offsec.2"
+    python_expected = "2.4.0.dev2"
+    npm_expected = "2.4.0-offsec.4"
     python_metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     workspace = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
     npm_package = json.loads(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import os
 import sqlite3
 import threading
@@ -16,6 +17,99 @@ from travis.coding_agent.processes.types import (
     ProcessState,
 )
 from travis.coding_agent.tools.truncate import DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES
+
+
+def completion_record(
+    session_id: str,
+    *,
+    output_size: int,
+    total_lines: int,
+) -> ProcessCompletionRecord:
+    return ProcessCompletionRecord(
+        session_id=session_id,
+        state=ProcessState.EXITED,
+        exit_code=0,
+        output_size=output_size,
+        total_lines=total_lines,
+        elapsed_ms=1,
+        completed_at=1.0,
+        launch_session_id=None,
+        failure_code=None,
+    )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="hard-link inode assertion is POSIX-specific")
+def test_completion_uses_hard_link_for_same_filesystem_output(tmp_path: Path) -> None:
+    source = tmp_path / "source.log"
+    source.write_text("done\n", encoding="utf-8")
+    store = ProcessCompletionStore(tmp_path / "results", clock=lambda: 2.0)
+    try:
+        persisted = store.persist(
+            ProcessOwner("app", str(tmp_path / "workspace"), "agent"),
+            completion_record("proc_" + "a" * 32, output_size=5, total_lines=1),
+            source,
+        )
+
+        assert persisted.stat().st_ino == source.stat().st_ino
+        source.unlink()
+        assert persisted.read_text(encoding="utf-8") == "done\n"
+    finally:
+        store.close()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="hard-link inode assertion is POSIX-specific")
+def test_completion_falls_back_to_atomic_copy_across_filesystems(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "source.log"
+    source.write_text("done\n", encoding="utf-8")
+    store = ProcessCompletionStore(tmp_path / "results", clock=lambda: 2.0)
+    monkeypatch.setattr(
+        "travis.coding_agent.processes.completions.os.link",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError(errno.EXDEV, "cross-device link")),
+    )
+    try:
+        persisted = store.persist(
+            ProcessOwner("app", str(tmp_path / "workspace"), "agent"),
+            completion_record("proc_" + "b" * 32, output_size=5, total_lines=1),
+            source,
+        )
+
+        assert persisted.read_text(encoding="utf-8") == "done\n"
+        assert persisted.stat().st_ino != source.stat().st_ino
+    finally:
+        store.close()
+
+
+def test_completion_rejects_negative_authoritative_line_count(tmp_path: Path) -> None:
+    source = tmp_path / "source.log"
+    source.write_text("done\n", encoding="utf-8")
+    store = ProcessCompletionStore(tmp_path / "results", clock=lambda: 2.0)
+    try:
+        with pytest.raises(ValueError, match="line count"):
+            store.persist(
+                ProcessOwner("app", str(tmp_path / "workspace"), "agent"),
+                completion_record("proc_" + "c" * 32, output_size=5, total_lines=-1),
+                source,
+            )
+    finally:
+        store.close()
+
+
+def test_completion_tail_uses_authoritative_line_count(tmp_path: Path) -> None:
+    source = tmp_path / "source.log"
+    source.write_text("visible\n", encoding="utf-8")
+    owner = ProcessOwner("app", str(tmp_path / "workspace"), "agent")
+    process_id = "proc_" + "d" * 32
+    store = ProcessCompletionStore(tmp_path / "results", clock=lambda: 2.0)
+    try:
+        store.persist(
+            owner,
+            completion_record(process_id, output_size=8, total_lines=99),
+            source,
+        )
+
+        assert store.tail_snapshot(owner, process_id).total_lines == 99
+    finally:
+        store.close()
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX mode assertion")
@@ -36,6 +130,7 @@ def test_completion_survives_restart_without_cross_workspace_access(tmp_path: Pa
             state=ProcessState.EXITED,
             exit_code=0,
             output_size=15,
+            total_lines=1,
             elapsed_ms=125_000,
             completed_at=1_700_000_000.0,
             launch_session_id="session-a",
@@ -79,6 +174,7 @@ def test_completion_tail_is_bounded_and_keeps_terminal_end(tmp_path: Path) -> No
                 state=ProcessState.EXITED,
                 exit_code=0,
                 output_size=len(content.encode("utf-8")),
+                total_lines=3_000,
                 elapsed_ms=1_000,
                 completed_at=100.0,
                 launch_session_id=None,
@@ -123,6 +219,7 @@ def test_retention_prunes_oldest_by_count_size_and_ttl(tmp_path: Path) -> None:
                     state=ProcessState.EXITED,
                     exit_code=0,
                     output_size=3,
+                    total_lines=1,
                     elapsed_ms=index,
                     completed_at=float(index),
                     launch_session_id=None,
@@ -157,6 +254,7 @@ def test_duplicate_completion_does_not_destroy_first_output(tmp_path: Path) -> N
             state=ProcessState.EXITED,
             exit_code=0,
             output_size=5,
+            total_lines=1,
             elapsed_ms=1,
             completed_at=1.0,
             launch_session_id=None,
@@ -194,6 +292,7 @@ def test_two_store_instances_persist_without_lost_records(tmp_path: Path) -> Non
                     state=ProcessState.EXITED,
                     exit_code=index,
                     output_size=1,
+                    total_lines=1,
                     elapsed_ms=1,
                     completed_at=1.0,
                     launch_session_id=None,
@@ -233,6 +332,7 @@ def test_closed_completion_store_rejects_writes(tmp_path: Path) -> None:
                 state=ProcessState.EXITED,
                 exit_code=0,
                 output_size=1,
+                total_lines=1,
                 elapsed_ms=1,
                 completed_at=1.0,
                 launch_session_id=None,
@@ -258,6 +358,7 @@ def test_sparse_large_tail_reads_bounded_bytes(tmp_path: Path, monkeypatch) -> N
                 state=ProcessState.EXITED,
                 exit_code=0,
                 output_size=64 * 1024 * 1024,
+                total_lines=1,
                 elapsed_ms=1,
                 completed_at=1.0,
                 launch_session_id=None,
@@ -318,6 +419,7 @@ def test_completion_resolve_rejects_cursor_inside_utf8_sequence(tmp_path: Path) 
                 state=ProcessState.EXITED,
                 exit_code=0,
                 output_size=len(encoded),
+                total_lines=1,
                 elapsed_ms=1,
                 completed_at=1.0,
                 launch_session_id=None,
@@ -391,6 +493,7 @@ def test_inspect_many_is_one_ordered_query_and_rejects_duplicates(tmp_path: Path
                     state=ProcessState.EXITED,
                     exit_code=index,
                     output_size=8,
+                    total_lines=1,
                     elapsed_ms=100 + index,
                     completed_at=100.0,
                     launch_session_id=None,
@@ -429,6 +532,7 @@ def test_invalid_completion_row_is_removed_without_escaping(tmp_path: Path) -> N
                 state=ProcessState.EXITED,
                 exit_code=0,
                 output_size=6,
+                total_lines=1,
                 elapsed_ms=1,
                 completed_at=100.0,
                 launch_session_id=None,

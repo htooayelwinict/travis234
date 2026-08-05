@@ -139,12 +139,96 @@ def test_process_argument_preparation_rejects_ambiguous_wait_timing() -> None:
         )
 
 
-@pytest.mark.parametrize("alias", ["sessionId", "nextCursor", "yieldTimeMs", "waitTimeMs", "maxBytes"])
-def test_process_tool_rejects_compatibility_arguments(alias: str) -> None:
-    arguments = {"action": "poll", "session_id": "proc_x", "cursor": 0, alias: "legacy"}
+def test_process_argument_preparation_recovers_collapsed_wait_fields_and_id() -> None:
+    arguments = {
+        "action": "wait",
+        "cursor": 17,
+        "sessionid": "proc8e355b88e4fad64f5a9bd8c1e9cbc284",
+        "waittimems": 120_000,
+    }
 
-    with pytest.raises(ValueError, match=rf"poll does not accept {alias}"):
-        process_tool_module._validate_args(arguments)
+    assert process_tool_module.prepare_process_arguments(arguments) == {
+        "action": "wait",
+        "cursor": 17,
+        "session_id": "proc_8e355b88e4fad64f5a9bd8c1e9cbc284",
+        "wait_time_ms": 60_000,
+    }
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        (
+            {"action": "poll", "sessionId": "proc_x", "cursor": 0},
+            {"action": "poll", "session_id": "proc_x", "cursor": 0},
+        ),
+        (
+            {"action": "poll", "session_id": "proc_x", "nextCursor": 4},
+            {"action": "poll", "session_id": "proc_x", "cursor": 4},
+        ),
+        (
+            {"action": "poll", "session_id": "proc_x", "cursor": 0, "yieldTimeMs": 1_000},
+            {"action": "poll", "session_id": "proc_x", "cursor": 0, "yield_time_ms": 1_000},
+        ),
+        (
+            {"action": "wait", "session_id": "proc_x", "cursor": 0, "waitTimeMs": 1_000},
+            {"action": "wait", "session_id": "proc_x", "cursor": 0, "wait_time_ms": 1_000},
+        ),
+        (
+            {"action": "poll", "session_id": "proc_x", "cursor": 0, "maxBytes": 1_024},
+            {"action": "poll", "session_id": "proc_x", "cursor": 0, "max_bytes": 1_024},
+        ),
+    ],
+)
+def test_process_argument_preparation_recovers_compatibility_fields(arguments, expected) -> None:
+    assert process_tool_module.prepare_process_arguments(arguments) == expected
+
+
+@pytest.mark.parametrize(
+    ("canonical", "alias"),
+    [
+        ("session_id", "sessionid"),
+        ("cursor", "nextCursor"),
+        ("yield_time_ms", "yieldTimeMs"),
+        ("wait_time_ms", "waittimems"),
+        ("max_bytes", "maxBytes"),
+    ],
+)
+def test_process_argument_preparation_rejects_conflicting_aliases(canonical: str, alias: str) -> None:
+    arguments = {"action": "wait", canonical: 1, alias: 2}
+
+    with pytest.raises(ValueError, match="conflicting process fields"):
+        process_tool_module.prepare_process_arguments(arguments)
+
+
+def test_process_argument_preparation_deduplicates_equivalent_aliases() -> None:
+    arguments = {
+        "action": "wait",
+        "session_id": "proc_x",
+        "cursor": 4,
+        "wait_time_ms": 60_000,
+        "waittimems": "60000",
+    }
+
+    assert process_tool_module.prepare_process_arguments(arguments) == {
+        "action": "wait",
+        "session_id": "proc_x",
+        "cursor": 4,
+        "wait_time_ms": 60_000,
+    }
+
+
+def test_process_argument_preparation_leaves_unknown_fields_for_strict_validation() -> None:
+    arguments = {
+        "action": "poll",
+        "session_id": "proc_x",
+        "cursor": 0,
+        "sessionHandle": "legacy",
+    }
+
+    prepared = process_tool_module.prepare_process_arguments(arguments)
+    with pytest.raises(ValueError, match="poll does not accept sessionHandle"):
+        process_tool_module._validate_args(prepared)
 
 
 def test_process_argument_preparation_explains_required_wait_shape() -> None:
@@ -709,7 +793,7 @@ def test_internal_child_can_send_follow_up_input_to_managed_pty(tmp_path: Path) 
         service.close()
 
 
-def test_agent_loop_prepares_mixed_process_wait_arguments_before_schema_validation(tmp_path: Path) -> None:
+def test_agent_loop_recovers_malformed_process_wait_before_schema_validation(tmp_path: Path) -> None:
     model = faux_model()
     service = ProcessSessionService(directory=tmp_path / ".processes")
     owner = ProcessOwner("app", str(tmp_path.resolve()), "agent")
@@ -732,9 +816,9 @@ def test_agent_loop_prepares_mixed_process_wait_arguments_before_schema_validati
                 active_model,
                 "process.wait",
                 {
-                    "session_id": started.details["sessionId"],
+                    "sessionid": started.details["sessionId"].replace("proc_", "proc", 1),
                     "cursor": str(started.details["nextCursor"]),
-                    "wait_time_ms": "1000",
+                    "waittimems": "120000",
                 },
                 call_id="mixed-process-wait",
             )
@@ -770,7 +854,7 @@ def test_agent_loop_prepares_mixed_process_wait_arguments_before_schema_validati
             "action": "wait",
             "session_id": process_call.arguments["session_id"],
             "cursor": process_call.arguments["cursor"],
-            "wait_time_ms": 1_000,
+            "wait_time_ms": 60_000,
         }
 
         persisted_process_call = next(
@@ -856,6 +940,11 @@ def test_managed_bash_warns_models_not_to_infer_execution_deadlines(managed_tool
     definition = create_bash_tool_definition(".")
 
     assert "Never infer a timeout from expected command duration" in definition.description
+    assert any(
+        guideline
+        == "For planned interactive follow-up, launch bash with tty=true and yield_time_ms=0."
+        for guideline in definition.prompt_guidelines
+    )
 
 
 def test_process_write_explains_raw_input_and_line_submission(managed_tools) -> None:
@@ -871,6 +960,16 @@ def test_process_write_explains_raw_input_and_line_submission(managed_tools) -> 
     assert "appends one newline" in write_schema["properties"]["input"]["description"]
     assert "exactly as provided" in raw_schema["properties"]["input"]["description"]
     assert any("write_raw" in guideline for guideline in definition.prompt_guidelines)
+    assert any(
+        guideline
+        == "Each process wait observes for at most 60000 ms and never changes bash.timeout."
+        for guideline in definition.prompt_guidelines
+    )
+    assert any(
+        guideline
+        == "Use eof only for pipe stdin; use write_raw with an explicit Ctrl-D keystroke for PTYs."
+        for guideline in definition.prompt_guidelines
+    )
 
 
 def test_process_write_submits_one_line(managed_tools) -> None:
@@ -968,7 +1067,7 @@ def test_process_normalizes_poll_with_wait_deadline_to_terminal_wait(managed_too
     assert "done" in text(result)
 
 
-@pytest.mark.parametrize("wait_time_ms", [999, 60_001, True])
+@pytest.mark.parametrize("wait_time_ms", [999, True])
 def test_process_wait_validates_host_deadline(managed_tools, wait_time_ms) -> None:
     service, owner, _bash, _process = managed_tools
     definition = create_process_tool_definition(service, owner)

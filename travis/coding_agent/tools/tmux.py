@@ -19,6 +19,7 @@ from travis.coding_agent.tools.types import ToolContext, ToolDefinition, wrap_to
 
 
 TMUX_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,47}$")
+TMUX_RESOLVED_NAME_PATTERN = re.compile(r"^travis234-[0-9a-f]{12}-")
 TMUX_CAPTURE_LINES_DEFAULT = 200
 TMUX_CAPTURE_LINES_MAX = 2000
 TMUX_CAPTURE_BYTES_MAX = 50 * 1024
@@ -32,7 +33,12 @@ TMUX_SCHEMA = {
             "type": "string",
             "enum": ["start", "send", "capture", "list", "stop"],
         },
-        "name": {"type": "string", "description": "Logical tmux session name"},
+        "name": {
+            "type": "string",
+            "description": (
+                "Logical tmux session name or exact resolved name returned by this tool"
+            ),
+        },
         "command": {
             "type": "string",
             "description": "Command for a detached new session",
@@ -90,15 +96,32 @@ def _workspace_prefix(workspace: WorkspaceCapability) -> str:
     return f"travis234-{digest}-"
 
 
-def _session_name(workspace: WorkspaceCapability, name: object) -> str:
+def _session_identity(
+    workspace: WorkspaceCapability,
+    name: object,
+) -> tuple[str, str]:
+    prefix = _workspace_prefix(workspace)
+    if isinstance(name, str) and name.startswith(prefix):
+        logical_name = name[len(prefix) :]
+        if TMUX_NAME_PATTERN.fullmatch(logical_name) is not None:
+            return logical_name, name
+    if isinstance(name, str) and TMUX_RESOLVED_NAME_PATTERN.match(name):
+        raise ValueError("tmux session name belongs to another workspace")
     if not isinstance(name, str) or TMUX_NAME_PATTERN.fullmatch(name) is None:
         raise ValueError(
             "tmux name must match [A-Za-z0-9][A-Za-z0-9_-]{0,47}"
         )
-    return f"{_workspace_prefix(workspace)}{name}"
+    return name, f"{prefix}{name}"
 
 
-def _validated_args(raw_args: object) -> tuple[str, dict[str, object]]:
+def _session_name(workspace: WorkspaceCapability, name: object) -> str:
+    return _session_identity(workspace, name)[1]
+
+
+def _validated_args(
+    workspace: WorkspaceCapability,
+    raw_args: object,
+) -> tuple[str, dict[str, object]]:
     if not isinstance(raw_args, Mapping):
         raise ValueError("tmux arguments must be an object")
     args = dict(raw_args)
@@ -111,7 +134,7 @@ def _validated_args(raw_args: object) -> tuple[str, dict[str, object]]:
             f"{action} does not accept {', '.join(unexpected)}"
         )
     if action != "list":
-        _session_name_placeholder(args.get("name"))
+        _session_name(workspace, args.get("name"))
     if action == "start":
         command = args.get("command")
         if not isinstance(command, str) or not command.strip():
@@ -132,13 +155,6 @@ def _validated_args(raw_args: object) -> tuple[str, dict[str, object]]:
         ):
             raise ValueError("tmux capture lines must be an integer from 1 to 2000")
     return action, args
-
-
-def _session_name_placeholder(name: object) -> None:
-    if not isinstance(name, str) or TMUX_NAME_PATTERN.fullmatch(name) is None:
-        raise ValueError(
-            "tmux name must match [A-Za-z0-9][A-Za-z0-9_-]{0,47}"
-        )
 
 
 def _tool_result(message: str, details: dict[str, object]) -> AgentToolResult:
@@ -186,7 +202,7 @@ def _execute_tmux(
     operations: TmuxOperations,
     raw_args: object,
 ) -> AgentToolResult:
-    action, args = _validated_args(raw_args)
+    action, args = _validated_args(workspace, raw_args)
     executable = operations.which("tmux")
     if not executable:
         raise RuntimeError("tmux executable not found; install tmux and retry")
@@ -208,8 +224,7 @@ def _execute_tmux(
             {"action": "list", "sessions": sessions},
         )
 
-    logical_name = str(args["name"])
-    resolved_name = _session_name(workspace, logical_name)
+    logical_name, resolved_name = _session_identity(workspace, args["name"])
     details: dict[str, object] = {
         "action": action,
         "name": logical_name,
@@ -235,12 +250,48 @@ def _execute_tmux(
                 resolved_name,
                 "-c",
                 str(resolved_cwd),
-                "--",
-                str(args["command"]),
             ],
         )
+        try:
+            _run_checked(
+                operations,
+                [
+                    executable,
+                    "set-option",
+                    "-w",
+                    "-t",
+                    resolved_name,
+                    "remain-on-exit",
+                    "on",
+                ],
+            )
+            _run_checked(
+                operations,
+                [
+                    executable,
+                    "respawn-pane",
+                    "-k",
+                    "-t",
+                    resolved_name,
+                    "-c",
+                    str(resolved_cwd),
+                    "--",
+                    str(args["command"]),
+                ],
+            )
+        except Exception:
+            operations.run([executable, "kill-session", "-t", resolved_name])
+            raise
         details["cwd"] = str(resolved_cwd)
-        return _tool_result(f"Started tmux session {resolved_name}.", details)
+        return _tool_result(
+            (
+                "Started durable tmux session. "
+                f"Logical name: {logical_name}. "
+                f"Resolved native name: {resolved_name}. "
+                "Output remains capturable after command exit; stop the session explicitly."
+            ),
+            details,
+        )
 
     if action == "stop":
         if not _has_session(operations, executable, resolved_name):
@@ -320,6 +371,7 @@ def create_tmux_tool_definition(
         prompt_snippet="Manage named long-lived tmux sessions",
         prompt_guidelines=[
             "Use tmux for listeners, reverse connections, OOB callbacks, relays, servers, and work that must survive turns.",
+            "For follow-up tmux tool calls, use either the logical name or the exact resolved name returned by this tool; use the resolved name for native tmux commands.",
             "Use capture to collect evidence and stop sessions explicitly when they are no longer needed.",
         ],
         execute=lambda _tid, args, signal=None, on_update=None, ctx=None: _execute_tmux(

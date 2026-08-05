@@ -1,6 +1,6 @@
 {
   "name": "@htooayelwinict/travis234-offsec",
-  "version": "2.4.0-offsec.3",
+  "version": "2.4.0-offsec.4",
   "description": "Docker launcher for the Travis234 OffSec terminal agent.",
   "type": "module",
   "license": "MIT",

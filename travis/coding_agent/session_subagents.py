@@ -395,6 +395,21 @@ class SessionSubagentController:
             origin="agent",
         )
 
+    def _kill_active_subagent_processes(self, owner: ProcessOwner | None) -> None:
+        if owner is None or self.process_service is None:
+            return
+        try:
+            snapshots = self.process_service.list(owner)
+        except Exception:
+            return
+        for snapshot in snapshots:
+            if snapshot.state.terminal:
+                continue
+            try:
+                self.process_service.kill(owner, snapshot.session_id)
+            except Exception:
+                continue
+
     def _run_internal_subagent(self, task: SubagentTask) -> SubagentResult:
         started = int(time.time() * 1000)
         tool_trace: list[dict[str, object]] = []
@@ -453,6 +468,7 @@ class SessionSubagentController:
                 result = replace(result, raw_log_path=raw_log_path, errors=[*result.errors, *log_errors])
             return result
         finally:
+            self._kill_active_subagent_processes(child_owner)
             child.shutdown()
 
     def _safe_write_internal_subagent_result_pack(

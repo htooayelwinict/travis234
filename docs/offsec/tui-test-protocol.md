@@ -187,8 +187,10 @@ Use tmux to start a named session callback-check running sh -lc 'sleep 1; printf
 
 ### Expected tools/events
 
-The `tmux` tool performs start, list, condition-based capture, stop, and final
-list. The resolved name follows `travis234-{12-character digest}-callback-check`.
+The `tmux` tool performs start, list, capture, stop, and final list. The resolved
+name follows `travis234-{12-character digest}-callback-check`; follow-up tool
+calls may use that returned value without adding another prefix. The pane retains
+its final output if the short command exits before capture.
 
 ### Observed evidence
 

@@ -10,7 +10,7 @@ TRAVIS234 // NEURAL TERMINAL ONLINE
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-39e6c7?style=for-the-badge&labelColor=10182b"></a>
   <img alt="Python 3.13" src="https://img.shields.io/badge/Python-3.13-63a7ff?style=for-the-badge&labelColor=10182b">
-  <img alt="Version 2.4.0.dev1" src="https://img.shields.io/badge/version-2.4.0.dev1-bd6cff?style=for-the-badge&labelColor=10182b">
+  <img alt="Version 2.4.0.dev2" src="https://img.shields.io/badge/version-2.4.0.dev2-bd6cff?style=for-the-badge&labelColor=10182b">
 </p>
 
 # Travis234 OffSec
@@ -108,7 +108,10 @@ evidence. Its default child tool set is `read`, `grep`, `find`, `ls`, `bash`,
 
 - Use `bash` for finite commands.
 - Use `bash` plus `process` for current-session interactive PTYs and follow-up
-  input or keystrokes.
+  input or keystrokes. For planned interaction, launch with `tty=true` and
+  `yield_time_ms=0`; a PTY implicitly keeps input available. `eof=true` is only
+  valid for pipe stdin. Send an explicit Ctrl-D keystroke with `write_raw` only
+  when the interactive program expects it.
 - Use `tmux` for listeners, reverse connections, OOB callbacks, relays, servers,
   long waits, and work that must survive turns.
 
@@ -116,11 +119,14 @@ At most three children run concurrently. They may make workspace changes under
 disjoint ownership, return exact changed-file evidence, and cannot spawn children
 of their own. The parent remains responsible for reconciling their result packs.
 
-`process.wait` waits for terminal state and does not change the command timeout.
-If its deadline expires, the command is not killed; wait again from the returned
-cursor. Output is bounded to 64 MiB per process by default and a producer crossing
-the bound reports `output_limit`. Travis234 cannot reattach a running process after an application restart;
-use tmux for that lifecycle. User `!command` and `!!command` run asynchronously;
+Each model-facing `process.wait` observes terminal state for at most 60 seconds
+and does not change the command timeout (`bash.timeout`). If it returns `running`,
+the command is not killed; wait again from the exact returned `nextCursor`.
+Output is bounded to 64 MiB per process by default and a producer crossing the bound reports
+`output_limit`. Managed `proc_*` handles survive agent turns but not application
+restarts: Travis234 cannot reattach a running process after an application restart.
+Use tmux for cross-turn and cross-application durable terminals. User
+`!command` and `!!command` run asynchronously;
 `!!` output remains outside model context.
 
 ## State, sessions, and compaction
@@ -187,4 +193,4 @@ docker build --no-cache -f Dockerfile.release -t travis234-offsec:smoke .
 python evals/container_smoke.py --image travis234-offsec:smoke
 ```
 
-Version 2.4.0.dev1. Licensed under [MIT](LICENSE); see [NOTICE.md](NOTICE.md).
+Version 2.4.0.dev2. Licensed under [MIT](LICENSE); see [NOTICE.md](NOTICE.md).

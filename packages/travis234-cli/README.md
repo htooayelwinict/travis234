@@ -18,7 +18,7 @@ travis234 --cwd ~/agent-work -- --target 10.129.1.23
 ```
 
 The launcher pulls the image tag matching its installed npm version (currently
-`ghcr.io/htooayelwinict/travis234-offsec:2.4.0-offsec.3`), mounts
+`ghcr.io/htooayelwinict/travis234-offsec:2.4.0-offsec.4`), mounts
 only the chosen `--cwd` read-write at `/workspace`, and mounts
 `~/.travis234/sandbox-home` at `/travis-home`. Sessions therefore persist at
 `/travis-home/agent/sessions/` when a disposable container exits. The host `.env`
@@ -51,7 +51,7 @@ travis234 --cwd . --dry-run
 travis234 --cwd . --dotenv ~/.config/travis/9router.env
 travis234 --cwd . --no-pull
 travis234 --cwd . --pull
-travis234 --cwd . --image ghcr.io/htooayelwinict/travis234-offsec:2.4.0-offsec.3
+travis234 --cwd . --image ghcr.io/htooayelwinict/travis234-offsec:2.4.0-offsec.4
 travis234 --cwd . -- --continue
 travis234 --cwd . -- --resume
 travis234 --cwd . -- --session <path-or-session-id>

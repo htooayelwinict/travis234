@@ -1,11 +1,23 @@
 from __future__ import annotations
 
+import shlex
+import shutil
+
 from tests._support_coding_agent import *  # noqa: F403
 from travis.coding_agent.processes.service import ProcessSessionService
-from travis.coding_agent.processes.types import ProcessOwner
+from travis.coding_agent.processes.types import ProcessOwner, ProcessState
 from travis.coding_agent.session_types import _SUBAGENT_TOOL_NAMES, _prompt_requests_subagent_tools
 from travis.coding_agent.subagents import OFFSEC_SUBAGENT_TOOLS
 from travis.coding_agent.tools import all_tool_names
+
+
+def eventually(predicate, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.005)
+    assert predicate()
 
 
 def test_truncate_head_line_limit() -> None:
@@ -1566,6 +1578,252 @@ def test_internal_child_inherits_process_service_targets_and_unique_owner(tmp_pa
     finally:
         parent.shutdown()
         service.close()
+
+
+def test_internal_child_reaps_active_managed_processes_on_completion(tmp_path: Path) -> None:
+    calls = {"count": 0}
+    model = faux_model()
+    service = ProcessSessionService(directory=tmp_path / "processes")
+    parent_owner = ProcessOwner("app-fixed", str(tmp_path), "agent")
+
+    def stream_fn(active_model, context, options):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            events = tool_call_response_events(
+                active_model,
+                "bash",
+                {
+                    "command": f"{shlex.quote(sys.executable)} -c {shlex.quote('import time; time.sleep(60)')}",
+                    "yield_time_ms": 0,
+                },
+                call_id="child-background-process",
+            )
+        else:
+            events = text_response_events(active_model, "child complete")
+        return create_faux_provider(lambda _model, _context: events).stream_simple(
+            active_model,
+            context,
+            options,
+        )
+
+    parent = AgentSession(
+        cwd=str(tmp_path),
+        model=model,
+        stream_fn=stream_fn,
+        process_service=service,
+        process_owner=parent_owner,
+    )
+    task = parent._build_subagent_task("shell-worker", "start a managed command")
+    child_owner = parent._subagent_process_owner(task)
+    assert child_owner is not None
+    try:
+        result = parent._run_internal_subagent(task)
+
+        assert result.status == "completed"
+        eventually(
+            lambda: all(snapshot.state.terminal for snapshot in service.list(child_owner)),
+            timeout=2,
+        )
+        assert service.list(parent_owner) == ()
+    finally:
+        parent.shutdown()
+        service.close()
+
+
+def test_internal_child_cleanup_preserves_parent_processes(tmp_path: Path) -> None:
+    calls = {"count": 0}
+    service = ProcessSessionService(directory=tmp_path / "processes")
+    parent_owner = ProcessOwner("app-fixed", str(tmp_path), "agent")
+
+    def stream_fn(active_model, context, options):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            events = tool_call_response_events(
+                active_model,
+                "bash",
+                {
+                    "command": f"{shlex.quote(sys.executable)} -c {shlex.quote('import time; time.sleep(60)')}",
+                    "yield_time_ms": 0,
+                },
+                call_id="child-background-process",
+            )
+        else:
+            events = text_response_events(active_model, "child complete")
+        return create_faux_provider(lambda _model, _context: events).stream_simple(
+            active_model, context, options
+        )
+
+    parent = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        stream_fn=stream_fn,
+        process_service=service,
+        process_owner=parent_owner,
+    )
+    bash = parent.get_tool_definition("bash")
+    assert bash is not None
+    parent_job = bash.execute(
+        "parent-background-process",
+        {
+            "command": f"{shlex.quote(sys.executable)} -c {shlex.quote('import time; time.sleep(60)')}",
+            "yield_time_ms": 0,
+        },
+    )
+    task = parent._build_subagent_task("shell-worker", "start a managed command")
+    child_owner = parent._subagent_process_owner(task)
+    assert child_owner is not None
+    try:
+        parent._run_internal_subagent(task)
+
+        assert service.list(parent_owner)[0].state is ProcessState.RUNNING
+        eventually(
+            lambda: bool(service.list(child_owner))
+            and all(snapshot.state.terminal for snapshot in service.list(child_owner))
+        )
+    finally:
+        service.kill(parent_owner, parent_job.details["sessionId"])
+        parent.shutdown()
+        service.close()
+
+
+def test_internal_child_reaps_managed_processes_when_provider_raises(tmp_path: Path) -> None:
+    calls = {"count": 0}
+    service = ProcessSessionService(directory=tmp_path / "processes")
+    parent_owner = ProcessOwner("app-fixed", str(tmp_path), "agent")
+
+    def stream_fn(active_model, context, options):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            events = tool_call_response_events(
+                active_model,
+                "bash",
+                {
+                    "command": f"{shlex.quote(sys.executable)} -c {shlex.quote('import time; time.sleep(60)')}",
+                    "yield_time_ms": 0,
+                },
+                call_id="child-background-process",
+            )
+            return create_faux_provider(lambda _model, _context: events).stream_simple(
+                active_model, context, options
+            )
+        raise RuntimeError("child provider failed")
+
+    parent = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        stream_fn=stream_fn,
+        process_service=service,
+        process_owner=parent_owner,
+    )
+    task = parent._build_subagent_task("shell-worker", "start a managed command")
+    child_owner = parent._subagent_process_owner(task)
+    assert child_owner is not None
+    try:
+        result = parent._run_internal_subagent(task)
+
+        assert result.status == "completed"
+        eventually(
+            lambda: bool(service.list(child_owner))
+            and all(snapshot.state.terminal for snapshot in service.list(child_owner))
+        )
+    finally:
+        parent.shutdown()
+        service.close()
+
+
+def test_internal_child_cleanup_runs_after_parent_cancellation(tmp_path: Path) -> None:
+    calls = {"count": 0}
+    release = threading.Event()
+    service = ProcessSessionService(directory=tmp_path / "processes")
+    parent_owner = ProcessOwner("app-fixed", str(tmp_path), "agent")
+
+    def stream_fn(active_model, context, options):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            events = tool_call_response_events(
+                active_model,
+                "bash",
+                {
+                    "command": f"{shlex.quote(sys.executable)} -c {shlex.quote('import time; time.sleep(60)')}",
+                    "yield_time_ms": 0,
+                },
+                call_id="child-background-process",
+            )
+        else:
+            assert release.wait(2)
+            events = text_response_events(active_model, "child released")
+        return create_faux_provider(lambda _model, _context: events).stream_simple(
+            active_model, context, options
+        )
+
+    parent = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        stream_fn=stream_fn,
+        process_service=service,
+        process_owner=parent_owner,
+    )
+    task = parent._build_subagent_task("shell-worker", "start a managed command")
+    child_owner = parent._subagent_process_owner(task)
+    assert child_owner is not None
+    try:
+        parent.subagents.spawn(task)
+        eventually(lambda: any(not item.state.terminal for item in service.list(child_owner)))
+        cancelled = parent.subagents.cancel(task.id, "parent cancelled")
+        assert cancelled.status == "cancelled"
+        release.set()
+        eventually(lambda: all(item.state.terminal for item in service.list(child_owner)))
+    finally:
+        release.set()
+        parent.shutdown()
+        service.close()
+
+
+def test_internal_child_cleanup_is_a_noop_without_managed_process_service(tmp_path: Path) -> None:
+    parent = AgentSession(cwd=str(tmp_path), model=faux_model())
+    task = parent._build_subagent_task("reviewer", "inspect files")
+    try:
+        assert parent._subagent_process_owner(task) is None
+        parent._kill_active_subagent_processes(None)
+    finally:
+        parent.shutdown()
+
+
+def test_internal_child_cleanup_suppresses_process_service_failures(tmp_path: Path) -> None:
+    class FailingProcessService:
+        def list(self, _owner):
+            raise RuntimeError("cleanup failed")
+
+    parent = AgentSession(cwd=str(tmp_path), model=faux_model())
+    parent.process_service = FailingProcessService()
+    try:
+        parent._kill_active_subagent_processes(
+            ProcessOwner("child", str(tmp_path), "agent")
+        )
+    finally:
+        parent.process_service = None
+        parent.shutdown()
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is not installed")
+def test_internal_child_process_cleanup_does_not_stop_tmux(tmp_path: Path) -> None:
+    parent = AgentSession(cwd=str(tmp_path), model=faux_model())
+    tmux = parent.get_tool_definition("tmux")
+    assert tmux is not None
+    started = tmux.execute(
+        "start-isolation-session",
+        {"action": "start", "name": "cleanup-isolation", "command": "sleep 60"},
+    )
+    try:
+        parent._kill_active_subagent_processes(None)
+        listed = tmux.execute("list-isolation-session", {"action": "list"})
+        assert started.details["sessionName"] in listed.details["sessions"]
+    finally:
+        tmux.execute(
+            "stop-isolation-session",
+            {"action": "stop", "name": "cleanup-isolation"},
+        )
+        parent.shutdown()
 
 
 def test_real_internal_child_writes_edits_and_reports_changed_file(tmp_path: Path) -> None:
