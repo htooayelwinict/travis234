@@ -9,7 +9,7 @@ import os
 import re
 import threading
 
-from travis.tui.components.base import Container
+from travis.tui.components.base import Component, Container
 from travis.tui.components.editor import CURSOR_MARKER
 from travis.tui.dispatcher import UiDispatcher
 from travis.tui.keys import is_key_release
@@ -144,6 +144,9 @@ class TUI(Container):
         self._focus_order_counter = 0
         self._overlay_stack: list[dict[str, object]] = []
         self._scroll_listeners: list[Callable[[], None]] = []
+        self._input_tail_components: tuple[Component, ...] = ()
+        self._input_tail_start: int | None = None
+        self._input_tail_line_count: int | None = None
         self.dispatcher = UiDispatcher(render=self._do_render, render_interval=render_interval)
 
     @property
@@ -236,6 +239,10 @@ class TUI(Container):
         if is_focusable(component):
             component.focused = True
 
+    def set_input_tail_components(self, components: list[Component]) -> None:
+        self._input_tail_components = tuple(components)
+        self._clear_input_tail_snapshot()
+
 
     @property
     def focused_component(self):
@@ -311,7 +318,8 @@ class TUI(Container):
             if is_key_release(current) and not _wants_key_release(self._focused_component):
                 return
             self._focused_component.handle_input(current)
-            self.request_render()
+            if not self._try_render_input_tail():
+                self.request_render()
 
     def _query_cell_size(self) -> None:
         if not get_capabilities()["images"]:
@@ -432,7 +440,83 @@ class TUI(Container):
         self._last_width = width
         self._last_height = height
         self.last_render = info
+        self._capture_input_tail_snapshot(width, new_lines)
         return info
+
+    def _clear_input_tail_snapshot(self) -> None:
+        self._input_tail_start = None
+        self._input_tail_line_count = None
+
+    def _render_input_tail(self, width: int) -> list[str] | None:
+        if not self._input_tail_components:
+            return None
+        rendered: list[str] = []
+        for component in self._input_tail_components:
+            rendered.extend(component.render(width))
+        if not rendered or any(is_image_line(line) for line in rendered):
+            return None
+        return [truncate_to_width(line, width) for line in rendered]
+
+    def _capture_input_tail_snapshot(self, width: int, lines: list[str]) -> None:
+        self._clear_input_tail_snapshot()
+        if self.has_overlay():
+            return
+        tail_lines = self._render_input_tail(width)
+        if tail_lines is None:
+            return
+        self._extract_cursor_position(tail_lines, self.terminal.rows)
+        if len(tail_lines) > len(lines) or lines[-len(tail_lines) :] != tail_lines:
+            return
+        self._input_tail_start = len(lines) - len(tail_lines)
+        self._input_tail_line_count = len(tail_lines)
+
+    @staticmethod
+    def _contains_component(root: Component, target: object) -> bool:
+        if root is target:
+            return True
+        if isinstance(root, Container):
+            return any(TUI._contains_component(child, target) for child in root.children)
+        return False
+
+    def _try_render_input_tail(self) -> bool:
+        width = self.terminal.columns
+        height = max(1, self.terminal.rows)
+        start = self._input_tail_start
+        line_count = self._input_tail_line_count
+        if (
+            start is None
+            or line_count is None
+            or not self.previous_lines
+            or self._last_width != width
+            or self._last_height != height
+            or self.has_overlay()
+            or not self._input_tail_components
+            or not self._contains_component(self._input_tail_components[0], self._focused_component)
+        ):
+            return False
+
+        tail_lines = self._render_input_tail(width)
+        if tail_lines is None or len(tail_lines) != line_count or start + line_count != len(self.previous_lines):
+            return False
+
+        tail_cursor = self._extract_cursor_position(tail_lines, height)
+        if tail_lines == self.previous_lines[start:]:
+            return False
+        new_lines = [*self.previous_lines[:start], *tail_lines]
+        cursor_position = (
+            (start + tail_cursor[0], tail_cursor[1])
+            if tail_cursor is not None
+            else None
+        )
+        info = self._diff_render(
+            new_lines,
+            cursor_position,
+            height=height,
+            previous_viewport_top=self._previous_viewport_top,
+        )
+        self.previous_lines = new_lines
+        self.last_render = info
+        return True
 
     def scroll_by(self, delta: int) -> int:
         del delta

@@ -70,6 +70,7 @@ class FakeProcessTransport:
         *,
         tty: bool = False,
         initial_output: bytes = b"",
+        secondary_output: bytes | None = None,
         initial_exit_code: int | None = None,
         close_output_on_exit: bool = True,
         exit_on_signals: set[str] | None = None,
@@ -77,6 +78,7 @@ class FakeProcessTransport:
     ) -> None:
         self.tty = tty
         self.reader = BlockingReader()
+        self.secondary_reader = BlockingReader() if secondary_output is not None else None
         self.writes: list[bytes] = []
         self.signals: list[str] = []
         self.resizes: list[tuple[int, int]] = []
@@ -91,11 +93,16 @@ class FakeProcessTransport:
         self._lock = threading.Lock()
         if initial_output:
             self.reader.feed(initial_output)
+        if secondary_output:
+            assert self.secondary_reader is not None
+            self.secondary_reader.feed(secondary_output)
         if initial_exit_code is not None:
             self.exit(initial_exit_code)
 
     def read_sources(self):
-        return (self.reader,)
+        if self.secondary_reader is None:
+            return (self.reader,)
+        return (self.reader, self.secondary_reader)
 
     def poll(self) -> int | None:
         with self._lock:
@@ -138,6 +145,8 @@ class FakeProcessTransport:
     def close(self) -> None:
         self.closed = True
         self.reader.close()
+        if self.secondary_reader is not None:
+            self.secondary_reader.close()
 
     def emit(self, data: bytes) -> None:
         self.reader.feed(data)
@@ -153,6 +162,8 @@ class FakeProcessTransport:
             self._exit_event.set()
         if self._close_output_on_exit if close_output is None else close_output:
             self.reader.finish()
+            if self.secondary_reader is not None:
+                self.secondary_reader.finish()
 
 
 class Factory:
@@ -214,6 +225,91 @@ def test_start_returns_completed_output_when_process_exits_before_yield(service,
     assert snapshot.exit_code == 0
     assert snapshot.cursor == 0
     assert snapshot.next_cursor == 5
+
+
+def test_foreground_output_is_coalesced_before_snapshot_construction(tmp_path: Path, owner) -> None:
+    payload = b"x" * 1_000_000
+    transport = FakeProcessTransport(initial_output=payload, initial_exit_code=0)
+    service = ProcessSessionService(
+        directory=tmp_path / "processes",
+        foreground_update_interval_seconds=60,
+        termination_grace_seconds=0.02,
+        drain_timeout_seconds=0.1,
+    )
+    updates = []
+    try:
+        terminal = service.start(
+            owner,
+            request("chatty"),
+            Factory(transport),
+            yield_time_ms=1_000,
+            on_update=updates.append,
+        )
+
+        assert terminal.state is ProcessState.EXITED
+        assert terminal.output_size == len(payload)
+        assert terminal.output == "x" * len(terminal.output)
+        assert len(updates) == 1
+    finally:
+        service.close()
+
+
+def test_foreground_cadence_is_shared_across_output_readers(tmp_path: Path, owner) -> None:
+    transport = FakeProcessTransport(
+        initial_output=b"stdout\n",
+        secondary_output=b"stderr\n",
+        initial_exit_code=0,
+    )
+    service = ProcessSessionService(
+        directory=tmp_path / "processes",
+        foreground_update_interval_seconds=60,
+        termination_grace_seconds=0.02,
+        drain_timeout_seconds=0.1,
+    )
+    updates = []
+    try:
+        terminal = service.start(
+            owner,
+            request("two-readers"),
+            Factory(transport),
+            yield_time_ms=1_000,
+            on_update=updates.append,
+        )
+
+        assert terminal.state is ProcessState.EXITED
+        assert "stdout\n" in terminal.output
+        assert "stderr\n" in terminal.output
+        assert len(updates) == 1
+    finally:
+        service.close()
+
+
+def test_foreground_listener_failure_does_not_interrupt_terminal_result(tmp_path: Path, owner) -> None:
+    transport = FakeProcessTransport(initial_output=b"done\n", initial_exit_code=0)
+    service = ProcessSessionService(
+        directory=tmp_path / "processes",
+        foreground_update_interval_seconds=60,
+        termination_grace_seconds=0.02,
+        drain_timeout_seconds=0.1,
+    )
+
+    def fail_update(_snapshot) -> None:
+        raise RuntimeError("listener failed")
+
+    try:
+        terminal = service.start(
+            owner,
+            request("listener-failure"),
+            Factory(transport),
+            yield_time_ms=1_000,
+            on_update=fail_update,
+        )
+
+        assert terminal.state is ProcessState.EXITED
+        assert terminal.exit_code == 0
+        assert terminal.output == "done\n"
+    finally:
+        service.close()
 
 
 def test_start_yields_running_handle_without_stopping_process(service, owner) -> None:
@@ -316,6 +412,23 @@ def test_write_is_ordered_and_eof_closes_after_payload(service, owner) -> None:
 
     eventually(lambda: transport.stdin_closed)
     assert transport.writes == [b"first", b"second"]
+
+
+def test_pty_rejects_pipe_style_eof_without_closing_input(service, owner) -> None:
+    transport = FakeProcessTransport(tty=True)
+    started = service.start(
+        owner,
+        request("interactive", tty=True),
+        Factory(transport),
+        yield_time_ms=0,
+    )
+
+    with pytest.raises(ProcessStateError, match="PTY.*write_raw.*Ctrl-D"):
+        service.write(owner, started.session_id, "partial", eof=True, wait_ms=0)
+
+    assert transport.stdin_closed is False
+    service.write(owner, started.session_id, "still-usable\n", wait_ms=0)
+    eventually(lambda: transport.writes == [b"still-usable\n"])
 
 
 def test_write_reports_broken_pipe_and_publishes_input_failure(tmp_path: Path, owner) -> None:

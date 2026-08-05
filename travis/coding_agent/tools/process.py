@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
@@ -22,6 +23,7 @@ from travis.coding_agent.tools.types import ToolDefinition, wrap_tool_definition
 from travis.coding_agent.tools.truncate import truncation_to_details
 
 PROCESS_ACTIONS = ("poll", "wait", "write", "write_raw", "resize", "interrupt", "terminate", "kill", "list")
+MAX_PROCESS_WAIT_MS = 60_000
 
 _PROCESS_FIELDS = {
     "session_id": {"type": "string", "minLength": 1, "description": "Exact process session ID"},
@@ -32,7 +34,10 @@ _PROCESS_FIELDS = {
             "Raw input to write exactly as provided. Include a trailing newline (\\n) to submit a line or press Enter"
         ),
     },
-    "eof": {"type": "boolean", "description": "Close stdin after writing"},
+    "eof": {
+        "type": "boolean",
+        "description": "Close pipe stdin after writing; invalid for PTY sessions",
+    },
     "yield_time_ms": {
         "type": "integer",
         "minimum": 0,
@@ -42,7 +47,7 @@ _PROCESS_FIELDS = {
     "wait_time_ms": {
         "type": "integer",
         "minimum": 1000,
-        "maximum": 60000,
+        "maximum": MAX_PROCESS_WAIT_MS,
         "description": "Terminal-state wait deadline; valid only for wait and never a command timeout",
     },
     "max_bytes": {"type": "integer", "minimum": 1024, "maximum": 51200},
@@ -85,7 +90,6 @@ PROCESS_SCHEMA = {
 
 PROCESS_WAIT_EXAMPLE = '{"action":"wait","session_id":"<id>","cursor":<nextCursor>,"wait_time_ms":60000}'
 PROCESS_POLL_EXAMPLE = '{"action":"poll","session_id":"<id>","cursor":<nextCursor>,"yield_time_ms":1000}'
-MAX_PROCESS_WAIT_MS = 60_000
 
 _ACTION_FIELDS = {
     "poll": {"action", "session_id", "cursor", "yield_time_ms", "max_bytes"},
@@ -100,6 +104,16 @@ _ACTION_FIELDS = {
 }
 
 _PROCESS_INTEGER_FIELDS = {"cursor", "yield_time_ms", "wait_time_ms", "max_bytes", "rows", "cols"}
+_PROCESS_FIELD_TOKEN_MAP = {
+    "sessionid": "session_id",
+    "processid": "session_id",
+    "cursor": "cursor",
+    "nextcursor": "cursor",
+    "yieldtimems": "yield_time_ms",
+    "waittimems": "wait_time_ms",
+    "maxbytes": "max_bytes",
+}
+_COLLAPSED_PROCESS_SESSION_ID = re.compile(r"^proc([0-9a-f]{32})$")
 
 
 def _coerce_process_integer(value):
@@ -111,12 +125,53 @@ def _coerce_process_integer(value):
     return value
 
 
+def _repair_process_session_id(value):
+    if not isinstance(value, str):
+        return value
+    match = _COLLAPSED_PROCESS_SESSION_ID.fullmatch(value)
+    if match is None:
+        return value
+    return f"proc_{match.group(1)}"
+
+
+def _normalized_process_field_value(field: str, value):
+    if field in _PROCESS_INTEGER_FIELDS:
+        return _coerce_process_integer(value)
+    if field == "session_id":
+        return _repair_process_session_id(value)
+    return value
+
+
+def _normalize_process_field_aliases(args: dict) -> None:
+    canonical_fields = set(_PROCESS_FIELDS)
+    for supplied_field in tuple(args):
+        if supplied_field in canonical_fields or supplied_field == "action":
+            continue
+        token = supplied_field.replace("_", "").replace("-", "").lower()
+        canonical_field = _PROCESS_FIELD_TOKEN_MAP.get(token)
+        if canonical_field is None:
+            continue
+        supplied_value = _normalized_process_field_value(canonical_field, args[supplied_field])
+        if canonical_field in args:
+            canonical_value = _normalized_process_field_value(canonical_field, args[canonical_field])
+            if canonical_value != supplied_value:
+                raise ValueError(
+                    f"conflicting process fields: {canonical_field} and {supplied_field}"
+                )
+        else:
+            args[canonical_field] = supplied_value
+        args.pop(supplied_field)
+
+
 def prepare_process_arguments(raw_args):
     if not isinstance(raw_args, Mapping):
         return raw_args
     args = dict(raw_args)
+    _normalize_process_field_aliases(args)
     for field in _PROCESS_INTEGER_FIELDS.intersection(args):
         args[field] = _coerce_process_integer(args[field])
+    if "session_id" in args:
+        args["session_id"] = _repair_process_session_id(args["session_id"])
 
     action = args.get("action")
     if action == "start":
@@ -148,6 +203,13 @@ def prepare_process_arguments(raw_args):
     elif action == "poll" and "wait_time_ms" in args:
         args["action"] = "wait"
         args.pop("yield_time_ms", None)
+
+    if (
+        args.get("action") == "wait"
+        and isinstance(args.get("wait_time_ms"), int)
+        and not isinstance(args["wait_time_ms"], bool)
+    ):
+        args["wait_time_ms"] = min(args["wait_time_ms"], MAX_PROCESS_WAIT_MS)
 
     normalized_action = args.get("action")
     if normalized_action in {"poll", "wait"}:
@@ -202,9 +264,12 @@ def create_process_tool_definition(
             "Use the poll action only for interactive input, quick status checks, or intentionally incremental output.",
             "When a command result is required, continue independent work first and then use the wait action; wait ignores output-only wakeups and does not set the command timeout.",
             "When the final result is required, do not call the poll action before the wait action; use one wait from the latest cursor and act on its terminal result.",
+            "Each process wait observes for at most 60000 ms and never changes bash.timeout.",
+            "If a process wait returns running, wait again from the exact nextCursor; the observation deadline never kills the command.",
             f"Exact terminal-wait shape: Call tool process with {PROCESS_WAIT_EXAMPLE}; never use yield_time_ms with wait.",
             f"Exact quick-poll shape: Call tool process with {PROCESS_POLL_EXAMPLE}; never use wait_time_ms with poll.",
             "Use write to submit one line or press Enter. Use write_raw only for exact bytes, control sequences, or partial input.",
+            "Use eof only for pipe stdin; use write_raw with an explicit Ctrl-D keystroke for PTYs.",
             "Do not repeat unchanged file reads around process checks; retain earlier read results unless a tool operation could have changed that file.",
             "Leave a process detached only for a requested server/watcher or when its result is not required.",
             "Set bash.timeout only when an actual execution deadline is intended.",

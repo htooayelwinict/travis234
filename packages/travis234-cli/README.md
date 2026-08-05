@@ -39,9 +39,14 @@ travis234 --cwd /path/to/workspace
 travis234 --cwd . --dry-run
 travis234 --cwd . --no-pull
 travis234 --cwd . --image ghcr.io/htooayelwinict/travis234:production
+travis234 --cwd . --dotenv .env
 ```
 
-The host `.env` file is not mounted or passed automatically. Use `/login` inside the TUI for API keys.
+The host `.env` file is not mounted or passed automatically. An explicit
+`--dotenv` file is validated by the launcher and passed to Docker with
+`--env-file`; its host path is not mounted or forwarded to the Python CLI. Use
+`host.docker.internal` rather than `localhost` for a proxy running on the host.
+You can also use `/login` inside the TUI for API keys.
 
 ## Extensions
 
@@ -74,7 +79,7 @@ timeout lets the job run until natural exit, explicit process control, an output
 limit, or travis234 shutdown.
 
 Use `process.poll` for quick or interactive incremental observation. Use
-`process.wait` to wait from 1 to 900 seconds for terminal state without returning
+`process.wait` to wait for up to 60 seconds for terminal state without returning
 on every output chunk. The wait duration does not change the command timeout. If
 the wait deadline expires first, it returns `running`; the command is not killed,
 and another wait can continue from the returned cursor.
@@ -95,3 +100,13 @@ User `!command` and `!!command` run asynchronously; `!!` output remains excluded
 from model context. Extension `user_bash` handlers preserve their
 payload and launch order, run on the command worker, and custom operations must
 honor cancellation.
+
+Use the built-in `tmux` tool for durable development servers, watchers, REPLs,
+test loops, and long builds that must survive an agent turn. Sessions are
+workspace-scoped and remain available until explicitly stopped.
+
+Subagent management tools remain out of ordinary turns. Explicit delegation or
+parallel-work language exposes them temporarily. Coding children use bounded
+workspace-write access with `bash`, `process`, `tmux`, `edit`, and `write`, must
+verify their work, and report changed files. Child-owned managed processes are
+cleaned up when the child finishes.

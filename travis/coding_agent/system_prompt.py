@@ -28,6 +28,38 @@ _PREAMBLE = (
     "You help users by reading files, executing commands, editing code, and writing new files."
 )
 
+_ENGINEERING_GUIDANCE = (
+    "Operate as a senior software engineer responsible for the complete outcome. Understand the repository, its "
+    "constraints, and the dependency graph before acting. Ground every material claim in repository contents or "
+    "observed tool output. Treat child summaries as leads rather than proof: independently verify their material "
+    "claims, exact test counts, and changed files before reporting. Never invent files, tests, command results, or "
+    "verification."
+)
+
+_SUBAGENT_ORCHESTRATION_GUIDANCE = (
+    "Use subagents for two or more independent, bounded "
+    "engineering workstreams; give each child exact scope, constraints, expected evidence, and verification. Do not "
+    "delegate trivial, sequential, or tightly coupled work, and honor an explicit request not to use subagents. Keep "
+    "shared architecture, overlapping edits, integration, and final validation with the parent. Start independent "
+    "children concurrently with `spawn_subagent` using `wait=false`, continue useful parent work, then use "
+    "`wait_subagent` to collect every child result before synthesizing and verifying the integrated outcome."
+)
+
+def _execution_routing_guidance(tools: list[str]) -> str:
+    guidance: list[str] = []
+    if "bash" in tools:
+        guidance.append("Run finite commands with `bash`.")
+    if "process" in tools:
+        guidance.append(
+            "Use PTY plus `process` when a command requires interactive input or incremental output."
+        )
+    if "tmux" in tools:
+        guidance.append(
+            "Use `tmux` for servers, watchers, REPLs, and work that must survive across turns. Capture evidence from "
+            "long-lived work and stop resources that are no longer needed."
+        )
+    return " ".join(guidance)
+
 
 def build_system_prompt(options: BuildSystemPromptOptions) -> str:
     prompt_cwd = options.cwd.replace("\\", "/")
@@ -44,7 +76,7 @@ def build_system_prompt(options: BuildSystemPromptOptions) -> str:
         prompt += f"\nCurrent working directory: {prompt_cwd}"
         return prompt
 
-    tools = options.selected_tools if options.selected_tools is not None else ["read", "bash", "edit", "write"]
+    tools = options.selected_tools if options.selected_tools is not None else ["read", "bash", "tmux", "edit", "write"]
     visible_tools = [name for name in tools if options.tool_snippets.get(name)]
     if visible_tools:
         tools_list = "\n".join(f"- {name}: {options.tool_snippets[name]}" for name in visible_tools)
@@ -65,6 +97,17 @@ def build_system_prompt(options: BuildSystemPromptOptions) -> str:
     has_find = "find" in tools
     has_ls = "ls" in tools
     has_read = "read" in tools
+    orchestration_guidance = " ".join(
+        part
+        for part in (
+            _ENGINEERING_GUIDANCE,
+            _SUBAGENT_ORCHESTRATION_GUIDANCE
+            if {"spawn_subagent", "wait_subagent"}.issubset(tools)
+            else "",
+            _execution_routing_guidance(tools),
+        )
+        if part
+    )
     if has_bash and not has_grep and not has_find and not has_ls:
         add("Use bash for file operations like ls, rg, find")
     for guideline in options.prompt_guidelines:
@@ -77,6 +120,7 @@ def build_system_prompt(options: BuildSystemPromptOptions) -> str:
     documentation_section = _documentation_section()
     prompt = (
         f"{_PREAMBLE}\n\n"
+        f"{orchestration_guidance}\n\n"
         f"Available tools:\n{tools_list}\n\n"
         "In addition to the tools above, you may have access to other custom tools depending on the project.\n\n"
         f"Guidelines:\n{guidelines_text}"

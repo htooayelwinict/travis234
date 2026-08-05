@@ -16,6 +16,7 @@ RUN apt-get update \
         npm \
         ripgrep \
         sudo \
+        tmux \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --home-dir /travis-home --shell /bin/bash travis \
     && mkdir -p /workspace /travis-home/agent /opt/travis234 \

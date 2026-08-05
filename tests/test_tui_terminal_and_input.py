@@ -2,6 +2,58 @@ from __future__ import annotations
 
 from tests._support_tui import *  # noqa: F403
 from travis.agent.types import AbortSignal
+from travis.tui import Editor
+
+
+class CountingText(Text):
+    def __init__(self, text: str) -> None:
+        super().__init__(text)
+        self.render_calls = 0
+
+    def render(self, width: int) -> list[str]:
+        self.render_calls += 1
+        return super().render(width)
+
+
+def test_tui_editor_input_fast_path_does_not_rerender_retained_history() -> None:
+    terminal = FakeTerminal(columns=80, rows=24)
+    tui = TUI(terminal)
+    history = [CountingText(f"history {index}") for index in range(1_000)]
+    for item in history:
+        tui.add(item)
+    editor = Editor(prompt="> ")
+    tui.add(editor)
+    tui.set_input_tail_components([editor])
+    tui.set_focus(editor)
+    tui.request_render(force=True)
+    for item in history:
+        item.render_calls = 0
+
+    tui._handle_terminal_input("x")
+
+    assert sum(item.render_calls for item in history) == 0
+    assert tui.previous_lines[0] == "history 0"
+    assert any("x" in line for line in tui.previous_lines)
+
+
+def test_tui_editor_input_fast_path_falls_back_when_editor_wraps() -> None:
+    terminal = FakeTerminal(columns=12, rows=5)
+    tui = TUI(terminal)
+    history = [CountingText(f"history {index}") for index in range(8)]
+    for item in history:
+        tui.add(item)
+    editor = Editor(prompt="> ")
+    tui.add(editor)
+    tui.set_input_tail_components([editor])
+    tui.set_focus(editor)
+    tui.request_render(force=True)
+    for item in history:
+        item.render_calls = 0
+
+    tui._handle_terminal_input("long-editor-text")
+
+    assert sum(item.render_calls for item in history) > 0
+    assert tui.previous_lines[:2] == ["history 0", "history 1"]
 
 
 def test_visible_width_strips_ansi() -> None:

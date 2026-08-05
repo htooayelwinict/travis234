@@ -293,6 +293,22 @@ def test_pty_transport_reports_tty_and_accepts_input(service, owner, tmp_path: P
 
 
 @pytest.mark.skipif(os.name != "posix", reason="v1 PTY is POSIX-only")
+def test_real_pty_eof_rejection_keeps_follow_up_input_available(service, owner, tmp_path: Path) -> None:
+    source = "value=input(); print('VALUE=' + value, flush=True)"
+    launch = request(python_command(source), tmp_path, tty=True)
+    started = service.start(owner, launch, local_factory(), yield_time_ms=0)
+
+    with pytest.raises(ProcessStateError, match="PTY.*write_raw.*Ctrl-D"):
+        service.write(owner, started.session_id, "partial", eof=True, wait_ms=0)
+
+    service.write(owner, started.session_id, "complete\n", wait_ms=0)
+    terminal, output = collect_until_terminal(service, owner, started)
+
+    assert terminal.state is ProcessState.EXITED
+    assert "VALUE=complete" in output
+
+
+@pytest.mark.skipif(os.name != "posix", reason="v1 PTY is POSIX-only")
 def test_pty_resize_updates_child_terminal_dimensions(service, owner, tmp_path: Path) -> None:
     source = "import os,time; time.sleep(.1); size=os.get_terminal_size(0); print(size.lines, size.columns)"
     launch = request(python_command(source), tmp_path, tty=True)

@@ -35,6 +35,7 @@ test("npm bin symlink invokes the launcher entrypoint", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /^Travis234$/m);
   assert.match(result.stdout, /^Usage:$/m);
+  assert.match(result.stdout, /--dotenv <path>/);
 });
 
 test("package does not bundle a mandatory global agent prompt", () => {
@@ -43,9 +44,13 @@ test("package does not bundle a mandatory global agent prompt", () => {
   assert.equal(fs.existsSync(path.join(packageRoot, "agents", "AGENTS.md")), false);
   assert.doesNotMatch(subagentSkill, /\bLewis\b/i);
   assert.match(subagentSkill, /truncated child result is not a failed child result/i);
-  assert.match(subagentSkill, /subagents? (are|must remain) read-only/i);
-  assert.match(subagentSkill, /must not write files/i);
-  assert.match(subagentSkill, /child should inspect.*parent should write/is);
+  assert.match(subagentSkill, /workspace-write/i);
+  assert.match(subagentSkill, /bash plus process/i);
+  assert.match(subagentSkill, /development servers/i);
+  assert.match(subagentSkill, /disjoint/i);
+  assert.match(subagentSkill, /Do not let children spawn more subagents/i);
+  assert.doesNotMatch(subagentSkill, /Subagents must remain read-only/i);
+  assert.doesNotMatch(subagentSkill, /parent should write/i);
   assert.match(subagentSkill, /pre-read, find, list, grep, or resolve delegated target files/i);
   assert.match(subagentSkill, /do not re-read files in the parent/i);
   assert.match(subagentSkill, /forbidden fallback/i);
@@ -80,6 +85,7 @@ test("release image combines Python 3.13 and Node 20 without passwordless sudo",
   assert.match(dockerfile, /COPY --from=node-runtime \/usr\/local\/bin\/node \/usr\/local\/bin\/node/);
   assert.match(dockerfile, /COPY --from=node-runtime \/usr\/local\/lib\/node_modules \/usr\/local\/lib\/node_modules/);
   assert.match(dockerfile, /ENTRYPOINT \["travis234"\]/);
+  assert.match(dockerfile, /\btmux\b/);
   assert.match(dockerfile, /useradd --create-home --home-dir \/travis-home .* travis/);
   assert.match(dockerfile, /USER travis/);
   assert.doesNotMatch(dockerfile, /NOPASSWD|\bsudo\b/);
@@ -92,6 +98,7 @@ test("local development image creates the travis user with limited package sudo"
   assert.match(dockerfile, /\bsudo\b/);
   assert.match(dockerfile, /\bnodejs\b/);
   assert.match(dockerfile, /\bnpm\b/);
+  assert.match(dockerfile, /\btmux\b/);
   assert.match(dockerfile, /useradd .* travis/);
   assert.match(dockerfile, /env_keep \+= "DEBIAN_FRONTEND"/);
   assert.match(dockerfile, /travis ALL=.*NOPASSWD:.*apt-get/);
@@ -115,6 +122,34 @@ test("package defaults to travis234 production GHCR image and auto pull", () => 
   assert.equal(config.pull, "auto");
   assert.deepEqual(buildPullCommand(config), ["docker", "pull", "ghcr.io/htooayelwinict/travis234:production"]);
   assert.equal(shouldUseIsolatedDockerConfig(config, {}), true);
+});
+
+test("package forwards an explicit dotenv file without mounting or forwarding its path to the CLI", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "travis234-dotenv-"));
+  const workspace = path.join(root, "workspace");
+  const dotenv = path.join(workspace, "9router.env");
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.writeFileSync(dotenv, "OPENROUTER_API_KEY=example\\nOPENROUTER_BASE_URL=https://proxy.invalid/v1\\n");
+
+  const config = parseArgs(["--cwd", workspace, "--dotenv", "9router.env", "--", "hello"]);
+  const command = buildDockerCommand(config, { pid: 24680 });
+
+  assert.equal(config.dotenv, dotenv);
+  assert.deepEqual(
+    command.slice(command.indexOf("--env-file"), command.indexOf("--env-file") + 2),
+    ["--env-file", dotenv],
+  );
+  assert.deepEqual(command.slice(-4), ["ghcr.io/htooayelwinict/travis234:production", "--cwd", "/workspace", "hello"]);
+  assert.equal(command.some((value) => value === `${dotenv}:/dotenv:ro`), false);
+});
+
+test("package rejects a missing explicit dotenv file before Docker starts", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "travis234-dotenv-"));
+
+  assert.throws(
+    () => parseArgs(["--cwd", root, "--dotenv=missing.env"]),
+    /dotenv file is not a regular file:/,
+  );
 });
 
 test("package auto pull skips when pull cache is fresh", () => {

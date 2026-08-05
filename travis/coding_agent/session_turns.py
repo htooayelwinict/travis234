@@ -89,7 +89,7 @@ from travis.coding_agent.session_persistence import _user_message
 from travis.coding_agent.session_policy_controller import (
     _is_internal_steering_user_message,
 )
-from travis.coding_agent.session_types import AgentSettledEvent, AutoRetryEndEvent, AutoRetryStartEvent, _MALFORMED_STREAMED_TOOL_ARGS_MARKER, _MALFORMED_STREAMED_TOOL_CALL_ARGUMENTS_CODE, _MALFORMED_STREAM_RECOVERY_PREFIX, _MAX_PARTIAL_STREAM_CONTINUATIONS, _NON_RETRYABLE_PROVIDER_LIMIT_MARKERS, _PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE, _PARTIAL_STREAM_STUB_ID, _RETRYABLE_ERROR_MARKERS, _SUBAGENT_TOOL_NAMES, _prompt_requests_subagent_tools
+from travis.coding_agent.session_types import AgentSettledEvent, AutoRetryEndEvent, AutoRetryStartEvent, _MALFORMED_STREAMED_TOOL_ARGS_MARKER, _MALFORMED_STREAMED_TOOL_CALL_ARGUMENTS_CODE, _MALFORMED_STREAM_RECOVERY_PREFIX, _MAX_PARTIAL_STREAM_CONTINUATIONS, _NON_RETRYABLE_PROVIDER_LIMIT_MARKERS, _PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE, _PARTIAL_STREAM_STUB_ID, _RETRYABLE_ERROR_MARKERS, _SUBAGENT_TOOL_NAMES, _prompt_rejects_subagent_tools, _prompt_requests_subagent_tools
 from travis.coding_agent.prompt_templates import expand_prompt_template
 from travis.coding_agent.input_expansion import InputExpansionError, expand_user_input
 from travis.coding_agent.skills import format_skill_invocation
@@ -307,8 +307,15 @@ class SessionTurnController:
         if preflight_result:
             preflight_result(True)
         restore_active_tool_names: list[str] | None = None
-        if _prompt_requests_subagent_tools(current_text):
-            current_active_tool_names = self.get_active_tool_names()
+        current_active_tool_names = self.get_active_tool_names()
+        if _prompt_rejects_subagent_tools(current_text):
+            active_without_subagents = [
+                name for name in current_active_tool_names if name not in set(_SUBAGENT_TOOL_NAMES)
+            ]
+            if active_without_subagents != current_active_tool_names:
+                restore_active_tool_names = current_active_tool_names
+                self.set_active_tools_by_name(active_without_subagents)
+        elif _prompt_requests_subagent_tools(current_text):
             missing_subagent_tools = [
                 name for name in _SUBAGENT_TOOL_NAMES if name not in set(current_active_tool_names)
             ]

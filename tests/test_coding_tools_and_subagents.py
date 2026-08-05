@@ -1,6 +1,26 @@
 from __future__ import annotations
 
+import shlex
+import shutil
+
 from tests._support_coding_agent import *  # noqa: F403
+from travis.coding_agent.processes.service import ProcessSessionService
+from travis.coding_agent.processes.types import ProcessOwner, ProcessState
+from travis.coding_agent.session_types import (
+    _SUBAGENT_TOOL_NAMES,
+    _prompt_rejects_subagent_tools,
+    _prompt_requests_subagent_tools,
+)
+from travis.coding_agent.tools import all_tool_names
+
+
+def eventually(predicate, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.005)
+    assert predicate()
 
 
 def test_truncate_head_line_limit() -> None:
@@ -1461,25 +1481,468 @@ def test_travis234_extension_tool_event_type_guards_are_public() -> None:
     assert is_tool_call_event_type("read", bash_call) is False
 
 def test_tool_factory_bundles(tmp_path: Path) -> None:
-    assert {t.name for t in create_coding_tools(str(tmp_path))} == {"read", "bash", "edit", "write"}
-    assert {t.name for t in create_read_only_tools(str(tmp_path))} == {"read", "grep", "find", "ls"}
-    assert len(create_all_tools(str(tmp_path))) == 7
-
-def test_agent_session_keeps_subagent_tools_opt_in_by_default(tmp_path: Path) -> None:
-    session = AgentSession(cwd=str(tmp_path), model=faux_model())
-
-    expected = {
-        "spawn_subagent",
-        "wait_subagent",
-        "list_subagents",
-        "get_subagent_result",
-        "expand_subagent_result",
-        "cancel_subagent",
+    assert {t.name for t in create_coding_tools(str(tmp_path))} == {
+        "read",
+        "bash",
+        "tmux",
+        "edit",
+        "write",
     }
+    assert {t.name for t in create_read_only_tools(str(tmp_path))} == {"read", "grep", "find", "ls"}
+    assert len(create_all_tools(str(tmp_path))) == 8
 
-    assert expected.isdisjoint(set(session.get_active_tool_names()))
-    assert expected <= {tool["name"] for tool in session.get_all_tools()}
-    assert "spawn_subagent" not in session.system_prompt
+
+def test_tmux_is_builtin_and_default(tmp_path: Path) -> None:
+    assert "tmux" in all_tool_names
+    assert create_tool_definition("tmux", str(tmp_path)).name == "tmux"
+
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+    try:
+        assert session.get_active_tool_names() == [
+            "read",
+            "bash",
+            "tmux",
+            "edit",
+            "write",
+            "spawn_subagent",
+            "wait_subagent",
+        ]
+        assert "Manage named long-lived tmux sessions" in session.system_prompt
+    finally:
+        session.shutdown()
+
+def test_agent_session_exposes_only_core_subagent_workflow_by_default(tmp_path: Path) -> None:
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+    try:
+        active_names = set(session.get_active_tool_names())
+        assert {"spawn_subagent", "wait_subagent"} <= active_names
+        assert {
+            "list_subagents",
+            "get_subagent_result",
+            "expand_subagent_result",
+            "cancel_subagent",
+        }.isdisjoint(active_names)
+        assert set(_SUBAGENT_TOOL_NAMES) <= {tool["name"] for tool in session.get_all_tools()}
+        assert "senior software engineer responsible for the complete outcome" in session.system_prompt
+        assert "two or more independent, bounded engineering workstreams" in session.system_prompt
+        assert "Run finite commands with `bash`" in session.system_prompt
+        assert "PTY plus `process`" not in session.system_prompt
+        assert "Use `tmux` for servers, watchers, REPLs" in session.system_prompt
+        assert "Keep shared architecture, overlapping edits, integration, and final validation with the parent" in session.system_prompt
+        assert "Treat child summaries as leads rather than proof" in session.system_prompt
+        assert "Never invent files, tests, command results, or verification" in session.system_prompt
+    finally:
+        session.shutdown()
+
+
+def test_parallel_delegation_language_activates_parent_subagent_tools() -> None:
+    assert _prompt_requests_subagent_tools("Review this change with multiple agents.") is True
+    assert _prompt_requests_subagent_tools("Split this into parallel workers.") is True
+    assert _prompt_requests_subagent_tools("Use a multi-agent review.") is True
+    assert _prompt_requests_subagent_tools("Do this without subagents.") is False
+    assert _prompt_rejects_subagent_tools("Do this without subagents.") is True
+    assert _prompt_rejects_subagent_tools("Review this change with multiple agents.") is False
+
+
+def test_natural_coding_request_exposes_core_subagent_tools_to_the_model(tmp_path: Path) -> None:
+    seen_tool_names: list[str] = []
+
+    def script(model, context):
+        seen_tool_names.extend(tool.name for tool in context.tools or [])
+        return text_response_events(model, "analysis complete")
+
+    register_api_provider(create_faux_provider(script))
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+    try:
+        session.prompt("Analyze the frontend and backend failures, then recommend fixes.")
+        assert {"spawn_subagent", "wait_subagent"} <= set(seen_tool_names)
+        assert "list_subagents" not in seen_tool_names
+    finally:
+        session.shutdown()
+
+
+def test_explicit_subagent_opt_out_hides_every_subagent_tool_for_the_turn(tmp_path: Path) -> None:
+    seen_tool_names: list[str] = []
+    seen_system_prompts: list[str] = []
+
+    def script(model, context):
+        seen_tool_names.extend(tool.name for tool in context.tools or [])
+        seen_system_prompts.append(context.system_prompt)
+        return text_response_events(model, "worked alone")
+
+    register_api_provider(create_faux_provider(script))
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+    try:
+        session.prompt("Analyze the frontend and backend without subagents.")
+        assert set(_SUBAGENT_TOOL_NAMES).isdisjoint(seen_tool_names)
+        assert "spawn_subagent" not in seen_system_prompts[0]
+        assert "wait_subagent" not in seen_system_prompts[0]
+        assert {"spawn_subagent", "wait_subagent"} <= set(session.get_active_tool_names())
+    finally:
+        session.shutdown()
+
+
+def test_parallel_delegation_temporarily_exposes_subagent_tools_to_the_model(tmp_path: Path) -> None:
+    seen_tool_names: list[str] = []
+
+    def script(model, context):
+        seen_tool_names.extend(tool.name for tool in context.tools or [])
+        return text_response_events(model, "review complete")
+
+    register_api_provider(create_faux_provider(script))
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+    try:
+        session.prompt("Review this change with multiple agents.")
+        assert set(_SUBAGENT_TOOL_NAMES) <= set(seen_tool_names)
+        assert {"spawn_subagent", "wait_subagent"} <= set(session.get_active_tool_names())
+        assert {
+            "list_subagents",
+            "get_subagent_result",
+            "expand_subagent_result",
+            "cancel_subagent",
+        }.isdisjoint(set(session.get_active_tool_names()))
+    finally:
+        session.shutdown()
+
+
+def test_internal_child_inherits_process_service_and_unique_owner(tmp_path: Path) -> None:
+    child_stream = create_faux_provider(
+        lambda model, _context: text_response_events(model, "child complete")
+    ).stream_simple
+    service = ProcessSessionService(directory=tmp_path / "processes")
+    parent_owner = ProcessOwner("app-fixed", str(tmp_path), "agent")
+    parent = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        stream_fn=child_stream,
+        process_service=service,
+        process_owner=parent_owner,
+    )
+    captured: dict[str, object] = {}
+
+    def recording_factory(**kwargs):
+        captured.update(kwargs)
+        return AgentSession(**kwargs)
+
+    parent._session_factory = recording_factory
+    task = parent._build_subagent_task("shell-worker", "run an interactive command")
+    try:
+        result = parent._run_internal_subagent(task)
+        assert result.status == "completed"
+        assert result.summary == "child complete"
+        child_owner = captured["process_owner"]
+        assert captured["process_service"] is service
+        assert captured["allowed_tool_names"] == [
+            "read",
+            "grep",
+            "find",
+            "ls",
+            "bash",
+            "process",
+            "edit",
+            "write",
+            "tmux",
+        ]
+        assert child_owner != parent_owner
+        assert child_owner.workspace_key == parent_owner.workspace_key
+        assert child_owner.origin == "agent"
+        assert child_owner.app_instance_id == f"app-fixed:subagent:{task.id}"
+    finally:
+        parent.shutdown()
+        service.close()
+
+
+def test_internal_child_reaps_active_managed_processes_on_completion(tmp_path: Path) -> None:
+    calls = {"count": 0}
+    model = faux_model()
+    service = ProcessSessionService(directory=tmp_path / "processes")
+    parent_owner = ProcessOwner("app-fixed", str(tmp_path), "agent")
+
+    def stream_fn(active_model, context, options):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            events = tool_call_response_events(
+                active_model,
+                "bash",
+                {
+                    "command": f"{shlex.quote(sys.executable)} -c {shlex.quote('import time; time.sleep(60)')}",
+                    "yield_time_ms": 0,
+                },
+                call_id="child-background-process",
+            )
+        else:
+            events = text_response_events(active_model, "child complete")
+        return create_faux_provider(lambda _model, _context: events).stream_simple(
+            active_model,
+            context,
+            options,
+        )
+
+    parent = AgentSession(
+        cwd=str(tmp_path),
+        model=model,
+        stream_fn=stream_fn,
+        process_service=service,
+        process_owner=parent_owner,
+    )
+    task = parent._build_subagent_task("shell-worker", "start a managed command")
+    child_owner = parent._subagent_process_owner(task)
+    assert child_owner is not None
+    try:
+        result = parent._run_internal_subagent(task)
+
+        assert result.status == "completed"
+        eventually(
+            lambda: all(snapshot.state.terminal for snapshot in service.list(child_owner)),
+            timeout=2,
+        )
+        assert service.list(parent_owner) == ()
+    finally:
+        parent.shutdown()
+        service.close()
+
+
+def test_internal_child_cleanup_preserves_parent_processes(tmp_path: Path) -> None:
+    calls = {"count": 0}
+    service = ProcessSessionService(directory=tmp_path / "processes")
+    parent_owner = ProcessOwner("app-fixed", str(tmp_path), "agent")
+
+    def stream_fn(active_model, context, options):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            events = tool_call_response_events(
+                active_model,
+                "bash",
+                {
+                    "command": f"{shlex.quote(sys.executable)} -c {shlex.quote('import time; time.sleep(60)')}",
+                    "yield_time_ms": 0,
+                },
+                call_id="child-background-process",
+            )
+        else:
+            events = text_response_events(active_model, "child complete")
+        return create_faux_provider(lambda _model, _context: events).stream_simple(
+            active_model, context, options
+        )
+
+    parent = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        stream_fn=stream_fn,
+        process_service=service,
+        process_owner=parent_owner,
+    )
+    bash = parent.get_tool_definition("bash")
+    assert bash is not None
+    parent_job = bash.execute(
+        "parent-background-process",
+        {
+            "command": f"{shlex.quote(sys.executable)} -c {shlex.quote('import time; time.sleep(60)')}",
+            "yield_time_ms": 0,
+        },
+    )
+    task = parent._build_subagent_task("shell-worker", "start a managed command")
+    child_owner = parent._subagent_process_owner(task)
+    assert child_owner is not None
+    try:
+        parent._run_internal_subagent(task)
+
+        assert service.list(parent_owner)[0].state is ProcessState.RUNNING
+        eventually(
+            lambda: bool(service.list(child_owner))
+            and all(snapshot.state.terminal for snapshot in service.list(child_owner))
+        )
+    finally:
+        service.kill(parent_owner, parent_job.details["sessionId"])
+        parent.shutdown()
+        service.close()
+
+
+def test_internal_child_reaps_managed_processes_when_provider_raises(tmp_path: Path) -> None:
+    calls = {"count": 0}
+    service = ProcessSessionService(directory=tmp_path / "processes")
+    parent_owner = ProcessOwner("app-fixed", str(tmp_path), "agent")
+
+    def stream_fn(active_model, context, options):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            events = tool_call_response_events(
+                active_model,
+                "bash",
+                {
+                    "command": f"{shlex.quote(sys.executable)} -c {shlex.quote('import time; time.sleep(60)')}",
+                    "yield_time_ms": 0,
+                },
+                call_id="child-background-process",
+            )
+            return create_faux_provider(lambda _model, _context: events).stream_simple(
+                active_model, context, options
+            )
+        raise RuntimeError("child provider failed")
+
+    parent = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        stream_fn=stream_fn,
+        process_service=service,
+        process_owner=parent_owner,
+    )
+    task = parent._build_subagent_task("shell-worker", "start a managed command")
+    child_owner = parent._subagent_process_owner(task)
+    assert child_owner is not None
+    try:
+        result = parent._run_internal_subagent(task)
+
+        assert result.status == "completed"
+        eventually(
+            lambda: bool(service.list(child_owner))
+            and all(snapshot.state.terminal for snapshot in service.list(child_owner))
+        )
+    finally:
+        parent.shutdown()
+        service.close()
+
+
+def test_internal_child_cleanup_runs_after_parent_cancellation(tmp_path: Path) -> None:
+    calls = {"count": 0}
+    release = threading.Event()
+    service = ProcessSessionService(directory=tmp_path / "processes")
+    parent_owner = ProcessOwner("app-fixed", str(tmp_path), "agent")
+
+    def stream_fn(active_model, context, options):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            events = tool_call_response_events(
+                active_model,
+                "bash",
+                {
+                    "command": f"{shlex.quote(sys.executable)} -c {shlex.quote('import time; time.sleep(60)')}",
+                    "yield_time_ms": 0,
+                },
+                call_id="child-background-process",
+            )
+        else:
+            assert release.wait(2)
+            events = text_response_events(active_model, "child released")
+        return create_faux_provider(lambda _model, _context: events).stream_simple(
+            active_model, context, options
+        )
+
+    parent = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        stream_fn=stream_fn,
+        process_service=service,
+        process_owner=parent_owner,
+    )
+    task = parent._build_subagent_task("shell-worker", "start a managed command")
+    child_owner = parent._subagent_process_owner(task)
+    assert child_owner is not None
+    try:
+        parent.subagents.spawn(task)
+        eventually(lambda: any(not item.state.terminal for item in service.list(child_owner)))
+        cancelled = parent.subagents.cancel(task.id, "parent cancelled")
+        assert cancelled.status == "cancelled"
+        release.set()
+        eventually(lambda: all(item.state.terminal for item in service.list(child_owner)))
+    finally:
+        release.set()
+        parent.shutdown()
+        service.close()
+
+
+def test_internal_child_cleanup_is_a_noop_without_managed_process_service(tmp_path: Path) -> None:
+    parent = AgentSession(cwd=str(tmp_path), model=faux_model())
+    task = parent._build_subagent_task("reviewer", "inspect files")
+    try:
+        assert parent._subagent_process_owner(task) is None
+        parent._kill_active_subagent_processes(None)
+    finally:
+        parent.shutdown()
+
+
+def test_internal_child_cleanup_suppresses_process_service_failures(tmp_path: Path) -> None:
+    class FailingProcessService:
+        def list(self, _owner):
+            raise RuntimeError("cleanup failed")
+
+    parent = AgentSession(cwd=str(tmp_path), model=faux_model())
+    parent.process_service = FailingProcessService()
+    try:
+        parent._kill_active_subagent_processes(
+            ProcessOwner("child", str(tmp_path), "agent")
+        )
+    finally:
+        parent.process_service = None
+        parent.shutdown()
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is not installed")
+def test_internal_child_process_cleanup_does_not_stop_tmux(tmp_path: Path) -> None:
+    parent = AgentSession(cwd=str(tmp_path), model=faux_model())
+    tmux = parent.get_tool_definition("tmux")
+    assert tmux is not None
+    started = tmux.execute(
+        "start-isolation-session",
+        {"action": "start", "name": "cleanup-isolation", "command": "sleep 60"},
+    )
+    try:
+        parent._kill_active_subagent_processes(None)
+        listed = tmux.execute("list-isolation-session", {"action": "list"})
+        assert started.details["sessionName"] in listed.details["sessions"]
+    finally:
+        tmux.execute(
+            "stop-isolation-session",
+            {"action": "stop", "name": "cleanup-isolation"},
+        )
+        parent.shutdown()
+
+
+def test_real_internal_child_writes_edits_and_reports_changed_file(tmp_path: Path) -> None:
+    calls = {"count": 0}
+
+    def stream_fn(active_model, context, options):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            events = tool_call_response_events(
+                active_model,
+                "write",
+                {"path": "evidence/child.txt", "content": "draft\n"},
+                call_id="child-write",
+            )
+        elif calls["count"] == 2:
+            events = tool_call_response_events(
+                active_model,
+                "edit",
+                {
+                    "path": "evidence/child.txt",
+                    "edits": [{"oldText": "draft", "newText": "CHILD-EDIT-OK"}],
+                },
+                call_id="child-edit",
+            )
+        elif calls["count"] == 3:
+            events = tool_call_response_events(
+                active_model,
+                "bash",
+                {"command": 'test "$(cat evidence/child.txt)" = CHILD-EDIT-OK'},
+                call_id="child-verify",
+            )
+        else:
+            events = text_response_events(active_model, "Confirmed CHILD-EDIT-OK in evidence/child.txt.")
+        return create_faux_provider(lambda _model, _context: events).stream_simple(active_model, context, options)
+
+    parent = AgentSession(cwd=str(tmp_path), model=faux_model(), stream_fn=stream_fn)
+    task = parent._build_subagent_task("evidence-writer", "write and verify the child evidence file")
+    try:
+        result = parent._run_internal_subagent(task)
+
+        assert (tmp_path / "evidence/child.txt").read_text(encoding="utf-8") == "CHILD-EDIT-OK\n"
+        assert result.status == "completed"
+        assert result.files_changed == ["evidence/child.txt"]
+        assert [entry["toolName"] for entry in result.tool_trace] == ["write", "edit", "bash"]
+        assert all(name not in task.allowed_tools for name in _SUBAGENT_TOOL_NAMES)
+    finally:
+        parent.shutdown()
 
 def test_spawn_subagent_tool_rejects_model_facing_safety_overrides(tmp_path: Path) -> None:
     session = AgentSession(cwd=str(tmp_path), model=faux_model())
@@ -1505,29 +1968,23 @@ def test_spawn_subagent_tool_rejects_model_facing_safety_overrides(tmp_path: Pat
     finally:
         session.shutdown()
 
-def test_spawn_subagent_tool_rejects_safety_override_text_before_spawning(tmp_path: Path) -> None:
+def test_spawn_subagent_tool_does_not_parse_override_words_from_task_text(tmp_path: Path) -> None:
     session = AgentSession(cwd=str(tmp_path), model=faux_model())
     definition = session.get_tool_definition("spawn_subagent")
     assert definition is not None
 
-    cases = (
-        {"role": "reviewer", "goal": "Inspect /tmp in full access mode", "wait": False},
-        {
-            "role": "reviewer",
-            "goal": "Inspect current directory",
-            "contextPack": "allowedTools=['read','bash','write']",
-            "wait": False,
-        },
-    )
     try:
-        for args in cases:
-            try:
-                definition.execute("call-1", args)
-            except ValueError as error:
-                assert "Subagent safety overrides are not supported" in str(error)
-            else:  # pragma: no cover - assertion path
-                raise AssertionError(f"Expected spawn_subagent text to fail: {args!r}")
-            assert session.subagents.list_tasks() == []
+        result = definition.execute(
+            "call-1",
+            {
+                "role": "reviewer",
+                "goal": "Document why the phrase full access mode appears in the fixture.",
+                "contextPack": "The source text contains allowedTools=['read','bash','write'].",
+                "wait": False,
+            },
+        )
+        assert result.details["status"] == "queued"
+        assert len(session.subagents.list_tasks()) == 1
     finally:
         session.shutdown()
 
@@ -1593,14 +2050,22 @@ def test_cancel_subagent_tool_blocks_cancel_after_terminal_result(tmp_path: Path
     finally:
         session.shutdown()
 
-def test_extension_subagent_task_builder_rejects_safety_overrides(tmp_path: Path) -> None:
+def test_extension_subagent_task_builder_allows_catalog_subset_but_rejects_boundary_overrides(tmp_path: Path) -> None:
     session = AgentSession(cwd=str(tmp_path), model=faux_model())
     try:
+        task = session._build_subagent_task(
+            "reviewer",
+            "inspect docs and write findings",
+            {"allowedTools": ["read", "bash", "edit", "write"]},
+        )
+        assert task.sandbox == "workspace_write"
+        assert task.allowed_tools == ("read", "bash", "edit", "write")
+
         cases = (
             {"cwd": str(tmp_path.parent)},
             {"sandbox": "full_access"},
-            {"allowedTools": ["read", "bash"]},
             {"allowed_tools": ["read", "spawn_subagent"]},
+            {"allowed_tools": []},
         )
         for options in cases:
             try:

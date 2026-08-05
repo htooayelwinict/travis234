@@ -21,6 +21,7 @@ from travis.coding_agent.tools.grep import create_grep_tool, create_grep_tool_de
 from travis.coding_agent.tools.ls import create_ls_tool, create_ls_tool_definition
 from travis.coding_agent.tools.process import create_process_tool, create_process_tool_definition
 from travis.coding_agent.tools.read import create_read_tool, create_read_tool_definition
+from travis.coding_agent.tools.tmux import create_tmux_tool, create_tmux_tool_definition
 from travis.coding_agent.tools.truncate import (
     DEFAULT_MAX_BYTES,
     DEFAULT_MAX_LINES,
@@ -33,14 +34,24 @@ from travis.coding_agent.tools.truncate import (
 from travis.coding_agent.tools.types import ToolDefinition
 from travis.coding_agent.tools.write import create_write_tool, create_write_tool_definition
 
-ToolName = Literal["read", "bash", "edit", "write", "grep", "find", "ls"]
+ToolName = Literal["read", "bash", "tmux", "edit", "write", "grep", "find", "ls"]
 
-_ORDERED_TOOL_NAMES: tuple[ToolName, ...] = ("read", "bash", "edit", "write", "grep", "find", "ls")
+_ORDERED_TOOL_NAMES: tuple[ToolName, ...] = (
+    "read",
+    "bash",
+    "tmux",
+    "edit",
+    "write",
+    "grep",
+    "find",
+    "ls",
+)
 all_tool_names: frozenset[str] = frozenset(_ORDERED_TOOL_NAMES)
 
 _DEFINITION_FACTORIES = {
     "read": create_read_tool_definition,
     "bash": create_bash_tool_definition,
+    "tmux": create_tmux_tool_definition,
     "edit": create_edit_tool_definition,
     "write": create_write_tool_definition,
     "grep": create_grep_tool_definition,
@@ -51,6 +62,7 @@ _DEFINITION_FACTORIES = {
 _TOOL_FACTORIES = {
     "read": create_read_tool,
     "bash": create_bash_tool,
+    "tmux": create_tmux_tool,
     "edit": create_edit_tool,
     "write": create_write_tool,
     "grep": create_grep_tool,
@@ -84,6 +96,7 @@ _SUPPORTED_DEFINITION_OPTIONS = {
         "process_owner",
         "transport_factory",
     },
+    "tmux": {"operations", "workspace"},
     "edit": {"workspace"},
     "write": {"operations", "workspace"},
     "grep": {"operations", "workspace"},
@@ -119,7 +132,7 @@ def create_tool(name: str, cwd: str, options: Mapping[str, object] | None = None
 
 
 def create_coding_tools(cwd: str, options: Mapping[str, object] | None = None) -> list[AgentTool]:
-    return [create_tool(n, cwd, options) for n in ("read", "bash", "edit", "write")]
+    return [create_tool(n, cwd, options) for n in ("read", "bash", "tmux", "edit", "write")]
 
 
 def create_read_only_tools(cwd: str, options: Mapping[str, object] | None = None) -> list[AgentTool]:
@@ -131,7 +144,10 @@ def create_all_tools(cwd: str, options: Mapping[str, object] | None = None) -> l
 
 
 def create_coding_tool_definitions(cwd: str, options: Mapping[str, object] | None = None) -> list[ToolDefinition]:
-    return [create_tool_definition(n, cwd, options) for n in ("read", "bash", "edit", "write")]
+    return [
+        create_tool_definition(n, cwd, options)
+        for n in ("read", "bash", "tmux", "edit", "write")
+    ]
 
 
 def create_read_only_tool_definitions(cwd: str, options: Mapping[str, object] | None = None) -> list[ToolDefinition]:

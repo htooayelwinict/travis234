@@ -394,6 +394,26 @@ def _optional_timeout_arg(args) -> float | None:
         raise ValueError("timeoutSeconds must be a number")
     return float(value)
 
+def _subagent_changed_files(task: SubagentTask, tool_trace: list[dict[str, object]]) -> list[str]:
+    changed: list[str] = []
+    root = Path(task.cwd).resolve()
+    for entry in tool_trace:
+        if entry.get("status") != "ok" or entry.get("toolName") not in {"edit", "write"}:
+            continue
+        raw_path = entry.get("filePath")
+        if not isinstance(raw_path, str) or not raw_path:
+            continue
+        candidate = Path(raw_path).expanduser()
+        resolved = (candidate if candidate.is_absolute() else root / candidate).resolve()
+        try:
+            rendered = str(resolved.relative_to(root))
+        except ValueError:
+            continue
+        if rendered not in changed:
+            changed.append(rendered)
+    return changed
+
+
 class SessionSubagentTraceController:
     """Owns a focused AgentSession runtime concern."""
 
@@ -407,16 +427,24 @@ class SessionSubagentTraceController:
         def _listener(event) -> None:
             event_type = getattr(event, "type", None)
             if event_type == "tool_execution_start":
+                tool_name = getattr(event, "tool_name", "")
+                event_args = getattr(event, "args", None)
                 entry = {
                     "toolCallId": getattr(event, "tool_call_id", ""),
-                    "toolName": getattr(event, "tool_name", ""),
+                    "toolName": tool_name,
                     "status": "started",
-                    "argsPreview": _subagent_preview(getattr(event, "args", None)),
+                    "argsPreview": _subagent_preview(event_args),
                     "resultPreview": "",
                     "startedAtMs": int(time.time() * 1000),
                     "endedAtMs": 0,
                     "elapsedMs": 0,
                 }
+                if (
+                    tool_name in {"edit", "write"}
+                    and isinstance(event_args, Mapping)
+                    and isinstance(event_args.get("path"), str)
+                ):
+                    entry["filePath"] = str(event_args["path"])
                 tool_trace.append(entry)
                 trace_by_call_id[str(entry["toolCallId"])] = entry
                 self._handle_subagent_event(_subagent_tool_event(task, "subagent_tool_start", entry))
@@ -608,7 +636,6 @@ class SessionSubagentTraceController:
                     if text:
                         parts.append(str(text))
         return "\n".join(part for part in parts if part).strip()
-
     def _format_subagent_result(self, result: SubagentResult) -> str:
         heading = f"Subagent {result.task_id}"
         summary = _truncate_subagent_text(result.summary, limit=_SUBAGENT_VISIBLE_SUMMARY_LIMIT)
@@ -649,6 +676,7 @@ __all__ = (
     '_public_subagent_tool_trace',
     '_reject_unexpected_args',
     '_required_text_arg',
+    '_subagent_changed_files',
     '_subagent_expansion_budget_arg',
     '_subagent_expansion_offset_arg',
     '_subagent_expansion_section_arg',

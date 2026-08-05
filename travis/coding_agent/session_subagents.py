@@ -70,6 +70,7 @@ from travis.coding_agent.system_prompt import BuildSystemPromptOptions, build_sy
 from travis.coding_agent.subagents import (
     CallableSubagentBackend,
     CodexExecBackend,
+    CODING_SUBAGENT_TOOLS,
     SubagentResult,
     SubagentSupervisor,
     SubagentTask,
@@ -85,8 +86,8 @@ from travis.coding_agent.tools.types import (
     wrap_tool_definition,
 )
 
-from travis.coding_agent.session_types import _CANCEL_SUBAGENT_SCHEMA, _DEFAULT_SUBAGENT_ALLOWED_TOOLS, _EXPAND_SUBAGENT_RESULT_SCHEMA, _LIST_SUBAGENTS_SCHEMA, _MODEL_SUBAGENT_SPAWN_LIMIT_PER_TURN, _SKILL_SUBAGENT_ALLOWED_TOOL_NAMES, _SPAWN_SUBAGENT_SCHEMA, _SUBAGENT_RESULT_SUMMARY_LIMIT, _TASK_ID_SCHEMA, _subagent_goal_requests_file_mutation
-from travis.coding_agent.subagent_trace import _coerce_subagent_timeout_seconds, _expanded_subagent_result_details, _format_subagent_expansion, _model_subagent_timeout_seconds_arg, _optional_timeout_arg, _public_subagent_result_details, _reject_unexpected_args, _required_text_arg, _subagent_expansion_budget_arg, _subagent_expansion_offset_arg, _subagent_expansion_section_arg, _task_id_arg
+from travis.coding_agent.session_types import _CANCEL_SUBAGENT_SCHEMA, _DEFAULT_SUBAGENT_ALLOWED_TOOLS, _EXPAND_SUBAGENT_RESULT_SCHEMA, _LIST_SUBAGENTS_SCHEMA, _MODEL_SUBAGENT_SPAWN_LIMIT_PER_TURN, _SKILL_SUBAGENT_ALLOWED_TOOL_NAMES, _SPAWN_SUBAGENT_SCHEMA, _SUBAGENT_RESULT_SUMMARY_LIMIT, _TASK_ID_SCHEMA
+from travis.coding_agent.subagent_trace import _coerce_subagent_timeout_seconds, _expanded_subagent_result_details, _format_subagent_expansion, _model_subagent_timeout_seconds_arg, _optional_timeout_arg, _public_subagent_result_details, _reject_unexpected_args, _required_text_arg, _subagent_changed_files, _subagent_expansion_budget_arg, _subagent_expansion_offset_arg, _subagent_expansion_section_arg, _task_id_arg
 
 class SessionSubagentController:
     """Owns a focused AgentSession runtime concern."""
@@ -98,15 +99,9 @@ class SessionSubagentController:
             if getattr(skill, "name", None) != role:
                 continue
             raw_allowed_tools = getattr(skill, "allowed_tools", None) or getattr(skill, "allowedTools", None) or ()
-            tools: list[str] = []
-            for tool in raw_allowed_tools:
-                if tool not in _SKILL_SUBAGENT_ALLOWED_TOOL_NAMES or tool in tools:
-                    continue
-                tools.append(tool)
-            if tools:
-                if "read" not in tools:
-                    tools.insert(0, "read")
-                return tuple(tools)
+            tools = tuple(dict.fromkeys(raw_allowed_tools))
+            if tools and all(tool in _SKILL_SUBAGENT_ALLOWED_TOOL_NAMES for tool in tools):
+                return tools
         return _DEFAULT_SUBAGENT_ALLOWED_TOOLS
 
     @staticmethod
@@ -121,18 +116,22 @@ class SessionSubagentController:
         if "cwd" in options:
             raise ValueError("Subagent safety overrides are not supported: cwd")
         sandbox = options.get("sandbox")
-        if sandbox is not None and sandbox != "read_only":
+        if sandbox is not None and sandbox != "workspace_write":
             raise ValueError("Subagent safety overrides are not supported: sandbox")
         allowed_tools = options.get("allowedTools", options.get("allowed_tools"))
-        if allowed_tools is not None and tuple(allowed_tools) != _DEFAULT_SUBAGENT_ALLOWED_TOOLS:
-            raise ValueError("Subagent safety overrides are not supported: allowedTools")
+        if allowed_tools is not None:
+            if isinstance(allowed_tools, str):
+                raise ValueError("Subagent safety overrides are not supported: allowedTools")
+            allowed_tools = tuple(allowed_tools)
+            if not allowed_tools or any(tool not in CODING_SUBAGENT_TOOLS for tool in allowed_tools):
+                raise ValueError("Subagent safety overrides are not supported: allowedTools")
         timeout_value = options.get("timeoutSeconds", options.get("timeout_seconds"))
         task_options = {
             "role": role,
             "goal": goal,
             "cwd": str(options.get("cwd") or self.cwd),
             "backend": str(options.get("backend") or "internal"),
-            "sandbox": str(options.get("sandbox") or "read_only"),
+            "sandbox": str(options.get("sandbox") or "workspace_write"),
             "model": options.get("model"),
             "reasoning": options.get("reasoning", self.thinking_level),
             "context_pack": str(options.get("contextPack", options.get("context_pack", "")) or ""),
@@ -182,6 +181,9 @@ class SessionSubagentController:
                     "Do not call parent read, bash, find, grep, or ls to inspect or resolve delegated targets before spawning.",
                     "Pass exact user-provided paths or names to the child; let the child gather and validate delegated evidence.",
                     "Report the returned taskId, role, status, and summary to the user.",
+                    "For two or more independent, bounded tasks, use spawn_subagent to improve coverage; keep shared edits with the parent and synthesize child results before answering.",
+                    "For independent children, emit all spawn_subagent calls in the same assistant tool-call response with `wait: false`; do useful parent work, then collect every child result with wait_subagent or get_subagent_result before finalizing.",
+                    "Honor an explicit user request not to use subagents.",
                 ],
                 execute=self._execute_spawn_subagent_tool,
             ),
@@ -250,21 +252,6 @@ class SessionSubagentController:
         role = _required_text_arg(args, "role")
         goal = _required_text_arg(args, "goal")
         context_pack = args.get("contextPack", "")
-        self._reject_subagent_safety_override_text(role, goal, context_pack)
-        if _subagent_goal_requests_file_mutation(goal):
-            details = {
-                "status": "blocked",
-                "reason": "read_only_subagent_file_mutation_goal",
-                "goal": goal,
-                "allowedTools": list(_DEFAULT_SUBAGENT_ALLOWED_TOOLS),
-            }
-            return self._subagent_tool_result(
-                "Subagents are read-only and cannot write, edit, create, delete, or save files. "
-                "If the user requested a written artifact, spawn the child for inspection only, then the parent should write "
-                "the requested file from the child summary. "
-                "No subagent task was spawned and no taskId exists for wait_subagent, cancel_subagent, or expand_subagent_result.",
-                details,
-            )
         normalized_role = self._normalize_subagent_role(role)
         wait_for_result = args.get("wait", True)
         if not isinstance(wait_for_result, bool):
@@ -328,28 +315,6 @@ class SessionSubagentController:
             f"Spawned subagent {task_id}\nrole: {task.role}\nstatus: queued\nsummary: waiting for result",
             details,
         )
-
-    def _reject_subagent_safety_override_text(self, *values: object) -> None:
-        text = "\n".join(str(value) for value in values if value is not None).lower()
-        markers = (
-            "cwd=",
-            "cwd:",
-            "sandbox=",
-            "sandbox:",
-            "allowedtools=",
-            "allowedtools:",
-            "allowedtools[",
-            "allowed_tools=",
-            "allowed_tools:",
-            "allowed_tools[",
-            "full_access",
-            "danger-full-access",
-            "workspace_write",
-            "full access mode",
-        )
-        for marker in markers:
-            if marker in text:
-                raise ValueError("Subagent safety overrides are not supported: prompt text")
 
     def _execute_wait_subagent_tool(self, _tool_call_id, args, signal=None, on_update=None, ctx=None) -> AgentToolResult:
         task_id = _task_id_arg(args)
@@ -421,10 +386,35 @@ class SessionSubagentController:
     def _subagent_tool_result(self, content: str, details: dict[str, object]) -> AgentToolResult:
         return AgentToolResult(content=[TextContent(text=content)], details=details)
 
+    def _subagent_process_owner(self, task: SubagentTask) -> ProcessOwner | None:
+        if self.process_owner is None:
+            return None
+        return replace(
+            self.process_owner,
+            app_instance_id=f"{self.process_owner.app_instance_id}:subagent:{task.id}",
+            origin="agent",
+        )
+
+    def _kill_active_subagent_processes(self, owner: ProcessOwner | None) -> None:
+        if owner is None or self.process_service is None:
+            return
+        try:
+            snapshots = self.process_service.list(owner)
+        except Exception:
+            return
+        for snapshot in snapshots:
+            if snapshot.state.terminal:
+                continue
+            try:
+                self.process_service.kill(owner, snapshot.session_id)
+            except Exception:
+                continue
+
     def _run_internal_subagent(self, task: SubagentTask) -> SubagentResult:
         started = int(time.time() * 1000)
         tool_trace: list[dict[str, object]] = []
         trace_by_call_id: dict[str, dict[str, object]] = {}
+        child_owner = self._subagent_process_owner(task)
         child = self._session_factory(
             cwd=task.cwd,
             model=self.model,
@@ -432,6 +422,8 @@ class SessionSubagentController:
             allowed_tool_names=list(task.allowed_tools),
             thinking_level=self.thinking_level,
             stream_fn=self._stream_fn,
+            process_service=self.process_service if child_owner is not None else None,
+            process_owner=child_owner,
         )
         child.agent.subscribe(self._subagent_tool_trace_listener(task, child, tool_trace, trace_by_call_id))
         child.agent._after_tool_call = self._subagent_after_tool_call_tracer(  # noqa: SLF001 - parent observes delegated child tools.
@@ -463,6 +455,7 @@ class SessionSubagentController:
                 status=status,
                 summary=summary or "Internal subagent completed without a final message.",
                 final_response=summary,
+                files_changed=_subagent_changed_files(task, tool_trace),
                 errors=errors,
                 tool_trace=tool_trace,
                 child_session_id=child.session_id,
@@ -474,6 +467,7 @@ class SessionSubagentController:
                 result = replace(result, raw_log_path=raw_log_path, errors=[*result.errors, *log_errors])
             return result
         finally:
+            self._kill_active_subagent_processes(child_owner)
             child.shutdown()
 
     def _safe_write_internal_subagent_result_pack(

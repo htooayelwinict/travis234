@@ -10,7 +10,7 @@ TRAVIS234 // NEURAL TERMINAL ONLINE
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-39e6c7?style=for-the-badge&labelColor=10182b"></a>
   <img alt="Python 3.13" src="https://img.shields.io/badge/Python-3.13-63a7ff?style=for-the-badge&labelColor=10182b">
-  <img alt="Version 2.3.5" src="https://img.shields.io/badge/version-2.3.5-bd6cff?style=for-the-badge&labelColor=10182b">
+  <img alt="Version 2.4.0" src="https://img.shields.io/badge/version-2.4.0-bd6cff?style=for-the-badge&labelColor=10182b">
   <img alt="Terminal first" src="https://img.shields.io/badge/interface-terminal-ff7ac6?style=for-the-badge&labelColor=10182b">
 </p>
 
@@ -63,7 +63,7 @@ Travis234 is designed for developers who want an agent to carry a task—not one
     </td>
     <td width="50%" valign="top">
       <h3>🛡 Isolated execution</h3>
-      An optional unprivileged Docker sandbox with dropped capabilities, isolated state, and no dotenv forwarding.
+      An optional unprivileged Docker sandbox with dropped capabilities, isolated state, and explicit-only dotenv forwarding.
     </td>
   </tr>
 </table>
@@ -192,7 +192,7 @@ Browser-development support is optional:
 npx @htooayelwinict/travis234 --cwd .
 ```
 
-The npm package exposes only the `travis234` command and launches the release container with isolated Travis234 state.
+The npm package exposes only the `travis234` command and launches the release container with isolated Travis234 state. To provide credentials or an OpenAI-compatible proxy explicitly, add `--dotenv /path/to/.env`; Docker receives it as an environment file without mounting it or forwarding its host path to the Python CLI. A proxy running on the host must use a container-reachable address such as `host.docker.internal`, not `localhost`.
 
 ## Everyday controls
 
@@ -430,14 +430,20 @@ Useful overrides:
 Long-running shell work can return a process handle instead of blocking the agent. The process API supports polling, acknowledged stdin writes, interrupts, and terminal-state recovery.
 
 - `process.wait` waits for terminal state and does not change the command timeout.
+- Model-generated camelCase or collapsed process fields are recovered only for documented process arguments; unknown or conflicting fields still fail strict validation.
+- Pipe-style `eof=true` is rejected on PTYs without closing their input; send explicit terminal control characters through `write_raw`.
 - If a wait deadline expires, the command is not killed; a later wait continues from the returned cursor.
 - Live output is bounded to 64 MiB per process and reports `output_limit` when crossed.
 - Completed metadata is retained for bounded recovery.
 - Travis234 cannot reattach a running process after an application restart.
 
+Use `tmux` for durable development servers, watchers, REPLs, test loops, and long builds. Travis234 namespaces tmux sessions to the current workspace, preserves fast-exiting command output, and requires explicit cleanup with the returned logical or resolved session name.
+
+Subagent management tools stay outside ordinary model turns. Explicit delegation, multiple-agent, parallel-worker, split-work, or independent-review requests expose them temporarily; an explicit request not to use subagents always wins. Coding children receive bounded workspace-write access to `read`, `grep`, `find`, `ls`, `bash`, `process`, `tmux`, `edit`, and `write`. Concurrent children must own disjoint files, verify requested changes, and report changed-file evidence. Child-owned managed processes are cleaned up when the child ends, while parent processes and durable tmux sessions remain independently owned.
+
 ## Production sandbox
 
-The release image runs as the unprivileged `travis` user. The npm launcher mounts only the chosen workspace and isolated Travis234 state, drops Linux capabilities, enables `no-new-privileges`, and does not forward a dotenv file.
+The release image runs as the unprivileged `travis` user. The npm launcher mounts only the chosen workspace and isolated Travis234 state, drops Linux capabilities, enables `no-new-privileges`, and forwards a dotenv file only when the user explicitly supplies `--dotenv`.
 
 ```bash
 travis234 --cwd /path/to/project

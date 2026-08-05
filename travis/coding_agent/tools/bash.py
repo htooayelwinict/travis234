@@ -619,6 +619,7 @@ def create_bash_tool_definition(
         prompt_snippet="Execute bash commands (ls, grep, find, etc.)",
         prompt_guidelines=[
             "Leave stdin closed for normal commands, searches, tests, and servers. Set stdin=open only before using process write or write_raw on that command.",
+            "For planned interactive follow-up, launch bash with tty=true and yield_time_ms=0.",
         ],
         execute=lambda tid, args, signal=None, on_update=None, ctx=None: _execute_bash(
             cwd,

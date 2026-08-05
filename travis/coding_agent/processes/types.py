@@ -55,6 +55,7 @@ class ProcessCompletionRecord:
     state: ProcessState
     exit_code: int | None
     output_size: int
+    total_lines: int
     elapsed_ms: int
     completed_at: float
     launch_session_id: str | None

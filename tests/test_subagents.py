@@ -326,6 +326,29 @@ def test_subagent_task_prompt_contains_child_system_contract(tmp_path):
     assert "glob" not in prompt.lower()
 
 
+def test_subagent_task_defaults_to_workspace_write_coding_catalog(tmp_path):
+    task = SubagentTask(role="enumerator", goal="write evidence/ports.md", cwd=str(tmp_path))
+
+    assert task.sandbox == "workspace_write"
+    assert task.allowed_tools == (
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "bash",
+        "process",
+        "edit",
+        "write",
+        "tmux",
+    )
+    prompt = task.prompt()
+    assert "Use bash for finite commands" in prompt
+    assert "Use bash plus process" in prompt
+    assert "Use tmux for development servers" in prompt
+    assert "Do not assign or modify a file owned by another" in prompt
+    assert "Do not spawn subagents" in prompt
+
+
 def test_subagent_task_prompt_requires_evidence_bound_claims(tmp_path):
     task = SubagentTask(role="reviewer", goal="inspect slugify behavior", cwd=str(tmp_path))
 
@@ -333,6 +356,16 @@ def test_subagent_task_prompt_requires_evidence_bound_claims(tmp_path):
 
     assert "Every factual claim in your summary must be backed by observed evidence" in prompt
     assert "If evidence is missing or ambiguous, mark the claim as uncertain" in prompt
+
+
+def test_subagent_task_prompt_requires_execution_before_success(tmp_path):
+    task = SubagentTask(role="writer", goal="write evidence/result.txt", cwd=str(tmp_path))
+
+    prompt = task.prompt()
+
+    assert "Execute the Goal now. Do not answer with a plan, acknowledgement, or intent." in prompt
+    assert "make the required tool calls before producing any final response" in prompt
+    assert "Do not finish successfully until you have verified the requested outcome with a tool." in prompt
     assert "Do not infer behavior from filenames, conventions, or expectations alone" in prompt
     assert "Evidence:" in prompt
 
@@ -406,6 +439,51 @@ def test_supervisor_rejects_malformed_task_id_references():
             raise AssertionError(f"Expected ValueError from {name}, got {type(error).__name__}") from error
         else:  # pragma: no cover - assertion path
             raise AssertionError(f"Expected malformed task id in {name} to fail")
+
+
+def test_supervisor_runs_three_disjoint_workspace_writes_concurrently(tmp_path):
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    barrier = threading.Barrier(3)
+    entered: list[str] = []
+    entered_lock = threading.Lock()
+
+    def backend(task):
+        with entered_lock:
+            entered.append(task.id)
+        barrier.wait(timeout=2)
+        relative = f"evidence/{task.role}.txt"
+        (tmp_path / relative).write_text(task.id, encoding="utf-8")
+        return SubagentResult(
+            task_id=task.id,
+            backend=task.backend,
+            role=task.role,
+            status="completed",
+            summary=f"Wrote {relative}",
+            files_changed=[relative],
+        )
+
+    supervisor = SubagentSupervisor(max_threads=3, max_depth=1)
+    supervisor.register_backend(CallableSubagentBackend("internal", backend))
+    tasks = [
+        SubagentTask(id=f"subagent-{name}", role=name, goal=f"write evidence/{name}.txt", cwd=str(tmp_path))
+        for name in ("a", "b", "c")
+    ]
+    try:
+        task_ids = [supervisor.spawn(task) for task in tasks]
+        results = [supervisor.wait(task_id, timeout=3) for task_id in task_ids]
+
+        assert set(entered) == set(task_ids)
+        assert [result.status for result in results] == ["completed"] * 3
+        assert {
+            path
+            for result in results
+            for path in result.files_changed
+        } == {"evidence/a.txt", "evidence/b.txt", "evidence/c.txt"}
+        for task in tasks:
+            assert (evidence / f"{task.role}.txt").read_text(encoding="utf-8") == task.id
+    finally:
+        supervisor.shutdown(wait=True)
 
 
 def test_supervisor_timeout_keeps_capacity_until_backend_finishes(tmp_path):
@@ -983,7 +1061,7 @@ def test_codex_exec_backend_parses_jsonl_final_agent_message(tmp_path):
     assert result.status == "completed"
     assert result.summary == "final summary"
     assert calls[0][0][:4] == ["codex", "exec", "--json", "--sandbox"]
-    assert "read-only" in calls[0][0]
+    assert "workspace-write" in calls[0][0]
     assert calls[0][1] == str(tmp_path)
 
 
@@ -1021,7 +1099,7 @@ def test_codex_exec_backend_forwards_model_and_reasoning_effort(tmp_path):
     assert 'model_reasoning_effort="high"' in calls[0]
 
 
-def test_codex_exec_backend_rejects_custom_allowed_tools_before_running(tmp_path):
+def test_codex_exec_backend_rejects_tool_outside_coding_catalog_before_running(tmp_path):
     called = False
 
     def fake_runner(args, cwd, timeout, text, capture_output):
@@ -1044,14 +1122,14 @@ def test_codex_exec_backend_rejects_custom_allowed_tools_before_running(tmp_path
             goal="review",
             cwd=str(tmp_path),
             backend="codex",
-            allowed_tools=("read", "bash"),
+            allowed_tools=("read", "spawn_subagent"),
         )
     )
 
     assert called is False
     assert result.status == "failed"
-    assert result.summary == "Codex backend does not enforce custom allowed tools."
-    assert result.errors == ["Codex backend does not enforce custom allowed tools."]
+    assert result.summary == "Codex backend received a tool outside the coding child catalog."
+    assert result.errors == ["Codex backend received a tool outside the coding child catalog."]
 
 
 def test_codex_exec_backend_persists_raw_log_when_configured(tmp_path):
@@ -1214,12 +1292,12 @@ def test_agent_session_spawn_subagent_tool_normalizes_safe_human_role(tmp_path):
     assert seen_roles == ["provider-loop-reviewer"]
 
 
-def test_agent_session_spawn_subagent_tool_rejects_read_only_child_file_mutation_goal(tmp_path):
+def test_agent_session_spawn_subagent_tool_allows_workspace_file_mutation_goal(tmp_path):
     spawned_goals: list[str] = []
 
     def backend(task):
         spawned_goals.append(task.goal)
-        return "should not run"
+        return "Wrote REVIEW.md with evidence."
 
     session = AgentSession(cwd=str(tmp_path), model=faux_model())
     session.subagents.register_backend(CallableSubagentBackend("internal", backend))
@@ -1234,14 +1312,9 @@ def test_agent_session_spawn_subagent_tool_rejects_read_only_child_file_mutation
     )
 
     rendered = "\n".join(block.text for block in result.content)
-    assert result.details["status"] == "blocked"
-    assert result.details["reason"] == "read_only_subagent_file_mutation_goal"
-    assert "Subagents are read-only" in rendered
-    assert "spawn the child for inspection only" in rendered
-    assert "parent should write" in rendered
-    assert "No subagent task was spawned" in rendered
-    assert spawned_goals == []
-    assert session.subagents.list_tasks() == []
+    assert result.details["status"] == "completed"
+    assert "Wrote REVIEW.md with evidence." in rendered
+    assert spawned_goals == ["Inspect the project and write REVIEW.md with the top 3 concrete risks."]
 
 
 def test_agent_session_spawn_subagent_tool_allows_negated_file_mutation_instruction(tmp_path):

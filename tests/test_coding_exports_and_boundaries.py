@@ -1409,7 +1409,7 @@ def test_coding_agent_package_exports_travis_tool_factory_surface(tmp_path: Path
 
     cwd = str(tmp_path)
 
-    assert all_tool_names == {"read", "bash", "edit", "write", "grep", "find", "ls"}
+    assert all_tool_names == {"read", "bash", "tmux", "edit", "write", "grep", "find", "ls"}
     assert create_read_tool(cwd).name == "read"
     assert create_bash_tool(cwd).name == "bash"
     assert create_edit_tool(cwd).name == "edit"
@@ -1426,8 +1426,14 @@ def test_coding_agent_package_exports_travis_tool_factory_surface(tmp_path: Path
     assert create_ls_tool_definition(cwd).name == "ls"
     assert create_tool("read", cwd).name == "read"
     assert create_tool_definition("bash", cwd).name == "bash"
-    assert [tool.name for tool in create_coding_tools(cwd)] == ["read", "bash", "edit", "write"]
-    assert [definition.name for definition in create_coding_tool_definitions(cwd)] == ["read", "bash", "edit", "write"]
+    assert [tool.name for tool in create_coding_tools(cwd)] == ["read", "bash", "tmux", "edit", "write"]
+    assert [definition.name for definition in create_coding_tool_definitions(cwd)] == [
+        "read",
+        "bash",
+        "tmux",
+        "edit",
+        "write",
+    ]
     assert [tool.name for tool in create_read_only_tools(cwd)] == ["read", "grep", "find", "ls"]
     assert [definition.name for definition in create_read_only_tool_definitions(cwd)] == ["read", "grep", "find", "ls"]
     assert set(create_all_tools_map(cwd)) == all_tool_names

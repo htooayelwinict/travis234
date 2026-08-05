@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import re
@@ -37,6 +38,13 @@ from travis.coding_agent.tools.truncate import (
 _SCHEMA_VERSION = 1
 _PROCESS_ID = re.compile(r"^proc_[0-9a-f]{32}$")
 _TERMINAL_STATES = frozenset(state.value for state in ProcessState if state.terminal)
+_LINK_FALLBACK_ERRNOS = {
+    errno.EXDEV,
+    errno.EPERM,
+    errno.EACCES,
+    getattr(errno, "EOPNOTSUPP", errno.EPERM),
+    getattr(errno, "ENOTSUP", errno.EPERM),
+}
 
 
 @dataclass(frozen=True)
@@ -105,8 +113,13 @@ class ProcessCompletionStore:
         output_path = directory / f"{record.session_id}-{uuid.uuid4().hex}.log"
         stale_paths: tuple[Path, ...] = ()
         with SessionFileLock(self.index_path):
-            metrics = _atomic_copy_0600(source, output_path)
-            if metrics.size != record.output_size:
+            metrics = _promote_output_0600(
+                source,
+                output_path,
+                output_size=record.output_size,
+                total_lines=record.total_lines,
+            )
+            if metrics.size != record.output_size or metrics.total_lines != record.total_lines:
                 output_path.unlink(missing_ok=True)
                 raise ValueError("Process completion output changed while it was persisted")
             try:
@@ -128,7 +141,7 @@ class ProcessCompletionStore:
                                 record.state.value,
                                 record.exit_code,
                                 record.output_size,
-                                metrics.total_lines,
+                                record.total_lines,
                                 record.elapsed_ms,
                                 record.completed_at,
                                 record.launch_session_id,
@@ -485,6 +498,8 @@ class ProcessCompletionStore:
             raise ValueError("Only terminal process states can be persisted")
         if record.output_size < 0 or record.elapsed_ms < 0:
             raise ValueError("Process completion sizes and duration must be nonnegative")
+        if record.total_lines < 0:
+            raise ValueError("Process completion line count must be nonnegative")
         if not source.is_file() or source.stat().st_size != record.output_size:
             raise ValueError("Process completion output size does not match the sanitized output file")
         if self.retention_seconds <= 0 or self.max_records < 1:
@@ -611,6 +626,32 @@ def _is_corrupt_database_error(error: sqlite3.DatabaseError) -> bool:
     return "not a database" in message or "malformed" in message or "file is encrypted" in message
 
 
+def _fsync_directory(path: Path) -> None:
+    directory_fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _promote_output_0600(
+    source: Path,
+    destination: Path,
+    *,
+    output_size: int,
+    total_lines: int,
+) -> _OutputMetrics:
+    try:
+        os.link(source, destination)
+    except OSError as error:
+        if error.errno not in _LINK_FALLBACK_ERRNOS:
+            raise
+        return _atomic_copy_0600(source, destination)
+    destination.chmod(0o600)
+    _fsync_directory(destination.parent)
+    return _OutputMetrics(size=output_size, total_lines=total_lines)
+
+
 def _atomic_copy_0600(source: Path, destination: Path) -> _OutputMetrics:
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{destination.name}.", dir=destination.parent)
     temporary = Path(temporary_name)
@@ -631,11 +672,7 @@ def _atomic_copy_0600(source: Path, destination: Path) -> _OutputMetrics:
             os.fsync(target.fileno())
         os.replace(temporary, destination)
         destination.chmod(0o600)
-        directory_fd = os.open(destination.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        _fsync_directory(destination.parent)
         total_lines = newline_count + int(saw_data and not ends_with_newline)
         return _OutputMetrics(size=size, total_lines=total_lines)
     except Exception:

@@ -72,6 +72,7 @@ class _ManagedProcess:
         self.output = output
         self.started_at = started_at
         self.next_tree_refresh_at = started_at
+        self.next_foreground_update_at = started_at
         self.state = ProcessState.RUNNING
         self.stop_cause: StopCause | None = None
         self.exit_code: int | None = None
@@ -116,6 +117,7 @@ class ProcessSessionService:
         max_pending_input_bytes: int = 65_536,
         termination_grace_seconds: float = 2,
         drain_timeout_seconds: float = 1,
+        foreground_update_interval_seconds: float = 0.1,
         clock: Callable[[], float] = time.monotonic,
         completion_store: ProcessCompletionStore | None = None,
         wall_clock: Callable[[], float] = time.time,
@@ -129,6 +131,8 @@ class ProcessSessionService:
             raise ValueError("active process limits must be positive")
         if max_spool_bytes_per_process < 0 or max_live_spool_bytes < 0:
             raise ValueError("process output limits must be nonnegative")
+        if foreground_update_interval_seconds < 0:
+            raise ValueError("foreground_update_interval_seconds must be nonnegative")
         self._directory = Path(directory) if directory is not None else Path(
             tempfile.mkdtemp(prefix="travis-processes-")
         )
@@ -145,6 +149,7 @@ class ProcessSessionService:
         self._max_pending_input_bytes = max_pending_input_bytes
         self._termination_grace_seconds = max(0, termination_grace_seconds)
         self._drain_timeout_seconds = max(0, drain_timeout_seconds)
+        self._foreground_update_interval_seconds = foreground_update_interval_seconds
         self._clock = clock
         self._wall_clock = wall_clock
         self._completion_store = completion_store
@@ -302,6 +307,11 @@ class ProcessSessionService:
             item = _InputItem(encoded, eof)
             with record.condition:
                 self._require_running(record, "write")
+                if eof and record.request.tty:
+                    raise ProcessStateError(
+                        "PTY sessions do not support pipe-style EOF; use process write_raw "
+                        'input "\\u0004" to send an explicit Ctrl-D when the program expects that keystroke'
+                    )
                 if record.input_closed:
                     raise ProcessStateError("Process stdin is closed")
                 if record.pending_input_bytes + len(encoded) > self._max_pending_input_bytes:
@@ -580,8 +590,17 @@ class ProcessSessionService:
                 if not data:
                     return
                 record.output.append(data)
+                listener = None
                 with record.condition:
-                    listener = record.foreground_update
+                    now = self._clock()
+                    if (
+                        record.foreground_update is not None
+                        and now >= record.next_foreground_update_at
+                    ):
+                        listener = record.foreground_update
+                        record.next_foreground_update_at = (
+                            now + self._foreground_update_interval_seconds
+                        )
                     record.condition.notify_all()
                 if listener is not None:
                     try:
@@ -745,9 +764,17 @@ class ProcessSessionService:
 
     def _drain_readers(self, record: _ManagedProcess) -> None:
         deadline = self._clock() + self._drain_timeout_seconds
+        observed_size = record.output.size
         with record.condition:
-            while record.reader_count and self._clock() < deadline:
-                record.condition.wait(min(0.02, max(0, deadline - self._clock())))
+            while record.reader_count:
+                current_size = record.output.size
+                if current_size > observed_size:
+                    observed_size = current_size
+                    deadline = self._clock() + self._drain_timeout_seconds
+                remaining = deadline - self._clock()
+                if remaining <= 0:
+                    break
+                record.condition.wait(min(0.02, remaining))
         if record.reader_count:
             try:
                 record.transport.signal_tree("kill")
@@ -935,6 +962,7 @@ class ProcessSessionService:
             state=state,
             exit_code=record.exit_code,
             output_size=record.output.size,
+            total_lines=record.output.tail_snapshot().total_lines,
             elapsed_ms=max(0, int((terminal_at - record.started_at) * 1000)),
             completed_at=self._wall_clock(),
             launch_session_id=record.request.launch_session_id,

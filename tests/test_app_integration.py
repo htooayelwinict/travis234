@@ -425,7 +425,17 @@ def test_coding_app_model_can_spawn_visible_subagent(tmp_path: Path) -> None:
     event_types = [event["type"] if isinstance(event, dict) else event.type for event in events]
     assert "subagent_start" in event_types
     assert "subagent_stop" in event_types
-    assert set(child_tool_names) == {"read", "grep", "find", "ls"}
+    assert set(child_tool_names) == {
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "bash",
+        "process",
+        "tmux",
+        "edit",
+        "write",
+    }
     assert "run" not in child_tool_names
     assert provider_calls["n"] == 3
 

@@ -135,6 +135,7 @@ def test_builtin_tool_definitions_match_travis234_prompt_metadata(tmp_path: Path
                 "Execute bash commands (ls, grep, find, etc.)",
                 [
                     "Leave stdin closed for normal commands, searches, tests, and servers. Set stdin=open only before using process write or write_raw on that command.",
+                    "For planned interactive follow-up, launch bash with tty=true and yield_time_ms=0.",
                 ],
             ),
         "grep": ("Search file contents for patterns (respects .gitignore)", []),
@@ -1073,7 +1074,7 @@ def test_web_search_skill_allowed_tools_profile_enables_bash_for_child(
         task = session._build_subagent_task("web-search", "search latest result", None)
 
         assert task.allowed_tools == ("read", "bash")
-        assert task.sandbox == "read_only"
+        assert task.sandbox == "workspace_write"
     finally:
         session.shutdown()
 
