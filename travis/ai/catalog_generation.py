@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 import json
 from typing import Any
@@ -187,6 +188,127 @@ def catalog_drift_to_dict(item: CatalogDrift) -> dict[str, Any]:
     }
 
 
+@dataclass(frozen=True)
+class CatalogPromotion:
+    action: Literal["add", "update", "retire"]
+    provider: str
+    model: str
+    reason: str
+    evidence: str
+
+
+@dataclass(frozen=True)
+class PromotionSet:
+    pi_commit: str
+    promotions: tuple[CatalogPromotion, ...]
+
+
+def load_promotion_set(payload: Any) -> PromotionSet:
+    if not isinstance(payload, dict):
+        raise ValueError("promotion manifest must contain an object")
+    pi_commit = payload.get("piCommit")
+    if (
+        not isinstance(pi_commit, str)
+        or len(pi_commit) != 40
+        or any(char not in "0123456789abcdef" for char in pi_commit.lower())
+    ):
+        raise ValueError("promotion manifest requires a full Pi commit")
+    raw_promotions = payload.get("promotions")
+    if not isinstance(raw_promotions, list) or not raw_promotions:
+        raise ValueError("promotion manifest requires at least one promotion")
+    promotions: list[CatalogPromotion] = []
+    seen: set[tuple[str, str]] = set()
+    for raw in raw_promotions:
+        if not isinstance(raw, dict):
+            raise ValueError("promotion entries must be objects")
+        action = raw.get("action")
+        provider = raw.get("provider")
+        model = raw.get("model")
+        reason = raw.get("reason")
+        evidence = raw.get("evidence")
+        if action not in {"add", "update", "retire"}:
+            raise ValueError("promotion action must be add, update, or retire")
+        if not all(
+            isinstance(value, str) and value.strip()
+            for value in (provider, model, reason)
+        ):
+            raise ValueError("promotion provider, model, and reason are required")
+        if not isinstance(evidence, str) or not evidence.startswith("https://"):
+            raise ValueError("promotion evidence must be an https URL")
+        key = (provider, model)
+        if key in seen:
+            raise ValueError(f"duplicate promotion scope: {provider}/{model}")
+        seen.add(key)
+        promotions.append(CatalogPromotion(action, provider, model, reason, evidence))
+    return PromotionSet(pi_commit.lower(), tuple(promotions))
+
+
+def apply_pi_promotions(
+    current: dict[str, Any],
+    reference: dict[str, Any],
+    promotion_set: PromotionSet,
+) -> tuple[dict[str, Any], tuple[str, ...]]:
+    current = validate_catalog(current)
+    reference = validate_catalog(reference)
+    current_apis = {
+        str(record.get("api"))
+        for models in current.values()
+        for record in models.values()
+        if record.get("api")
+    }
+    current_compat = {
+        str(key)
+        for models in current.values()
+        for record in models.values()
+        for key in (
+            record.get("compat", {}).keys()
+            if isinstance(record.get("compat"), dict)
+            else ()
+        )
+    }
+    updated = copy.deepcopy(current)
+    changed: list[str] = []
+    for promotion in promotion_set.promotions:
+        if promotion.provider not in current:
+            raise ValueError(f"unsupported provider: {promotion.provider}")
+        provider_models = updated[promotion.provider]
+        if promotion.action == "retire":
+            if promotion.model not in provider_models:
+                raise ValueError(
+                    f"retirement target is absent: {promotion.provider}/{promotion.model}"
+                )
+            del provider_models[promotion.model]
+        else:
+            reference_record = reference.get(promotion.provider, {}).get(promotion.model)
+            if not isinstance(reference_record, dict):
+                raise ValueError(
+                    f"Pi promotion target is absent: {promotion.provider}/{promotion.model}"
+                )
+            if reference_record.get("api") not in current_apis:
+                raise ValueError(
+                    f"unsupported api for {promotion.provider}/{promotion.model}: "
+                    f"{reference_record.get('api')}"
+                )
+            compat = reference_record.get("compat")
+            unknown_compat = (
+                sorted(set(compat) - current_compat) if isinstance(compat, dict) else []
+            )
+            if unknown_compat:
+                raise ValueError(
+                    f"unsupported compatibility for {promotion.provider}/{promotion.model}: "
+                    f"{unknown_compat}"
+                )
+            exists = promotion.model in provider_models
+            if promotion.action == "add" and exists:
+                raise ValueError("add promotion target already exists")
+            if promotion.action == "update" and not exists:
+                raise ValueError("update promotion target is absent")
+            provider_models[promotion.model] = copy.deepcopy(reference_record)
+        changed.append(f"{promotion.action}:{promotion.provider}/{promotion.model}")
+    validate_catalog(updated)
+    return updated, tuple(sorted(changed))
+
+
 def apply_openrouter_capabilities(
     catalog: dict[str, Any],
     payload: dict[str, Any],
@@ -256,8 +378,12 @@ def _positive_int(value: object) -> int | None:
 
 __all__ = [
     "CatalogDrift",
+    "CatalogPromotion",
+    "PromotionSet",
     "apply_openrouter_capabilities",
+    "apply_pi_promotions",
     "catalog_drift_to_dict",
     "compare_pi_catalogs",
+    "load_promotion_set",
     "validate_catalog",
 ]

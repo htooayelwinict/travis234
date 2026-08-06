@@ -8,8 +8,10 @@ import pytest
 from travis.ai.catalog_generation import (
     CatalogDrift,
     apply_openrouter_capabilities,
+    apply_pi_promotions,
     catalog_drift_to_dict,
     compare_pi_catalogs,
+    load_promotion_set,
     validate_catalog,
 )
 
@@ -102,6 +104,126 @@ def test_compare_pi_catalogs_is_stable_and_classifies_drift() -> None:
 def test_validate_catalog_rejects_malformed_shapes(payload) -> None:
     with pytest.raises(ValueError, match="catalog"):
         validate_catalog(payload)
+
+
+def test_apply_pi_promotions_changes_only_explicit_scope() -> None:
+    current = {
+        "direct": {
+            "keep": _catalog_record("direct", "keep", contextWindow=32_000),
+            "retire": _catalog_record("direct", "retire"),
+        }
+    }
+    pi = {
+        "direct": {
+            "keep": _catalog_record("direct", "keep", contextWindow=64_000),
+            "add": _catalog_record("direct", "add"),
+        }
+    }
+    promotions = load_promotion_set(
+        {
+            "piCommit": "bde81c84405514c8b0f57c34405c152fb129c0ce",
+            "promotions": [
+                {
+                    "action": "add",
+                    "provider": "direct",
+                    "model": "add",
+                    "reason": "supported current model",
+                    "evidence": "https://provider.invalid/models",
+                },
+                {
+                    "action": "retire",
+                    "provider": "direct",
+                    "model": "retire",
+                    "reason": "retired upstream",
+                    "evidence": "https://provider.invalid/deprecations",
+                },
+            ],
+        }
+    )
+
+    updated, changed = apply_pi_promotions(current, pi, promotions)
+
+    assert changed == ("add:direct/add", "retire:direct/retire")
+    assert updated["direct"]["keep"] == current["direct"]["keep"]
+    assert updated["direct"]["add"] == pi["direct"]["add"]
+    assert "retire" not in updated["direct"]
+
+
+def test_apply_pi_promotions_rejects_unavailable_or_unsupported_updates() -> None:
+    current = {"direct": {"keep": _catalog_record("direct", "keep")}}
+    pi = {
+        "direct": {
+            "future": _catalog_record(
+                "direct",
+                "future",
+                api="future-api",
+                compat={"futureCompatFlag": True},
+            )
+        }
+    }
+    promotions = load_promotion_set(
+        {
+            "piCommit": "bde81c84405514c8b0f57c34405c152fb129c0ce",
+            "promotions": [
+                {
+                    "action": "add",
+                    "provider": "direct",
+                    "model": "future",
+                    "reason": "not yet supported",
+                    "evidence": "https://provider.invalid/models",
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ValueError, match="unsupported api"):
+        apply_pi_promotions(current, pi, promotions)
+
+
+def test_apply_pi_promotions_rejects_unregistered_provider() -> None:
+    current = {"direct": {"keep": _catalog_record("direct", "keep")}}
+    pi = {"new-provider": {"m": _catalog_record("new-provider", "m")}}
+    promotions = load_promotion_set(
+        {
+            "piCommit": "bde81c84405514c8b0f57c34405c152fb129c0ce",
+            "promotions": [
+                {
+                    "action": "add",
+                    "provider": "new-provider",
+                    "model": "m",
+                    "reason": "provider is not registered in Travis234",
+                    "evidence": "https://provider.invalid/models",
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ValueError, match="unsupported provider"):
+        apply_pi_promotions(current, pi, promotions)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"piCommit": "", "promotions": []},
+        {"piCommit": "abc", "promotions": []},
+        {
+            "piCommit": "b" * 40,
+            "promotions": [
+                {
+                    "action": "update",
+                    "provider": "direct",
+                    "model": "m",
+                    "reason": "",
+                    "evidence": "http://not-secure.invalid",
+                }
+            ],
+        },
+    ],
+)
+def test_load_promotion_set_requires_auditable_evidence(payload) -> None:
+    with pytest.raises(ValueError, match="promotion"):
+        load_promotion_set(payload)
 
 
 def test_generated_openrouter_capacities_match_pinned_pi_fixture() -> None:
