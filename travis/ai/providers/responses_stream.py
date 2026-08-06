@@ -41,11 +41,18 @@ def _responses_tool_call_id(call_id: str, item_id: str | None) -> str:
     return f"{call_id}|{item_id}" if item_id else call_id
 
 
-def _map_responses_status(status: str | None) -> tuple[str, str | None]:
+def _map_responses_status(
+    status: str | None,
+    incomplete_reason: str | None = None,
+) -> tuple[str, str | None]:
     if status in (None, "completed", "in_progress", "queued"):
         return "stop", None
     if status == "incomplete":
-        return "length", None
+        if incomplete_reason in {"max_output_tokens", "max_tokens"}:
+            return "length", None
+        if incomplete_reason:
+            return "error", f"Response incomplete: {incomplete_reason}"
+        return "error", "Response incomplete without a provider reason"
     if status in ("failed", "cancelled"):
         return "error", f"Provider response status: {status}"
     return "error", f"Provider response status: {status}"
@@ -354,7 +361,17 @@ def _parse_codex_responses_sse_chunks(
                     if isinstance(response.get("id"), str):
                         message.response_id = response["id"]
                     usage = _merge_responses_usage(usage, response.get("usage"))
-                    reason, error_message = _map_responses_status(response.get("status"))
+                    incomplete_details = response.get("incomplete_details")
+                    incomplete_reason = (
+                        incomplete_details.get("reason")
+                        if isinstance(incomplete_details, dict)
+                        and isinstance(incomplete_details.get("reason"), str)
+                        else None
+                    )
+                    reason, error_message = _map_responses_status(
+                        response.get("status"),
+                        incomplete_reason,
+                    )
                     if reason == "stop" and any(isinstance(block, ToolCall) for block in message.content):
                         reason = "toolUse"
                     message.usage = usage

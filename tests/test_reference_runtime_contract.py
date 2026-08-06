@@ -2436,6 +2436,8 @@ def test_responses_stream_preserves_text_signature_and_exact_usage_split() -> No
     events = list(decode_responses_stream(lines, model))
     message = events[-1].message
 
+    assert message.stop_reason == "stop"
+    assert message.error_message is None
     assert isinstance(message.content[0], TextContent)
     assert json.loads(message.content[0].text_signature) == {
         "v": 1,
@@ -2448,6 +2450,57 @@ def test_responses_stream_preserves_text_signature_and_exact_usage_split() -> No
     assert message.usage.output == 30
     assert message.usage.reasoning == 10
     assert message.usage.total_tokens == 130
+
+
+def _responses_terminal_message(events):
+    terminal = events[-1]
+    return terminal.error if hasattr(terminal, "error") else terminal.message
+
+
+@pytest.mark.parametrize(
+    ("incomplete_reason", "expected_stop", "expected_error"),
+    [
+        ("max_output_tokens", "length", None),
+        ("max_tokens", "length", None),
+        ("content_filter", "error", "Response incomplete: content_filter"),
+        ("future_provider_reason", "error", "Response incomplete: future_provider_reason"),
+        (None, "error", "Response incomplete without a provider reason"),
+    ],
+)
+def test_responses_stream_classifies_incomplete_provider_reason(
+    incomplete_reason: str | None,
+    expected_stop: str,
+    expected_error: str | None,
+) -> None:
+    model = Model(
+        id="gpt-5.4",
+        name="GPT-5.4",
+        api="openai-responses",
+        provider="openai",
+        base_url="https://api.openai.com/v1",
+    )
+    details = {} if incomplete_reason is None else {"reason": incomplete_reason}
+    payload = {
+        "type": "response.incomplete",
+        "response": {
+            "id": "resp_incomplete",
+            "status": "incomplete",
+            "incomplete_details": details,
+            "output": [],
+            "usage": {
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "total_tokens": 2,
+            },
+        },
+    }
+
+    message = _responses_terminal_message(
+        list(decode_responses_stream([f"data: {json.dumps(payload)}"], model))
+    )
+
+    assert message.stop_reason == expected_stop
+    assert message.error_message == expected_error
 
 
 def test_vertex_url_requires_project_location_for_adc_and_uses_express_for_key(monkeypatch) -> None:
