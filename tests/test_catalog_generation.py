@@ -5,7 +5,103 @@ from pathlib import Path
 
 import pytest
 
-from travis.ai.catalog_generation import apply_openrouter_capabilities
+from travis.ai.catalog_generation import (
+    CatalogDrift,
+    apply_openrouter_capabilities,
+    catalog_drift_to_dict,
+    compare_pi_catalogs,
+    validate_catalog,
+)
+
+
+def _catalog_record(provider: str, model_id: str, **overrides) -> dict:
+    record = {
+        "id": model_id,
+        "name": model_id,
+        "api": "openai-completions",
+        "provider": provider,
+        "baseUrl": f"https://{provider}.invalid/v1",
+        "reasoning": False,
+        "input": ["text"],
+        "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+        "contextWindow": 32_000,
+        "maxTokens": 4_096,
+    }
+    record.update(overrides)
+    return record
+
+
+def test_compare_pi_catalogs_is_stable_and_classifies_drift() -> None:
+    current = {
+        "direct": {
+            "same": _catalog_record("direct", "same", contextWindow=32_000),
+            "removed": _catalog_record("direct", "removed"),
+        },
+        "travis-only": {"local": _catalog_record("travis-only", "local")},
+    }
+    pi = {
+        "direct": {
+            "same": _catalog_record("direct", "same", contextWindow=64_000),
+            "added": _catalog_record(
+                "direct",
+                "added",
+                compat={"futureCompatFlag": True},
+            ),
+        },
+        "pi-only": {"remote": _catalog_record("pi-only", "remote")},
+    }
+
+    first = compare_pi_catalogs(current, pi)
+    second = compare_pi_catalogs(current, pi)
+
+    assert first == second
+    assert first == tuple(sorted(first, key=lambda item: item.sort_key()))
+    assert {item.kind for item in first} == {
+        "provider_missing_from_pi",
+        "provider_missing_from_travis",
+        "model_missing_from_pi",
+        "model_missing_from_travis",
+        "field_difference",
+        "unsupported_compatibility",
+    }
+    assert any(
+        item.kind == "field_difference"
+        and item.provider == "direct"
+        and item.model == "same"
+        and item.field == "contextWindow"
+        for item in first
+    )
+    assert any(
+        item.kind == "unsupported_compatibility"
+        and item.field == "compat.futureCompatFlag"
+        for item in first
+    )
+    assert [catalog_drift_to_dict(item) for item in first] == [
+        catalog_drift_to_dict(item) for item in second
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [],
+        {"provider": []},
+        {"provider": {"model": []}},
+        {"provider": {"model": {"id": "different"}}},
+        {
+            "provider": {
+                "model": {
+                    "id": "model",
+                    "provider": "provider",
+                    "api": [],
+                }
+            }
+        },
+    ],
+)
+def test_validate_catalog_rejects_malformed_shapes(payload) -> None:
+    with pytest.raises(ValueError, match="catalog"):
+        validate_catalog(payload)
 
 
 def test_generated_openrouter_capacities_match_pinned_pi_fixture() -> None:

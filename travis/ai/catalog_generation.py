@@ -2,8 +2,189 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+import json
 from typing import Any
+from typing import Literal
 import warnings
+
+
+CatalogDriftKind = Literal[
+    "provider_missing_from_travis",
+    "provider_missing_from_pi",
+    "model_missing_from_travis",
+    "model_missing_from_pi",
+    "field_difference",
+    "unsupported_api",
+    "unsupported_compatibility",
+]
+
+COMPARABLE_MODEL_FIELDS = (
+    "id",
+    "name",
+    "api",
+    "provider",
+    "baseUrl",
+    "reasoning",
+    "thinkingLevelMap",
+    "input",
+    "cost",
+    "contextWindow",
+    "maxTokens",
+    "compat",
+)
+
+
+@dataclass(frozen=True)
+class CatalogDrift:
+    kind: CatalogDriftKind
+    provider: str
+    model: str | None = None
+    field: str | None = None
+    current: Any = None
+    reference: Any = None
+
+    def sort_key(self) -> tuple[str, str, str, str, str, str]:
+        return (
+            self.provider,
+            self.model or "",
+            self.kind,
+            self.field or "",
+            _stable_json(self.current),
+            _stable_json(self.reference),
+        )
+
+
+def _stable_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def validate_catalog(payload: Any) -> dict[str, dict[str, dict[str, Any]]]:
+    if not isinstance(payload, dict):
+        raise ValueError("catalog must contain a provider object")
+    for provider, models in payload.items():
+        if not isinstance(provider, str) or not isinstance(models, dict):
+            raise ValueError("catalog provider entries must contain model objects")
+        for model_id, record in models.items():
+            if not isinstance(model_id, str) or not isinstance(record, dict):
+                raise ValueError("catalog model entries must be objects")
+            if record.get("id") != model_id:
+                raise ValueError(f"catalog record id mismatch for {provider}/{model_id}")
+            if record.get("provider") != provider:
+                raise ValueError(f"catalog record provider mismatch for {provider}/{model_id}")
+            if not isinstance(record.get("api"), str) or not record["api"]:
+                raise ValueError(f"catalog record api is invalid for {provider}/{model_id}")
+            for numeric_field in ("contextWindow", "maxTokens"):
+                value = record.get(numeric_field)
+                if value is not None and (
+                    not isinstance(value, int) or isinstance(value, bool) or value < 0
+                ):
+                    raise ValueError(
+                        f"catalog record {numeric_field} is invalid for {provider}/{model_id}"
+                    )
+            if "input" in record and not isinstance(record["input"], list):
+                raise ValueError(f"catalog record input is invalid for {provider}/{model_id}")
+            if "cost" in record and not isinstance(record["cost"], dict):
+                raise ValueError(f"catalog record cost is invalid for {provider}/{model_id}")
+            if "compat" in record and not isinstance(record["compat"], dict):
+                raise ValueError(f"catalog record compat is invalid for {provider}/{model_id}")
+    return payload
+
+
+def compare_pi_catalogs(
+    current: dict[str, Any],
+    reference: dict[str, Any],
+) -> tuple[CatalogDrift, ...]:
+    current = validate_catalog(current)
+    reference = validate_catalog(reference)
+    current_apis = {
+        str(record.get("api"))
+        for models in current.values()
+        for record in models.values()
+        if record.get("api")
+    }
+    current_compat = {
+        str(key)
+        for models in current.values()
+        for record in models.values()
+        for key in (
+            record.get("compat", {}).keys()
+            if isinstance(record.get("compat"), dict)
+            else ()
+        )
+    }
+    drift: list[CatalogDrift] = []
+
+    for provider in sorted(set(current) | set(reference)):
+        if provider not in current:
+            drift.append(CatalogDrift("provider_missing_from_travis", provider))
+            continue
+        if provider not in reference:
+            drift.append(CatalogDrift("provider_missing_from_pi", provider))
+            continue
+        current_models = current[provider]
+        reference_models = reference[provider]
+        for model_id in sorted(set(current_models) | set(reference_models)):
+            if model_id not in current_models:
+                drift.append(CatalogDrift("model_missing_from_travis", provider, model_id))
+                reference_record = reference_models[model_id]
+            elif model_id not in reference_models:
+                drift.append(CatalogDrift("model_missing_from_pi", provider, model_id))
+                continue
+            else:
+                reference_record = reference_models[model_id]
+
+            reference_api = reference_record.get("api")
+            if reference_api not in current_apis:
+                drift.append(
+                    CatalogDrift(
+                        "unsupported_api",
+                        provider,
+                        model_id,
+                        "api",
+                        reference=reference_api,
+                    )
+                )
+            reference_compat = reference_record.get("compat")
+            if isinstance(reference_compat, dict):
+                for key in sorted(set(reference_compat) - current_compat):
+                    drift.append(
+                        CatalogDrift(
+                            "unsupported_compatibility",
+                            provider,
+                            model_id,
+                            f"compat.{key}",
+                            reference=reference_compat[key],
+                        )
+                    )
+            if model_id not in current_models:
+                continue
+            current_record = current_models[model_id]
+            for field in COMPARABLE_MODEL_FIELDS:
+                if current_record.get(field) != reference_record.get(field):
+                    drift.append(
+                        CatalogDrift(
+                            "field_difference",
+                            provider,
+                            model_id,
+                            field,
+                            current_record.get(field),
+                            reference_record.get(field),
+                        )
+                    )
+
+    return tuple(sorted(drift, key=CatalogDrift.sort_key))
+
+
+def catalog_drift_to_dict(item: CatalogDrift) -> dict[str, Any]:
+    return {
+        "kind": item.kind,
+        "provider": item.provider,
+        "model": item.model,
+        "field": item.field,
+        "current": item.current,
+        "reference": item.reference,
+    }
 
 
 def apply_openrouter_capabilities(
@@ -73,4 +254,10 @@ def _positive_int(value: object) -> int | None:
     return parsed if parsed > 0 else None
 
 
-__all__ = ["apply_openrouter_capabilities"]
+__all__ = [
+    "CatalogDrift",
+    "apply_openrouter_capabilities",
+    "catalog_drift_to_dict",
+    "compare_pi_catalogs",
+    "validate_catalog",
+]
