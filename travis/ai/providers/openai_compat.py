@@ -100,7 +100,15 @@ def _detect_openai_compat(model: Model) -> OpenAICompat:
         )
     )
     use_max_tokens = any(
-        ("chutes.ai" in base_url, is_moonshot, is_cloudflare_gateway, is_together, is_nvidia, is_ant_ling)
+        (
+            "chutes.ai" in base_url,
+            is_moonshot,
+            is_cloudflare_gateway,
+            is_together,
+            is_nvidia,
+            is_ant_ling,
+            is_zai,
+        )
     )
     openrouter_developer = is_openrouter and model.id.startswith(("anthropic/", "openai/"))
     if is_deepseek:
