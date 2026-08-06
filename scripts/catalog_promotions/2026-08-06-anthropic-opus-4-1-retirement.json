@@ -1,0 +1,19 @@
+{
+  "piCommit": "bde81c84405514c8b0f57c34405c152fb129c0ce",
+  "promotions": [
+    {
+      "action": "retire",
+      "provider": "anthropic",
+      "model": "claude-opus-4-1",
+      "reason": "Direct Claude API alias retired with Claude Opus 4.1",
+      "evidence": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
+    },
+    {
+      "action": "retire",
+      "provider": "anthropic",
+      "model": "claude-opus-4-1-20250805",
+      "reason": "Direct Claude API model retired on 2026-08-05",
+      "evidence": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
+    }
+  ]
+}

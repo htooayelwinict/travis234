@@ -326,6 +326,21 @@ def test_claude_opus_5_catalog_routes_match_current_pi_metadata() -> None:
         assert record["maxTokens"] == 128_000
 
 
+def test_direct_anthropic_omits_retired_opus_4_1_but_partner_routes_remain() -> None:
+    root = Path(__file__).resolve().parents[1]
+    catalog = json.loads(
+        (root / "travis" / "ai" / "builtin_models.json").read_text(encoding="utf-8")
+    )
+
+    assert "claude-opus-4-1" not in catalog["anthropic"]
+    assert "claude-opus-4-1-20250805" not in catalog["anthropic"]
+    assert "claude-opus-4-8" in catalog["anthropic"]
+    assert "anthropic.claude-opus-4-1-20250805-v1:0" in catalog["amazon-bedrock"]
+    assert "us.anthropic.claude-opus-4-1-20250805-v1:0" in catalog["amazon-bedrock"]
+    assert "claude-opus-4-1" in catalog["cloudflare-ai-gateway"]
+    assert "claude-opus-4-1" in catalog["opencode"]
+
+
 def test_openrouter_capability_refresh_is_model_agnostic() -> None:
     catalog = {
         "openrouter": {
