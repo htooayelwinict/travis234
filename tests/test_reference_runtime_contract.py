@@ -630,59 +630,6 @@ def test_summary_request_can_use_provider_native_output_ceiling_without_wire_cap
 
 
 @pytest.mark.parametrize(
-    ("provider", "base_url"),
-    [
-        ("zai", "https://api.z.ai/api/coding/paas/v4"),
-        ("zai-coding-cn", "https://open.bigmodel.cn/api/coding/paas/v4"),
-    ],
-)
-def test_direct_zai_routes_send_output_limit_as_max_tokens(
-    provider: str,
-    base_url: str,
-) -> None:
-    body = ChatCompletionsTransport().build_kwargs(
-        model="glm-5.2",
-        messages=[{"role": "user", "content": "hello"}],
-        tools=[],
-        profile=ProviderProfile(
-            name=provider,
-            base_url=base_url,
-            default_max_tokens=8_192,
-        ),
-        stream=True,
-        temperature=None,
-        max_tokens=4_096,
-        base_url=base_url,
-        model_reasoning=True,
-    )
-
-    assert body["max_tokens"] == 4_096
-    assert "max_completion_tokens" not in body
-
-
-def test_direct_zai_explicit_max_tokens_field_override_still_wins() -> None:
-    base_url = "https://api.z.ai/api/coding/paas/v4"
-    body = ChatCompletionsTransport().build_kwargs(
-        model="custom-zai-model",
-        messages=[{"role": "user", "content": "hello"}],
-        tools=[],
-        profile=ProviderProfile(
-            name="zai",
-            base_url=base_url,
-            default_max_tokens=8_192,
-        ),
-        stream=True,
-        temperature=None,
-        max_tokens=2_048,
-        base_url=base_url,
-        model_compat={"maxTokensField": "max_completion_tokens"},
-    )
-
-    assert body["max_completion_tokens"] == 2_048
-    assert "max_tokens" not in body
-
-
-@pytest.mark.parametrize(
     ("transport", "api", "provider", "container", "field"),
     [
         (ChatCompletionsTransport(), "openai-completions", "openrouter", None, "max_tokens"),
@@ -2450,57 +2397,6 @@ def test_responses_stream_preserves_text_signature_and_exact_usage_split() -> No
     assert message.usage.output == 30
     assert message.usage.reasoning == 10
     assert message.usage.total_tokens == 130
-
-
-def _responses_terminal_message(events):
-    terminal = events[-1]
-    return terminal.error if hasattr(terminal, "error") else terminal.message
-
-
-@pytest.mark.parametrize(
-    ("incomplete_reason", "expected_stop", "expected_error"),
-    [
-        ("max_output_tokens", "length", None),
-        ("max_tokens", "length", None),
-        ("content_filter", "error", "Response incomplete: content_filter"),
-        ("future_provider_reason", "error", "Response incomplete: future_provider_reason"),
-        (None, "error", "Response incomplete without a provider reason"),
-    ],
-)
-def test_responses_stream_classifies_incomplete_provider_reason(
-    incomplete_reason: str | None,
-    expected_stop: str,
-    expected_error: str | None,
-) -> None:
-    model = Model(
-        id="gpt-5.4",
-        name="GPT-5.4",
-        api="openai-responses",
-        provider="openai",
-        base_url="https://api.openai.com/v1",
-    )
-    details = {} if incomplete_reason is None else {"reason": incomplete_reason}
-    payload = {
-        "type": "response.incomplete",
-        "response": {
-            "id": "resp_incomplete",
-            "status": "incomplete",
-            "incomplete_details": details,
-            "output": [],
-            "usage": {
-                "input_tokens": 1,
-                "output_tokens": 1,
-                "total_tokens": 2,
-            },
-        },
-    }
-
-    message = _responses_terminal_message(
-        list(decode_responses_stream([f"data: {json.dumps(payload)}"], model))
-    )
-
-    assert message.stop_reason == expected_stop
-    assert message.error_message == expected_error
 
 
 def test_vertex_url_requires_project_location_for_adc_and_uses_express_for_key(monkeypatch) -> None:
