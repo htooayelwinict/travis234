@@ -15,7 +15,7 @@ It is an MCP client adapter, not an MCP server and not a general compatibility l
 
 ## Requirements
 
-- Travis234 2.4.2 or newer
+- Travis234 2.4.3 or newer
 - Python 3.13
 - the command runtime required by each stdio server, such as Node.js for `npx` servers
 - network access for remote servers and for package runners that download on first use
@@ -30,19 +30,27 @@ travis234 install travis234-mcp-adapter
 
 Start a new Travis234 process after installation, or use `/reload` if the adapter has not already been imported in the current process. After `/update`, restart Travis234 so Python cannot reuse the previous adapter package from its module cache.
 
-Installing the adapter does not force the `mcp` tool into a turn. Normal Travis tool selection and allowlists still apply; an allowlist that excludes `mcp` wins.
+Installing the adapter does not force the `mcp` tool into a turn. Enable it for the current process with `--mcp`; the flag adds MCP to the tools that would otherwise be active and does not modify any MCP configuration.
+
+Launch with the default Travis234 tools plus MCP:
+
+```bash
+travis234 --cwd . --mcp
+```
 
 Launch an MCP-only session:
 
 ```bash
-travis234 --cwd . --tools mcp
+travis234 --cwd . --no-tools --mcp
 ```
 
-Or explicitly combine it with selected core tools:
+Or combine MCP with an advanced explicit subset:
 
 ```bash
-travis234 --cwd . --tools read,bash,process,edit,write,mcp
+travis234 --cwd . --tools read,bash --mcp
 ```
+
+The generic `--tools mcp` form remains supported as an explicit MCP-only allowlist.
 
 Manage the separately installed package with the normal Travis234 package commands:
 
@@ -55,7 +63,7 @@ travis234 remove travis234-mcp-adapter
 For a reproducible installation, pin the adapter source:
 
 ```bash
-travis234 install 'travis234-mcp-adapter==0.1.0'
+travis234 install 'travis234-mcp-adapter==0.1.1'
 ```
 
 ## Configuration
@@ -266,7 +274,7 @@ Ordinary startup never installs or updates packages automatically. `--offline` a
 
 ### The model cannot see `mcp`
 
-Installation registers the extension but does not override the active-tool policy. Start Travis234 with `--tools mcp`, or include `mcp` in the explicit comma-separated tool list. Check `travis234 list` to confirm the adapter package is installed, then restart or `/reload` as described above.
+Installation registers the extension but does not override the active-tool policy. Start Travis234 with `--mcp`, or use `--no-tools --mcp` for an MCP-only session. Check `travis234 list` to confirm the adapter package is installed, then restart or `/reload` as described above.
 
 ### A project server is missing
 

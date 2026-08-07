@@ -10,7 +10,7 @@ TRAVIS234 // NEURAL TERMINAL ONLINE
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-39e6c7?style=for-the-badge&labelColor=10182b"></a>
   <img alt="Python 3.13" src="https://img.shields.io/badge/Python-3.13-63a7ff?style=for-the-badge&labelColor=10182b">
-  <img alt="Version 2.4.2" src="https://img.shields.io/badge/version-2.4.2-bd6cff?style=for-the-badge&labelColor=10182b">
+  <img alt="Version 2.4.3" src="https://img.shields.io/badge/version-2.4.3-bd6cff?style=for-the-badge&labelColor=10182b">
   <img alt="Terminal first" src="https://img.shields.io/badge/interface-terminal-ff7ac6?style=for-the-badge&labelColor=10182b">
 </p>
 
@@ -400,15 +400,20 @@ Install the separate official-SDK adapter when Travis234 should call explicitly 
 travis234 install travis234-mcp-adapter
 ```
 
-Restart Travis234 after the first install or an update. The adapter registers one lazy `mcp` proxy instead of adding every remote tool to the provider schema. Extension tools are not activated merely by being installed, so opt in for the process:
+Restart Travis234 after the first install or an update. The adapter registers one lazy `mcp` proxy instead of adding every remote tool to the provider schema. Enable it for the current process with the additive `--mcp` flag:
 
 ```bash
-# MCP-only tool session
-travis234 --cwd . --tools mcp
+# Default Travis234 tools plus MCP
+travis234 --cwd . --mcp
 
-# MCP plus an explicit set of core tools
-travis234 --cwd . --tools read,bash,process,edit,write,mcp
+# MCP only
+travis234 --cwd . --no-tools --mcp
+
+# Advanced explicit subset plus MCP
+travis234 --cwd . --tools read,bash --mcp
 ```
+
+`--mcp` only changes the active tools for that process; it does not install the adapter or modify any MCP configuration. The generic `--tools mcp` form remains supported for an explicit MCP-only allowlist.
 
 The adapter reads `mcpServers` from these files, in increasing precedence:
 

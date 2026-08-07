@@ -115,6 +115,7 @@ class CodingApp:
         model_registry: ModelRegistry | None = None,
         allowed_tool_names: list[str] | None = None,
         excluded_tool_names: list[str] | None = None,
+        additional_active_tool_names: list[str] | None = None,
         additional_extension_paths: list[str] | None = None,
         additional_skill_paths: list[str] | None = None,
         additional_prompt_template_paths: list[str] | None = None,
@@ -144,6 +145,7 @@ class CodingApp:
             list(allowed_tool_names) if allowed_tool_names is not None else None
         )
         self._excluded_tool_names = list(excluded_tool_names or [])
+        self._additional_active_tool_names = list(additional_active_tool_names or [])
         self._additional_extension_paths = list(additional_extension_paths or [])
         self._additional_skill_paths = list(additional_skill_paths or [])
         self._additional_prompt_template_paths = list(additional_prompt_template_paths or [])
@@ -295,6 +297,7 @@ class CodingApp:
             ),
             allowed_tool_names=self._allowed_tool_names,
             excluded_tool_names=self._excluded_tool_names,
+            additional_active_tool_names=self._additional_active_tool_names,
             settings_manager=self._settings_manager,
             resource_loader=resource_loader,
             retry_enabled=retry_enabled,

@@ -318,6 +318,35 @@ def test_coding_app_applies_allowlist_then_denylist_with_explicit_extension(
         app.close()
 
 
+def test_coding_app_adds_mcp_to_default_active_tools(tmp_path: Path) -> None:
+    extension = tmp_path / "operator" / "mcp.py"
+    _write_extension_tool(extension, "mcp")
+
+    app = CodingApp(
+        cwd=str(tmp_path),
+        agent_dir=str(tmp_path / "agent"),
+        model=faux_model(),
+        enable_tui=False,
+        project_trust_override=False,
+        additional_active_tool_names=["mcp", "mcp"],
+        additional_extension_paths=[str(extension)],
+    )
+    try:
+        assert app.session.get_active_tool_names() == [
+            "read",
+            "bash",
+            "process",
+            "tmux",
+            "edit",
+            "write",
+            "spawn_subagent",
+            "wait_subagent",
+            "mcp",
+        ]
+    finally:
+        app.close()
+
+
 def test_coding_app_applies_extension_flags_to_initial_and_replacement_sessions(
     tmp_path: Path,
 ) -> None:

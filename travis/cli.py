@@ -367,6 +367,11 @@ def _build_parser(
         help="Comma-separated tools to subtract from the active set; may be repeated",
     )
     parser.add_argument(
+        "--mcp",
+        action="store_true",
+        help="Add MCP to the otherwise active tool set; requires travis234-mcp-adapter",
+    )
+    parser.add_argument(
         "--extension",
         dest="extension_paths",
         action="append",
@@ -642,13 +647,18 @@ def main(argv: list[str] | None = None) -> int:
     args.image_paths = image_paths
     selected_tool_names = _split_repeatable_csv(args.tools)
     excluded_tool_names = _split_repeatable_csv(args.exclude_tools)
+    if args.mcp and "mcp" in excluded_tool_names:
+        parser.error("--mcp cannot be combined with --exclude-tools mcp")
+    if args.mcp and "mcp" not in selected_tool_names:
+        selected_tool_names.append("mcp")
     allowed_tool_names = (
         selected_tool_names
-        if args.tools is not None
+        if args.tools is not None or args.mcp and args.no_tools
         else []
         if args.no_tools
         else None
     )
+    additional_active_tool_names = ["mcp"] if args.mcp else None
 
     if args.thinking and args.thinking not in _VALID_THINKING_LEVELS:
         print(
@@ -736,6 +746,7 @@ def main(argv: list[str] | None = None) -> int:
             model_registry=model_registry,
             allowed_tool_names=allowed_tool_names,
             excluded_tool_names=excluded_tool_names,
+            additional_active_tool_names=additional_active_tool_names,
             additional_extension_paths=extension_paths,
             additional_skill_paths=skill_paths,
             additional_prompt_template_paths=prompt_template_paths,
@@ -767,6 +778,11 @@ def main(argv: list[str] | None = None) -> int:
             [*selected_tool_names, *excluded_tool_names],
         )
         if unknown_tool_names:
+            if args.mcp and "mcp" in unknown_tool_names:
+                parser.error(
+                    "MCP tool is unavailable; install it with: "
+                    "travis234 install travis234-mcp-adapter"
+                )
             noun = "name" if len(unknown_tool_names) == 1 else "names"
             parser.error(f"unknown tool {noun}: {', '.join(unknown_tool_names)}")
         return _run_configured_app(

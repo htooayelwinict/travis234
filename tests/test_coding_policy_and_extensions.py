@@ -199,6 +199,30 @@ def test_agent_session_registry_set_active_tools_and_allowlist(tmp_path: Path) -
     assert seen == [["grep", "find"]]
     assert session.get_active_tool_names() == ["grep", "find"]
 
+
+def test_session_additional_active_tools_extend_selection_once(tmp_path: Path) -> None:
+    def execute(tool_call_id, args, signal=None, on_update=None, ctx=None):
+        return AgentToolResult(content=[TextContent(text="ok")], details=None)
+
+    definition = ToolDefinition(
+        name="mcp",
+        label="MCP",
+        description="MCP proxy",
+        parameters={"type": "object", "properties": {}},
+        execute=execute,
+    )
+
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        tool_definitions=[definition],
+        active_tool_names=[],
+        additional_active_tool_names=["mcp", "mcp"],
+    )
+
+    assert session.get_active_tool_names() == ["mcp"]
+
+
 def test_agent_session_get_all_tools_returns_travis234_tool_info_with_source_metadata(tmp_path: Path) -> None:
     from travis.coding_agent import SourceInfo, create_synthetic_source_info
 

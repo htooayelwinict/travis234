@@ -44,7 +44,7 @@ def test_built_wheel_installs_and_loads_through_travis(
         metadata_name = next(name for name in names if name.endswith(".dist-info/METADATA"))
         metadata = Parser().parsestr(archive.read(metadata_name).decode("utf-8"))
     assert metadata["Name"] == "travis234-mcp-adapter"
-    assert metadata["Version"] == "0.1.0"
+    assert metadata["Version"] == "0.1.1"
     assert "mcp<3,>=2" in metadata.get_all("Requires-Dist", [])
     assert any(name.endswith("/extensions/mcp_adapter.py") for name in names)
     monkeypatch.setattr(

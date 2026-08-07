@@ -132,6 +132,7 @@ class _SessionRuntime(
         active_tool_names: list[str] | None = None,
         allowed_tool_names: list[str] | None = None,
         excluded_tool_names: list[str] | None = None,
+        additional_active_tool_names: list[str] | None = None,
         convert_to_llm: Optional[Callable[[list[AgentMessage]], list[Message]]] = None,
         custom_prompt: str | None = None,
         append_system_prompt: str | None = None,
@@ -335,6 +336,9 @@ class _SessionRuntime(
             if allowed_tool_names is not None
             else self._default_active_tool_names()
         )
+        for name in additional_active_tool_names or []:
+            if name not in initial_active_tool_names:
+                initial_active_tool_names.append(name)
         self.system_prompt = self._build_system_prompt([])
         self.agent = Agent(
             system_prompt=self.system_prompt,
