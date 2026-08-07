@@ -4,10 +4,12 @@ import asyncio
 import json
 from typing import TYPE_CHECKING, Any, Protocol
 
-from mcp.types import TextContent as McpTextContent, Tool
+from mcp.types import Tool
 from travis.agent.types import AgentToolResult
 from travis.ai.types import TextContent
 from travis.coding_agent.tools.types import ToolDefinition
+from travis234_mcp_adapter.output_guard import SpillRegistry
+from travis234_mcp_adapter.results import convert_call_result
 
 if TYPE_CHECKING:
     from travis.agent.types import AbortSignal
@@ -37,6 +39,7 @@ class ProxyState(Protocol):
     config_error: str | None
     runtime: McpRuntime | None
     catalogs: dict[str, tuple[Tool, ...]]
+    spills: SpillRegistry
 
 
 def create_proxy_definition(state: ProxyState) -> ToolDefinition:
@@ -102,6 +105,7 @@ async def dispatch_proxy(
             str(params["tool"]),
             params.get("args"),
             signal,
+            state.spills,
         )
     except asyncio.CancelledError:
         raise
@@ -239,6 +243,7 @@ async def _call_result(
     name: str,
     raw_arguments: object,
     signal: AbortSignal | None,
+    spills: SpillRegistry,
 ) -> AgentToolResult:
     if not any(tool.name == name for tool in catalog):
         return _error_result(
@@ -248,14 +253,9 @@ async def _call_result(
         )
     arguments = dict(raw_arguments) if isinstance(raw_arguments, dict) else {}
     result = await connected.call_tool(name, arguments, signal)
-    text_blocks = [block.text for block in result.content if isinstance(block, McpTextContent)]
-    text = "\n".join(text_blocks) if text_blocks else "MCP tool returned non-text content."
-    return _adapter_result(
-        text,
-        operation="call",
-        is_error=bool(result.is_error),
-        server=server,
-    )
+    converted = convert_call_result(result, spills)
+    converted.details["travis234Mcp"]["server"] = server
+    return converted
 
 
 def _description(tool: Tool) -> str:

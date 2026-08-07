@@ -88,3 +88,34 @@ async def test_invalid_config_status_is_bounded_and_source_attributed(
     assert str(invalid) in result.content[0].text
     assert len(result.content[0].text.encode("utf-8")) <= 4_096
     assert result.details["travis234Mcp"]["isError"] is True
+
+
+def test_tool_result_bridge_is_scoped_to_adapter_marker(tmp_path: Path) -> None:
+    runner = ExtensionRunner(cwd=str(tmp_path))
+    extension(runner)
+
+    adapted = runner.emit_tool_result(
+        {
+            "type": "tool_result",
+            "toolName": "mcp",
+            "content": [],
+            "details": {"travis234Mcp": {"isError": True}},
+            "isError": False,
+        }
+    )
+    unrelated = runner.emit_tool_result(
+        {
+            "type": "tool_result",
+            "toolName": "bash",
+            "content": [],
+            "details": {"exitCode": 1},
+            "isError": False,
+        }
+    )
+
+    assert adapted == {
+        "content": [],
+        "details": {"travis234Mcp": {"isError": True}},
+        "isError": True,
+    }
+    assert unrelated is None

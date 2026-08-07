@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from mcp.types import CallToolResult, ListToolsResult, TextContent as McpTextContent, Tool
 from travis234_mcp_adapter.config import LoadedConfig, ServerConfig
+from travis234_mcp_adapter.output_guard import SpillRegistry
 from travis234_mcp_adapter.proxy_tool import dispatch_proxy, load_tool_catalog
 
 
@@ -47,13 +49,14 @@ class FakeRuntime:
 
 
 def _state(connected: FakeConnected | None = None):
-    configured = ServerConfig(name="github", source_path=SimpleNamespace(), command="fixture")
+    configured = ServerConfig(name="github", source_path=Path("/fixture/mcp.json"), command="fixture")
     runtime = FakeRuntime(connected or FakeConnected())
     return SimpleNamespace(
         config=LoadedConfig(servers={"github": configured}, sources=(), ignored_project_sources=()),
         config_error=None,
         runtime=runtime,
         catalogs={},
+        spills=SpillRegistry(),
     )
 
 
