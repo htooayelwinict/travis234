@@ -1,11 +1,53 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from travis234_mcp_adapter.config import ConfigError, LoadedConfig, load_config
+from travis234_mcp_adapter.proxy_tool import create_proxy_definition
+
+
+def _empty_config() -> LoadedConfig:
+    return LoadedConfig(servers={}, sources=(), ignored_project_sources=())
+
+
+@dataclass
+class ExtensionState:
+    config: LoadedConfig = field(default_factory=_empty_config)
+    config_error: str | None = None
+    generation: int = 0
+    session_started: bool = False
+
+    async def on_session_start(self, _event, ctx) -> None:
+        self.generation += 1
+        self.session_started = True
+        self.config = _empty_config()
+        self.config_error = None
+        try:
+            self.config = load_config(
+                Path(ctx.cwd),
+                Path.home(),
+                ctx.is_project_trusted(),
+            )
+        except ConfigError as error:
+            self.config_error = _bounded_error(str(error))
+
+    async def on_session_shutdown(self, _event, _ctx) -> None:
+        self.generation += 1
+        self.session_started = False
+        self.config = _empty_config()
+        self.config_error = None
+
 
 def extension(travis) -> None:
-    travis.register_command(
-        "mcp-package-probe",
-        {
-            "description": "Confirm that the optional MCP adapter package loaded.",
-            "handler": lambda _args, _ctx: [],
-        },
-    )
+    state = ExtensionState()
+    travis.register_tool(create_proxy_definition(state))
+    travis.on("session_start", state.on_session_start)
+    travis.on("session_shutdown", state.on_session_shutdown)
+
+
+def _bounded_error(message: str) -> str:
+    encoded = message.encode("utf-8")
+    if len(encoded) <= 4_000:
+        return message
+    return encoded[:3_980].decode("utf-8", errors="ignore") + "…"

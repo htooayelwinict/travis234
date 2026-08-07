@@ -66,4 +66,4 @@ def test_built_wheel_installs_and_loads_through_travis(
     )
     loader.reload()
     runtime = loader.get_extensions()["runtime"]
-    assert runtime.get_registered_command("mcp-package-probe") is not None
+    assert [item.definition.name for item in runtime.get_all_registered_tools()] == ["mcp"]

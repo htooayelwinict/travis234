@@ -43,3 +43,8 @@ def config_tree(tmp_path: Path) -> ConfigTree:
     home.mkdir()
     cwd.mkdir()
     return ConfigTree(home=home, cwd=cwd)
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
