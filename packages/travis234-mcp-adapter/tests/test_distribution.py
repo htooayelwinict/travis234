@@ -1,0 +1,69 @@
+from __future__ import annotations
+
+from pathlib import Path
+import subprocess
+
+from travis.coding_agent.package_manager import DefaultPackageManager
+from travis.coding_agent.resource_loader import DefaultResourceLoader
+from travis.coding_agent.settings_manager import SettingsManager
+
+
+PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _build_adapter_wheel(output_dir: Path) -> Path:
+    output_dir.mkdir(parents=True)
+    subprocess.run(
+        [
+            "uv",
+            "build",
+            "--wheel",
+            "--clear",
+            "-o",
+            str(output_dir),
+            str(PACKAGE_ROOT),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    wheels = list(output_dir.glob("*.whl"))
+    assert len(wheels) == 1
+    return wheels[0]
+
+
+def test_built_wheel_installs_and_loads_through_travis(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    wheel = _build_adapter_wheel(tmp_path / "dist")
+    monkeypatch.setattr(
+        "travis.coding_agent.package_manager.importlib.util.find_spec",
+        lambda name: None if name == "pip" else __import__(name).__spec__,
+    )
+    settings = SettingsManager.in_memory()
+    manager = DefaultPackageManager(
+        cwd=str(tmp_path / "repo"),
+        agent_dir=str(tmp_path / "agent"),
+        settings_manager=settings,
+        project_trusted=True,
+    )
+
+    installed = manager.install(
+        f"travis234-mcp-adapter @ {wheel.as_uri()}",
+        scope="global",
+    )
+    resolved = manager.resolve()
+
+    assert Path(installed.install_path).is_dir()
+    assert [Path(item.path).name for item in resolved.extensions] == ["mcp_adapter.py"]
+
+    loader = DefaultResourceLoader(
+        cwd=str(tmp_path / "repo"),
+        agent_dir=str(tmp_path / "agent"),
+        settings_manager=settings,
+        project_trusted=True,
+    )
+    loader.reload()
+    runtime = loader.get_extensions()["runtime"]
+    assert runtime.get_registered_command("mcp-package-probe") is not None

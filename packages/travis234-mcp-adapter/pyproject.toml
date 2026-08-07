@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "travis234-mcp-adapter"
+version = "0.1.0"
+description = "Optional MCP client adapter extension for Travis234."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.13,<3.14"
+dependencies = ["mcp>=2,<3"]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pytest-asyncio>=1"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["travis234_mcp_adapter*"]
+
+[tool.setuptools.data-files]
+"extensions" = ["extensions/mcp_adapter.py"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

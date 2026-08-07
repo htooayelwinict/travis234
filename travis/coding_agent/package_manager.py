@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -344,10 +345,7 @@ class DefaultPackageManager:
                 )
             return
         destination.mkdir(parents=True, exist_ok=True)
-        _run_package_command(
-            [sys.executable, "-m", "pip", "install", "--target", str(destination), source.raw],
-            env,
-        )
+        _run_package_command(_python_install_command(destination, source.raw), env)
 
     def _install_root(self, scope: PackageScope) -> Path:
         if scope == "global":
@@ -475,6 +473,32 @@ def _run_package_command(command: list[str], env: dict[str, str]) -> None:
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "package command failed").strip()
         raise RuntimeError(f"Package command failed ({command[0]}): {detail}")
+
+
+def _python_install_command(destination: Path, requirement: str) -> list[str]:
+    if importlib.util.find_spec("pip") is not None:
+        return [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--target",
+            str(destination),
+            requirement,
+        ]
+    uv = shutil.which("uv")
+    if uv is None:
+        raise RuntimeError("Python package installation requires pip or uv")
+    return [
+        uv,
+        "pip",
+        "install",
+        "--python",
+        sys.executable,
+        "--target",
+        str(destination),
+        requirement,
+    ]
 
 
 def _read_package_manifest(package_root: Path) -> tuple[dict[str, list[str]], str | None, str | None]:
