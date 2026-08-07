@@ -267,6 +267,9 @@ class McpRuntime:
         if actors:
             await asyncio.gather(*(actor.close() for actor in actors), return_exceptions=True)
 
+    def is_connected(self, name: str) -> bool:
+        return name in self._connected
+
 
 async def _await_controlled(
     awaitable: Awaitable[object],
