@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 import os
 from pathlib import Path
-from typing import Any, Literal, TextIO
+from typing import Any, AsyncIterator, Literal, TextIO
 
+import httpx2
 from mcp import Client, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from mcp.client.streamable_http import streamable_http_client
 
 from travis.agent.types import AbortSignal
 from travis234_mcp_adapter.config import ResolvedServer, ServerConfig, resolve_server
@@ -34,15 +37,20 @@ class _ActorRequest:
 
 
 class ConnectedServer:
-    def __init__(self, actor: _ServerActor) -> None:
+    def __init__(self, actor: _ServerActor, runtime: McpRuntime) -> None:
         self._actor = actor
+        self._runtime = runtime
 
     @property
     def name(self) -> str:
         return self._actor.resolved.name
 
     async def list_tools(self, signal: AbortSignal | None, cursor: str | None = None):
-        return await self._actor.request("list_tools", (cursor,), signal)
+        try:
+            return await self._actor.request("list_tools", (cursor,), signal)
+        except (TimeoutError, asyncio.CancelledError):
+            await self._runtime._discard(self._actor)
+            raise
 
     async def call_tool(
         self,
@@ -50,7 +58,11 @@ class ConnectedServer:
         arguments: dict[str, Any],
         signal: AbortSignal | None,
     ):
-        return await self._actor.request("call_tool", (name, arguments), signal)
+        try:
+            return await self._actor.request("call_tool", (name, arguments), signal)
+        except (TimeoutError, asyncio.CancelledError):
+            await self._runtime._discard(self._actor)
+            raise
 
 
 class _ServerActor:
@@ -134,19 +146,10 @@ class _ServerActor:
         ready = self._ready
         assert ready is not None
         try:
-            if self.resolved.command is None:
-                raise RuntimeError("Streamable HTTP transport is not implemented")
-            params = StdioServerParameters(
-                command=self.resolved.command,
-                args=list(self.resolved.args),
-                env=dict(self.resolved.env),
-                cwd=self.resolved.cwd,
-            )
-            with Path(os.devnull).open("w", encoding="utf-8") as errlog:
-                async with Client(stdio_client(params, errlog=_as_text_io(errlog))) as client:
-                    if not ready.done():
-                        ready.set_result(None)
-                    await self._serve(client)
+            async with _open_client(self.resolved) as client:
+                if not ready.done():
+                    ready.set_result(None)
+                await self._serve(client)
         except BaseException as error:
             if not ready.done():
                 if isinstance(error, asyncio.CancelledError):
@@ -240,9 +243,19 @@ class McpRuntime:
             except BaseException:
                 self._actors.pop(name, None)
                 raise
-            connected = ConnectedServer(actor)
+            connected = ConnectedServer(actor, self)
             self._connected[name] = connected
             return connected
+
+    async def _discard(self, actor: _ServerActor) -> None:
+        name = actor.resolved.name
+        lock = self._locks.setdefault(name, asyncio.Lock())
+        async with lock:
+            if self._actors.get(name) is not actor:
+                return
+            self._actors.pop(name, None)
+            self._connected.pop(name, None)
+            await actor.close()
 
     async def close(self) -> None:
         if self._closed:
@@ -288,3 +301,39 @@ async def _await_controlled(
 
 def _as_text_io(stream: TextIO) -> TextIO:
     return stream
+
+
+@asynccontextmanager
+async def _open_client(resolved: ResolvedServer) -> AsyncIterator[Client]:
+    if resolved.command is not None:
+        params = StdioServerParameters(
+            command=resolved.command,
+            args=list(resolved.args),
+            env=dict(resolved.env),
+            cwd=resolved.cwd,
+        )
+        with Path(os.devnull).open("w", encoding="utf-8") as errlog:
+            async with Client(stdio_client(params, errlog=_as_text_io(errlog))) as client:
+                yield client
+        return
+
+    if resolved.url is None:
+        raise RuntimeError(f'MCP server "{resolved.name}" has no transport')
+    timeout_seconds = (
+        resolved.request_timeout_ms / 1_000
+        if resolved.request_timeout_ms is not None and resolved.request_timeout_ms > 0
+        else None
+    )
+    timeout = (
+        httpx2.Timeout(timeout_seconds)
+        if timeout_seconds is not None
+        else httpx2.Timeout(30.0, read=300.0)
+    )
+    async with httpx2.AsyncClient(
+        headers=dict(resolved.headers),
+        timeout=timeout,
+        follow_redirects=True,
+    ) as http_client:
+        transport = streamable_http_client(resolved.url, http_client=http_client)
+        async with Client(transport) as client:
+            yield client

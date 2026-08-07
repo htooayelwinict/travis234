@@ -66,13 +66,15 @@ async def test_stdio_is_lazy_connects_once_and_closes_child(tmp_path: Path) -> N
 
 @pytest.mark.anyio
 async def test_stdio_timeout_does_not_poison_later_calls(tmp_path: Path) -> None:
-    runtime, _pid_file = _runtime(tmp_path, timeout_ms=1_000)
+    runtime, _pid_file = _runtime(tmp_path, timeout_ms=2_000)
     connected = await runtime.connect("fixture", None)
 
-    with pytest.raises(TimeoutError, match="fixture.*call_tool.*1000"):
+    with pytest.raises(TimeoutError, match="fixture.*call_tool.*2000"):
         await connected.call_tool("slow", {"delay_ms": 5_000}, None)
 
-    assert _text(await connected.call_tool("echo", {"text": "after-timeout"}, None)) == "after-timeout"
+    reconnected = await runtime.connect("fixture", None)
+    assert reconnected is not connected
+    assert _text(await reconnected.call_tool("echo", {"text": "after-timeout"}, None)) == "after-timeout"
     await runtime.close()
 
 
@@ -88,7 +90,9 @@ async def test_stdio_abort_cancels_request_and_keeps_server_usable(tmp_path: Pat
 
     with pytest.raises(asyncio.CancelledError):
         await call
-    assert _text(await connected.call_tool("echo", {"text": "after-abort"}, None)) == "after-abort"
+    reconnected = await runtime.connect("fixture", None)
+    assert reconnected is not connected
+    assert _text(await reconnected.call_tool("echo", {"text": "after-abort"}, None)) == "after-abort"
     await runtime.close()
 
 

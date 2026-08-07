@@ -7,26 +7,31 @@ from pathlib import Path
 from mcp.server import MCPServer
 
 
-server = MCPServer("travis234-mcp-adapter-fixture")
-
-
-@server.tool()
 def echo(text: str) -> str:
     """Return the supplied text."""
     return text
 
 
-@server.tool()
 def configured_secret_name() -> str:
     """Report only whether the fixture received its configured token."""
     return "present" if os.environ.get("FIXTURE_TOKEN") else "missing"
 
 
-@server.tool()
 async def slow(delay_ms: int) -> str:
     """Wait for a controlled duration."""
     await asyncio.sleep(delay_ms / 1_000)
     return "finished"
+
+
+def create_server() -> MCPServer:
+    created = MCPServer("travis234-mcp-adapter-fixture")
+    created.tool()(echo)
+    created.tool()(configured_secret_name)
+    created.tool()(slow)
+    return created
+
+
+server = create_server()
 
 
 if __name__ == "__main__":
