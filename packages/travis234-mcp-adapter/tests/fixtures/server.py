@@ -23,11 +23,23 @@ async def slow(delay_ms: int) -> str:
     return "finished"
 
 
+def large_output(size: int) -> str:
+    """Return controlled oversized text."""
+    return "x" * size
+
+
+def controlled_error() -> str:
+    """Return a controlled MCP tool error."""
+    raise ValueError("controlled fixture failure")
+
+
 def create_server() -> MCPServer:
     created = MCPServer("travis234-mcp-adapter-fixture")
     created.tool()(echo)
     created.tool()(configured_secret_name)
     created.tool()(slow)
+    created.tool()(large_output)
+    created.tool()(controlled_error)
     return created
 
 

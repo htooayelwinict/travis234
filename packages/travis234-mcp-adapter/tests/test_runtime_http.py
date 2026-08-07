@@ -38,6 +38,8 @@ async def test_http_is_lazy_sends_referenced_header_and_closes(
         "echo",
         "configured_secret_name",
         "slow",
+        "large_output",
+        "controlled_error",
     ]
     assert _text(await connected.call_tool("echo", {"text": "http-sentinel"}, None)) == "http-sentinel"
     assert mcp_http_server.probe["requests"] > 0

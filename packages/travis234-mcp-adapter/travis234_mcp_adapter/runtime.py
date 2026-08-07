@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import threading
 from typing import Any, AsyncIterator, Literal, TextIO
 
 import httpx2
@@ -18,6 +19,73 @@ from travis234_mcp_adapter.config import ResolvedServer, ServerConfig, resolve_s
 
 
 Operation = Literal["list_tools", "call_tool"]
+
+
+class _LoopOwner:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._ready = threading.Event()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+
+    @property
+    def started(self) -> bool:
+        return self._thread is not None
+
+    async def run(self, awaitable: Awaitable[object]) -> object:
+        loop = self._ensure_started()
+        future = asyncio.run_coroutine_threadsafe(awaitable, loop)
+        return await asyncio.wrap_future(future)
+
+    async def stop(self) -> None:
+        with self._lock:
+            loop = self._loop
+            thread = self._thread
+        if loop is None or thread is None:
+            return
+        loop.call_soon_threadsafe(loop.stop)
+        await asyncio.to_thread(thread.join, 5)
+        if thread.is_alive():
+            raise RuntimeError("MCP runtime loop did not stop")
+        with self._lock:
+            self._loop = None
+            self._thread = None
+            self._ready.clear()
+
+    def _ensure_started(self) -> asyncio.AbstractEventLoop:
+        with self._lock:
+            if self._thread is None:
+                self._ready.clear()
+                self._thread = threading.Thread(
+                    target=self._thread_main,
+                    name="travis234-mcp-runtime",
+                    daemon=True,
+                )
+                self._thread.start()
+            thread = self._thread
+        if not self._ready.wait(5):
+            raise RuntimeError("MCP runtime loop did not start")
+        with self._lock:
+            loop = self._loop
+        if loop is None or thread is None or not thread.is_alive():
+            raise RuntimeError("MCP runtime loop is unavailable")
+        return loop
+
+    def _thread_main(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        with self._lock:
+            self._loop = loop
+        self._ready.set()
+        try:
+            loop.run_forever()
+        finally:
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.close()
 
 
 @dataclass
@@ -46,11 +114,12 @@ class ConnectedServer:
         return self._actor.resolved.name
 
     async def list_tools(self, signal: AbortSignal | None, cursor: str | None = None):
-        try:
-            return await self._actor.request("list_tools", (cursor,), signal)
-        except (TimeoutError, asyncio.CancelledError):
-            await self._runtime._discard(self._actor)
-            raise
+        return await self._runtime._request(
+            self._actor,
+            "list_tools",
+            (cursor,),
+            signal,
+        )
 
     async def call_tool(
         self,
@@ -58,11 +127,12 @@ class ConnectedServer:
         arguments: dict[str, Any],
         signal: AbortSignal | None,
     ):
-        try:
-            return await self._actor.request("call_tool", (name, arguments), signal)
-        except (TimeoutError, asyncio.CancelledError):
-            await self._runtime._discard(self._actor)
-            raise
+        return await self._runtime._request(
+            self._actor,
+            "call_tool",
+            (name, arguments),
+            signal,
+        )
 
 
 class _ServerActor:
@@ -222,11 +292,22 @@ class McpRuntime:
         self._actors: dict[str, _ServerActor] = {}
         self._connected: dict[str, ConnectedServer] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self._loop_owner = _LoopOwner()
+        self._status_lock = threading.Lock()
+        self._connected_names: set[str] = set()
+        self._close_lock = threading.Lock()
         self._closed = False
 
     async def connect(self, name: str, signal: AbortSignal | None) -> ConnectedServer:
         if self._closed:
             raise RuntimeError("MCP runtime is closed")
+        return await self._loop_owner.run(self._connect_on_owner(name, signal))
+
+    async def _connect_on_owner(
+        self,
+        name: str,
+        signal: AbortSignal | None,
+    ) -> ConnectedServer:
         server = self._servers.get(name)
         if server is None:
             raise KeyError(f'Unknown MCP server "{name}"')
@@ -245,9 +326,27 @@ class McpRuntime:
                 raise
             connected = ConnectedServer(actor, self)
             self._connected[name] = connected
+            with self._status_lock:
+                self._connected_names.add(name)
             return connected
 
-    async def _discard(self, actor: _ServerActor) -> None:
+    async def _request(
+        self,
+        actor: _ServerActor,
+        operation: Operation,
+        arguments: tuple[object, ...],
+        signal: AbortSignal | None,
+    ) -> object:
+        try:
+            return await self._loop_owner.run(actor.request(operation, arguments, signal))
+        except (TimeoutError, asyncio.CancelledError):
+            try:
+                await self._loop_owner.run(self._discard_on_owner(actor))
+            except (asyncio.CancelledError, RuntimeError):
+                pass
+            raise
+
+    async def _discard_on_owner(self, actor: _ServerActor) -> None:
         name = actor.resolved.name
         lock = self._locks.setdefault(name, asyncio.Lock())
         async with lock:
@@ -255,20 +354,32 @@ class McpRuntime:
                 return
             self._actors.pop(name, None)
             self._connected.pop(name, None)
+            with self._status_lock:
+                self._connected_names.discard(name)
             await actor.close()
 
     async def close(self) -> None:
-        if self._closed:
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+        if not self._loop_owner.started:
             return
-        self._closed = True
+        await self._loop_owner.run(self._close_on_owner())
+        await self._loop_owner.stop()
+
+    async def _close_on_owner(self) -> None:
         actors = list(self._actors.values())
         self._actors.clear()
         self._connected.clear()
+        with self._status_lock:
+            self._connected_names.clear()
         if actors:
             await asyncio.gather(*(actor.close() for actor in actors), return_exceptions=True)
 
     def is_connected(self, name: str) -> bool:
-        return name in self._connected
+        with self._status_lock:
+            return name in self._connected_names
 
 
 async def _await_controlled(

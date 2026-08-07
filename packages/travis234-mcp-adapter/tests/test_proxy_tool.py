@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -57,6 +58,7 @@ def _state(connected: FakeConnected | None = None):
         runtime=runtime,
         catalogs={},
         spills=SpillRegistry(),
+        generation=1,
     )
 
 
@@ -186,3 +188,24 @@ async def test_unknown_call_recommends_discovery_without_invoking() -> None:
     assert connected.calls == []
     assert "list or search" in result.content[0].text
     assert result.details["travis234Mcp"]["isError"] is True
+
+
+@pytest.mark.anyio
+async def test_result_from_replaced_generation_is_rejected() -> None:
+    release = asyncio.Event()
+
+    class DelayedConnected(FakeConnected):
+        async def call_tool(self, name, arguments, _signal):
+            await release.wait()
+            return await super().call_tool(name, arguments, _signal)
+
+    state = _state(DelayedConnected())
+    call = asyncio.create_task(
+        dispatch_proxy(state, {"server": "github", "tool": "echo"}, None)
+    )
+    await asyncio.sleep(0)
+    state.generation += 1
+    release.set()
+
+    with pytest.raises(RuntimeError, match="generation"):
+        await call

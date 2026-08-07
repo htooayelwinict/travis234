@@ -26,9 +26,9 @@ class ExtensionState:
     spills: SpillRegistry = field(default_factory=SpillRegistry)
 
     async def on_session_start(self, _event, ctx) -> None:
+        self.generation += 1
         if self.runtime is not None:
             await self.runtime.close()
-        self.generation += 1
         self.session_started = True
         self.config = _empty_config()
         self.config_error = None
@@ -48,9 +48,9 @@ class ExtensionState:
             self.runtime = McpRuntime(self.config.servers, lambda: os.environ)
 
     async def on_session_shutdown(self, _event, _ctx) -> None:
+        self.generation += 1
         if self.runtime is not None:
             await self.runtime.close()
-        self.generation += 1
         self.session_started = False
         self.config = _empty_config()
         self.config_error = None

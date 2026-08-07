@@ -40,6 +40,11 @@ class ProxyState(Protocol):
     runtime: McpRuntime | None
     catalogs: dict[str, tuple[Tool, ...]]
     spills: SpillRegistry
+    generation: int
+
+
+class StaleMcpGenerationError(RuntimeError):
+    pass
 
 
 def create_proxy_definition(state: ProxyState) -> ToolDefinition:
@@ -86,6 +91,7 @@ async def dispatch_proxy(
         (name for name in ("search", "describe", "tool") if params.get(name) is not None),
         "list",
     )
+    generation = state.generation
     try:
         connected = await state.runtime.connect(server_name, signal)
         catalog = state.catalogs.get(server_name)
@@ -93,25 +99,35 @@ async def dispatch_proxy(
             catalog = await load_tool_catalog(connected, signal)
             state.catalogs[server_name] = catalog
         if operation == "list":
-            return _list_result(server_name, catalog)
-        if operation == "search":
-            return _search_result(server_name, catalog, str(params["search"]))
-        if operation == "describe":
-            return _describe_result(server_name, catalog, str(params["describe"]))
-        return await _call_result(
-            connected,
-            server_name,
-            catalog,
-            str(params["tool"]),
-            params.get("args"),
-            signal,
-            state.spills,
-        )
+            result = _list_result(server_name, catalog)
+        elif operation == "search":
+            result = _search_result(server_name, catalog, str(params["search"]))
+        elif operation == "describe":
+            result = _describe_result(server_name, catalog, str(params["describe"]))
+        else:
+            result = await _call_result(
+                connected,
+                server_name,
+                catalog,
+                str(params["tool"]),
+                params.get("args"),
+                signal,
+                state.spills,
+            )
+        if state.generation != generation:
+            raise StaleMcpGenerationError("MCP session generation changed during tool execution")
+        return result
     except asyncio.CancelledError:
         raise
+    except StaleMcpGenerationError:
+        raise
     except TimeoutError as error:
+        if state.generation != generation:
+            raise asyncio.CancelledError
         return _error_result(str(error), operation=operation, server=server_name)
     except Exception as error:
+        if state.generation != generation:
+            raise asyncio.CancelledError
         return _error_result(
             f'MCP server "{server_name}" {operation} failed ({type(error).__name__}).',
             operation=operation,

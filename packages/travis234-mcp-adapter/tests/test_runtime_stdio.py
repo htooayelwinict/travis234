@@ -37,6 +37,31 @@ def _text(result) -> str:
     return "\n".join(block.text for block in result.content if isinstance(block, TextContent))
 
 
+def test_stdio_connection_survives_sequential_event_loops(tmp_path: Path) -> None:
+    runtime, pid_file = _runtime(tmp_path)
+
+    async def connect_and_list():
+        connected = await runtime.connect("fixture", None)
+        await connected.list_tools(None)
+        return connected
+
+    first = asyncio.run(connect_and_list())
+    pid = int(pid_file.read_text(encoding="ascii"))
+
+    async def reconnect_and_call():
+        connected = await runtime.connect("fixture", None)
+        result = await connected.call_tool("echo", {"text": "next-loop"}, None)
+        return connected, result
+
+    second, result = asyncio.run(reconnect_and_call())
+
+    assert second is first
+    assert _text(result) == "next-loop"
+    assert psutil.pid_exists(pid)
+    asyncio.run(runtime.close())
+    assert not psutil.pid_exists(pid)
+
+
 @pytest.mark.anyio
 async def test_stdio_is_lazy_connects_once_and_closes_child(tmp_path: Path) -> None:
     runtime, pid_file = _runtime(tmp_path)
@@ -52,6 +77,8 @@ async def test_stdio_is_lazy_connects_once_and_closes_child(tmp_path: Path) -> N
         "echo",
         "configured_secret_name",
         "slow",
+        "large_output",
+        "controlled_error",
     ]
     assert _text(await first.call_tool("echo", {"text": "stdio-sentinel"}, None)) == "stdio-sentinel"
     assert _text(await first.call_tool("configured_secret_name", {}, None)) == "present"
