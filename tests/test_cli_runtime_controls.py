@@ -65,6 +65,130 @@ def _write_skill(path: Path, name: str) -> None:
     )
 
 
+def _capture_cli_tool_options(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    known_tools: list[str],
+) -> dict[str, object]:
+    captured: dict[str, object] = {}
+
+    class FakeApp:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            self.session = SimpleNamespace(
+                get_known_tool_names=lambda: list(known_tools),
+            )
+
+        def close(self) -> None:
+            captured["closed"] = True
+
+    monkeypatch.setattr(cli, "CodingApp", FakeApp)
+    monkeypatch.setattr(cli, "run_print_mode", lambda *_args: 0)
+    return captured
+
+
+@pytest.mark.parametrize(
+    ("flags", "expected_allowed"),
+    [
+        (["--mcp"], None),
+        (["--no-tools", "--mcp"], ["mcp"]),
+        (["--tools", "read,bash", "--mcp"], ["read", "bash", "mcp"]),
+        (["--tools", "mcp", "--mcp"], ["mcp"]),
+    ],
+)
+def test_cli_mcp_flag_resolves_additive_tool_selection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    flags: list[str],
+    expected_allowed: list[str] | None,
+) -> None:
+    captured = _capture_cli_tool_options(
+        monkeypatch,
+        known_tools=["read", "bash", "mcp"],
+    )
+
+    assert cli.main(
+        [
+            "--cwd",
+            str(tmp_path),
+            "--no-session",
+            "--mode",
+            "print",
+            *flags,
+            "inspect",
+        ]
+    ) == 0
+
+    assert captured["allowed_tool_names"] == expected_allowed
+    assert captured["additional_active_tool_names"] == ["mcp"]
+    assert captured["closed"] is True
+
+
+def test_cli_mcp_flag_explains_missing_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured = _capture_cli_tool_options(
+        monkeypatch,
+        known_tools=["read", "bash"],
+    )
+
+    with pytest.raises(SystemExit, match="2"):
+        cli.main(
+            [
+                "--cwd",
+                str(tmp_path),
+                "--no-session",
+                "--mode",
+                "print",
+                "--mcp",
+                "inspect",
+            ]
+        )
+
+    assert "travis234 install travis234-mcp-adapter" in capsys.readouterr().err
+    assert captured["closed"] is True
+
+
+def test_cli_rejects_mcp_flag_excluded_mcp(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _capture_cli_tool_options(
+        monkeypatch,
+        known_tools=["read", "bash", "mcp"],
+    )
+
+    with pytest.raises(SystemExit, match="2"):
+        cli.main(
+            [
+                "--cwd",
+                str(tmp_path),
+                "--no-session",
+                "--mode",
+                "print",
+                "--mcp",
+                "--exclude-tools",
+                "mcp",
+                "inspect",
+            ]
+        )
+
+    assert "--mcp cannot be combined with --exclude-tools mcp" in capsys.readouterr().err
+
+
+def test_cli_help_describes_additive_mcp_flag(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert cli.main(["--help"]) == 0
+
+    output = capsys.readouterr().out
+    assert "--mcp" in output
+    assert "Add MCP to the otherwise active tool set" in output
+
+
 def test_cli_forwards_repeatable_tool_resource_and_offline_controls(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
