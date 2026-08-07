@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import os
 from pathlib import Path
 import sys
@@ -93,10 +94,14 @@ async def test_stdio_is_lazy_connects_once_and_closes_child(tmp_path: Path) -> N
 
 @pytest.mark.anyio
 async def test_stdio_timeout_does_not_poison_later_calls(tmp_path: Path) -> None:
-    runtime, _pid_file = _runtime(tmp_path, timeout_ms=2_000)
+    runtime, _pid_file = _runtime(tmp_path)
     connected = await runtime.connect("fixture", None)
+    connected._actor.resolved = replace(  # noqa: SLF001 - isolate request-timeout recovery from process startup.
+        connected._actor.resolved,  # noqa: SLF001
+        request_timeout_ms=250,
+    )
 
-    with pytest.raises(TimeoutError, match="fixture.*call_tool.*2000"):
+    with pytest.raises(TimeoutError, match="fixture.*call_tool.*250"):
         await connected.call_tool("slow", {"delay_ms": 5_000}, None)
 
     reconnected = await runtime.connect("fixture", None)

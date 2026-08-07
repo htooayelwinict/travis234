@@ -359,6 +359,9 @@ mcp({
 - Tool names remain the server's original MCP names.
 - The adapter performs no automatic tool-call retry.
 - No operation implicitly connects every configured server.
+- A shared-config `lifecycle: "lazy"` declaration is accepted as a no-op;
+  non-lazy lifecycle modes remain rejected because eager connection and
+  keep-alive behavior are outside this design.
 
 Tool discovery follows SDK pagination until `next_cursor` is absent. Cursor
 cycles, excessive page counts, or excessive aggregate entries fail with a bounded
@@ -571,6 +574,13 @@ release decision with the normal root Python, npm, and container verification.
 Publishing either artifact, changing GitHub accounts, or pushing release tags is
 outside implementation authorization until the user explicitly requests those
 GitOps actions.
+
+The installed-wheel regression demonstrated that the conditional repair was
+required: a Python resource package with dependencies could inherit the first
+dependency's distribution metadata instead of its requested identity. The user
+subsequently authorized the release boundary. The root Python package, aligned
+npm launcher, and production image therefore advance together to `2.4.2`, while
+the independently versioned adapter begins at `0.1.0`.
 
 ## Explicit non-goals
 

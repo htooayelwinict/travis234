@@ -175,6 +175,44 @@ def test_package_subprocesses_strip_runtime_credentials(
         assert env["PIP_INDEX_URL"].startswith("https://index-user:")
 
 
+def test_python_install_uses_requested_distribution_identity_when_dependencies_are_present(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(command, **kwargs):
+        destination = Path(command[command.index("--target") + 1])
+        destination.mkdir(parents=True, exist_ok=True)
+        (destination / "extensions").mkdir()
+        (destination / "extensions" / "mcp_adapter.py").write_text("", encoding="utf-8")
+        for directory, name, version in (
+            ("annotated_types-0.8.0.dist-info", "annotated-types", "0.8.0"),
+            ("travis234_mcp_adapter-0.1.0.dist-info", "travis234-mcp-adapter", "0.1.0"),
+        ):
+            metadata = destination / directory / "METADATA"
+            metadata.parent.mkdir()
+            metadata.write_text(
+                f"Metadata-Version: 2.4\nName: {name}\nVersion: {version}\n",
+                encoding="utf-8",
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("travis.coding_agent.package_manager.subprocess.run", fake_run)
+    manager = DefaultPackageManager(
+        cwd=str(tmp_path / "repo"),
+        agent_dir=str(tmp_path / "agent"),
+        project_trusted=True,
+    )
+
+    installed = manager.install(
+        "travis234-mcp-adapter @ file:///tmp/travis234_mcp_adapter-0.1.0.whl",
+        scope="global",
+    )
+
+    assert Path(installed.install_path).name.startswith("travis234-mcp-adapter-")
+    assert installed.version == "0.1.0"
+    assert manager.list_installed(scope="global") == [installed]
+
+
 def test_configured_missing_package_is_diagnostic_not_auto_install(tmp_path: Path) -> None:
     settings = SettingsManager.in_memory({"packages": ["travis-missing==9.9.9"]})
     manager = DefaultPackageManager(

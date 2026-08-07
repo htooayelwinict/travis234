@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 import subprocess
+from email.parser import Parser
+import zipfile
 
 from travis.coding_agent.package_manager import DefaultPackageManager
 from travis.coding_agent.resource_loader import DefaultResourceLoader
@@ -37,6 +39,14 @@ def test_built_wheel_installs_and_loads_through_travis(
     monkeypatch,
 ) -> None:
     wheel = _build_adapter_wheel(tmp_path / "dist")
+    with zipfile.ZipFile(wheel) as archive:
+        names = archive.namelist()
+        metadata_name = next(name for name in names if name.endswith(".dist-info/METADATA"))
+        metadata = Parser().parsestr(archive.read(metadata_name).decode("utf-8"))
+    assert metadata["Name"] == "travis234-mcp-adapter"
+    assert metadata["Version"] == "0.1.0"
+    assert "mcp<3,>=2" in metadata.get_all("Requires-Dist", [])
+    assert any(name.endswith("/extensions/mcp_adapter.py") for name in names)
     monkeypatch.setattr(
         "travis.coding_agent.package_manager.importlib.util.find_spec",
         lambda name: None if name == "pip" else __import__(name).__spec__,

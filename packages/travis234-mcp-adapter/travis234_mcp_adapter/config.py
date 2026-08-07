@@ -15,6 +15,7 @@ _SERVER_FIELDS = {
     "env",
     "url",
     "headers",
+    "lifecycle",
     "requestTimeoutMs",
 }
 _SENSITIVE_HEADERS = {"authorization", "cookie", "proxy-authorization"}
@@ -162,6 +163,9 @@ def _parse_server(source_path: Path, name: str, value: object) -> ServerConfig:
     if unknown:
         field_name = sorted(str(item) for item in unknown)[0]
         raise _error(source_path, name, field_name, "is an unknown field")
+    lifecycle = value.get("lifecycle")
+    if lifecycle is not None and lifecycle != "lazy":
+        raise _error(source_path, name, "lifecycle", "only supports lazy")
 
     command = value.get("command")
     url = value.get("url")

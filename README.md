@@ -10,7 +10,7 @@ TRAVIS234 // NEURAL TERMINAL ONLINE
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-39e6c7?style=for-the-badge&labelColor=10182b"></a>
   <img alt="Python 3.13" src="https://img.shields.io/badge/Python-3.13-63a7ff?style=for-the-badge&labelColor=10182b">
-  <img alt="Version 2.4.1" src="https://img.shields.io/badge/version-2.4.1-bd6cff?style=for-the-badge&labelColor=10182b">
+  <img alt="Version 2.4.2" src="https://img.shields.io/badge/version-2.4.2-bd6cff?style=for-the-badge&labelColor=10182b">
   <img alt="Terminal first" src="https://img.shields.io/badge/interface-terminal-ff7ac6?style=for-the-badge&labelColor=10182b">
 </p>
 
@@ -391,6 +391,80 @@ Extensions execute with Travis234's permissions, so install only trusted code. U
 Resource files use safe YAML frontmatter. Discovery merges `.gitignore`, `.ignore`, and `.fdignore`; an explicitly named file remains an operator-selected exception. Leading `/template` prompts expand shell-quoted `$ARGUMENTS`, `$1`, and related Pi placeholders before provider submission. When `enableSkillCommands` is enabled, `/skill:<name>` injects only the selected skill. Discovered themes are reloadable, and extension UI code can select them with `setTheme`.
 
 Packages can be local directories, `git+https://...@revision` sources, or pinned Python requirements. Global commands use `travis234 install|remove|update|list`; add `--local` for trusted project scope. Installs replace atomically, ordinary startup never auto-updates packages, and package subprocesses do not receive model-provider, worker, compression, OAuth, or ambient token credentials.
+
+### Optional MCP adapter
+
+Install the separate official-SDK adapter when Travis234 should call explicitly configured Model Context Protocol servers. Keeping it optional means ordinary Travis234 installations do not inherit MCP dependencies or remote tool schemas.
+
+```bash
+travis234 install travis234-mcp-adapter
+```
+
+Restart Travis234 after the first install or an update. The adapter registers one lazy `mcp` proxy instead of adding every remote tool to the provider schema. Extension tools are not activated merely by being installed, so opt in for the process:
+
+```bash
+# MCP-only tool session
+travis234 --cwd . --tools mcp
+
+# MCP plus an explicit set of core tools
+travis234 --cwd . --tools read,bash,process,edit,write,mcp
+```
+
+The adapter reads `mcpServers` from these files, in increasing precedence:
+
+1. `~/.config/mcp/mcp.json`
+2. `~/.travis234/agent/mcp.json`
+3. project `.mcp.json`
+4. project `.travis234/mcp.json`
+
+Project files require project trust. A higher-precedence definition replaces the complete lower-precedence server definition; individual fields are not merged. The adapter never writes these files.
+
+Minimal stdio configuration:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/absolute/allowed/path"],
+      "lifecycle": "lazy"
+    }
+  }
+}
+```
+
+Minimal Streamable HTTP configuration:
+
+```json
+{
+  "mcpServers": {
+    "context7": {
+      "url": "https://mcp.context7.com/mcp",
+      "headers": {
+        "CONTEXT7_API_KEY": "$env:CONTEXT7_API_KEY"
+      }
+    }
+  }
+}
+```
+
+Secrets stay in the Travis234 process environment. Configuration may use `${SERVICE_TOKEN}` inside a value or exact `$env:SERVICE_TOKEN`; the adapter does not load `.env` itself. Native users export variables before launch. The npm sandbox may receive an operator-selected file through its existing `--dotenv /path/to/.env` boundary.
+
+The model sees five bounded proxy forms:
+
+```json
+{}
+{"server":"filesystem"}
+{"server":"filesystem","search":"read text"}
+{"server":"filesystem","describe":"read_text_file"}
+{"server":"filesystem","tool":"read_text_file","args":{"path":"/absolute/allowed/path/README.md"}}
+```
+
+Status does not connect. Listing, search, describe, and calls connect only the named server. Calls are never fanned out or automatically retried. `requestTimeoutMs` controls MCP initialization, discovery, and calls only; it does not alter provider, process, or subagent timeouts. Shared `"lifecycle": "lazy"` declarations are accepted as no-ops, while eager and keep-alive modes are rejected.
+
+Configured servers are an operator consent boundary: review third-party packages, pin versions when reproducibility matters, and give filesystem servers only the directories they need. The adapter supports stdio and Streamable HTTP. It does not currently implement legacy SSE, MCP OAuth, prompts, resources, sampling, elicitation, Apps/UI, or direct per-server provider tools.
+
+See the [complete adapter user guide](packages/travis234-mcp-adapter/README.md) for installation management, public-server examples, security rules, output limits, TUI workflows, and troubleshooting.
 
 ## Skills and state
 

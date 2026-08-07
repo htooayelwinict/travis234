@@ -43,12 +43,30 @@ def test_travis_project_source_wins_without_reading_pi(config_tree: ConfigTree) 
     assert pi_file not in loaded.sources
 
 
+def test_shared_config_accepts_explicit_lazy_lifecycle(config_tree: ConfigTree) -> None:
+    shared = config_tree.write_global_shared(
+        "filesystem",
+        {"command": "shared-server", "lifecycle": "lazy"},
+    )
+    config_tree.write_project_travis("fixture", {"command": "project-server"})
+
+    loaded = load_config(config_tree.cwd, config_tree.home, True)
+
+    assert loaded.servers["filesystem"].command == "shared-server"
+    assert loaded.servers["filesystem"].source_path == shared
+    assert loaded.servers["fixture"].command == "project-server"
+
+
 @pytest.mark.parametrize(
     ("payload", "message"),
     [
         ("not-json", "valid JSON"),
         (json.dumps({"mcpServers": []}), "mcpServers"),
         (json.dumps({"mcpServers": {"x": {"transport": "sse"}}}), "unknown field"),
+        (
+            json.dumps({"mcpServers": {"x": {"command": "a", "lifecycle": "eager"}}}),
+            "only supports lazy",
+        ),
         (json.dumps({"mcpServers": {"x": {"command": "a", "url": "https://x"}}}), "exactly one"),
         (json.dumps({"mcpServers": {"x": {"command": "a", "args": [1]}}}), "args"),
         (json.dumps({"mcpServers": {"x": {"url": "https://x", "headers": {"X": 1}}}}), "headers"),

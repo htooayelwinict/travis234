@@ -202,7 +202,8 @@ class DefaultPackageManager:
         try:
             self._materialize(parsed, payload, package_env)
             _validate_package_root(payload)
-            package_name, version = _package_identity(payload)
+            preferred_name = parsed.location if parsed.kind == "python" else None
+            package_name, version = _package_identity(payload, preferred_name=preferred_name)
             target = install_root / _package_directory_name(parsed, package_name)
             _write_install_record(payload, parsed, scope, version)
             if target.exists():
@@ -573,21 +574,37 @@ def _collect_manifest_entries(package_root: Path, entries: Sequence[str], resour
     return result
 
 
-def _package_identity(package_root: Path) -> tuple[str | None, str | None]:
+def _package_identity(
+    package_root: Path,
+    *,
+    preferred_name: str | None = None,
+) -> tuple[str | None, str | None]:
     _resources, name, version = _read_package_manifest(package_root)
     if name is not None or version is not None:
         return name, version
     metadata_files = sorted(package_root.glob("*.dist-info/METADATA"))
     if not metadata_files:
         return None, None
-    name_value: str | None = None
-    version_value: str | None = None
-    for line in metadata_files[0].read_text(encoding="utf-8", errors="replace").splitlines():
-        if line.startswith("Name: "):
-            name_value = line[6:].strip()
-        elif line.startswith("Version: "):
-            version_value = line[9:].strip()
-    return name_value, version_value
+    identities: list[tuple[str | None, str | None]] = []
+    for metadata_file in metadata_files:
+        name_value: str | None = None
+        version_value: str | None = None
+        for line in metadata_file.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith("Name: "):
+                name_value = line[6:].strip()
+            elif line.startswith("Version: "):
+                version_value = line[9:].strip()
+        identities.append((name_value, version_value))
+    if preferred_name is not None:
+        normalized_preference = re.sub(r"[-_.]+", "-", preferred_name).lower()
+        for identity in identities:
+            identity_name = identity[0]
+            if (
+                identity_name is not None
+                and re.sub(r"[-_.]+", "-", identity_name).lower() == normalized_preference
+            ):
+                return identity
+    return identities[0]
 
 
 def _package_directory_name(source: PackageSource, package_name: str | None) -> str:
