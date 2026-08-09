@@ -10,8 +10,8 @@ from pathlib import Path
 import pytest
 
 from travis.ai.providers.faux import create_faux_provider, faux_model, text_response_events, tool_call_response_events
-from travis.ai.types import AssistantMessage
-from travis.ai.validation import compile_tool_schema
+from travis.ai.types import AssistantMessage, ToolCall
+from travis.ai.validation import ToolValidationError, compile_tool_schema, validate_tool_arguments
 from travis.coding_agent.agent_session import AgentSession
 from travis.coding_agent.artifacts import ArtifactRegistry
 from travis.coding_agent.execution_backend import TrustedLocalBackend
@@ -59,7 +59,41 @@ def collect(service, owner, process_tool, started, timeout: float = 5):
     return current, output
 
 
-def test_process_schema_matches_action_specific_runtime_contracts() -> None:
+def test_process_schema_is_flat_provider_friendly_and_compact() -> None:
+    assert PROCESS_SCHEMA["type"] == "object"
+    assert "oneOf" not in PROCESS_SCHEMA
+    assert "anyOf" not in PROCESS_SCHEMA
+    assert PROCESS_SCHEMA["required"] == ["action"]
+    assert PROCESS_SCHEMA["additionalProperties"] is False
+    assert PROCESS_SCHEMA["properties"]["action"]["enum"] == list(process_tool_module.PROCESS_ACTIONS)
+    assert set(PROCESS_SCHEMA["properties"]) == {
+        "action",
+        "session_id",
+        "cursor",
+        "input",
+        "eof",
+        "yield_time_ms",
+        "wait_time_ms",
+        "max_bytes",
+        "rows",
+        "cols",
+    }
+    compact = json.dumps(PROCESS_SCHEMA, separators=(",", ":"), sort_keys=True)
+    assert len(compact) <= 1_600
+
+
+def test_process_flat_schema_rejects_only_universally_invalid_shapes() -> None:
+    schema = compile_tool_schema(PROCESS_SCHEMA)
+
+    assert schema.errors({})
+    assert schema.errors({"action": "unknown"})
+    assert schema.errors({"action": "list", "unknown": True})
+    assert not schema.errors({"action": "list"})
+    assert not schema.errors({"action": "wait"})
+    assert not schema.errors({"action": "write", "session_id": "proc_x"})
+
+
+def test_process_schema_accepts_every_documented_complete_action() -> None:
     schema = compile_tool_schema(PROCESS_SCHEMA)
     valid = [
         {"action": "poll", "session_id": "proc_x", "cursor": 0, "yield_time_ms": 1_000},
@@ -72,16 +106,90 @@ def test_process_schema_matches_action_specific_runtime_contracts() -> None:
         {"action": "kill", "session_id": "proc_x"},
         {"action": "list"},
     ]
-    invalid = [
-        {"action": "wait", "session_id": "proc_x"},
-        {"action": "wait", "session_id": "proc_x", "cursor": 0, "yield_time_ms": 10_000},
-        {"action": "poll", "session_id": "proc_x", "cursor": 0, "wait_time_ms": 60_000},
-        {"action": "write", "session_id": "proc_x", "input": "yes\n", "cursor": 0},
-        {"action": "list", "session_id": "proc_x"},
-    ]
 
     assert all(not schema.errors(arguments) for arguments in valid)
-    assert all(schema.errors(arguments) for arguments in invalid)
+
+
+def test_process_prompt_metadata_is_compact_and_contains_no_placeholder_calls(managed_tools) -> None:
+    service, owner, _bash, _process = managed_tools
+    definition = create_process_tool_definition(service, owner)
+    metadata = "\n".join([definition.prompt_snippet or "", *definition.prompt_guidelines])
+
+    assert len(definition.prompt_guidelines) <= 7
+    assert len(metadata) <= 1_050
+    assert "<nextCursor>" not in metadata
+    assert '"session_id":"<id>"' not in metadata
+    assert "exact nextCursor" in metadata
+    assert "write_raw" in metadata
+    assert "actual execution deadline" in metadata
+
+
+def test_readme_documents_action_based_process_handoff() -> None:
+    readme = (Path(__file__).parents[1] / "README.md").read_text(encoding="utf-8")
+
+    assert '"action":"write"' in readme
+    assert '"action":"wait"' in readme
+    assert "real session ID" in readme
+    assert "nextCursor returned by the write" in readme
+    assert "PTY only for terminal interaction" in readme
+
+
+def test_managed_process_routing_separates_background_work_from_pty_allocation(tmp_path: Path) -> None:
+    service = ProcessSessionService(directory=tmp_path / ".processes")
+    owner = ProcessOwner("app", str(tmp_path.resolve()), "agent")
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        process_service=service,
+        process_owner=owner,
+        agent_dir=str(tmp_path / "agent"),
+    )
+    try:
+        assert "Use managed `bash` plus `process` for commands that remain running" in session.system_prompt
+        assert "Set `tty=true` only for terminal interaction" in session.system_prompt
+        assert "PTY plus `process` when a command requires interactive input or incremental output" not in session.system_prompt
+        assert '"session_id":"<id>"' not in session.system_prompt
+        assert "Use `tmux` for servers, watchers, REPLs" in session.system_prompt
+    finally:
+        session.shutdown()
+        service.close()
+
+
+def test_empty_process_call_reports_the_required_action_without_repair() -> None:
+    tool = create_process_tool(None, None)
+    call = ToolCall(id="empty-process", name="process", arguments={})
+
+    assert tool.prepare_arguments({}) == {}
+    with pytest.raises(ToolValidationError, match=r"process: missing required property 'action'"):
+        validate_tool_arguments(tool, call)
+    assert call.arguments == {}
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        ({"action": "write", "session_id": "proc_x"}, r"write requires input.*\"action\":\"write\""),
+        ({"action": "write_raw", "session_id": "proc_x"}, r"write_raw requires input.*\"action\":\"write_raw\""),
+        ({"action": "resize", "session_id": "proc_x", "cols": 80}, r"resize requires rows.*\"rows\":24"),
+        ({"action": "kill"}, r"kill requires session_id.*\"action\":\"kill\""),
+    ],
+)
+def test_process_runtime_errors_include_the_relevant_action_shape(arguments, expected) -> None:
+    definition = create_process_tool_definition(None, None)
+
+    with pytest.raises(ValueError, match=expected):
+        definition.execute("invalid-process", arguments)
+
+
+def test_process_preparation_never_invents_identity_or_cursor() -> None:
+    assert process_tool_module.prepare_process_arguments({"action": "write", "input": "yes"}) == {
+        "action": "write",
+        "input": "yes",
+    }
+    with pytest.raises(ValueError, match=r"cursor must be a nonnegative integer.*tool process"):
+        process_tool_module.prepare_process_arguments(
+            {"action": "wait", "session_id": "proc_x"}
+        )
 
 
 def test_process_start_error_routes_model_to_bash_launcher() -> None:
@@ -423,8 +531,17 @@ def test_running_process_results_expose_suggested_poll_delay(managed_tools) -> N
     assert "Call the process tool with" in text(started)
     assert "Do not pass yield_time_ms to the wait action." in text(started)
     assert "process.wait" not in text(started)
-    assert "Suggested poll delay: 1000 ms." in text(started)
-    assert "Suggested poll delay: 1000 ms." in text(polled)
+    for result in (started, polled):
+        poll_shape = json.dumps(
+            {
+                "action": "poll",
+                "session_id": result.details["sessionId"],
+                "cursor": result.details["nextCursor"],
+                "yield_time_ms": result.details["suggestedPollDelayMs"],
+            },
+            separators=(",", ":"),
+        )
+        assert poll_shape in text(result)
 
     waited = process.execute(
         "wait",
@@ -438,7 +555,146 @@ def test_running_process_results_expose_suggested_poll_delay(managed_tools) -> N
 
     assert waited.details["status"] == "running"
     assert '"action":"wait"' in text(waited)
-    assert "Suggested poll delay" not in text(waited)
+    assert '"action":"poll"' not in text(waited)
+
+
+def test_managed_bash_pty_handoff_leads_with_live_write_then_returned_wait(managed_tools) -> None:
+    _service, _owner, bash, process = managed_tools
+    started = bash.execute(
+        "bash",
+        {
+            "command": python_command(
+                "import sys,time; print('READY', flush=True); "
+                "value=sys.stdin.readline().rstrip('\\n'); time.sleep(.2); "
+                "print('HANDOFF-OK:' + value, flush=True)"
+            ),
+            "stdin": "open",
+            "tty": True,
+            "yield_time_ms": 0,
+        },
+    )
+    session_id = started.details["sessionId"]
+    write_shape = json.dumps(
+        {"action": "write", "session_id": session_id, "input": "<line>"},
+        separators=(",", ":"),
+    )
+
+    assert started.details["status"] == "running"
+    assert write_shape in text(started)
+    assert "After that write, use the exact wait call returned by its result" in text(started)
+    assert '"session_id":"<id>"' not in text(started)
+
+    written = process.execute(
+        "write",
+        {
+            "action": "write",
+            "session_id": session_id,
+            "input": "LIVE-ID",
+            "yield_time_ms": 0,
+        },
+    )
+    wait_shape = json.dumps(
+        {
+            "action": "wait",
+            "session_id": session_id,
+            "cursor": written.details["nextCursor"],
+            "wait_time_ms": 60_000,
+        },
+        separators=(",", ":"),
+    )
+    assert wait_shape in text(written)
+
+    terminal = process.execute(
+        "wait",
+        {
+            "action": "wait",
+            "session_id": session_id,
+            "cursor": written.details["nextCursor"],
+            "wait_time_ms": 60_000,
+        },
+    )
+    assert terminal.details["status"] == "exited"
+    assert "HANDOFF-OK:LIVE-ID" in text(terminal)
+
+
+def test_managed_bash_open_pipe_handoff_leads_with_live_write(managed_tools) -> None:
+    _service, _owner, bash, process = managed_tools
+    started = bash.execute(
+        "bash",
+        {
+            "command": python_command(
+                "import sys,time; print('READY', flush=True); "
+                "value=sys.stdin.readline().rstrip('\\n'); time.sleep(.2); "
+                "print('PIPE:' + value, flush=True)"
+            ),
+            "stdin": "open",
+            "yield_time_ms": 0,
+        },
+    )
+    write_shape = json.dumps(
+        {
+            "action": "write",
+            "session_id": started.details["sessionId"],
+            "input": "<line>",
+        },
+        separators=(",", ":"),
+    )
+
+    assert started.details["tty"] is False
+    assert write_shape in text(started)
+    assert "Pipe stdin is open" in text(started)
+
+    written = process.execute(
+        "write",
+        {
+            "action": "write",
+            "session_id": started.details["sessionId"],
+            "input": "PIPE-LIVE",
+            "yield_time_ms": 0,
+        },
+    )
+    terminal = process.execute(
+        "wait",
+        {
+            "action": "wait",
+            "session_id": started.details["sessionId"],
+            "cursor": written.details["nextCursor"],
+            "wait_time_ms": 60_000,
+        },
+    )
+    assert terminal.details["status"] == "exited"
+    assert "PIPE:PIPE-LIVE" in text(terminal)
+
+
+def test_managed_bash_noninteractive_handoff_leads_with_live_wait(managed_tools) -> None:
+    _service, _owner, bash, process = managed_tools
+    started = bash.execute(
+        "bash",
+        {"command": python_command("import time; time.sleep(.2); print('DONE')"), "yield_time_ms": 0},
+    )
+    expected_wait = json.dumps(
+        {
+            "action": "wait",
+            "session_id": started.details["sessionId"],
+            "cursor": started.details["nextCursor"],
+            "wait_time_ms": 60_000,
+        },
+        separators=(",", ":"),
+    )
+
+    assert expected_wait in text(started)
+    assert '"action":"write"' not in text(started)
+
+    terminal = process.execute(
+        "wait",
+        {
+            "action": "wait",
+            "session_id": started.details["sessionId"],
+            "cursor": started.details["nextCursor"],
+            "wait_time_ms": 60_000,
+        },
+    )
+    assert terminal.details["status"] == "exited"
 
 
 def test_managed_bash_streams_sanitized_updates_before_handoff(managed_tools) -> None:
@@ -644,7 +900,8 @@ def test_agent_session_exposes_process_only_when_service_is_injected(tmp_path: P
             "wait_subagent",
         ]
         assert "Manage named long-lived tmux sessions" in managed.system_prompt
-        assert "PTY plus `process`" in managed.system_prompt
+        assert "Use managed `bash` plus `process` for commands that remain running" in managed.system_prompt
+        assert "Set `tty=true` only for terminal interaction" in managed.system_prompt
     finally:
         plain.shutdown()
         managed.shutdown()
@@ -661,15 +918,15 @@ def test_agent_session_prompt_keeps_required_managed_process_work_pending(tmp_pa
         process_owner=owner,
     )
     try:
-        assert "Use the poll action only for interactive input, quick status checks" in session.system_prompt
-        assert "continue independent work first and then use the wait action" in session.system_prompt
-        assert "wait ignores output-only wakeups and does not set the command timeout" in session.system_prompt
-        assert "do not call the poll action before the wait action" in session.system_prompt
-        assert 'Call tool process with {"action":"wait","session_id":"<id>","cursor":<nextCursor>,"wait_time_ms":60000}' in session.system_prompt
-        assert 'Call tool process with {"action":"poll","session_id":"<id>","cursor":<nextCursor>,"yield_time_ms":1000}' in session.system_prompt
+        assert "Use wait when a command result is required" in session.system_prompt
+        assert "use poll only for interactive input, quick status" in session.system_prompt
+        assert "A wait observation never changes bash.timeout or kills the command" in session.system_prompt
+        assert "If wait returns running, wait again from that result's exact nextCursor" in session.system_prompt
+        assert '"session_id":"<id>"' not in session.system_prompt
+        assert "<nextCursor>" not in session.system_prompt
         assert "process.wait" not in session.system_prompt
         assert "process.poll" not in session.system_prompt
-        assert "Do not repeat unchanged file reads around process checks" in session.system_prompt
+        assert "do not repeat unchanged file reads around process checks" in session.system_prompt
         assert "Leave a process detached only for a requested server/watcher" in session.system_prompt
     finally:
         session.shutdown()
@@ -962,24 +1219,17 @@ def test_managed_bash_warns_models_not_to_infer_execution_deadlines(managed_tool
 def test_process_write_explains_raw_input_and_line_submission(managed_tools) -> None:
     service, owner, _bash, _process = managed_tools
     definition = create_process_tool_definition(service, owner)
-    write_schema = next(
-        item for item in definition.parameters["oneOf"] if item["properties"]["action"].get("const") == "write"
-    )
-    raw_schema = next(
-        item for item in definition.parameters["oneOf"] if item["properties"]["action"].get("const") == "write_raw"
-    )
+    input_description = definition.parameters["properties"]["input"]["description"]
 
-    assert "appends one newline" in write_schema["properties"]["input"]["description"]
-    assert "exactly as provided" in raw_schema["properties"]["input"]["description"]
+    assert "appends Enter" in input_description
+    assert "write_raw sends the text exactly" in input_description
     assert any("write_raw" in guideline for guideline in definition.prompt_guidelines)
     assert any(
-        guideline
-        == "Each process wait observes for at most 60000 ms and never changes bash.timeout."
+        "A wait observation never changes bash.timeout or kills the command" in guideline
         for guideline in definition.prompt_guidelines
     )
     assert any(
-        guideline
-        == "Use eof only for pipe stdin; use write_raw with an explicit Ctrl-D keystroke for PTYs."
+        "eof is valid only for pipe stdin" in guideline
         for guideline in definition.prompt_guidelines
     )
 

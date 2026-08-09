@@ -10,7 +10,7 @@ TRAVIS234 // NEURAL TERMINAL ONLINE
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-39e6c7?style=for-the-badge&labelColor=10182b"></a>
   <img alt="Python 3.13" src="https://img.shields.io/badge/Python-3.13-63a7ff?style=for-the-badge&labelColor=10182b">
-  <img alt="Version 2.4.3" src="https://img.shields.io/badge/version-2.4.3-bd6cff?style=for-the-badge&labelColor=10182b">
+  <img alt="Version 2.4.4" src="https://img.shields.io/badge/version-2.4.4-bd6cff?style=for-the-badge&labelColor=10182b">
   <img alt="Terminal first" src="https://img.shields.io/badge/interface-terminal-ff7ac6?style=for-the-badge&labelColor=10182b">
 </p>
 
@@ -295,6 +295,12 @@ async with AgentHarness.create(
     message = await harness.prompt("Inspect the failing test")
 ```
 
+`AgentHarness.subscribe()` delivers an independent dictionary snapshot to each observer. An
+observer exception is reported through logging without interrupting the agent, session commit,
+or later observers. `close()` gives an active operation ten seconds to cooperate with abort; if
+ownership cannot be obtained, it raises `TimeoutError` while leaving the harness open so cleanup
+can be retried after the operation exits.
+
 Image APIs are exported from `travis.ai`: `ImageModel`, `ImageGenerationOptions`, `generate_images`, and `register_image_provider`. They do not load an image provider or add image-model schemas to ordinary chat requests unless explicitly invoked.
 
 ## Providers and credentials
@@ -506,9 +512,11 @@ Useful overrides:
 
 ## Managed processes
 
-Long-running shell work can return a process handle instead of blocking the agent. The process API supports polling, acknowledged stdin writes, interrupts, and terminal-state recovery.
+Finite commands run with Bash and need no process follow-up. A command that is still running returns a managed process handle instead of blocking the agent. For noninteractive work, the handoff includes a `{"action":"wait",...}` call with the real session ID and cursor. For planned terminal input, start Bash with open stdin and a PTY; the handoff leads with a `{"action":"write",...}` call containing the real session ID, and the write result supplies the wait call using the exact `nextCursor returned by the write`. Use a PTY only for terminal interaction—long duration alone does not require one.
 
-- `process.wait` waits for terminal state and does not change the command timeout.
+The model-facing process tool uses one `action` field for polling, waiting, acknowledged stdin writes, interrupts, and terminal-state recovery; it does not expose namespaced tools such as `process.wait`.
+
+- The `wait` action waits for terminal state and does not change the command timeout.
 - Model-generated camelCase or collapsed process fields are recovered only for documented process arguments; unknown or conflicting fields still fail strict validation.
 - Pipe-style `eof=true` is rejected on PTYs without closing their input; send explicit terminal control characters through `write_raw`.
 - If a wait deadline expires, the command is not killed; a later wait continues from the returned cursor.

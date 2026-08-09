@@ -37,12 +37,13 @@ _ENGINEERING_GUIDANCE = (
 )
 
 _SUBAGENT_ORCHESTRATION_GUIDANCE = (
-    "Use subagents for two or more independent, bounded "
-    "engineering workstreams; give each child exact scope, constraints, expected evidence, and verification. Do not "
-    "delegate trivial, sequential, or tightly coupled work, and honor an explicit request not to use subagents. Keep "
-    "shared architecture, overlapping edits, integration, and final validation with the parent. Start independent "
-    "children concurrently with `spawn_subagent` using `wait=false`, continue useful parent work, then use "
-    "`wait_subagent` to collect every child result before synthesizing and verifying the integrated outcome."
+    "Use subagents when the user explicitly requests delegation. Otherwise, use them for two or more independent, "
+    "bounded engineering workstreams only when project instructions do not restrict delegation. Give each child "
+    "exact scope, constraints, expected evidence, and verification; do not delegate trivial, sequential, tightly "
+    "coupled, shared-architecture, overlapping-edit, integration, or final-validation work. Start independent "
+    "children concurrently with `spawn_subagent` and `wait=false`, continue useful parent work, collect every child "
+    "with `wait_subagent`, and independently verify material claims before synthesizing the outcome. Honor an "
+    "explicit user request not to use subagents."
 )
 
 def _execution_routing_guidance(tools: list[str]) -> str:
@@ -51,7 +52,8 @@ def _execution_routing_guidance(tools: list[str]) -> str:
         guidance.append("Run finite commands with `bash`.")
     if "process" in tools:
         guidance.append(
-            "Use PTY plus `process` when a command requires interactive input or incremental output."
+            "Use managed `bash` plus `process` for commands that remain running. "
+            "Set `tty=true` only for terminal interaction; ordinary long-running commands should remain non-PTY."
         )
     if "tmux" in tools:
         guidance.append(
@@ -150,31 +152,30 @@ def _documentation_section() -> str:
     lines = [
         "",
         "",
-        "Travis234 documentation (read only when the user asks about Travis234 itself, its SDK, extensions, "
-        "themes, skills, or TUI):",
+        "Travis234 documentation (consult only for Travis234 itself, its SDK, extensions, themes, skills, or TUI):",
     ]
     if readme_exists:
         lines.append(f"- Main documentation: {readme_path}")
     if docs_exists:
-        lines.append(f"- Additional docs: {docs_path}")
+        lines.append(f"- Additional docs root: {docs_path}")
         lines.extend(f"- Installed documentation file: {path}" for path in installed_docs)
     if examples_exists:
-        lines.append(f"- Examples: {examples_path} (extensions, custom tools, SDK)")
+        lines.append(f"- Examples root: {examples_path}")
     if docs_exists and examples_exists:
         lines.append(
-            "- Resolve docs/... under Additional docs and examples/... under Examples, not the current working directory"
+            "- Resolve docs/... under the docs root and examples/... under the examples root, not cwd."
         )
+    elif docs_exists:
+        lines.append("- Resolve docs/... under the docs root, not cwd.")
+    elif examples_exists:
+        lines.append("- Resolve examples/... under the examples root, not cwd.")
     if docs_exists:
-        lines.extend(
-            [
-                "- Use only the installed documentation files listed above; never assume an unlisted topic file exists",
-                "- When working on Travis234 topics, read the available documentation and follow .md cross-references "
-                "before implementing",
-                "- Always read Travis234 .md files completely and follow links to related docs",
-            ]
+        lines.append(
+            "- For Travis234 work, read the listed Markdown completely and follow its links; use only listed files "
+            "and never assume an unlisted topic file exists."
         )
     elif examples_exists:
-        lines.append("- Use the installed examples when working on Travis234 extensions, custom tools, or SDK integrations")
+        lines.append("- For Travis234 SDK or extension work, consult the installed examples root.")
     return "\n".join(lines)
 
 

@@ -363,6 +363,7 @@ Important contracts:
 - context handlers chain {"messages": [...]} replacements.
 - before_provider_request chains each non-None returned payload.
 - before_provider_headers mutates the shared headers mapping; assigning None requests deletion. Return values do not replace the mapping.
+- tool_execution_update carries a progress snapshot rather than a durable delta. Travis234 serializes updates before tool_execution_end and may coalesce excessive same-loop snapshots while always retaining the newest accepted snapshot and the final tool result.
 - message_end may replace message, but its role must remain unchanged.
 - tool_result may replace content, details, and isError.
 - tool_call may return {"block": True, "reason": "..."}. Unlike ordinary observer failures, a tool_call exception propagates to the tool boundary and blocks unsafe execution.

@@ -879,6 +879,43 @@ def test_unacknowledged_external_message_restores_without_core_duplicate(tmp_pat
     assert [item.id for item in session._turn_mailbox.snapshot("steering")] == [message_id]
     assert session.get_steering_messages() == ["retry me"]
 
+
+def test_unacknowledged_restore_preserves_concurrent_core_enqueue(tmp_path: Path) -> None:
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+    session.steer("retry me")
+    snapshot_finished = threading.Event()
+    release_filter = threading.Event()
+    enqueue_finished = threading.Event()
+    concurrent = UserMessage(content="concurrent", timestamp=now_ms())
+
+    class BlockingFilterList(list):
+        def __iter__(self):
+            snapshot = tuple(super().__iter__())
+            yield from snapshot
+            snapshot_finished.set()
+            assert release_filter.wait(timeout=2)
+
+    session.agent._steering.messages = BlockingFilterList(session.agent._steering.messages)
+
+    restore_thread = threading.Thread(target=session._restore_unacknowledged_turn_messages)
+
+    def enqueue() -> None:
+        session.agent.steer(concurrent)
+        enqueue_finished.set()
+
+    enqueue_thread = threading.Thread(target=enqueue)
+    restore_thread.start()
+    assert snapshot_finished.wait(timeout=2)
+    enqueue_thread.start()
+    enqueue_finished.wait(timeout=0.05)
+    release_filter.set()
+    restore_thread.join(timeout=2)
+    enqueue_thread.join(timeout=2)
+
+    assert restore_thread.is_alive() is False
+    assert enqueue_thread.is_alive() is False
+    assert concurrent in session.agent._steering.messages
+
 def test_agent_session_input_extension_transforms_and_handles_prompt(tmp_path: Path) -> None:
     model = faux_model()
     provider_user_texts: list[str] = []
@@ -994,6 +1031,52 @@ def test_agent_session_message_end_extension_replaces_assistant_message(tmp_path
     assistant = next(message for message in session.messages if isinstance(message, AssistantMessage))
     assert assistant.usage.cost.total == 0.123
     assert public_events[-1].usage.cost.total == 0.123
+
+
+def test_public_listener_failure_does_not_prevent_session_commit(tmp_path: Path) -> None:
+    model = faux_model()
+    session_path = tmp_path / "listener-failure.jsonl"
+    register_api_provider(create_faux_provider(lambda m, c: text_response_events(m, "persisted")))
+    session = AgentSession(cwd=str(tmp_path), model=model, session_path=str(session_path))
+    later_events: list[str] = []
+
+    def failing_listener(event) -> None:
+        if event.type == "message_end" and isinstance(event.message, AssistantMessage):
+            raise RuntimeError("observer exploded")
+
+    session.subscribe(failing_listener)
+    session.subscribe(lambda event: later_events.append(event.type))
+
+    messages = session.prompt("hello")
+
+    persisted = [json.loads(line) for line in session_path.read_text(encoding="utf-8").splitlines()]
+    assistant_entries = [
+        entry
+        for entry in persisted
+        if entry.get("type") == "message"
+        and entry.get("message", {}).get("role") == "assistant"
+    ]
+    assert messages[-1].content == [TextContent(text="persisted")]
+    assert assistant_entries[-1]["message"]["content"][0]["text"] == "persisted"
+    assert "turn_end" in later_events
+    assert later_events[-2:] == ["agent_end", "agent_settled"]
+
+
+def test_public_session_listener_mutation_cannot_change_canonical_message(tmp_path: Path) -> None:
+    model = faux_model()
+    register_api_provider(create_faux_provider(lambda m, c: text_response_events(m, "canonical")))
+    session = AgentSession(cwd=str(tmp_path), model=model)
+
+    def mutating_listener(event) -> None:
+        if event.type == "message_end" and isinstance(event.message, AssistantMessage):
+            event.message.content[0].text = "mutated-by-observer"
+
+    session.subscribe(mutating_listener)
+    session.prompt("hello")
+
+    assistant = next(message for message in session.messages if isinstance(message, AssistantMessage))
+    assert assistant.content == [TextContent(text="canonical")]
+
 
 def test_agent_session_message_end_extension_rejects_role_change(tmp_path: Path) -> None:
     model = faux_model()

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import inspect
+import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +22,8 @@ if TYPE_CHECKING:
 
 
 HarnessListener = Callable[[dict[str, object]], object]
+logger = logging.getLogger(__name__)
+_CLOSE_TIMEOUT_SECONDS = 10.0
 
 
 @dataclass(frozen=True)
@@ -190,15 +194,29 @@ class AgentHarness:
     async def close(self) -> None:
         if self._closed:
             return
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _CLOSE_TIMEOUT_SECONDS
         await self.abort()
         active = self._active_task
         current = asyncio.current_task()
         if active is not None and active is not current and not active.done():
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise TimeoutError("AgentHarness close timed out waiting for the active operation")
             try:
-                await asyncio.wait_for(asyncio.shield(active), timeout=10)
-            except (TimeoutError, asyncio.CancelledError):
-                pass
-        async with self._operation_lock:
+                await asyncio.wait_for(asyncio.shield(active), timeout=remaining)
+            except TimeoutError as error:
+                raise TimeoutError(
+                    "AgentHarness close timed out waiting for the active operation"
+                ) from error
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            raise TimeoutError("AgentHarness close timed out acquiring operation ownership")
+        try:
+            await asyncio.wait_for(self._operation_lock.acquire(), timeout=remaining)
+        except TimeoutError as error:
+            raise TimeoutError("AgentHarness close timed out acquiring operation ownership") from error
+        try:
             if self._closed:
                 return
             self._closed = True
@@ -208,6 +226,8 @@ class AgentHarness:
             self._rebound_unsubscribe()
             await asyncio.to_thread(self._app.close)
             self._listeners.clear()
+        finally:
+            self._operation_lock.release()
 
     async def _run_owner(self, callback: Callable[..., Any], *args: object, **kwargs: object):
         self._ensure_open()
@@ -235,13 +255,20 @@ class AgentHarness:
                 "value": value,
             }
         for listener in list(self._listeners):
-            result = listener(dict(normalized))
-            if not inspect.isawaitable(result):
-                continue
-            if self._loop is not None and self._loop.is_running():
-                asyncio.run_coroutine_threadsafe(result, self._loop).result()
-            else:
-                asyncio.run(result)
+            try:
+                result = listener(copy.deepcopy(normalized))
+                if not inspect.isawaitable(result):
+                    continue
+                if self._loop is not None and self._loop.is_running():
+                    asyncio.run_coroutine_threadsafe(result, self._loop).result()
+                else:
+                    asyncio.run(result)
+            except Exception as error:  # noqa: BLE001 - harness observers are non-critical.
+                logger.warning(
+                    "AgentHarness observer failed for %s (%s)",
+                    normalized.get("type", "unknown"),
+                    type(error).__name__,
+                )
 
     def _ensure_open(self) -> None:
         if self._closed:

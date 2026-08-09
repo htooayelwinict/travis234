@@ -288,9 +288,9 @@ def test_default_system_prompt_advertises_travis234_docs_like_reference_runtime(
 
     assert "Travis234 documentation" in prompt
     assert "Main documentation:" in prompt
-    assert "Additional docs:" in prompt
-    assert "Examples:" in prompt
-    assert "Always read Travis234 .md files completely" in prompt
+    assert "Additional docs root:" in prompt
+    assert "Examples root:" in prompt
+    assert "read the listed Markdown completely and follow its links" in prompt
 
 
 def test_default_system_prompt_only_advertises_installed_documentation(
@@ -312,9 +312,9 @@ def test_default_system_prompt_only_advertises_installed_documentation(
     prompt = build_system_prompt(BuildSystemPromptOptions(cwd=str(tmp_path)))
 
     assert f"Main documentation: {readme}" in prompt
-    assert f"Examples: {examples}" in prompt
+    assert f"Examples root: {examples}" in prompt
     assert str(missing_docs) not in prompt
-    assert "Resolve docs/... under Additional docs" not in prompt
+    assert "Resolve docs/... under the docs root" not in prompt
 
 
 def test_default_system_prompt_never_names_missing_documentation_files(
@@ -337,10 +337,39 @@ def test_default_system_prompt_never_names_missing_documentation_files(
 
     prompt = build_system_prompt(BuildSystemPromptOptions(cwd=str(tmp_path)))
 
-    assert f"Additional docs: {docs}" in prompt
+    assert f"Additional docs root: {docs}" in prompt
     assert "docs/README.md" in prompt
     assert "docs/extensions.md" not in prompt
     assert "docs/themes.md" not in prompt
+
+
+def test_default_documentation_index_is_compact_and_exact(tmp_path: Path, monkeypatch) -> None:
+    resources = tmp_path / "resources"
+    readme = resources / "README.md"
+    docs = resources / "docs"
+    examples = resources / "examples"
+    docs.mkdir(parents=True)
+    examples.mkdir()
+    readme.write_text("# Travis234\n", encoding="utf-8")
+    first = docs / "README.md"
+    second = docs / "extensions.md"
+    first.write_text("# Docs\n", encoding="utf-8")
+    second.write_text("# Extensions\n", encoding="utf-8")
+    monkeypatch.setattr(
+        system_prompt_module,
+        "get_packaged_context_paths",
+        lambda: (str(readme), str(docs), str(examples)),
+    )
+
+    prompt = build_system_prompt(BuildSystemPromptOptions(cwd=str(tmp_path)))
+    section = prompt[prompt.index("Travis234 documentation") : prompt.index("Current date:")]
+
+    assert len(section.splitlines()) <= 9
+    assert str(readme) in section
+    assert str(first) in section
+    assert str(second) in section
+    assert str(examples) in section
+    assert "never assume an unlisted topic file exists" in section
 
 def test_custom_prompt_includes_skills_when_selected_tools_unset(tmp_path: Path) -> None:
     skill_path = tmp_path / "skills" / "audit" / "SKILL.md"

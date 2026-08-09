@@ -420,16 +420,12 @@ class SessionTurnController:
         if not restored:
             return
         restored_ids = {item.id for item in restored}
-        self.agent._steering.messages = [  # noqa: SLF001 - coding adapter owns tagged messages.
-            message
-            for message in self.agent._steering.messages  # noqa: SLF001
-            if getattr(message, "_coding_queue_id", None) not in restored_ids
-        ]
-        self.agent._follow_up.messages = [  # noqa: SLF001 - coding adapter owns tagged messages.
-            message
-            for message in self.agent._follow_up.messages  # noqa: SLF001
-            if getattr(message, "_coding_queue_id", None) not in restored_ids
-        ]
+        self.agent._steering.remove_where(  # noqa: SLF001 - coding adapter owns tagged messages.
+            lambda message: getattr(message, "_coding_queue_id", None) in restored_ids
+        )
+        self.agent._follow_up.remove_where(  # noqa: SLF001 - coding adapter owns tagged messages.
+            lambda message: getattr(message, "_coding_queue_id", None) in restored_ids
+        )
         self._emit_queue_update()
 
     def send_custom_message(self, message: dict, options: dict | None = None, stream_fn=None) -> list[AgentMessage]:

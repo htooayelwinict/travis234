@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import copy
 import json
+import logging
 import os
 import re
 import subprocess
@@ -88,6 +90,10 @@ from travis.coding_agent.tools.types import (
 from travis.coding_agent.session_extensions import _replace_message_in_place
 from travis.coding_agent.session_types import QueueUpdateEvent
 
+
+logger = logging.getLogger(__name__)
+
+
 def _canonicalize_process_tool_calls(message: AssistantMessage) -> None:
     for block in message.content:
         if not isinstance(block, ToolCall):
@@ -143,7 +149,6 @@ class SessionEventController:
             self._restore_unacknowledged_turn_messages()
             setattr(event, "will_retry", self._will_retry_after_agent_end(event))
             setattr(event, "willRetry", getattr(event, "will_retry"))
-        self._emit(event)
         if event.type == "message_end" and self._session_store:
             message_role = getattr(event.message, "role", None)
             if message_role == "custom":
@@ -155,6 +160,7 @@ class SessionEventController:
                 )
             elif message_role in ("user", "assistant", "toolResult"):
                 self._session_store.append_message(event.message)
+        self._emit(event)
 
     async def _emit_extension_event(self, event) -> None:
         if event.type == "agent_start":
@@ -258,7 +264,33 @@ class SessionEventController:
 
     def _emit(self, event) -> None:
         for listener in list(self._event_listeners):
-            listener(event)
+            try:
+                listener(_snapshot_session_event(event))
+            except Exception as error:  # noqa: BLE001 - public observers cannot fail the session.
+                logger.warning(
+                    "Session observer failed for %s (%s)",
+                    getattr(event, "type", type(event).__name__),
+                    type(error).__name__,
+                )
+
+
+def _snapshot_session_event(event):
+    snapshot = copy.copy(event)
+    fields_by_type = {
+        "message_start": ("message",),
+        "message_update": ("message", "assistant_message_event"),
+        "message_end": ("message",),
+        "agent_end": ("messages",),
+        "turn_end": ("message", "tool_results"),
+        "tool_execution_start": ("args",),
+        "tool_execution_update": ("args", "partial_result"),
+        "tool_execution_end": ("args", "result"),
+        "queue_update": ("steering", "follow_up"),
+    }
+    for field_name in fields_by_type.get(getattr(event, "type", ""), ()):
+        if hasattr(event, field_name):
+            setattr(snapshot, field_name, copy.deepcopy(getattr(event, field_name)))
+    return snapshot
 
 
 def _normalize_extension_message(message):

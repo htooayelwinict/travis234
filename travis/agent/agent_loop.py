@@ -14,6 +14,7 @@ from travis.ai.event_stream import EventStream
 from travis.ai.types import (
     AssistantMessage,
     Context,
+    ImageContent,
     SimpleStreamOptions,
     TextContent,
     ToolResultMessage,
@@ -23,7 +24,9 @@ from travis.ai.types import (
 )
 from travis.ai.validation import validate_tool_arguments
 from travis.agent.async_utils import resolve, run_sync
-from travis.agent.tool_coordinator import ToolCoordinator
+from travis.agent.stream_protocol import AssistantStreamProtocol, ProviderStreamProtocolError
+from travis.agent.tool_coordinator import ToolCoordinator, ToolExecutionAborted
+from travis.agent.tool_updates import ToolUpdateRelay
 from travis.agent.types import (
     AbortSignal,
     AgentContext,
@@ -307,27 +310,28 @@ async def _stream_assistant_response(
 
     partial_added = False
     last_partial_snapshot: AssistantMessage | None = None
-    async for event in _iter_response_events(response, signal):
-        if signal and signal.aborted:
-            await _close_response(response)
-            return await _finalize_aborted_stream_response(
-                context,
-                config,
-                emit,
-                partial_added=partial_added,
-                partial_snapshot=last_partial_snapshot,
-            )
-        if event.type == "start":
-            last_partial_snapshot = copy.deepcopy(event.partial)
-            context.messages.append(last_partial_snapshot)
-            partial_added = True
-            await _emit_event(emit, MessageStartEvent(message=copy.copy(last_partial_snapshot)))
-        elif event.type in (
-            "text_start", "text_delta", "text_end",
-            "thinking_start", "thinking_delta", "thinking_end",
-            "toolcall_start", "toolcall_delta", "toolcall_end",
-        ):
-            if partial_added:
+    protocol = AssistantStreamProtocol()
+    try:
+        async for event in _iter_response_events(response, signal):
+            if signal and signal.aborted:
+                return await _finalize_aborted_stream_response(
+                    context,
+                    config,
+                    emit,
+                    partial_added=partial_added,
+                    partial_snapshot=last_partial_snapshot,
+                )
+            protocol.accept(event.type)
+            if event.type == "start":
+                last_partial_snapshot = copy.deepcopy(event.partial)
+                context.messages.append(last_partial_snapshot)
+                partial_added = True
+                await _emit_event(emit, MessageStartEvent(message=copy.copy(last_partial_snapshot)))
+            elif event.type in (
+                "text_start", "text_delta", "text_end",
+                "thinking_start", "thinking_delta", "thinking_end",
+                "toolcall_start", "toolcall_delta", "toolcall_end",
+            ):
                 last_partial_snapshot = copy.deepcopy(event.partial)
                 context.messages[-1] = last_partial_snapshot
                 await _emit_event(
@@ -336,17 +340,25 @@ async def _stream_assistant_response(
                         message=copy.copy(last_partial_snapshot), assistant_message_event=event
                     ),
                 )
-        elif event.type in ("done", "error"):
-            final_message = await _response_result(response)
-            if partial_added:
-                context.messages[-1] = final_message
-            else:
-                context.messages.append(final_message)
-                await _emit_event(emit, MessageStartEvent(message=copy.copy(final_message)))
-            await _emit_event(emit, MessageEndEvent(message=final_message))
-            return final_message
+            elif event.type in ("done", "error"):
+                final_message = await _response_result(response)
+                if partial_added:
+                    context.messages[-1] = final_message
+                else:
+                    context.messages.append(final_message)
+                    await _emit_event(emit, MessageStartEvent(message=copy.copy(final_message)))
+                await _emit_event(emit, MessageEndEvent(message=final_message))
+                return final_message
+            if signal and signal.aborted:
+                return await _finalize_aborted_stream_response(
+                    context,
+                    config,
+                    emit,
+                    partial_added=partial_added,
+                    partial_snapshot=last_partial_snapshot,
+                )
+
         if signal and signal.aborted:
-            await _close_response(response)
             return await _finalize_aborted_stream_response(
                 context,
                 config,
@@ -355,24 +367,25 @@ async def _stream_assistant_response(
                 partial_snapshot=last_partial_snapshot,
             )
 
-    if signal and signal.aborted:
-        await _close_response(response)
-        return await _finalize_aborted_stream_response(
+        final_message = await _response_result(response)
+        if partial_added:
+            context.messages[-1] = final_message
+        else:
+            context.messages.append(final_message)
+            await _emit_event(emit, MessageStartEvent(message=copy.copy(final_message)))
+        await _emit_event(emit, MessageEndEvent(message=final_message))
+        return final_message
+    except ProviderStreamProtocolError as error:
+        return await _finalize_failed_stream_response(
             context,
             config,
             emit,
+            error_message=f"Provider stream protocol error: {error}",
             partial_added=partial_added,
             partial_snapshot=last_partial_snapshot,
         )
-
-    final_message = await _response_result(response)
-    if partial_added:
-        context.messages[-1] = final_message
-    else:
-        context.messages.append(final_message)
-        await _emit_event(emit, MessageStartEvent(message=copy.copy(final_message)))
-    await _emit_event(emit, MessageEndEvent(message=final_message))
-    return final_message
+    finally:
+        await _close_response(response)
 
 
 async def _iter_response_events(response: object, signal: Optional[AbortSignal]):
@@ -408,9 +421,15 @@ def _next_or_done(iterator):
 async def _response_result(response: object) -> AssistantMessage:
     result = getattr(response, "result", None)
     if callable(result):
-        return await resolve(result())
-    result_sync = getattr(response, "result_sync")
-    return await asyncio.to_thread(result_sync)
+        resolved = await resolve(result())
+    else:
+        result_sync = getattr(response, "result_sync")
+        resolved = await asyncio.to_thread(result_sync)
+    if not isinstance(resolved, AssistantMessage):
+        raise ProviderStreamProtocolError(
+            f"invalid result type {type(resolved).__name__}; expected AssistantMessage"
+        )
+    return resolved
 
 
 async def _finalize_aborted_stream_response(
@@ -438,6 +457,40 @@ async def _finalize_aborted_stream_response(
             usage=empty_usage(),
             stop_reason="aborted",
             error_message="Operation aborted",
+            timestamp=now_ms(),
+        )
+        context.messages.append(final_message)
+        await _emit_event(emit, MessageStartEvent(message=copy.copy(final_message)))
+    await _emit_event(emit, MessageEndEvent(message=final_message))
+    return final_message
+
+
+async def _finalize_failed_stream_response(
+    context: AgentContext,
+    config: AgentLoopConfig,
+    emit: AgentEventSink,
+    *,
+    error_message: str,
+    partial_added: bool,
+    partial_snapshot: AssistantMessage | None,
+) -> AssistantMessage:
+    if partial_added and partial_snapshot is not None:
+        final_message = replace(
+            partial_snapshot,
+            stop_reason="error",
+            error_message=error_message,
+            timestamp=now_ms(),
+        )
+        context.messages[-1] = final_message
+    else:
+        final_message = AssistantMessage(
+            content=[TextContent(text="")],
+            api=config.model.api,
+            provider=config.model.provider,
+            model=config.model.id,
+            usage=empty_usage(),
+            stop_reason="error",
+            error_message=error_message,
             timestamp=now_ms(),
         )
         context.messages.append(final_message)
@@ -556,43 +609,66 @@ async def _execute_sequential(
 async def _execute_parallel(
     current_context, assistant_message, tool_calls, config, signal, emit, coordinator
 ) -> _ExecutedBatch:
-    entries: list = []  # either a finalized dict or an awaitable task
-    for tool_call in tool_calls:
-        await _emit_event(
-            emit,
-            ToolExecutionStartEvent(tool_call_id=tool_call.id, tool_name=tool_call.name, args=tool_call.arguments),
-        )
-        preparation = await _prepare_tool_call(
-            current_context, assistant_message, tool_call, config, signal
-        )
-        if isinstance(preparation, ImmediateToolOutcome):
-            finalized = _finalize_immediate(preparation)
-            await _emit_tool_end(finalized, emit)
-            entries.append(finalized)
+    work_queue: asyncio.Queue[tuple[int, PreparedToolCall] | None] = asyncio.Queue()
+    ordered_slots: list[dict | None] = [None] * len(tool_calls)
+
+    async def worker() -> None:
+        while True:
+            item = await work_queue.get()
+            if item is None:
+                return
+            index, preparation = item
+            ordered_slots[index] = await _execute_and_finalize(
+                current_context,
+                assistant_message,
+                preparation,
+                config,
+                signal,
+                emit,
+                coordinator,
+            )
+
+    worker_count = min(coordinator.max_parallel_tools, len(tool_calls))
+    workers = [asyncio.create_task(worker()) for _ in range(worker_count)]
+    scheduled_count = 0
+    try:
+        for index, tool_call in enumerate(tool_calls):
+            await _emit_event(
+                emit,
+                ToolExecutionStartEvent(
+                    tool_call_id=tool_call.id,
+                    tool_name=tool_call.name,
+                    args=tool_call.arguments,
+                ),
+            )
+            preparation = await _prepare_tool_call(
+                current_context, assistant_message, tool_call, config, signal
+            )
+            scheduled_count = index + 1
+            if isinstance(preparation, ImmediateToolOutcome):
+                finalized = _finalize_immediate(preparation)
+                await _emit_tool_end(finalized, emit)
+                ordered_slots[index] = finalized
+            else:
+                await work_queue.put((index, preparation))
             if signal and signal.aborted:
                 break
-            continue
 
-        entries.append(
-            asyncio.create_task(
-                _execute_and_finalize(
-                    current_context,
-                    assistant_message,
-                    preparation,
-                    config,
-                    signal,
-                    emit,
-                    coordinator,
-                )
-            )
-        )
-        if signal and signal.aborted:
-            break
+        for _worker in workers:
+            await work_queue.put(None)
+        await asyncio.gather(*workers)
+    finally:
+        for worker_task in workers:
+            if not worker_task.done():
+                worker_task.cancel()
+        if workers:
+            await asyncio.gather(*workers, return_exceptions=True)
 
-    ordered: list[dict] = []
-    for entry in entries:
-        finalized = await entry if isinstance(entry, asyncio.Task) else entry
-        ordered.append(finalized)
+    ordered = [
+        finalized
+        for finalized in ordered_slots[:scheduled_count]
+        if finalized is not None
+    ]
 
     messages: list[ToolResultMessage] = []
     for finalized in ordered:
@@ -687,49 +763,79 @@ async def _execute_prepared(
     coordinator: ToolCoordinator,
 ) -> dict:
     tool_call = prepared.tool_call
-    accepting = {"value": True}
-    update_tasks: list[Any] = []
-    owner_loop = asyncio.get_running_loop()
+
+    async def emit_update(event: ToolExecutionUpdateEvent) -> None:
+        await _emit_event(emit, event)
+
+    update_relay: ToolUpdateRelay[ToolExecutionUpdateEvent] = ToolUpdateRelay(emit_update)
 
     def on_update(partial_result: AgentToolResult) -> None:
-        if not accepting["value"]:
-            return
         event = ToolExecutionUpdateEvent(
             tool_call_id=tool_call.id,
             tool_name=tool_call.name,
             args=tool_call.arguments,
             partial_result=partial_result,
         )
-        try:
-            running_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            running_loop = None
-        if running_loop is owner_loop:
-            update_tasks.append(owner_loop.create_task(_emit_event(emit, event)))
-        else:
-            future = asyncio.run_coroutine_threadsafe(_emit_event(emit, event), owner_loop)
-            future.result()
+        update_relay.publish(event)
 
     try:
         execute = prepared.tool.execute
         result = await coordinator.execute(
-            execute, tool_call.id, prepared.args, signal, on_update
+            execute,
+            tool_call.id,
+            prepared.args,
+            signal,
+            on_update,
+            abort_signal=signal,
         )
-        accepting["value"] = False
-        await _settle_update_tasks(update_tasks)
+        if not isinstance(result, AgentToolResult):
+            return {
+                "result": _error_result(
+                    f"Tool {tool_call.name} returned invalid result type "
+                    f"{type(result).__name__}; expected AgentToolResult"
+                ),
+                "is_error": True,
+                "reason_code": "invalid_tool_result",
+            }
+        if not isinstance(result.content, list) or not all(
+            isinstance(block, (TextContent, ImageContent)) for block in result.content
+        ):
+            return {
+                "result": _error_result(
+                    f"Tool {tool_call.name} returned AgentToolResult with invalid content; "
+                    "expected TextContent or ImageContent items"
+                ),
+                "is_error": True,
+                "reason_code": "invalid_tool_result",
+            }
+        if (
+            result.terminate is not None
+            and not isinstance(result.terminate, bool)
+        ) or (
+            result.added_tool_names is not None
+            and (
+                not isinstance(result.added_tool_names, list)
+                or not all(isinstance(name, str) for name in result.added_tool_names)
+            )
+        ):
+            return {
+                "result": _error_result(
+                    f"Tool {tool_call.name} returned AgentToolResult with invalid metadata"
+                ),
+                "is_error": True,
+                "reason_code": "invalid_tool_result",
+            }
         return {"result": result, "is_error": False}
+    except ToolExecutionAborted:
+        return {
+            "result": _error_result("Operation aborted"),
+            "is_error": True,
+            "reason_code": "aborted",
+        }
     except Exception as error:  # noqa: BLE001
-        accepting["value"] = False
-        await _settle_update_tasks(update_tasks)
         return {"result": _error_result(str(error)), "is_error": True}
-
-
-async def _settle_update_tasks(tasks: list[Any]) -> None:
-    for task in tasks:
-        if isinstance(task, asyncio.Future):
-            await task
-        else:
-            await asyncio.wrap_future(task)
+    finally:
+        await update_relay.close()
 
 
 async def _emit_event(emit: AgentEventSink, event: AgentEvent) -> None:
@@ -748,6 +854,7 @@ async def _emit_event(emit: AgentEventSink, event: AgentEvent) -> None:
 async def _finalize(current_context, assistant_message, prepared, executed, config, signal) -> dict:
     result = executed["result"]
     is_error = executed["is_error"]
+    reason_code = executed.get("reason_code")
     if config.after_tool_call:
         try:
             after = await resolve(
@@ -775,12 +882,15 @@ async def _finalize(current_context, assistant_message, prepared, executed, conf
         except Exception as error:  # noqa: BLE001
             result = _error_result(str(error))
             is_error = True
-    return {
+    finalized = {
         "tool_call": prepared.tool_call,
         "args": prepared.args,
         "result": result,
         "is_error": is_error,
     }
+    if reason_code is not None:
+        finalized["reason_code"] = reason_code
+    return finalized
 
 
 def _finalize_immediate(outcome: ImmediateToolOutcome) -> dict:

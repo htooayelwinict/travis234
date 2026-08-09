@@ -31,7 +31,8 @@ _PROCESS_FIELDS = {
     "input": {
         "type": "string",
         "description": (
-            "Raw input to write exactly as provided. Include a trailing newline (\\n) to submit a line or press Enter"
+            "Input for write or write_raw. write accepts one line without a newline and appends Enter; "
+            "write_raw sends the text exactly, including control characters or newlines"
         ),
     },
     "eof": {
@@ -56,40 +57,37 @@ _PROCESS_FIELDS = {
 }
 
 
-def _process_action_schema(action: str, fields: tuple[str, ...], required: tuple[str, ...]) -> dict[str, object]:
-    properties = {
-        "action": {"type": "string", "const": action, "description": f"Use exactly '{action}' for this action"}
-    }
-    properties.update({name: dict(_PROCESS_FIELDS[name]) for name in fields})
-    if action == "write":
-        properties["input"]["description"] = "One line of input without a newline; the tool appends one newline to press Enter"
-    return {
-        "type": "object",
-        "title": f"{action} action",
-        "properties": properties,
-        "required": ["action", *required],
-        "additionalProperties": False,
-    }
-
-
 PROCESS_SCHEMA = {
     "type": "object",
-    "description": "One action per call; use only the fields declared by that action",
-    "oneOf": [
-        _process_action_schema("poll", ("session_id", "cursor", "yield_time_ms", "max_bytes"), ("session_id", "cursor")),
-        _process_action_schema("wait", ("session_id", "cursor", "wait_time_ms", "max_bytes"), ("session_id", "cursor")),
-        _process_action_schema("write", ("session_id", "input", "eof", "yield_time_ms"), ("session_id", "input")),
-        _process_action_schema("write_raw", ("session_id", "input", "eof", "yield_time_ms"), ("session_id", "input")),
-        _process_action_schema("resize", ("session_id", "rows", "cols"), ("session_id", "rows", "cols")),
-        _process_action_schema("interrupt", ("session_id", "yield_time_ms"), ("session_id",)),
-        _process_action_schema("terminate", ("session_id", "yield_time_ms"), ("session_id",)),
-        _process_action_schema("kill", ("session_id",), ("session_id",)),
-        _process_action_schema("list", (), ()),
-    ],
+    "description": (
+        "Control one process session returned by bash. Choose one action and supply only fields valid for it; "
+        "start commands with bash, not process."
+    ),
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": list(PROCESS_ACTIONS),
+            "description": "Process operation to perform",
+        },
+        **{name: dict(schema) for name, schema in _PROCESS_FIELDS.items()},
+    },
+    "required": ["action"],
+    "additionalProperties": False,
 }
 
 PROCESS_WAIT_EXAMPLE = '{"action":"wait","session_id":"<id>","cursor":<nextCursor>,"wait_time_ms":60000}'
 PROCESS_POLL_EXAMPLE = '{"action":"poll","session_id":"<id>","cursor":<nextCursor>,"yield_time_ms":1000}'
+_PROCESS_ACTION_EXAMPLES = {
+    "poll": PROCESS_POLL_EXAMPLE,
+    "wait": PROCESS_WAIT_EXAMPLE,
+    "write": '{"action":"write","session_id":"<id>","input":"<line>"}',
+    "write_raw": '{"action":"write_raw","session_id":"<id>","input":"<exact-input>"}',
+    "resize": '{"action":"resize","session_id":"<id>","rows":24,"cols":80}',
+    "interrupt": '{"action":"interrupt","session_id":"<id>"}',
+    "terminate": '{"action":"terminate","session_id":"<id>"}',
+    "kill": '{"action":"kill","session_id":"<id>"}',
+    "list": '{"action":"list"}',
+}
 
 _ACTION_FIELDS = {
     "poll": {"action", "session_id", "cursor", "yield_time_ms", "max_bytes"},
@@ -231,17 +229,53 @@ def prepare_process_arguments(raw_args):
     return args
 
 
+def _compact_process_call(arguments: dict[str, object]) -> str:
+    return json.dumps(arguments, separators=(",", ":"))
+
+
 def format_process_wait_instruction(session_id: str, cursor: int, wait_time_ms: int = 60_000) -> str:
-    arguments = json.dumps(
+    arguments = _compact_process_call(
         {
             "action": "wait",
             "session_id": session_id,
             "cursor": cursor,
             "wait_time_ms": wait_time_ms,
-        },
-        separators=(",", ":"),
+        }
     )
     return f"Call the process tool with {arguments}. Do not pass yield_time_ms to the wait action."
+
+
+def format_process_poll_instruction(session_id: str, cursor: int, yield_time_ms: int = 1_000) -> str:
+    arguments = _compact_process_call(
+        {
+            "action": "poll",
+            "session_id": session_id,
+            "cursor": cursor,
+            "yield_time_ms": yield_time_ms,
+        }
+    )
+    return f"For a quick status check, call the process tool with {arguments}."
+
+
+def format_process_write_instruction(session_id: str) -> str:
+    arguments = _compact_process_call(
+        {"action": "write", "session_id": session_id, "input": "<line>"}
+    )
+    return f"To submit one line, call the process tool with {arguments}."
+
+
+def format_process_bash_handoff(snapshot: ProcessSnapshot, *, input_open: bool) -> str:
+    if input_open:
+        input_kind = "PTY input" if snapshot.tty else "Pipe stdin"
+        return (
+            f"{input_kind} is open. {format_process_write_instruction(snapshot.session_id)} "
+            "After that write, use the exact wait call returned by its result and its nextCursor. "
+            f"{format_process_poll_instruction(snapshot.session_id, snapshot.next_cursor, snapshot.suggested_poll_delay_ms)}"
+        )
+    return (
+        f"{format_process_wait_instruction(snapshot.session_id, snapshot.next_cursor)} "
+        f"{format_process_poll_instruction(snapshot.session_id, snapshot.next_cursor, snapshot.suggested_poll_delay_ms)}"
+    )
 
 
 def create_process_tool_definition(
@@ -260,17 +294,11 @@ def create_process_tool_definition(
         parameters=PROCESS_SCHEMA,
         prompt_snippet="Poll and control managed background commands",
         prompt_guidelines=[
-            "Use the exact nextCursor returned by bash/process so output is not repeated.",
-            "Use the poll action only for interactive input, quick status checks, or intentionally incremental output.",
-            "When a command result is required, continue independent work first and then use the wait action; wait ignores output-only wakeups and does not set the command timeout.",
-            "When the final result is required, do not call the poll action before the wait action; use one wait from the latest cursor and act on its terminal result.",
-            "Each process wait observes for at most 60000 ms and never changes bash.timeout.",
-            "If a process wait returns running, wait again from the exact nextCursor; the observation deadline never kills the command.",
-            f"Exact terminal-wait shape: Call tool process with {PROCESS_WAIT_EXAMPLE}; never use yield_time_ms with wait.",
-            f"Exact quick-poll shape: Call tool process with {PROCESS_POLL_EXAMPLE}; never use wait_time_ms with poll.",
-            "Use write to submit one line or press Enter. Use write_raw only for exact bytes, control sequences, or partial input.",
-            "Use eof only for pipe stdin; use write_raw with an explicit Ctrl-D keystroke for PTYs.",
-            "Do not repeat unchanged file reads around process checks; retain earlier read results unless a tool operation could have changed that file.",
+            "Use the exact nextCursor returned by bash/process so output is neither repeated nor skipped.",
+            "Use wait when a command result is required; use poll only for interactive input, quick status, or intentionally incremental output. A wait observation never changes bash.timeout or kills the command.",
+            "If wait returns running, wait again from that result's exact nextCursor.",
+            "Use write to submit one line; use write_raw for exact bytes, control sequences, partial input, or PTY Ctrl-D. eof is valid only for pipe stdin.",
+            "Continue independent work before waiting, but do not repeat unchanged file reads around process checks.",
             "Leave a process detached only for a requested server/watcher or when its result is not required.",
             "Set bash.timeout only when an actual execution deadline is intended.",
         ],
@@ -442,7 +470,7 @@ def _validate_args(raw_args) -> dict[str, object]:
     elif action == "resize":
         for field in ("rows", "cols"):
             if not isinstance(args.get(field), int) or isinstance(args.get(field), bool):
-                raise ValueError(f"resize requires {field}")
+                raise _missing_process_field("resize", field)
     if "yield_time_ms" in args:
         value = args["yield_time_ms"]
         if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 30_000:
@@ -461,8 +489,14 @@ def _validate_args(raw_args) -> dict[str, object]:
 def _require_string(args: dict[str, object], action: str, field: str, *, allow_empty: bool = False) -> str:
     value = args.get(field)
     if not isinstance(value, str) or (not allow_empty and not value):
-        raise ValueError(f"{action} requires {field}")
+        raise _missing_process_field(action, field)
     return value
+
+
+def _missing_process_field(action: str, field: str) -> ValueError:
+    return ValueError(
+        f"{action} requires {field}; use tool process with {_PROCESS_ACTION_EXAMPLES[action]}"
+    )
 
 
 def _snapshot_result(snapshot: ProcessSnapshot, *, include_poll_hint: bool = True) -> AgentToolResult:
@@ -491,7 +525,10 @@ def _snapshot_footer(snapshot: ProcessSnapshot, *, include_poll_hint: bool = Tru
         f"{format_process_wait_instruction(snapshot.session_id, snapshot.next_cursor)}"
     )
     if include_poll_hint:
-        footer += f" Suggested poll delay: {snapshot.suggested_poll_delay_ms} ms."
+        footer += (
+            " "
+            f"{format_process_poll_instruction(snapshot.session_id, snapshot.next_cursor, snapshot.suggested_poll_delay_ms)}"
+        )
     return footer
 
 
@@ -594,6 +631,9 @@ __all__ = [
     "PROCESS_WAIT_EXAMPLE",
     "create_process_tool",
     "create_process_tool_definition",
+    "format_process_bash_handoff",
+    "format_process_poll_instruction",
     "format_process_wait_instruction",
+    "format_process_write_instruction",
     "prepare_process_arguments",
 ]

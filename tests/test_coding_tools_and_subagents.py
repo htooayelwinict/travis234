@@ -1524,15 +1524,37 @@ def test_agent_session_exposes_only_core_subagent_workflow_by_default(tmp_path: 
         }.isdisjoint(active_names)
         assert set(_SUBAGENT_TOOL_NAMES) <= {tool["name"] for tool in session.get_all_tools()}
         assert "senior software engineer responsible for the complete outcome" in session.system_prompt
-        assert "two or more independent, bounded engineering workstreams" in session.system_prompt
+        assert "Use subagents when the user explicitly requests delegation" in session.system_prompt
+        assert "only when project instructions do not restrict delegation" in session.system_prompt
+        assert "Start independent children concurrently" in session.system_prompt
+        assert "collect every child with `wait_subagent`" in session.system_prompt
         assert "Run finite commands with `bash`" in session.system_prompt
         assert "PTY plus `process`" not in session.system_prompt
         assert "Use `tmux` for servers, watchers, REPLs" in session.system_prompt
-        assert "Keep shared architecture, overlapping edits, integration, and final validation with the parent" in session.system_prompt
         assert "Treat child summaries as leads rather than proof" in session.system_prompt
         assert "Never invent files, tests, command results, or verification" in session.system_prompt
     finally:
         session.shutdown()
+
+
+def test_default_subagent_policy_has_one_compact_authority(tmp_path: Path) -> None:
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        agent_dir=str(tmp_path / "agent"),
+    )
+    try:
+        with_subagents = session.system_prompt
+        session.set_active_tools_by_name(["read", "bash", "tmux", "edit", "write"])
+        without_subagents = session.system_prompt
+    finally:
+        session.shutdown()
+
+    delta = len(with_subagents) - len(without_subagents)
+    assert delta <= 1_150
+    assert with_subagents.count("two or more independent, bounded") == 1
+    assert "project instructions do not restrict delegation" in with_subagents
+    assert with_subagents.count("Honor an explicit user request not to use subagents") == 1
 
 
 def test_parallel_delegation_language_activates_parent_subagent_tools() -> None:

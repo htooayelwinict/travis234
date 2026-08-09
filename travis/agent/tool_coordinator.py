@@ -14,6 +14,10 @@ T = TypeVar("T")
 R = TypeVar("R")
 
 
+class ToolExecutionAborted(RuntimeError):
+    """Raised when an aborted call reaches the execution-capacity boundary."""
+
+
 class ToolCoordinator:
     """Runs tool bodies concurrently while keeping policy and events on the owner loop."""
 
@@ -25,8 +29,15 @@ class ToolCoordinator:
             thread_name_prefix="travis-tool",
         )
 
-    async def execute(self, function: Callable[..., R], *args: Any) -> R:
+    async def execute(
+        self,
+        function: Callable[..., R],
+        *args: Any,
+        abort_signal: object | None = None,
+    ) -> R:
         async with self._semaphore:
+            if abort_signal is not None and bool(getattr(abort_signal, "aborted", False)):
+                raise ToolExecutionAborted("Operation aborted")
             if inspect.iscoroutinefunction(function):
                 return await function(*args)
             loop = asyncio.get_running_loop()
@@ -52,4 +63,5 @@ class ToolCoordinator:
 
 __all__ = [
     "ToolCoordinator",
+    "ToolExecutionAborted",
 ]

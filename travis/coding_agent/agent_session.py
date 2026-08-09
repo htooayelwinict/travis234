@@ -377,7 +377,9 @@ class _SessionRuntime(
         )
         self._bind_extension_core()
         self._register_builtin_subagent_commands()
-        self._unsubscribe_agent = self.agent.subscribe(self._handle_agent_event)
+        self._unsubscribe_agent = self.agent._subscribe_internal(  # noqa: SLF001 - session is the critical reducer.
+            self._handle_agent_event
+        )
         self.set_active_tools_by_name(initial_active_tool_names)
         if restored_context:
             self.agent.state.messages = restored_context.messages

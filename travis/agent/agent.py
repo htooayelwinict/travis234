@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import copy
 import inspect
+import logging
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Union
@@ -31,32 +33,47 @@ from travis.agent.types import (
 )
 
 Listener = Callable[..., None]
+logger = logging.getLogger(__name__)
 
 
 class PendingMessageQueue:
     def __init__(self, mode: QueueMode = "one-at-a-time") -> None:
         self.messages: list[AgentMessage] = []
         self.mode = mode
+        self._lock = threading.Lock()
 
     def enqueue(self, message: AgentMessage) -> None:
-        self.messages.append(message)
+        with self._lock:
+            self.messages.append(message)
 
     def has_items(self) -> bool:
-        return bool(self.messages)
+        with self._lock:
+            return bool(self.messages)
 
     def drain(self) -> list[AgentMessage]:
-        if self.mode == "all":
-            drained = list(self.messages)
-            self.messages = []
-            return drained
-        if not self.messages:
-            return []
-        first = self.messages[0]
-        self.messages = self.messages[1:]
-        return [first]
+        with self._lock:
+            if self.mode == "all":
+                drained = list(self.messages)
+                self.messages = []
+                return drained
+            if not self.messages:
+                return []
+            first = self.messages[0]
+            self.messages = self.messages[1:]
+            return [first]
 
     def clear(self) -> None:
-        self.messages = []
+        with self._lock:
+            self.messages = []
+
+    def remove_where(self, predicate: Callable[[AgentMessage], bool]) -> list[AgentMessage]:
+        with self._lock:
+            removed: list[AgentMessage] = []
+            retained: list[AgentMessage] = []
+            for message in self.messages:
+                (removed if predicate(message) else retained).append(message)
+            self.messages = retained
+            return removed
 
 
 @dataclass
@@ -125,6 +142,7 @@ class Agent:
         self.on_headers = on_headers
         self.on_response = on_response
         self._stream_fn = stream_fn
+        self._internal_listeners: list[Listener] = []
         self._listeners: list[Listener] = []
         self._signal = AbortSignal()
         self._run_state_lock = threading.Lock()
@@ -169,6 +187,15 @@ class Agent:
         def _unsubscribe() -> None:
             if listener in self._listeners:
                 self._listeners.remove(listener)
+
+        return _unsubscribe
+
+    def _subscribe_internal(self, listener: Listener) -> Callable[[], None]:
+        self._internal_listeners.append(listener)
+
+        def _unsubscribe() -> None:
+            if listener in self._internal_listeners:
+                self._internal_listeners.remove(listener)
 
         return _unsubscribe
 
@@ -402,11 +429,24 @@ class Agent:
     def _make_sink(self) -> AgentEventSink:
         async def _sink(event: AgentEvent) -> None:
             self._process_event(event)
-            for listener in list(self._listeners):
+            for listener in list(self._internal_listeners):
                 if _listener_accepts_signal(listener):
                     await resolve(listener(event, self._signal))
                 else:
                     await resolve(listener(event))
+            for listener in list(self._listeners):
+                try:
+                    snapshot = copy.deepcopy(event)
+                    if _listener_accepts_signal(listener):
+                        await resolve(listener(snapshot, self._signal))
+                    else:
+                        await resolve(listener(snapshot))
+                except Exception as error:  # noqa: BLE001 - public observers cannot fail the run.
+                    logger.warning(
+                        "Agent observer failed for %s (%s)",
+                        event.type,
+                        type(error).__name__,
+                    )
 
         return _sink
 

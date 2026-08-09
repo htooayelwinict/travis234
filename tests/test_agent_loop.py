@@ -19,6 +19,7 @@ from travis.agent import (
     RunLease,
     ShouldStopAfterTurnContext,
 )
+from travis.agent.agent_loop import run_agent_loop_async
 from travis.ai.event_stream import create_assistant_message_event_stream
 from travis.ai.providers.faux import (
     create_faux_provider,
@@ -32,6 +33,7 @@ from tests._provider_runtime import (
     register_api_provider,
     reset_api_providers,
     run_agent_loop,
+    stream_simple,
 )
 from travis.ai.types import (
     AssistantMessage,
@@ -240,6 +242,73 @@ def test_agent_loop_stops_after_signal_aborted_during_tool_execution() -> None:
     )
 
 
+def test_parallel_abort_skips_calls_waiting_for_coordinator_slot() -> None:
+    model = faux_model()
+    signal = AbortSignal()
+    provider_calls = 0
+    executed: list[str] = []
+    tool_end_reasons: dict[str, str | None] = {}
+
+    def provider(_model, _context):
+        nonlocal provider_calls
+        provider_calls += 1
+        if provider_calls == 1:
+            return _multi_tool_call_response_events(
+                model,
+                [("call_abort", "aborter", {}), ("call_late", "late", {})],
+            )
+        return text_response_events(model, "should not continue")
+
+    def aborter_execute(tool_call_id, _args, signal=None, on_update=None):
+        executed.append(tool_call_id)
+        assert signal is not None
+        signal.abort()
+        return AgentToolResult(content=[TextContent(text="aborted")], details={})
+
+    def late_execute(tool_call_id, _args, signal=None, on_update=None):
+        executed.append(tool_call_id)
+        return AgentToolResult(content=[TextContent(text="late")], details={})
+
+    tools = [
+        AgentTool(
+            name="aborter",
+            description="abort",
+            parameters={"type": "object", "properties": {}},
+            label="Aborter",
+            execute=aborter_execute,
+        ),
+        AgentTool(
+            name="late",
+            description="late",
+            parameters={"type": "object", "properties": {}},
+            label="Late",
+            execute=late_execute,
+        ),
+    ]
+    register_api_provider(create_faux_provider(provider))
+    config = _config(model)
+    config.tool_execution = "parallel"
+    config.max_parallel_tools = 1
+
+    messages = run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(tools=tools),
+        config,
+        lambda event: tool_end_reasons.__setitem__(event.tool_call_id, event.reason_code)
+        if event.type == "tool_execution_end"
+        else None,
+        signal,
+    )
+
+    results = [message for message in messages if getattr(message, "role", None) == "toolResult"]
+    assert executed == ["call_abort"]
+    assert [message.tool_call_id for message in results] == ["call_abort", "call_late"]
+    assert results[1].is_error is True
+    assert [block.text for block in results[1].content] == ["Operation aborted"]
+    assert tool_end_reasons["call_late"] == "aborted"
+    assert provider_calls == 1
+
+
 def test_duplicate_tool_calls_in_same_assistant_turn_execute_like_travis234() -> None:
     model = faux_model()
     provider_calls = {"n": 0}
@@ -294,6 +363,137 @@ def test_duplicate_tool_calls_in_same_assistant_turn_execute_like_travis234() ->
         "call_2",
         "call_3",
     ]
+
+
+def test_duplicate_provider_start_fails_without_context_corruption_and_closes_response() -> None:
+    model = faux_model()
+    stream_calls = 0
+    executions: list[str] = []
+    response_closed = threading.Event()
+    assistant_lifecycle: list[str] = []
+
+    class DuplicateStartResponse:
+        def __init__(self) -> None:
+            events = _multi_tool_call_response_events(model, [("call_probe", "probe", {})])
+            self._result = events[-1].message
+            self._events = [events[0], StartEvent(partial=events[0].partial), *events[1:]]
+
+        def __iter__(self):
+            return iter(self._events)
+
+        def result_sync(self):
+            return self._result
+
+        def close(self) -> None:
+            response_closed.set()
+
+    def stream_fn(_model, context, options):
+        nonlocal stream_calls
+        stream_calls += 1
+        if stream_calls == 1:
+            return DuplicateStartResponse()
+        return create_faux_provider(lambda m, c: text_response_events(m, "unexpected")).stream_simple(
+            model, context, options
+        )
+
+    tool = AgentTool(
+        name="probe",
+        description="probe",
+        parameters={"type": "object", "properties": {}},
+        label="Probe",
+        execute=lambda tool_call_id, *_args: executions.append(tool_call_id)
+        or AgentToolResult(content=[TextContent(text="ran")]),
+    )
+
+    messages = run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(tools=[tool]),
+        _config(model),
+        lambda event: assistant_lifecycle.append(event.type)
+        if event.type in {"message_start", "message_end"}
+        and getattr(event.message, "role", None) == "assistant"
+        else None,
+        stream_fn=stream_fn,
+    )
+
+    assistants = [message for message in messages if getattr(message, "role", None) == "assistant"]
+    assert stream_calls == 1
+    assert executions == []
+    assert len(assistants) == 1
+    assert assistants[0].stop_reason == "error"
+    assert assistants[0].error_message == "Provider stream protocol error: duplicate start event"
+    assert assistant_lifecycle == ["message_start", "message_end"]
+    assert response_closed.is_set()
+
+
+def test_provider_update_before_start_fails_with_balanced_message_lifecycle() -> None:
+    model = faux_model()
+    events = text_response_events(model, "invalid ordering")[1:]
+    lifecycle: list[str] = []
+
+    def stream_fn(_model, _context, _options):
+        stream = create_assistant_message_event_stream()
+        for event in events:
+            stream.push(event)
+        return stream
+
+    messages = run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(),
+        _config(model),
+        lambda event: lifecycle.append(event.type)
+        if event.type in {"message_start", "message_end"}
+        and getattr(event.message, "role", None) == "assistant"
+        else None,
+        stream_fn=stream_fn,
+    )
+
+    assistant = next(message for message in messages if getattr(message, "role", None) == "assistant")
+    assert assistant.stop_reason == "error"
+    assert assistant.error_message == (
+        "Provider stream protocol error: text_start event emitted before start event"
+    )
+    assert lifecycle == ["message_start", "message_end"]
+
+
+def test_invalid_provider_result_becomes_one_error_assistant() -> None:
+    model = faux_model()
+    response_closed = threading.Event()
+
+    class InvalidResultResponse:
+        def __iter__(self):
+            final = AssistantMessage(
+                content=[TextContent(text="ignored")],
+                api=model.api,
+                provider=model.provider,
+                model=model.id,
+                usage=empty_usage(),
+                stop_reason="stop",
+                timestamp=now_ms(),
+            )
+            return iter([DoneEvent(reason="stop", message=final)])
+
+        def result_sync(self):
+            return "not-an-assistant"
+
+        def close(self) -> None:
+            response_closed.set()
+
+    messages = run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(),
+        _config(model),
+        lambda _event: None,
+        stream_fn=lambda *_args: InvalidResultResponse(),
+    )
+
+    assistants = [message for message in messages if getattr(message, "role", None) == "assistant"]
+    assert len(assistants) == 1
+    assert assistants[0].stop_reason == "error"
+    assert assistants[0].error_message == (
+        "Provider stream protocol error: invalid result type str; expected AssistantMessage"
+    )
+    assert response_closed.is_set()
 
 
 def test_truncated_assistant_tool_calls_fail_without_execution_like_travis234() -> None:
@@ -547,6 +747,71 @@ def test_tool_execution_update_emit_settles_before_tool_execution_end() -> None:
     assert run_error == []
     assert thread.is_alive() is False
     assert events.index("tool_execution_update") < events.index("tool_execution_end")
+
+
+def test_async_tool_update_fanout_is_bounded_and_latest_settles_before_end() -> None:
+    model = faux_model()
+    provider_calls = 0
+    pending_task_counts: list[int] = []
+    update_values: list[int] = []
+    event_order: list[str] = []
+
+    def provider(_model, _context):
+        nonlocal provider_calls
+        provider_calls += 1
+        if provider_calls == 1:
+            return tool_call_response_events(model, "progress", {})
+        return text_response_events(model, "done")
+
+    async def execute(_tool_call_id, _args, signal=None, on_update=None):
+        assert on_update is not None
+        for index in range(100):
+            on_update(AgentToolResult(content=[TextContent(text=str(index))], details={}))
+        current = asyncio.current_task()
+        pending_task_counts.append(
+            len(
+                [
+                    task
+                    for task in asyncio.all_tasks()
+                    if task is not current and not task.done()
+                ]
+            )
+        )
+        return AgentToolResult(content=[TextContent(text="final")], details={})
+
+    tool = AgentTool(
+        name="progress",
+        description="progress",
+        parameters={"type": "object", "properties": {}},
+        label="Progress",
+        execute=execute,
+    )
+    register_api_provider(create_faux_provider(provider))
+    config = _config(model)
+    config.max_parallel_tools = 1
+
+    def emit(event) -> None:
+        event_order.append(event.type)
+        if event.type == "tool_execution_update":
+            update_values.append(int(event.partial_result.content[0].text))
+
+    async def scenario() -> None:
+        await run_agent_loop_async(
+            [UserMessage(content="go", timestamp=now_ms())],
+            _ctx(tools=[tool]),
+            config,
+            emit,
+            stream_fn=stream_simple,
+        )
+
+    asyncio.run(scenario())
+
+    assert max(pending_task_counts) <= 4
+    assert len(update_values) <= 65
+    assert update_values[-1] == 99
+    assert event_order.index("tool_execution_end") > max(
+        index for index, value in enumerate(event_order) if value == "tool_execution_update"
+    )
 
 
 @pytest.mark.parametrize("mode", ["sequential", "parallel"])
@@ -925,6 +1190,73 @@ def test_parallel_tools_are_bounded_and_callbacks_stay_on_coordinator_thread() -
     assert [message.tool_call_id for message in tool_results] == [f"call_{index}" for index in range(12)]
 
 
+def test_parallel_dispatch_creates_no_more_than_max_parallel_workers() -> None:
+    model = faux_model()
+    provider_calls = 0
+    entered = 0
+    release = asyncio.Event()
+    pending_task_counts: list[int] = []
+
+    def provider(_model, _context):
+        nonlocal provider_calls
+        provider_calls += 1
+        if provider_calls == 1:
+            return _multi_tool_call_response_events(
+                model,
+                [(f"call_{index}", "probe", {"index": index}) for index in range(12)],
+            )
+        return text_response_events(model, "done")
+
+    async def execute(_tool_call_id, args, signal=None, on_update=None):
+        nonlocal entered
+        entered += 1
+        current = asyncio.current_task()
+        pending_task_counts.append(
+            len(
+                [
+                    task
+                    for task in asyncio.all_tasks()
+                    if task is not current and not task.done()
+                ]
+            )
+        )
+        if entered == 3:
+            release.set()
+        await release.wait()
+        return AgentToolResult(content=[TextContent(text=str(args["index"]))], details={})
+
+    tool = AgentTool(
+        name="probe",
+        description="probe",
+        parameters={
+            "type": "object",
+            "properties": {"index": {"type": "integer"}},
+            "required": ["index"],
+        },
+        label="Probe",
+        execute=execute,
+    )
+    register_api_provider(create_faux_provider(provider))
+    config = _config(model)
+    config.tool_execution = "parallel"
+    config.max_parallel_tools = 3
+
+    async def scenario() -> None:
+        await run_agent_loop_async(
+            [UserMessage(content="go", timestamp=now_ms())],
+            _ctx(tools=[tool]),
+            config,
+            lambda _event: None,
+            stream_fn=stream_simple,
+        )
+
+    asyncio.run(scenario())
+
+    # The owner remains pending alongside one worker and one update relay per active tool.
+    assert max(pending_task_counts) <= (config.max_parallel_tools * 2) + 1
+    assert entered == 12
+
+
 def test_should_stop_after_turn_halts_loop() -> None:
     model = faux_model()
     register_api_provider(create_faux_provider(lambda m, c: text_response_events(m, "x")))
@@ -988,6 +1320,122 @@ def test_unknown_tool_returns_error_result() -> None:
     )
     assert ends[0].is_error is True
     assert "not found" in ends[0].result.content[0].text
+
+
+def test_invalid_tool_result_becomes_error_tool_result() -> None:
+    model = faux_model()
+    provider_calls = 0
+    end_reasons: dict[str, str | None] = {}
+
+    def provider(_model, _context):
+        nonlocal provider_calls
+        provider_calls += 1
+        if provider_calls == 1:
+            return tool_call_response_events(model, "broken", {}, call_id="call_broken")
+        return text_response_events(model, "recovered")
+
+    broken = AgentTool(
+        name="broken",
+        description="broken",
+        parameters={"type": "object", "properties": {}},
+        label="Broken",
+        execute=lambda *_args, **_kwargs: None,
+    )
+    register_api_provider(create_faux_provider(provider))
+
+    messages = run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(tools=[broken]),
+        _config(model),
+        lambda event: end_reasons.__setitem__(event.tool_call_id, event.reason_code)
+        if event.type == "tool_execution_end"
+        else None,
+    )
+
+    tool_result = next(message for message in messages if getattr(message, "role", None) == "toolResult")
+    assert tool_result.is_error is True
+    assert [block.text for block in tool_result.content] == [
+        "Tool broken returned invalid result type NoneType; expected AgentToolResult"
+    ]
+    assert end_reasons == {"call_broken": "invalid_tool_result"}
+    assert messages[-1].content == [TextContent(text="recovered")]
+    assert provider_calls == 2
+
+
+def test_invalid_tool_result_content_is_rejected_without_crashing_run() -> None:
+    model = faux_model()
+    provider_calls = 0
+
+    def provider(_model, _context):
+        nonlocal provider_calls
+        provider_calls += 1
+        if provider_calls == 1:
+            return tool_call_response_events(model, "broken", {}, call_id="call_content")
+        return text_response_events(model, "recovered")
+
+    broken = AgentTool(
+        name="broken",
+        description="broken",
+        parameters={"type": "object", "properties": {}},
+        label="Broken",
+        execute=lambda *_args, **_kwargs: AgentToolResult(content=["not-content"]),
+    )
+    register_api_provider(create_faux_provider(provider))
+
+    messages = run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(tools=[broken]),
+        _config(model),
+        lambda _event: None,
+    )
+
+    tool_result = next(message for message in messages if getattr(message, "role", None) == "toolResult")
+    assert tool_result.is_error is True
+    assert [block.text for block in tool_result.content] == [
+        "Tool broken returned AgentToolResult with invalid content; expected TextContent or ImageContent items"
+    ]
+    assert messages[-1].content == [TextContent(text="recovered")]
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        AgentToolResult(content=[TextContent(text="bad terminate")], terminate="yes"),
+        AgentToolResult(content=[TextContent(text="bad tools")], added_tool_names=["valid", 7]),
+    ],
+)
+def test_invalid_tool_result_metadata_becomes_error(result: AgentToolResult) -> None:
+    model = faux_model()
+    provider_calls = 0
+
+    def provider(_model, _context):
+        nonlocal provider_calls
+        provider_calls += 1
+        if provider_calls == 1:
+            return tool_call_response_events(model, "broken", {})
+        return text_response_events(model, "recovered")
+
+    register_api_provider(create_faux_provider(provider))
+    tool = AgentTool(
+        name="broken",
+        description="broken",
+        parameters={"type": "object", "properties": {}},
+        label="Broken",
+        execute=lambda *_args, **_kwargs: result,
+    )
+
+    messages = run_agent_loop(
+        [UserMessage(content="go", timestamp=now_ms())],
+        _ctx(tools=[tool]),
+        _config(model),
+        lambda _event: None,
+    )
+
+    tool_result = next(message for message in messages if getattr(message, "role", None) == "toolResult")
+    assert tool_result.is_error is True
+    assert [block.text for block in tool_result.content] == [
+        "Tool broken returned AgentToolResult with invalid metadata"
+    ]
 
 
 @pytest.mark.parametrize("case", ["before_block", "unknown_tool", "invalid_arguments"])
@@ -1519,6 +1967,49 @@ def test_agent_async_prompt_awaits_async_listener() -> None:
 
     assert seen[-1] == "agent_end"
     assert agent.wait_for_idle(timeout=0.1) is True
+
+
+def test_public_listener_mutation_cannot_change_canonical_agent_message() -> None:
+    model = faux_model()
+    agent = Agent(system_prompt="sys", model=model, convert_to_llm=_convert)
+
+    def listener(event) -> None:
+        if event.type == "message_end" and getattr(event.message, "role", None) == "assistant":
+            event.message.content[0].text = "mutated-by-observer"
+
+    agent.subscribe(listener)
+    agent.prompt(
+        "hello",
+        stream_fn=lambda model, context, options: create_faux_provider(
+            lambda m, c: text_response_events(m, "canonical")
+        ).stream_simple(model, context, options),
+    )
+
+    assert agent.state.messages[-1].content == [TextContent(text="canonical")]
+
+
+def test_public_listener_failure_does_not_stop_run_or_later_listener() -> None:
+    model = faux_model()
+    agent = Agent(system_prompt="sys", model=model, convert_to_llm=_convert)
+    later_events: list[str] = []
+
+    def failing_listener(event) -> None:
+        if event.type == "message_end" and getattr(event.message, "role", None) == "assistant":
+            raise RuntimeError("observer exploded")
+
+    agent.subscribe(failing_listener)
+    agent.subscribe(lambda event: later_events.append(event.type))
+
+    messages = agent.prompt(
+        "hello",
+        stream_fn=lambda model, context, options: create_faux_provider(
+            lambda m, c: text_response_events(m, "canonical")
+        ).stream_simple(model, context, options),
+    )
+
+    assert messages[-1].content == [TextContent(text="canonical")]
+    assert agent.state.messages[-1].content == [TextContent(text="canonical")]
+    assert later_events[-2:] == ["turn_end", "agent_end"]
 
 
 def test_agent_async_prompt_awaits_async_hook_and_tool() -> None:

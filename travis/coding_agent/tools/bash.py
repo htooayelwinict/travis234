@@ -24,7 +24,7 @@ from travis.coding_agent.processes.service import ProcessSessionService, Process
 from travis.coding_agent.processes.types import ProcessLaunchRequest, ProcessOwner, ProcessSnapshot, ProcessState
 from travis.coding_agent.subprocess_environment import sanitize_tool_environment
 from travis.coding_agent.tools.output_spool import OutputSnapshot, OutputSpool
-from travis.coding_agent.tools.process import format_process_wait_instruction
+from travis.coding_agent.tools.process import format_process_bash_handoff
 from travis.coding_agent.tools.truncate import (
     DEFAULT_MAX_BYTES,
     DEFAULT_MAX_LINES,
@@ -512,7 +512,15 @@ def _execute_managed_bash(
         signal=signal,
         on_update=handle_update if on_update is not None else None,
     )
-    return _managed_bash_result(service, owner, snapshot, signal, artifacts, timeout)
+    return _managed_bash_result(
+        service,
+        owner,
+        snapshot,
+        signal,
+        artifacts,
+        timeout,
+        input_open=tty or stdin_mode == "open",
+    )
 
 
 def _managed_bash_result(
@@ -522,6 +530,8 @@ def _managed_bash_result(
     signal,
     artifacts: ArtifactRegistry | None,
     timeout: float | None,
+    *,
+    input_open: bool,
 ) -> AgentToolResult:
     details = snapshot.as_details()
     tail = service.tail_snapshot(owner, snapshot.session_id) if snapshot.state.terminal else None
@@ -579,9 +589,7 @@ def _managed_bash_result(
         raise RuntimeError(_append_status(output, "Command failed to execute"))
     footer = (
         f"Process {snapshot.session_id} is {snapshot.state.value}; command continues in the background. "
-        f"{format_process_wait_instruction(snapshot.session_id, snapshot.next_cursor)} "
-        f"Use the poll action for interactive or quick status checks. "
-        f"Suggested poll delay: {snapshot.suggested_poll_delay_ms} ms."
+        f"{format_process_bash_handoff(snapshot, input_open=input_open)}"
     )
     return AgentToolResult(
         content=[TextContent(text=_append_status(snapshot.output, footer))],
