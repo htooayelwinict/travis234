@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -20,6 +21,16 @@ ADAPTER_ROOT = REPOSITORY_ROOT / "packages" / "travis234-mcp-adapter"
 GHOST_ROOT = REPOSITORY_ROOT / "packages" / "travis234-ghost-mcp"
 MAX_RESULT_BYTES = 16_384
 MODULE_NAME = "evals.bundled_ghost_mcp_smoke"
+
+
+def is_bundled_ghost_smoke_supported() -> bool:
+    if sys.platform != "darwin" or platform.machine() != "arm64":
+        return False
+    try:
+        version = tuple(int(part) for part in platform.mac_ver()[0].split(".")[:2])
+    except ValueError:
+        return False
+    return version >= (14, 0)
 
 
 def run_bundled_ghost_smoke(workspace: Path) -> dict[str, object]:
