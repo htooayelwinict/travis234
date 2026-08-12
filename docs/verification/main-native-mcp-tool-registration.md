@@ -39,8 +39,8 @@ adapter.
   size, aggregate decoded size, MIME type, and malformed-base64 limits have
   regression coverage.
 
-Focused core tests reported `103 passed in 10.12s`. The adapter suite reported
-`102 passed in 18.18s`, including real stdio and HTTP transport integration.
+Focused core tests reported `103 passed in 10.12s`. The final adapter suite reported
+`102 passed in 17.39s`, including real stdio and HTTP transport integration.
 Focused native core/CLI coverage separately reported `76 passed`; focused
 adapter runtime, extension, and Ghost coverage reported `28 passed`.
 
@@ -68,15 +68,15 @@ the protocol-safe catalog, native call, and cleanup checks do not require them.
 
 ## Complete repository and launcher verification
 
-- Full root Python suite: `1955 passed in 127.40s`.
-- Full adapter Python suite: `102 passed in 18.18s`.
+- Full root Python suite: `1955 passed in 129.60s`.
+- Full adapter Python suite: `102 passed in 17.39s`.
 - npm launcher suite: `23 passed`.
 - npm dry-run package: `@htooayelwinict/travis234@2.4.5`, five files,
   `htooayelwinict-travis234-2.4.5.tgz`, package size 9.3 kB, SHA-1
   `9131224b56d3952b6e273cbb8516e62121511d94`.
 
-These gates are rerun after the final verification record is committed; the
-fresh terminal results are the completion authority.
+These are the fresh committed-tree terminal results used as the completion
+authority.
 
 ## Built distributions
 
@@ -84,10 +84,10 @@ Both projects built wheel and sdist artifacts, and Twine accepted all four:
 
 | Artifact | SHA-256 |
 | --- | --- |
-| `travis234-2.4.5-py3-none-any.whl` | `05f84bb90cac657955bda2970463bd0710d039a811462ef4343030615ba8d439` |
-| `travis234-2.4.5.tar.gz` | `178684f94609803213be5a99ba0dda7d76ab32093ebb82589c63de49f73d8da1` |
-| `travis234_mcp_adapter-0.2.0-py3-none-any.whl` | `b238ff1572ab4614e0bfcab7358de1c4212ff9f9fdd14c00a216f928afd6c98b` |
-| `travis234_mcp_adapter-0.2.0.tar.gz` | `e1033a454aa783866fa2b775393e8f83948b73f12496a2f41db419c1e93835bc` |
+| `travis234-2.4.5-py3-none-any.whl` | `605c75d0d49946be5d684a02727e042d86b5bcee3c943bded728b6370d923968` |
+| `travis234-2.4.5.tar.gz` | `5d56e65977ab6d604db043675e35a91224b6cc5535914b531edd4b3ecc86a8a4` |
+| `travis234_mcp_adapter-0.2.0-py3-none-any.whl` | `146d011ee23cc7cfa0cf0e52ca39a0c61cbaa09a6580b94ada8135166ab97b80` |
+| `travis234_mcp_adapter-0.2.0.tar.gz` | `ef5a14404ad51b6c6fefde9976a077725a212951b73166919eca738f4c50e7ed` |
 
 The adapter wheel contained `catalog`, `native_tool`, `status_tool`, runtime,
 configuration, result, output-guard, and extension modules; it did not contain
@@ -130,7 +130,7 @@ secret was absent from both the evidence and serialized session.
 
 `docker build --no-cache -f Dockerfile.release -t
 travis234:native-mcp-tools .` produced image
-`sha256:a58a93ed9041a385990e10ba27ef289a5ddb0a654a9053c7a953bc86fc23da3e`.
+`sha256:f8475af588a76d1d68844b3367bb83bd914270212a0230b442caac869c5a8914`.
 `python3 evals/container_smoke.py --image travis234:native-mcp-tools` exited zero.
 The smoke covers the installed non-root CLI, print/JSON/RPC/TUI faux paths,
 compaction, managed-process cleanup, npm launcher behavior, and credential
