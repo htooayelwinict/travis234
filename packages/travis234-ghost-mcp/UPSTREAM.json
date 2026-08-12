@@ -1,0 +1,12 @@
+{
+  "repository": "https://github.com/ghostwright/ghost-os",
+  "commit": "991aa4831295aaff6beef04cc809d0f0b53dc024",
+  "version": "2.2.1+6",
+  "license": "MIT",
+  "adaptations": [
+    "Travis234-only state root",
+    "package-relative resources",
+    "non-interactive Travis setup and doctor",
+    "no external MCP client configuration"
+  ]
+}

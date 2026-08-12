@@ -17,6 +17,7 @@ env/
 venv.bak/
 dist/
 build/
+.build/
 *.egg
 *.egg-info/
 *.manifest
