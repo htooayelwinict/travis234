@@ -102,9 +102,22 @@ class SessionToolController:
         return str(base_dir / "subagents" / (safe_namespace or "ephemeral"))
 
     def _is_allowed_tool(self, name: str) -> bool:
+        definition = getattr(self, "_tool_definition_by_name", {}).get(name)
+        if definition is None:
+            definition = getattr(self, "_base_definition_by_name", {}).get(name)
+        if definition is not None:
+            return self._is_allowed_definition(definition)
         return (
             self._allowed_tool_names is None or name in self._allowed_tool_names
         ) and name not in self._excluded_tool_names
+
+    def _is_allowed_definition(self, definition: ToolDefinition) -> bool:
+        selectors = {definition.name}
+        if definition.activation_group:
+            selectors.add(definition.activation_group)
+        allowed = self._allowed_tool_names is None or bool(selectors & self._allowed_tool_names)
+        excluded = bool(selectors & self._excluded_tool_names)
+        return allowed and not excluded
 
     def _settings_shell_command_prefix(self) -> str | None:
         return _settings_value(
@@ -201,7 +214,9 @@ class SessionToolController:
             )
 
         self._tool_definition_by_name = {
-            name: definition for name, definition in definition_by_name.items() if self._is_allowed_tool(name)
+            name: definition
+            for name, definition in definition_by_name.items()
+            if self._is_allowed_definition(definition)
         }
         self._tool_source_info_by_name = {
             name: source_info
@@ -217,9 +232,24 @@ class SessionToolController:
             return
         next_active = list(previous_active)
         if include_all_extension_tools:
+            selected_groups = {
+                definition.activation_group
+                for name in previous_active
+                if (definition := self._tool_definition_by_name.get(name)) is not None
+                and definition.activation_group is not None
+            }
             for registered in self._extension_runner.get_all_registered_tools():
-                name = registered.definition.name
-                if self._is_allowed_tool(name) and name not in next_active:
+                definition = registered.definition
+                name = definition.name
+                group_is_selected = (
+                    definition.activation_group is not None
+                    and definition.activation_group in selected_groups
+                )
+                if (
+                    self._is_allowed_definition(definition)
+                    and (definition.activation_group is None or group_is_selected)
+                    and name not in next_active
+                ):
                     next_active.append(name)
         self.set_active_tools_by_name(next_active)
 
@@ -296,10 +326,24 @@ class SessionToolController:
     def get_tool_definition(self, name: str) -> ToolDefinition | None:
         return self._tool_definition_by_name.get(name)
 
+    def _expand_active_tool_names(self, tool_names: list[str]) -> list[str]:
+        expanded: list[str] = []
+        seen: set[str] = set()
+        for selector in tool_names:
+            concrete = self._tool_definition_by_name.get(selector)
+            if concrete is not None and selector not in seen:
+                expanded.append(selector)
+                seen.add(selector)
+            for definition in self._tool_definition_by_name.values():
+                if definition.activation_group == selector and definition.name not in seen:
+                    expanded.append(definition.name)
+                    seen.add(definition.name)
+        return expanded
+
     def set_active_tools_by_name(self, tool_names: list[str]) -> None:
         tools: list[AgentTool] = []
         valid_tool_names: list[str] = []
-        for name in tool_names:
+        for name in self._expand_active_tool_names(tool_names):
             tool = self._tool_by_name.get(name)
             if tool is None:
                 continue

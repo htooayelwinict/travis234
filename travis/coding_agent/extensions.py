@@ -565,6 +565,8 @@ class ExtensionRunner:
         self._get_all_tools: Callable[[], object] = lambda: []
         self._set_active_tools: Callable[[list[str]], object] = lambda tool_names: None
         self._refresh_tools: Callable[[], object] = lambda: None
+        self._tool_batch_depth = 0
+        self._tool_batch_dirty = False
         self._get_commands: Callable[[], object] = lambda: []
         self._exec: Callable[[str, list[str], dict[str, object] | None], dict[str, object]] = (
             lambda command, args, options=None: (_ for _ in ()).throw(
@@ -1350,12 +1352,31 @@ class ExtensionRunner:
             or definition.source_info
             or create_synthetic_source_info(extension_path, source="extension"),
         )
-        self._refresh_tools()
+        self._request_tool_refresh()
 
 
     def unregister_tool(self, name: str) -> None:
         if self._registered_tools.pop(name, None) is not None:
-            self._refresh_tools()
+            self._request_tool_refresh()
+
+
+    def _request_tool_refresh(self) -> None:
+        if self._tool_batch_depth:
+            self._tool_batch_dirty = True
+            return
+        self._refresh_tools()
+
+
+    @contextmanager
+    def tool_registration_batch(self):
+        self._tool_batch_depth += 1
+        try:
+            yield
+        finally:
+            self._tool_batch_depth -= 1
+            if self._tool_batch_depth == 0 and self._tool_batch_dirty:
+                self._tool_batch_dirty = False
+                self._refresh_tools()
 
 
     def clear_tools(self) -> None:

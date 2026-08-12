@@ -11,6 +11,7 @@ from travis.app import CodingApp
 from travis.ai.providers.faux import faux_model
 from travis.coding_agent import AgentSession
 from travis.coding_agent.extensions import ExtensionRunner
+from travis.coding_agent.tools.types import ToolDefinition
 from travis.tui import FakeTerminal, InteractiveMode
 
 
@@ -56,6 +57,51 @@ def test_noop_extension_ui_returns_safe_noninteractive_values() -> None:
     assert ui.get_editor_text() == ""
     assert ui.set_theme("night") == {"success": False, "error": "UI not available"}
     assert callable(ui.on_terminal_input(lambda _data: None))
+
+
+def test_extension_tool_registration_batch_refreshes_once_and_is_nested_safe() -> None:
+    runner = ExtensionRunner()
+    refreshes: list[str] = []
+    runner.bind_core({"refreshTools": lambda: refreshes.append("refresh")})
+
+    def definition(name: str) -> ToolDefinition:
+        return ToolDefinition(
+            name=name,
+            label=name,
+            description=name,
+            parameters={"type": "object", "properties": {}},
+            execute=lambda *_args, **_kwargs: None,
+        )
+
+    with runner.tool_registration_batch():
+        runner.register_tool(definition("one"))
+        with runner.tool_registration_batch():
+            runner.register_tool(definition("two"))
+        runner.unregister_tool("one")
+
+    assert refreshes == ["refresh"]
+    assert [tool.definition.name for tool in runner.get_all_registered_tools()] == ["two"]
+
+
+def test_extension_tool_registration_batch_flushes_after_exception() -> None:
+    runner = ExtensionRunner()
+    refreshes: list[str] = []
+    runner.bind_core({"refreshTools": lambda: refreshes.append("refresh")})
+    definition = ToolDefinition(
+        name="survivor",
+        label="survivor",
+        description="survivor",
+        parameters={"type": "object", "properties": {}},
+        execute=lambda *_args, **_kwargs: None,
+    )
+
+    with pytest.raises(RuntimeError, match="stop"):
+        with runner.tool_registration_batch():
+            runner.register_tool(definition)
+            raise RuntimeError("stop")
+
+    assert refreshes == ["refresh"]
+    assert [tool.definition.name for tool in runner.get_all_registered_tools()] == ["survivor"]
 
 
 class _FakeSession:
