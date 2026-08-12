@@ -139,6 +139,89 @@ async def test_active_family_discovers_and_calls_native_stdio_tools(
 
 
 @pytest.mark.anyio
+async def test_active_family_discovers_and_calls_native_http_tools(
+    tmp_path: Path,
+    mcp_http_server,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("REMOTE_TOKEN", "http-native-secret")
+    _write_stdio_config(
+        home,
+        {
+            "remote": {
+                "url": mcp_http_server.url,
+                "headers": {"Authorization": "Bearer ${REMOTE_TOKEN}"},
+                "includeTools": ["echo"],
+            }
+        },
+    )
+    runner = ExtensionRunner(cwd=str(project))
+    _bind(runner, active=("mcp",))
+    extension(runner)
+
+    await runner.async_emit({"type": "session_start"})
+
+    definitions = _registered(runner)
+    assert list(definitions) == ["mcp__remote__echo", "mcp"]
+    result = await definitions["mcp__remote__echo"].execute(
+        "call-1", {"text": "native-http"}, None, None, None
+    )
+    assert result.content[0].text == "native-http"
+    assert "http-native-secret" not in repr(result.details)
+    await runner.async_emit({"type": "session_shutdown"})
+
+
+@pytest.mark.anyio
+async def test_native_credential_reference_never_reaches_result_or_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "project"
+    project.mkdir()
+    sentinel = "travis234-native-mcp-secret-sentinel"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("FIXTURE_TOKEN", sentinel)
+    _write_stdio_config(
+        home,
+        {
+            "fixture": _stdio_entry(
+                tmp_path / "credential.pid",
+                includeTools=["configured_secret_name"],
+            )
+        },
+    )
+    runner = ExtensionRunner(cwd=str(project))
+    _bind(runner, active=("mcp",))
+    extension(runner)
+
+    await runner.async_emit({"type": "session_start"})
+    definition = _registered(runner)["mcp__fixture__configured_secret_name"]
+    result = await definition.execute("credential", {}, None, None, None)
+    status = _registered(runner)["mcp"].execute("status", {}, None, None, None)
+    captured = capsys.readouterr()
+    serialized = json.dumps(
+        {
+            "content": [getattr(item, "text", "") for item in result.content],
+            "details": result.details,
+            "status": status.content[0].text,
+            "stdout": captured.out,
+            "stderr": captured.err,
+        },
+        default=str,
+    )
+
+    assert result.content[0].text == "present"
+    assert sentinel not in serialized
+    await runner.async_emit({"type": "session_shutdown"})
+
+
+@pytest.mark.anyio
 async def test_invalid_config_updates_bounded_status(
     config_tree,
     monkeypatch: pytest.MonkeyPatch,
