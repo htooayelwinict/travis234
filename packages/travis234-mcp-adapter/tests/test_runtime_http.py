@@ -40,7 +40,10 @@ async def test_http_is_lazy_sends_referenced_header_and_closes(
         "slow",
         "large_output",
         "controlled_error",
+        "emit_tools_changed",
     ]
+    assert connected.metadata.protocol_version
+    assert connected.metadata.instructions == "Use fixture tools only for deterministic tests."
     assert _text(await connected.call_tool("echo", {"text": "http-sentinel"}, None)) == "http-sentinel"
     assert mcp_http_server.probe["requests"] > 0
     assert mcp_http_server.probe["authorized"] is True

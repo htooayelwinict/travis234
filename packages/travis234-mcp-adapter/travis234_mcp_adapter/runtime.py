@@ -13,12 +13,21 @@ import httpx2
 from mcp import Client, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
+from mcp.client.subscriptions import ToolsListChanged
+from mcp.types import ToolListChangedNotification
 
 from travis.agent.types import AbortSignal
 from travis234_mcp_adapter.config import ResolvedServer, ServerConfig, resolve_server
 
 
 Operation = Literal["list_tools", "call_tool"]
+
+
+@dataclass(frozen=True)
+class ServerMetadata:
+    protocol_version: str
+    instructions: str | None
+    tools_list_changed: bool
 
 
 class _LoopOwner:
@@ -113,6 +122,13 @@ class ConnectedServer:
     def name(self) -> str:
         return self._actor.resolved.name
 
+    @property
+    def metadata(self) -> ServerMetadata:
+        metadata = self._actor.metadata
+        if metadata is None:
+            raise RuntimeError(f'MCP server "{self.name}" metadata is unavailable')
+        return metadata
+
     async def list_tools(self, signal: AbortSignal | None, cursor: str | None = None):
         return await self._runtime._request(
             self._actor,
@@ -136,12 +152,21 @@ class ConnectedServer:
 
 
 class _ServerActor:
-    def __init__(self, resolved: ResolvedServer) -> None:
+    def __init__(
+        self,
+        resolved: ResolvedServer,
+        mark_tools_dirty: Callable[[str], None],
+        record_notification_error: Callable[[str, str], None],
+    ) -> None:
         self.resolved = resolved
+        self.metadata: ServerMetadata | None = None
+        self._mark_tools_dirty = mark_tools_dirty
+        self._record_notification_error = record_notification_error
         self._queue: asyncio.Queue[_ActorRequest | None] = asyncio.Queue()
         self._ready: asyncio.Future[None] | None = None
         self._owner: asyncio.Task[None] | None = None
         self._active: set[asyncio.Task[object]] = set()
+        self._listener: asyncio.Task[None] | None = None
         self._closing = False
 
     async def start(self, signal: AbortSignal | None) -> None:
@@ -216,7 +241,18 @@ class _ServerActor:
         ready = self._ready
         assert ready is not None
         try:
-            async with _open_client(self.resolved) as client:
+            async with _open_client(self.resolved, self._handle_message) as client:
+                tools = client.server_capabilities.tools
+                self.metadata = ServerMetadata(
+                    protocol_version=client.protocol_version,
+                    instructions=client.instructions,
+                    tools_list_changed=bool(tools and tools.list_changed),
+                )
+                if client.protocol_version == "2026-07-28" and self.metadata.tools_list_changed:
+                    self._listener = asyncio.create_task(
+                        self._listen_for_tool_changes(client),
+                        name=f"travis234-mcp-listen-{self.resolved.name}",
+                    )
                 if not ready.done():
                     ready.set_result(None)
                 await self._serve(client)
@@ -230,10 +266,29 @@ class _ServerActor:
             if isinstance(error, asyncio.CancelledError):
                 raise
         finally:
+            if self._listener is not None:
+                self._listener.cancel()
+                await asyncio.gather(self._listener, return_exceptions=True)
+                self._listener = None
             for task in tuple(self._active):
                 task.cancel()
             if self._active:
                 await asyncio.gather(*self._active, return_exceptions=True)
+
+    async def _handle_message(self, message: object) -> None:
+        if isinstance(message, ToolListChangedNotification):
+            self._mark_tools_dirty(self.resolved.name)
+
+    async def _listen_for_tool_changes(self, client: Client) -> None:
+        try:
+            async with client.listen(tools_list_changed=True) as subscription:
+                async for event in subscription:
+                    if isinstance(event, ToolsListChanged):
+                        self._mark_tools_dirty(self.resolved.name)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:  # noqa: BLE001 - listener loss is diagnostic, not fatal to calls.
+            self._record_notification_error(self.resolved.name, type(error).__name__)
 
     async def _serve(self, client: Client) -> None:
         while True:
@@ -295,6 +350,8 @@ class McpRuntime:
         self._loop_owner = _LoopOwner()
         self._status_lock = threading.Lock()
         self._connected_names: set[str] = set()
+        self._dirty_servers: set[str] = set()
+        self._notification_errors: set[tuple[str, str]] = set()
         self._close_lock = threading.Lock()
         self._closed = False
 
@@ -317,7 +374,11 @@ class McpRuntime:
             if existing is not None:
                 return existing
             resolved = resolve_server(server, self._get_environ())
-            actor = _ServerActor(resolved)
+            actor = _ServerActor(
+                resolved,
+                self._mark_tools_dirty,
+                self._record_notification_error,
+            )
             self._actors[name] = actor
             try:
                 await actor.start(signal)
@@ -381,6 +442,26 @@ class McpRuntime:
         with self._status_lock:
             return name in self._connected_names
 
+    def _mark_tools_dirty(self, name: str) -> None:
+        with self._status_lock:
+            self._dirty_servers.add(name)
+
+    def take_dirty_servers(self) -> tuple[str, ...]:
+        with self._status_lock:
+            names = tuple(sorted(self._dirty_servers))
+            self._dirty_servers.clear()
+        return names
+
+    def _record_notification_error(self, name: str, error_name: str) -> None:
+        with self._status_lock:
+            self._notification_errors.add((name, error_name))
+
+    def take_notification_errors(self) -> tuple[tuple[str, str], ...]:
+        with self._status_lock:
+            errors = tuple(sorted(self._notification_errors))
+            self._notification_errors.clear()
+        return errors
+
 
 async def _await_controlled(
     awaitable: Awaitable[object],
@@ -418,7 +499,10 @@ def _as_text_io(stream: TextIO) -> TextIO:
 
 
 @asynccontextmanager
-async def _open_client(resolved: ResolvedServer) -> AsyncIterator[Client]:
+async def _open_client(
+    resolved: ResolvedServer,
+    message_handler: Callable[[object], Awaitable[None]],
+) -> AsyncIterator[Client]:
     if resolved.command is not None:
         params = StdioServerParameters(
             command=resolved.command,
@@ -427,7 +511,10 @@ async def _open_client(resolved: ResolvedServer) -> AsyncIterator[Client]:
             cwd=resolved.cwd,
         )
         with Path(os.devnull).open("w", encoding="utf-8") as errlog:
-            async with Client(stdio_client(params, errlog=_as_text_io(errlog))) as client:
+            async with Client(
+                stdio_client(params, errlog=_as_text_io(errlog)),
+                message_handler=message_handler,
+            ) as client:
                 yield client
         return
 
@@ -449,5 +536,5 @@ async def _open_client(resolved: ResolvedServer) -> AsyncIterator[Client]:
         follow_redirects=True,
     ) as http_client:
         transport = streamable_http_client(resolved.url, http_client=http_client)
-        async with Client(transport) as client:
+        async with Client(transport, message_handler=message_handler) as client:
             yield client
