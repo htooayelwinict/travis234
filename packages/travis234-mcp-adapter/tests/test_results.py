@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 
 from mcp.types import (
@@ -14,7 +15,16 @@ from mcp.types import (
 )
 from travis.ai.types import ImageContent, TextContent
 from travis234_mcp_adapter.output_guard import MAX_INLINE_BYTES, SpillRegistry
-from travis234_mcp_adapter.results import convert_call_result
+from travis234_mcp_adapter.results import (
+    MAX_IMAGE_BLOCKS,
+    MAX_IMAGE_BYTES,
+    MAX_RESULT_IMAGE_BYTES,
+    convert_call_result,
+)
+
+
+def _b64(value: bytes) -> str:
+    return base64.b64encode(value).decode("ascii")
 
 
 def test_converts_text_image_resources_audio_and_blob(tmp_path: Path) -> None:
@@ -115,3 +125,94 @@ def test_aggregate_text_guard_cannot_be_bypassed_by_many_blocks(tmp_path: Path) 
     spill_path = Path(converted.details["travis234Mcp"]["spillPath"])
     assert spill_path.is_file()
     assert len(spill_path.read_text(encoding="utf-8")) > MAX_INLINE_BYTES
+
+
+def test_result_limits_image_count_and_aggregate_decoded_bytes(tmp_path: Path) -> None:
+    image = McpImageContent(
+        type="image",
+        data=_b64(b"x" * (3 * 1024 * 1024)),
+        mimeType="image/png",
+    )
+    result = convert_call_result(CallToolResult(content=[image] * 9), SpillRegistry(tmp_path))
+
+    images = [item for item in result.content if isinstance(item, ImageContent)]
+    text = "\n".join(item.text for item in result.content if isinstance(item, TextContent))
+    assert len(images) == 6
+    assert "image limit" in text
+    assert result.details["travis234Mcp"]["acceptedImages"] == 6
+    assert result.details["travis234Mcp"]["rejectedImages"] == 3
+
+
+def test_result_rejects_one_oversized_image_without_exposing_data(tmp_path: Path) -> None:
+    encoded = _b64(b"s" * (MAX_IMAGE_BYTES + 1))
+    result = convert_call_result(
+        CallToolResult(
+            content=[McpImageContent(type="image", data=encoded, mimeType="image/png")]
+        ),
+        SpillRegistry(tmp_path),
+    )
+
+    assert not any(isinstance(item, ImageContent) for item in result.content)
+    assert "10 MiB" in result.content[0].text
+    assert encoded[:100] not in result.content[0].text
+
+
+def test_result_rejects_malformed_base64_and_unsupported_image_mime(tmp_path: Path) -> None:
+    result = convert_call_result(
+        CallToolResult(
+            content=[
+                McpImageContent(type="image", data="not base64!", mimeType="image/png"),
+                McpImageContent(type="image", data=_b64(b"image"), mimeType="image/svg+xml"),
+            ]
+        ),
+        SpillRegistry(tmp_path),
+    )
+
+    assert not any(isinstance(item, ImageContent) for item in result.content)
+    text = "\n".join(item.text for item in result.content if isinstance(item, TextContent))
+    assert "malformed base64" in text
+    assert "unsupported MIME type" in text
+    assert "not base64" not in text
+
+
+def test_result_accepts_exact_image_count_and_aggregate_boundaries(tmp_path: Path) -> None:
+    small = McpImageContent(type="image", data=_b64(b"x"), mimeType="image/gif")
+    count_result = convert_call_result(
+        CallToolResult(content=[small] * MAX_IMAGE_BLOCKS),
+        SpillRegistry(tmp_path),
+    )
+    ten_mib = McpImageContent(
+        type="image",
+        data=_b64(b"x" * MAX_IMAGE_BYTES),
+        mimeType="image/webp",
+    )
+    aggregate_result = convert_call_result(
+        CallToolResult(content=[ten_mib, ten_mib]),
+        SpillRegistry(tmp_path),
+    )
+
+    assert len([item for item in count_result.content if isinstance(item, ImageContent)]) == 8
+    assert len([item for item in aggregate_result.content if isinstance(item, ImageContent)]) == 2
+    assert aggregate_result.details["travis234Mcp"]["imageBytes"] == MAX_RESULT_IMAGE_BYTES
+
+
+def test_result_preserves_text_around_accepted_and_rejected_images(tmp_path: Path) -> None:
+    result = convert_call_result(
+        CallToolResult(
+            content=[
+                McpTextContent(type="text", text="before"),
+                McpImageContent(type="image", data=_b64(b"image"), mimeType="image/jpeg"),
+                McpImageContent(type="image", data=_b64(b"vector"), mimeType="image/svg+xml"),
+                McpTextContent(type="text", text="after"),
+            ],
+            structuredContent={"ok": True},
+        ),
+        SpillRegistry(tmp_path),
+    )
+
+    assert len([item for item in result.content if isinstance(item, ImageContent)]) == 1
+    text = "\n".join(item.text for item in result.content if isinstance(item, TextContent))
+    assert "before" in text
+    assert "unsupported MIME type" in text
+    assert "after" in text
+    assert '{"ok":true}' in text
