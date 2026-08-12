@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=77", "wheel>=0.45"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "travis234-ghost-mcp"
+version = "0.1.0"
+description = "Bundled Ghost computer-use MCP server for Travis234."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.13,<3.14"
+dependencies = ["travis234-mcp-adapter>=0.1.2,<0.2"]
+classifiers = [
+  "Operating System :: MacOS :: MacOS X",
+  "Programming Language :: Python :: 3.13",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["travis234_ghost_mcp*"]
+
+[tool.setuptools.package-data]
+travis234_ghost_mcp = [
+  "bin/*",
+  "assets/GHOST-MCP.md",
+  "assets/recipes/*.json",
+  "assets/vision-sidecar/*",
+]
+
+[tool.setuptools.data-files]
+"share/travis234-ghost-mcp" = ["UPSTREAM.json", "THIRD_PARTY_NOTICES.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
