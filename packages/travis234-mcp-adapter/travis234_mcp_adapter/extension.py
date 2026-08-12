@@ -229,6 +229,57 @@ class ExtensionState:
         generation = await self._reset_generation()
         self._publish_status(generation)
 
+    async def on_before_agent_start(self, _event, _ctx) -> None:
+        runtime = self.runtime
+        if runtime is None:
+            return None
+        generation = self.generation
+        dirty_servers = runtime.take_dirty_servers()
+        notification_errors = runtime.take_notification_errors()
+        for name, error_name in notification_errors:
+            self.diagnostics[name] = (
+                *self.diagnostics.get(name, ()),
+                f'Tool-list listener for MCP server "{name}" stopped ({error_name}).',
+            )
+        if not dirty_servers:
+            if notification_errors:
+                self._publish_status(generation)
+            return None
+
+        catalogs = dict(self.catalogs)
+        reserved_names = self._reserved_names()
+        for name in dirty_servers:
+            catalogs.pop(name, None)
+            self.instructions.pop(name, None)
+            server = self.config.servers.get(name)
+            if server is None:
+                self.diagnostics[name] = ("Tool-list change ignored for an unconfigured server.",)
+                continue
+            try:
+                catalog = await self._discover_one(server, generation, reserved_names)
+            except asyncio.CancelledError:
+                if generation != self.generation:
+                    return None
+                raise
+            except Exception as error:  # noqa: BLE001 - remove stale tools and shape server failure.
+                self.diagnostics[name] = (
+                    f'Reconciliation failed for MCP server "{name}" ({type(error).__name__}).',
+                )
+            else:
+                catalogs[name] = catalog
+                if catalog.diagnostics:
+                    self.diagnostics[name] = catalog.diagnostics
+                else:
+                    self.diagnostics.pop(name, None)
+            if generation != self.generation:
+                return None
+
+        plan = admit_session_catalogs(tuple(catalogs.values()))
+        for name, reason in plan.rejected:
+            self.diagnostics[name] = (*self.diagnostics.get(name, ()), reason)
+        self._apply_catalog_plan(plan, generation)
+        return None
+
     def on_tool_result(self, event, _ctx):
         details = event.get("details")
         if not isinstance(details, dict):
@@ -244,6 +295,7 @@ def extension(travis) -> ExtensionState:
     travis.register_tool(create_status_definition(state._status_snapshot()))
     travis.on("session_start", state.on_session_start)
     travis.on("session_shutdown", state.on_session_shutdown)
+    travis.on("before_agent_start", state.on_before_agent_start)
     travis.on("tool_result", state.on_tool_result)
     return state
 

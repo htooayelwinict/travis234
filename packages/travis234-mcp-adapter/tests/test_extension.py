@@ -438,3 +438,224 @@ async def test_stale_session_generation_cannot_publish_discovered_tools(
     assert "mcp__fixture__stale" not in definitions
     assert instances[0].closed is True
     assert state.diagnostics == {}
+
+
+@pytest.mark.anyio
+async def test_tool_list_change_reconciles_once_at_before_agent_start(
+    config_tree,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(config_tree.home))
+    config_tree.write_global_shared("fixture", {"command": "fixture"})
+
+    class FakeRuntime:
+        def __init__(self, servers, environ):
+            self.tools = [_fake_tool("read")]
+            self.dirty: set[str] = set()
+            self.connect_calls: list[str] = []
+
+        async def connect(self, name, signal):
+            self.connect_calls.append(name)
+            return _FakeConnected(name, list(self.tools))
+
+        def is_connected(self, name):
+            return True
+
+        def mark_dirty(self, name):
+            self.dirty.add(name)
+
+        def take_dirty_servers(self):
+            snapshot = tuple(sorted(self.dirty))
+            self.dirty.clear()
+            return snapshot
+
+        def take_notification_errors(self):
+            return ()
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(extension_module, "McpRuntime", FakeRuntime)
+    runner = ExtensionRunner(cwd=str(config_tree.cwd))
+    _bind(runner, active=("mcp",))
+    state = extension(runner)
+    await runner.async_emit({"type": "session_start"})
+    runtime = state.runtime
+    assert runtime is not None
+
+    runtime.tools = [_fake_tool("inspect")]
+    for _index in range(50):
+        runtime.mark_dirty("fixture")
+
+    assert "mcp__fixture__read" in _registered(runner)
+    assert "mcp__fixture__inspect" not in _registered(runner)
+
+    await asyncio.to_thread(runner.emit_before_agent_start, "prompt", None, "system")
+
+    assert runtime.connect_calls == ["fixture", "fixture"]
+    assert "mcp__fixture__read" not in _registered(runner)
+    assert "mcp__fixture__inspect" in _registered(runner)
+    assert runtime.take_dirty_servers() == ()
+
+
+@pytest.mark.anyio
+async def test_notification_during_reconciliation_waits_for_next_boundary(
+    config_tree,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(config_tree.home))
+    config_tree.write_global_shared("fixture", {"command": "fixture"})
+
+    class FakeRuntime:
+        def __init__(self, servers, environ):
+            self.tools = [_fake_tool("read")]
+            self.dirty: set[str] = set()
+            self.refreshes = 0
+
+        async def connect(self, name, signal):
+            connected = _FakeConnected(name, list(self.tools))
+            original = connected.list_tools
+
+            async def list_tools(signal, cursor=None):
+                result = await original(signal, cursor)
+                if self.refreshes:
+                    self.dirty.add(name)
+                self.refreshes += 1
+                return result
+
+            connected.list_tools = list_tools
+            return connected
+
+        def is_connected(self, name):
+            return True
+
+        def take_dirty_servers(self):
+            snapshot = tuple(sorted(self.dirty))
+            self.dirty.clear()
+            return snapshot
+
+        def take_notification_errors(self):
+            return ()
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(extension_module, "McpRuntime", FakeRuntime)
+    runner = ExtensionRunner(cwd=str(config_tree.cwd))
+    _bind(runner, active=("mcp",))
+    state = extension(runner)
+    await runner.async_emit({"type": "session_start"})
+    runtime = state.runtime
+    runtime.tools = [_fake_tool("inspect")]
+    runtime.dirty.add("fixture")
+
+    await asyncio.to_thread(runner.emit_before_agent_start, "one", None, "system")
+
+    assert runtime.take_dirty_servers() == ("fixture",)
+    runtime.dirty.add("fixture")
+    await asyncio.to_thread(runner.emit_before_agent_start, "two", None, "system")
+    assert "mcp__fixture__inspect" in _registered(runner)
+
+
+@pytest.mark.anyio
+async def test_reconciliation_failure_removes_stale_server_definitions(
+    config_tree,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(config_tree.home))
+    config_tree.write_global_shared("fixture", {"command": "fixture"})
+
+    class FakeRuntime:
+        def __init__(self, servers, environ):
+            self.fail = False
+            self.dirty: set[str] = set()
+
+        async def connect(self, name, signal):
+            if self.fail:
+                raise RuntimeError("sensitive failure detail")
+            return _FakeConnected(name, [_fake_tool("read")])
+
+        def is_connected(self, name):
+            return True
+
+        def take_dirty_servers(self):
+            snapshot = tuple(sorted(self.dirty))
+            self.dirty.clear()
+            return snapshot
+
+        def take_notification_errors(self):
+            return ()
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(extension_module, "McpRuntime", FakeRuntime)
+    runner = ExtensionRunner(cwd=str(config_tree.cwd))
+    _bind(runner, active=("mcp",))
+    state = extension(runner)
+    await runner.async_emit({"type": "session_start"})
+    runtime = state.runtime
+    runtime.fail = True
+    runtime.dirty.add("fixture")
+
+    await asyncio.to_thread(runner.emit_before_agent_start, "prompt", None, "system")
+
+    assert "mcp__fixture__read" not in _registered(runner)
+    status = _registered(runner)["mcp"].execute("status", {}, None, None, None)
+    assert "RuntimeError" in status.content[0].text
+    assert "sensitive failure detail" not in status.content[0].text
+
+
+@pytest.mark.anyio
+async def test_stale_reconciliation_generation_publishes_nothing(
+    config_tree,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(config_tree.home))
+    config_tree.write_global_shared("fixture", {"command": "fixture"})
+    refresh_started = asyncio.Event()
+    release_refresh = asyncio.Event()
+
+    class FakeRuntime:
+        def __init__(self, servers, environ):
+            self.dirty: set[str] = set()
+            self.refreshing = False
+
+        async def connect(self, name, signal):
+            if self.refreshing:
+                refresh_started.set()
+                await release_refresh.wait()
+                return _FakeConnected(name, [_fake_tool("stale")])
+            return _FakeConnected(name, [_fake_tool("read")])
+
+        def is_connected(self, name):
+            return True
+
+        def take_dirty_servers(self):
+            snapshot = tuple(sorted(self.dirty))
+            self.dirty.clear()
+            return snapshot
+
+        def take_notification_errors(self):
+            return ()
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(extension_module, "McpRuntime", FakeRuntime)
+    runner = ExtensionRunner(cwd=str(config_tree.cwd))
+    _bind(runner, active=("mcp",))
+    state = extension(runner)
+    await runner.async_emit({"type": "session_start"})
+    runtime = state.runtime
+    runtime.refreshing = True
+    runtime.dirty.add("fixture")
+
+    reconciliation = asyncio.create_task(state.on_before_agent_start({}, None))
+    await refresh_started.wait()
+    state.generation += 1
+    release_refresh.set()
+    await reconciliation
+
+    assert "mcp__fixture__read" in _registered(runner)
+    assert "mcp__fixture__stale" not in _registered(runner)
