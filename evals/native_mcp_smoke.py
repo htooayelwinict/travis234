@@ -32,7 +32,6 @@ def run_native_mcp_smoke(workspace: Path, fixture_server: Path) -> dict[str, obj
     os.environ["FIXTURE_TOKEN"] = secret
     agent_dir = Path(get_agent_dir())
     _write_global_config(agent_dir, fixture)
-    _write_installed_extension_entry(agent_dir)
     seen_tools: list[str] = []
     calls = 0
 
@@ -92,15 +91,6 @@ def _write_global_config(agent_dir: Path, fixture_server: Path) -> None:
     )
 
 
-def _write_installed_extension_entry(agent_dir: Path) -> None:
-    extension_path = agent_dir / "extensions" / "mcp_adapter.py"
-    extension_path.parent.mkdir(parents=True, exist_ok=True)
-    extension_path.write_text(
-        "from travis234_mcp_adapter.extension import extension\n\n__all__ = ['extension']\n",
-        encoding="utf-8",
-    )
-
-
 class _McpOnlyApp:
     def __init__(self, workspace: Path, agent_dir: Path, script) -> None:
         registry = ModelRegistry.in_memory()
@@ -115,7 +105,6 @@ class _McpOnlyApp:
             model_registry=registry,
             allowed_tool_names=["mcp"],
             additional_active_tool_names=["mcp"],
-            additional_extension_paths=[str(agent_dir / "extensions" / "mcp_adapter.py")],
         )
 
     def __enter__(self) -> CodingApp:
