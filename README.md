@@ -10,7 +10,7 @@ TRAVIS234 // NEURAL TERMINAL ONLINE
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-39e6c7?style=for-the-badge&labelColor=10182b"></a>
   <img alt="Python 3.13" src="https://img.shields.io/badge/Python-3.13-63a7ff?style=for-the-badge&labelColor=10182b">
-  <img alt="Version 2.4.4" src="https://img.shields.io/badge/version-2.4.4-bd6cff?style=for-the-badge&labelColor=10182b">
+  <img alt="Version 2.4.5" src="https://img.shields.io/badge/version-2.4.5-bd6cff?style=for-the-badge&labelColor=10182b">
   <img alt="Terminal first" src="https://img.shields.io/badge/interface-terminal-ff7ac6?style=for-the-badge&labelColor=10182b">
 </p>
 
@@ -400,13 +400,13 @@ Packages can be local directories, `git+https://...@revision` sources, or pinned
 
 ### Optional MCP adapter
 
-Install the separate official-SDK adapter when Travis234 should call explicitly configured Model Context Protocol servers. Keeping it optional means ordinary Travis234 installations do not inherit MCP dependencies or remote tool schemas.
+Install the separate official-SDK adapter when Travis234 should call explicitly configured Model Context Protocol servers. Travis234 remains the MCP client: each admitted remote tool becomes a normal schema-driven Travis tool, while ordinary installations keep MCP dependencies optional.
 
 ```bash
-travis234 install travis234-mcp-adapter
+travis234 install 'travis234-mcp-adapter==0.2.0'
 ```
 
-Restart Travis234 after the first install or an update. The adapter registers one lazy `mcp` proxy instead of adding every remote tool to the provider schema. Enable it for the current process with the additive `--mcp` flag:
+Restart after the first install, or use `/reload` after an update. Enable the native MCP family for the current process with any of these forms:
 
 ```bash
 # Default Travis234 tools plus MCP
@@ -417,9 +417,12 @@ travis234 --cwd . --no-tools --mcp
 
 # Advanced explicit subset plus MCP
 travis234 --cwd . --tools read,bash --mcp
+
+# MCP only through the generic tool selector
+travis234 --cwd . --tools mcp
 ```
 
-`--mcp` only changes the active tools for that process; it does not install the adapter or modify any MCP configuration. The generic `--tools mcp` form remains supported for an explicit MCP-only allowlist.
+`--mcp` is additive and never modifies configuration. The literal `mcp` tool is status-only and accepts exactly `{}`. Remote definitions use `mcp__<configured-server>__<remote-tool>` when that name is provider-safe; for example, Ghost OS exposes `mcp__ghost-os__ghost_context` and `mcp__ghost-os__ghost_screenshot`. Generated names cannot be selected on the startup CLI because discovery happens afterward; select the `mcp` family and use per-server filters instead.
 
 The adapter reads `mcpServers` from these files, in increasing precedence:
 
@@ -438,7 +441,9 @@ Minimal stdio configuration:
     "filesystem": {
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "/absolute/allowed/path"],
-      "lifecycle": "lazy"
+      "lifecycle": "lazy",
+      "includeTools": ["list_allowed_directories", "read_text_file"],
+      "excludeTools": ["write_file"]
     }
   }
 }
@@ -461,19 +466,15 @@ Minimal Streamable HTTP configuration:
 
 Secrets stay in the Travis234 process environment. Configuration may use `${SERVICE_TOKEN}` inside a value or exact `$env:SERVICE_TOKEN`; the adapter does not load `.env` itself. Native users export variables before launch. The npm sandbox may receive an operator-selected file through its existing `--dotenv /path/to/.env` boundary.
 
-The model sees five bounded proxy forms:
+`includeTools` is an exact-name allowlist when present, including when explicitly empty. `excludeTools` is applied afterward and wins. Values must be unique non-empty strings; globs and regular expressions are not supported.
 
-```json
-{}
-{"server":"filesystem"}
-{"server":"filesystem","search":"read text"}
-{"server":"filesystem","describe":"read_text_file"}
-{"server":"filesystem","tool":"read_text_file","args":{"path":"/absolute/allowed/path/README.md"}}
-```
+Discovery admits whole servers deterministically: at most 64 tools and 256 KiB of schemas per server, 128 tools and 512 KiB per session, and 64 KiB per schema. Descriptions are capped at 4 KiB. Discovery runs at four servers concurrently with a 30-second phase budget. Server guidance is framed as untrusted operational guidance and capped at 8 KiB per server and 32 KiB per session. Text results remain capped at 50 KiB or 2,000 lines with private spill files. Images are limited to eight blocks, 10 MiB each, and 20 MiB total, and must be PNG, JPEG, GIF, or WebP.
 
-Status does not connect. Listing, search, describe, and calls connect only the named server. Calls are never fanned out or automatically retried. `requestTimeoutMs` controls MCP initialization, discovery, and calls only; it does not alter provider, process, or subagent timeouts. Shared `"lifecycle": "lazy"` declarations are accepted as no-ops, while eager and keep-alive modes are rejected.
+Calls are sequential by default. Only an explicit MCP `readOnlyHint: true` opts a tool into Travis234's existing bounded parallel coordinator. Calls are at-most-once: timeout, cancellation, and uncertain transport completion never trigger an automatic replay. `requestTimeoutMs` controls MCP initialize, discovery, and call operations only; it does not alter provider, process, or subagent timeouts. Shared `"lifecycle": "lazy"` declarations are accepted as no-ops, while eager and keep-alive modes are rejected.
 
-Configured servers are an operator consent boundary: review third-party packages, pin versions when reproducibility matters, and give filesystem servers only the directories they need. The adapter supports stdio and Streamable HTTP. It does not currently implement legacy SSE, MCP OAuth, prompts, resources, sampling, elicitation, Apps/UI, or direct per-server provider tools.
+Configured servers are an operator consent boundary: review third-party packages, pin versions when reproducibility matters, and give filesystem servers only the directories they need. The adapter supports stdio and Streamable HTTP. It does not currently implement legacy SSE, MCP OAuth, prompts, resources, sampling, elicitation, or Apps/UI.
+
+Adapter 0.2.0 deliberately replaces the old list/search/describe/call proxy with native definitions. There is no proxy compatibility alias: use `mcp({})` for status and call generated tools directly.
 
 See the [complete adapter user guide](packages/travis234-mcp-adapter/README.md) for installation management, public-server examples, security rules, output limits, TUI workflows, and troubleshooting.
 
