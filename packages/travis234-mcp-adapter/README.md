@@ -63,8 +63,22 @@ travis234 remove travis234-mcp-adapter
 For a reproducible installation, pin the adapter source:
 
 ```bash
-travis234 install 'travis234-mcp-adapter==0.1.1'
+travis234 install 'travis234-mcp-adapter==0.1.2'
 ```
+
+## Trusted packaged servers
+
+An installed Travis234 extension may register an executable it ships through
+the adapter's trusted extension API. This is how `travis234-ghost-mcp` exposes
+its embedded `ghost-os` server without writing an MCP configuration file. A
+packaged descriptor is immutable, must name an executable inside its package
+root, and wins an exact-name collision with obsolete file configuration while
+status reports the shadowed entry.
+
+Packaged-server registration is an in-process extension interface, not a user configuration format.
+Users should continue to configure unrelated stdio and
+HTTP servers through the `mcp.json` files below. Installing an arbitrary
+package remains an executable-code trust decision.
 
 ## Configuration
 

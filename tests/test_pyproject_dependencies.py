@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import tomllib
 import json
+import tomllib
 from pathlib import Path
 
 from packaging.requirements import Requirement
@@ -53,6 +53,14 @@ def test_package_metadata_has_one_python_authority() -> None:
     package_json = json.loads(Path("package.json").read_text())
 
     assert pyproject["project"]["name"] == "travis234"
-    assert pyproject["project"]["version"] == "2.4.4"
+    assert pyproject["project"]["version"] == "2.4.5"
     assert pyproject["project"]["scripts"] == {"travis234": "travis.cli:main"}
     assert "travisConfig" not in package_json
+
+
+def test_root_distribution_does_not_depend_on_macos_ghost_addon() -> None:
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    requirements = [Requirement(item).name for item in pyproject["project"]["dependencies"]]
+
+    assert "travis234-mcp-adapter" not in requirements
+    assert "travis234-ghost-mcp" not in requirements

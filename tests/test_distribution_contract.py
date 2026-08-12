@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import subprocess
 import tomllib
+import zipfile
+from email.parser import Parser
 from pathlib import Path
-
 
 ROOT = Path(__file__).parents[1]
 
@@ -26,7 +28,7 @@ def test_npm_distribution_names_only_travis234() -> None:
 def test_release_versions_are_aligned() -> None:
     import json
 
-    expected = "2.4.4"
+    expected = "2.4.5"
     python_metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     workspace = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
     npm_package = json.loads(
@@ -41,6 +43,70 @@ def test_release_versions_are_aligned() -> None:
     assert f'VERSION = "{expected}"' in config_source
     assert f"Version {expected}" in readme
     assert f"version-{expected}-" in readme
+
+
+def test_release_versions_include_bundled_ghost_addon() -> None:
+    adapter = tomllib.loads(
+        (ROOT / "packages/travis234-mcp-adapter/pyproject.toml").read_text(
+            encoding="utf-8"
+        )
+    )
+    ghost = tomllib.loads(
+        (ROOT / "packages/travis234-ghost-mcp/pyproject.toml").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert adapter["project"]["version"] == "0.1.2"
+    assert ghost["project"]["version"] == "0.1.0"
+
+
+def test_root_distribution_excludes_optional_mcp_packages(tmp_path: Path) -> None:
+    output = tmp_path / "dist"
+    subprocess.run(
+        ["uv", "build", "--wheel", "--clear", "-o", str(output), str(ROOT)],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    wheel = next(output.glob("*.whl"))
+    assert wheel.name.endswith("-py3-none-any.whl")
+
+    with zipfile.ZipFile(wheel) as archive:
+        names = archive.namelist()
+        metadata_name = next(name for name in names if name.endswith(".dist-info/METADATA"))
+        metadata = Parser().parsestr(archive.read(metadata_name).decode("utf-8"))
+
+    requirements = metadata.get_all("Requires-Dist", [])
+    assert not any("travis234-mcp-adapter" in item for item in requirements)
+    assert not any("travis234-ghost-mcp" in item for item in requirements)
+    assert not any("ghost_mcp" in name or "ghost-os" in name for name in names)
+
+
+def test_bundled_ghost_documentation_matches_runtime_contract() -> None:
+    root_readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    adapter_readme = (
+        ROOT / "packages/travis234-mcp-adapter/README.md"
+    ).read_text(encoding="utf-8")
+    ghost_readme = (
+        ROOT / "packages/travis234-ghost-mcp/README.md"
+    ).read_text(encoding="utf-8")
+
+    for required in (
+        "travis234 install travis234-ghost-mcp",
+        "travis234 --mcp",
+        "/ghost-doctor",
+        "/ghost-setup",
+        "/ghost-setup vision",
+        "~/.travis234/ghost-mcp",
+        "macOS 14",
+        "Apple Silicon",
+    ):
+        assert required in root_readme
+        assert required in ghost_readme
+    assert "trusted extension API" in adapter_readme
+    assert "not a user configuration format" in adapter_readme
 
 
 def test_packaged_builtin_skills_match_npm_distribution() -> None:
