@@ -1,7 +1,7 @@
 # Bundled Ghost Computer-Use MCP Add-on Design
 
-**Date:** 2026-08-12  
-**Status:** Approved in conversation; awaiting written-spec review  
+**Date:** 2026-08-12
+**Status:** Approved in conversation; awaiting written-spec review
 **Products:** Travis234, `travis234-mcp-adapter`, `travis234-ghost-mcp`
 
 ## Objective

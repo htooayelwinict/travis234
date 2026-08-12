@@ -37,6 +37,33 @@ for screenshots. Input Monitoring is required only for learning workflows.
 After granting a missing permission, restart Travis234 before testing the
 corresponding tools.
 
+## Use it from Travis
+
+The add-on does not add 29 top-level tools to Travis. Travis keeps one bounded
+`mcp` proxy tool; behind that proxy, the in-memory `ghost-os` server exposes its
+29 computer-use operations. The server starts lazily on first use and is stopped
+when the Travis session exits.
+
+Ask Travis in normal language. For example:
+
+```text
+Using only the bundled ghost-os MCP, open Safari, go to YouTube, find
+Rick Astley's Never Gonna Give You Up official video, and play it.
+Verify the final URL, title, playback state, and audio state.
+```
+
+To check discovery without operating the desktop, ask:
+
+```text
+Using only the mcp tool, report MCP status and list the tools available from
+the ghost-os server. Do not perform any computer action.
+```
+
+Status should initially show `ghost-os: disconnected`; listing or calling a
+Ghost tool connects the embedded server. A normal server listing reports 29
+tools. No Ghost tool names need to be added to `--tools` or an MCP configuration
+file.
+
 Visual grounding uses a large optional model that is not included in the
 package. Download it only through this explicit setup action:
 
