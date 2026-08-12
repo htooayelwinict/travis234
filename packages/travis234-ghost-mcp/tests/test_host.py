@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import pytest
-
 from travis234_ghost_mcp import host
 from travis234_ghost_mcp.host import (
     PackageIntegrityError,

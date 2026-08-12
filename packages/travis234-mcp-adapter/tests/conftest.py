@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import json
 import asyncio
-from dataclasses import dataclass
-from pathlib import Path
+import json
 import socket
 import sys
+from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 if str(PACKAGE_ROOT) not in sys.path:
@@ -53,10 +52,16 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
+@pytest.fixture(autouse=True)
+def isolated_packaged_server_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    from travis234_mcp_adapter import packaged_servers
+
+    monkeypatch.setattr(packaged_servers, "_REGISTRY", {})
+
+
 @pytest.fixture
 async def mcp_http_server():
     import uvicorn
-
     from fixtures.server import create_server
 
     probe = {"requests": 0, "authorized": False}

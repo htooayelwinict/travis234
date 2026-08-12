@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from conftest import ASSET_ROOT, PACKAGE_ROOT, VENDOR_ROOT
 
 
@@ -21,6 +20,7 @@ def test_adapted_runtime_has_no_external_state_or_resource_fallback(
 ) -> None:
     scanned = [
         *(VENDOR_ROOT / "Sources").rglob("*.swift"),
+        *PACKAGE_ROOT.joinpath("travis234_ghost_mcp").glob("*.py"),
         *ASSET_ROOT.rglob("*.py"),
         ASSET_ROOT / "vision-sidecar" / "ghost-vision",
     ]

@@ -4,6 +4,7 @@ include THIRD_PARTY_NOTICES.md
 include UPSTREAM.json
 include pyproject.toml
 include setup.py
+include extensions/ghost_mcp.py
 recursive-include licenses *
 recursive-include travis234_ghost_mcp *.py *.md *.json ghost-vision requirements.txt .gitkeep
 include vendor/ghost-os/Package.swift

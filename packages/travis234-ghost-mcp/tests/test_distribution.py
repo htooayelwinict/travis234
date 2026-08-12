@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-from email.parser import Parser
-from pathlib import Path
 import stat
 import subprocess
 import tarfile
 import tomllib
 import zipfile
+from email.parser import Parser
+from pathlib import Path
 
 import pytest
-
 from conftest import PACKAGE_ROOT
 
 
@@ -58,6 +57,7 @@ def test_wheel_has_strict_platform_metadata_and_payload(
     )
     assert "travis234_ghost_mcp/assets/GHOST-MCP.md" in names
     assert "travis234_ghost_mcp/assets/vision-sidecar/server.py" in names
+    assert any(name.endswith("/extensions/ghost_mcp.py") for name in names)
     assert any(name.endswith("/UPSTREAM.json") for name in names)
     assert any(name.endswith("/THIRD_PARTY_NOTICES.md") for name in names)
     assert not any("/.build/" in name or "/.git/" in name for name in names)
