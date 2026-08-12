@@ -88,12 +88,12 @@ def _capture_cli_tool_options(
 
 
 @pytest.mark.parametrize(
-    ("flags", "expected_allowed", "expected_additional"),
+    ("flags", "expected_allowed"),
     [
-        (["--mcp"], None, ["mcp"]),
-        (["--no-tools", "--mcp"], ["mcp"], ["mcp"]),
-        (["--tools", "read,bash", "--mcp"], ["read", "bash", "mcp"], ["mcp"]),
-        (["--tools", "mcp"], ["mcp"], None),
+        (["--mcp"], None),
+        (["--no-tools", "--mcp"], ["mcp"]),
+        (["--tools", "read,bash", "--mcp"], ["read", "bash", "mcp"]),
+        (["--tools", "mcp", "--mcp"], ["mcp"]),
     ],
 )
 def test_cli_mcp_flag_resolves_additive_tool_selection(
@@ -101,7 +101,6 @@ def test_cli_mcp_flag_resolves_additive_tool_selection(
     tmp_path: Path,
     flags: list[str],
     expected_allowed: list[str] | None,
-    expected_additional: list[str] | None,
 ) -> None:
     captured = _capture_cli_tool_options(
         monkeypatch,
@@ -121,35 +120,7 @@ def test_cli_mcp_flag_resolves_additive_tool_selection(
     ) == 0
 
     assert captured["allowed_tool_names"] == expected_allowed
-    assert captured["additional_active_tool_names"] == expected_additional
-    assert captured["closed"] is True
-
-
-def test_cli_rejects_generated_mcp_tool_name_before_discovery(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    captured = _capture_cli_tool_options(
-        monkeypatch,
-        known_tools=["read", "bash", "mcp"],
-    )
-
-    with pytest.raises(SystemExit, match="2"):
-        cli.main(
-            [
-                "--cwd",
-                str(tmp_path),
-                "--no-session",
-                "--mode",
-                "print",
-                "--tools",
-                "mcp__fixture__echo",
-                "inspect",
-            ]
-        )
-
-    assert "unknown tool name: mcp__fixture__echo" in capsys.readouterr().err
+    assert captured["additional_active_tool_names"] == ["mcp"]
     assert captured["closed"] is True
 
 

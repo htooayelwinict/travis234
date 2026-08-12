@@ -39,7 +39,6 @@ class ToolDefinition:
     execution_mode: str | None = None
     prepare_arguments: Optional[Callable[[Any], Any]] = None
     source_info: SourceInfo | None = None
-    activation_group: str | None = None
 
 
 def wrap_tool_definition(

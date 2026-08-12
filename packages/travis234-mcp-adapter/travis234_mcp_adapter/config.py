@@ -17,8 +17,6 @@ _SERVER_FIELDS = {
     "headers",
     "lifecycle",
     "requestTimeoutMs",
-    "includeTools",
-    "excludeTools",
 }
 _SENSITIVE_HEADERS = {"authorization", "cookie", "proxy-authorization"}
 _SENSITIVE_ENV_MARKERS = ("API_KEY", "APIKEY", "TOKEN", "SECRET", "PASSWORD", "OAUTH", "CREDENTIAL")
@@ -41,8 +39,6 @@ class ServerConfig:
     url: str | None = None
     headers: Mapping[str, str] = field(default_factory=dict)
     request_timeout_ms: int | None = None
-    include_tools: tuple[str, ...] | None = None
-    exclude_tools: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -63,8 +59,6 @@ class ResolvedServer:
     url: str | None
     headers: Mapping[str, str]
     request_timeout_ms: int | None
-    include_tools: tuple[str, ...] | None = None
-    exclude_tools: tuple[str, ...] = ()
 
     @property
     def transport(self) -> str:
@@ -130,8 +124,6 @@ def resolve_server(server: ServerConfig, environ: Mapping[str, str]) -> Resolved
         url=server.url,
         headers=MappingProxyType(resolved_headers),
         request_timeout_ms=server.request_timeout_ms,
-        include_tools=server.include_tools,
-        exclude_tools=server.exclude_tools,
     )
 
 
@@ -199,16 +191,6 @@ def _parse_server(source_path: Path, name: str, value: object) -> ServerConfig:
         raise _error(source_path, name, "headers", "is only valid for url servers")
     if has_url and (args or cwd is not None or env):
         raise _error(source_path, name, None, "args, cwd, and env are only valid for command servers")
-    include_tools = (
-        _tool_name_filter(source_path, name, "includeTools", value["includeTools"])
-        if "includeTools" in value
-        else None
-    )
-    exclude_tools = (
-        _tool_name_filter(source_path, name, "excludeTools", value["excludeTools"])
-        if "excludeTools" in value
-        else ()
-    )
 
     return ServerConfig(
         name=name,
@@ -220,8 +202,6 @@ def _parse_server(source_path: Path, name: str, value: object) -> ServerConfig:
         url=url if has_url else None,
         headers=MappingProxyType(headers),
         request_timeout_ms=timeout,
-        include_tools=include_tools,
-        exclude_tools=exclude_tools,
     )
 
 
@@ -229,21 +209,6 @@ def _string_sequence(source_path: Path, server: str, field_name: str, value: obj
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise _error(source_path, server, field_name, "must be an array of strings")
     return tuple(value)
-
-
-def _tool_name_filter(
-    source_path: Path,
-    server_name: str,
-    field_name: str,
-    value: object,
-) -> tuple[str, ...]:
-    message = "must be an array of unique non-empty strings"
-    if not isinstance(value, list):
-        raise _error(source_path, server_name, field_name, message)
-    names = tuple(value)
-    if any(not isinstance(name, str) or not name for name in names) or len(set(names)) != len(names):
-        raise _error(source_path, server_name, field_name, message)
-    return names
 
 
 def _string_mapping(source_path: Path, server: str, field_name: str, value: object) -> dict[str, str]:

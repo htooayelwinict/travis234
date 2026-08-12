@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 
 from mcp.server import MCPServer
-from mcp.server.mcpserver.context import Context
 
 
 def echo(text: str) -> str:
@@ -34,23 +33,13 @@ def controlled_error() -> str:
     raise ValueError("controlled fixture failure")
 
 
-async def emit_tools_changed(ctx: Context) -> str:
-    """Emit one deterministic tools-list change notification."""
-    await ctx.notify_tools_changed()
-    return "emitted"
-
-
 def create_server() -> MCPServer:
-    created = MCPServer(
-        "travis234-mcp-adapter-fixture",
-        instructions="Use fixture tools only for deterministic tests.",
-    )
+    created = MCPServer("travis234-mcp-adapter-fixture")
     created.tool()(echo)
     created.tool()(configured_secret_name)
     created.tool()(slow)
     created.tool()(large_output)
     created.tool()(controlled_error)
-    created.tool()(emit_tools_changed)
     return created
 
 

@@ -1,93 +1,133 @@
 # Travis234 MCP Adapter
 
-`travis234-mcp-adapter` 0.2.0 is the optional MCP client extension for Travis234. It uses the official MCP Python SDK v2 (`mcp>=2,<3`) and keeps MCP dependencies outside the core distribution.
+`travis234-mcp-adapter` is an optional Travis234 extension that connects the single `mcp` proxy tool to explicitly configured Model Context Protocol servers. It uses the official MCP Python SDK v2 and keeps MCP dependencies out of the core `travis234` distribution.
 
-Travis234 remains the MCP client. At session start, the adapter discovers authorized configured servers and registers each admitted remote tool as a native Travis definition with its real input schema. It does not make Travis234 an MCP server.
+The adapter is designed for controlled coding-agent use:
 
-## Install and activate
+- one stable Travis tool schema regardless of how many MCP servers are configured;
+- lazy, one-server-at-a-time connections;
+- explicit project trust and tool allowlists;
+- environment-reference enforcement for credential-shaped fields;
+- bounded discovery and result handling; and
+- session-owned cancellation, shutdown, and temporary-file cleanup.
+
+It is an MCP client adapter, not an MCP server and not a general compatibility layer for every MCP client feature.
+
+## Requirements
+
+- Travis234 2.4.3 or newer
+- Python 3.13
+- the command runtime required by each stdio server, such as Node.js for `npx` servers
+- network access for remote servers and for package runners that download on first use
+
+Travis234's npm sandbox image already includes Python, Node.js, and npm. Native installations must provide their own server runtimes.
+
+## Install
 
 ```bash
-travis234 install 'travis234-mcp-adapter==0.2.0'
+travis234 install travis234-mcp-adapter
 ```
 
-Restart Travis234 after the first installation. After an update, restart or run `/reload`.
+Start a new Travis234 process after installation, or use `/reload` if the adapter has not already been imported in the current process. After `/update`, restart Travis234 so Python cannot reuse the previous adapter package from its module cache.
+
+Installing the adapter does not force the `mcp` tool into a turn. Enable it for the current process with `--mcp`; the flag adds MCP to the tools that would otherwise be active and does not modify any MCP configuration.
+
+Launch with the default Travis234 tools plus MCP:
 
 ```bash
-# Default Travis234 tools plus native MCP tools
 travis234 --cwd . --mcp
+```
 
-# Native MCP tools only
+Launch an MCP-only session:
+
+```bash
 travis234 --cwd . --no-tools --mcp
+```
 
-# Explicit built-ins plus native MCP tools
+Or combine MCP with an advanced explicit subset:
+
+```bash
 travis234 --cwd . --tools read,bash --mcp
-
-# Generic MCP-only selector
-travis234 --cwd . --tools mcp
 ```
 
-`--mcp` is additive and process-local. It neither installs the adapter nor edits MCP configuration. `--mcp --exclude-tools mcp` is rejected.
+The generic `--tools mcp` form remains supported as an explicit MCP-only allowlist.
 
-The literal `mcp` definition is a status controller. It accepts exactly an empty object:
+Manage the separately installed package with the normal Travis234 package commands:
 
-```json
-{}
+```bash
+travis234 list
+travis234 update travis234-mcp-adapter
+travis234 remove travis234-mcp-adapter
 ```
 
-It reports configured and connected servers, registered native names, bounded diagnostics, and ignored untrusted project sources. It has no list, search, describe, tool, or args proxy fields and status does not connect when the family is inactive.
+For a reproducible installation, pin the adapter source:
 
-## Native names
-
-The preferred generated form is:
-
-```text
-mcp__<configured-server-name>__<remote-tool-name>
+```bash
+travis234 install 'travis234-mcp-adapter==0.1.1'
 ```
 
-The configured key—not server-reported metadata—owns the server segment. Safe names use `[A-Za-z0-9_-]` and are at most 64 characters. Unsafe or long names are normalized and receive a deterministic hash suffix. Examples:
+## Configuration
 
-```text
-mcp__ghost-os__ghost_context
-mcp__ghost-os__ghost_screenshot
-mcp__filesystem__read_text_file
-```
-
-Generated names are discovered after startup CLI validation. `--tools mcp__server__tool` is therefore intentionally unsupported. Select `mcp`, then use `includeTools` and `excludeTools` for startup filtering. Interactive selection may choose concrete native names after discovery.
-
-## Configuration and trust
-
-The adapter reads `mcpServers` from four files in increasing precedence:
+The adapter reads these files from lowest to highest precedence:
 
 1. `~/.config/mcp/mcp.json`
 2. `~/.travis234/agent/mcp.json`
 3. project `.mcp.json`
 4. project `.travis234/mcp.json`
 
-Project files are ignored until that project is trusted. A higher-precedence server entry replaces the complete lower-precedence entry; fields are not merged. The adapter never writes these files and introduces no alternate Travis234 state path.
+A higher-precedence server definition replaces the whole lower-precedence definition. Fields are not merged. Project files are ignored until the Travis project is trusted; after `/trust`, use `/reload`. The adapter never reads `~/.pi` and never writes these files.
 
-### stdio
+Each file has this shape:
 
 ```json
 {
   "mcpServers": {
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/absolute/allowed/path"],
-      "cwd": "/absolute/working/directory",
-      "env": {
-        "SERVICE_TOKEN": "${SERVICE_TOKEN}",
-        "LOG_LEVEL": "warning"
-      },
-      "requestTimeoutMs": 30000,
-      "lifecycle": "lazy",
-      "includeTools": ["list_allowed_directories", "read_text_file"],
-      "excludeTools": ["write_file"]
+    "server-name": {
+      "command": "server-command"
     }
   }
 }
 ```
 
-### Streamable HTTP
+Server names must be non-empty strings. Configuration is strict: unknown top-level or server fields are errors rather than silently ignored settings.
+
+Stdio example:
+
+```json
+{
+  "mcpServers": {
+    "local-tools": {
+      "command": "example-mcp",
+      "args": ["--stdio"],
+      "cwd": "/optional/path",
+      "env": {
+        "SERVICE_TOKEN": "${SERVICE_TOKEN}",
+        "LOG_LEVEL": "info"
+      },
+      "requestTimeoutMs": 1800000
+    }
+  }
+}
+```
+
+Streamable HTTP example:
+
+```json
+{
+  "mcpServers": {
+    "remote-tools": {
+      "url": "https://example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer $env:REMOTE_TOKEN"
+      }
+    }
+  }
+}
+```
+
+### Public server recipes
+
+Context7 over Streamable HTTP:
 
 ```json
 {
@@ -95,75 +135,191 @@ Project files are ignored until that project is trusted. A higher-precedence ser
     "context7": {
       "url": "https://mcp.context7.com/mcp",
       "headers": {
-        "Authorization": "Bearer ${CONTEXT7_TOKEN}"
-      },
-      "requestTimeoutMs": 30000
+        "CONTEXT7_API_KEY": "$env:CONTEXT7_API_KEY"
+      }
     }
   }
 }
 ```
 
-Each entry must specify exactly one non-empty `command` or `url`. `args`, `cwd`, and `env` are stdio-only; `headers` are HTTP-only. The only accepted lifecycle declaration is `"lazy"`.
+The Context7 API key is optional at the service level but recommended for higher limits. Export it before starting Travis234 if the header is present. Remove the entire `headers` object for anonymous access; do not leave a reference to an unset variable.
 
-`includeTools`, when present, is an exact-name allowlist. An explicit empty array admits no tools. `excludeTools` is applied afterward and wins. Both fields require arrays of unique non-empty strings. Globs, regular expressions, and partial matching are not supported. Missing included names and redundant exclusions appear only as bounded diagnostics.
+Context7 over stdio:
 
-## Credentials
+```json
+{
+  "mcpServers": {
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"]
+    }
+  }
+}
+```
 
-Secrets remain in the process environment. Values may use `${NAME}` interpolation or exact `$env:NAME`. Expansion is non-recursive and applies only to `env` and `headers` values. Sensitive stdio environment keys and the `Authorization`, `Cookie`, and `Proxy-Authorization` headers must use an environment reference; literal secrets are rejected.
+Official filesystem server with one deliberately narrow allowed root:
 
-The adapter does not load `.env`, serialize resolved credentials, place them in tool details, or print them. The npm launcher can forward only an explicitly selected file through its existing `--dotenv /path/to/.env` boundary.
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/absolute/path/to/allowed-workspace"
+      ],
+      "lifecycle": "lazy"
+    }
+  }
+}
+```
 
-## Discovery and context bounds
+The filesystem server exposes write-capable tools. Never grant it a home directory, filesystem root, credential directory, or broader tree than the task requires. Pin third-party npm package versions when repeatable behavior matters.
 
-Native exposure is deterministic and bounded after configuration filters:
+On Windows, stdio servers launched through npm normally use `"command": "cmd"` and prepend `"/c", "npx"` to `args`.
 
-- 64 tools per server and 128 per session;
-- 64 KiB for one serialized input schema;
-- 256 KiB of schemas per server and 512 KiB per session;
-- 4 KiB UTF-8 descriptions per tool;
-- 100 pagination pages and 10,000 raw tools as protocol guards;
-- four concurrent server discoveries and a 30-second total discovery phase;
-- 8 KiB initialization guidance per server and 32 KiB per session.
+### Server field reference
 
-Invalid individual schemas are skipped. A server exceeding its accepted tool or schema budget is rejected as a whole. Session admission processes configured names lexicographically and never truncates a server to an arbitrary prefix. Name collisions never overwrite another Travis or extension tool.
+| Field | Transport | Meaning |
+|---|---|---|
+| `command` | stdio | Non-empty executable name or path. Mutually exclusive with `url`. |
+| `args` | stdio | Array of literal command arguments. Defaults to an empty array. |
+| `cwd` | stdio | Optional child working directory. |
+| `env` | stdio | String-to-string child environment additions with supported variable expansion. |
+| `url` | HTTP | Non-empty Streamable HTTP endpoint. Mutually exclusive with `command`. |
+| `headers` | HTTP | String-to-string request headers with supported variable expansion. |
+| `lifecycle` | both | Optional compatibility declaration. Only `lazy` is accepted, and it is a no-op. |
+| `requestTimeoutMs` | both | Optional integer timeout for initialize, discovery, and tool-call operations. |
 
-Server instructions are included only for servers with admitted native tools. Each block is labeled as MCP server-provided operational guidance, has control characters sanitized, and cannot override system, user, project, trust, tool-policy, or credential instructions.
+Each server must specify exactly one non-empty `command` or `url`. The MVP supports stdio and Streamable HTTP only. Legacy SSE, OAuth, prompts, resource discovery, sampling, elicitation, scripting, direct per-server Travis tools, and MCP Apps/UI are not supported.
 
-Tool-list change notifications are coalesced. Catalogs reconcile only at the next safe `before_agent_start` boundary, never during an active tool batch. Catalogs and instructions live in session memory and are rediscovered after reload or process restart.
+For compatibility with shared Pi-style files, a server may declare `"lifecycle": "lazy"`; this is a no-op because the adapter is always lazy. Eager, keep-alive, and other lifecycle modes remain unsupported and are rejected.
 
-## Calls, concurrency, and results
+## Secrets and consent
 
-Every generated closure captures the exact configured server and original remote tool name. Calls are at-most-once. A timeout, cancellation, or uncertain transport completion discards the affected connection and never automatically replays the call. A later explicit model call may reconnect.
+Secret values stay in the Travis234 process environment. Use `${SERVICE_TOKEN}` inside a value or exact `$env:SERVICE_TOKEN`; expansion happens only when that server connects and is non-recursive. The adapter does not load `.env` files. Native users export variables before launch. Container users may use the existing explicit `--dotenv /path/to/file` launcher boundary, which supplies process environment without changing adapter behavior.
 
-Execution is sequential by default. Only MCP `readOnlyHint: true` selects Travis234's existing `parallel` execution mode, which remains subject to the core bounded parallel coordinator.
+Literal values are allowed for non-secret settings. Token-, secret-, password-, OAuth-, credential-, and API-key-shaped stdio environment keys require references. `Authorization`, `Cookie`, and `Proxy-Authorization` headers also require references. Resolved values are not written to configuration, status, errors, tool details, or session JSONL.
 
-`requestTimeoutMs` applies to initialize, discovery, and tool calls for that server. It does not modify provider, process, subagent, or workflow timeouts. A smaller positive per-server timeout wins within the 30-second discovery phase.
+Installing and activating this trusted extension, listing a server in an authorized configuration file, and leaving the `mcp` tool enabled together authorize calls to that server. The MVP does not add a second per-call confirmation dialog.
 
-Result conversion preserves text, supported images, structured content, resource summaries, MCP error state, and adapter-owned identity details. Bounds are:
+Treat an MCP server like any other executable or network integration:
 
-- 50 KiB or 2,000 text lines inline, with a `0600` session-owned spill file beyond either limit;
-- eight accepted images;
-- 10 MiB decoded bytes per image and 20 MiB per result;
-- PNG, JPEG, GIF, and WebP only.
+1. review its publisher, source, package name, and requested access;
+2. restrict filesystem and network scope;
+3. keep credentials in the process environment;
+4. pin versions where supply-chain reproducibility matters; and
+5. remove or disable servers that are not needed for the current task.
 
-Malformed, unsupported, oversized, and excess images become bounded placeholders without exposing base64 data. Spill files are deleted on reload and shutdown.
+## One proxy tool
 
-## Security model
+The proxy connects lazily and always targets one explicit server:
 
-Configured servers are operator-authorized executables or network integrations. Review packages, pin versions when reproducibility matters, restrict filesystem roots, and provide the minimum credentials. Project configuration remains trust-gated. The adapter shapes server and transport failures without echoing arguments, headers, environment values, or raw exception messages.
+```json
+{}
+{"server":"local-tools"}
+{"server":"local-tools","search":"issue"}
+{"server":"local-tools","describe":"search_issues"}
+{"server":"local-tools","tool":"search_issues","args":{"query":"open"}}
+```
 
-The supported transports are stdio and Streamable HTTP. This release does not implement legacy SSE, MCP OAuth, prompts, resource discovery, sampling, elicitation, scripting, Apps/UI, or background workflow scheduling.
+- `{}` reports configured servers without connecting.
+- `server` alone lists tools.
+- `search` returns at most 20 deterministic matches.
+- `describe` returns one tool's full input schema.
+- `tool` calls the original MCP tool name once; `args` defaults to `{}`.
 
-## Migration from 0.1.x
+Typical TUI workflow:
 
-Version 0.2.0 replaces the single list/search/describe/call proxy with native tool definitions. There is deliberately no proxy compatibility alias. Use `mcp({})` for status and call generated tools directly. Existing authorized configuration paths, trust behavior, environment references, and transports remain unchanged.
+1. Ask Travis234 to report MCP status. This uses `{}` and does not connect.
+2. Ask it to list one named server. This connects that server and returns compact tool summaries.
+3. Search when a server has many tools.
+4. Describe the chosen tool before calling it when the input shape is unfamiliar.
+5. Call the tool with explicit arguments.
+
+Example prompts:
+
+```text
+Use MCP status and tell me which servers are configured. Do not connect yet.
+Use MCP on context7. Find the official Python MCP SDK and explain stdio_client.
+Use MCP on filesystem. List allowed directories before reading anything.
+Use MCP on filesystem to read README.md inside the allowed workspace.
+```
+
+For direct automation, the same proxy object is supplied by the model as the `mcp` tool arguments. There are no generated `mcp__server__tool` names and no implicit cross-server dispatch.
+
+The adapter does not fan out across servers and does not retry failed calls. `requestTimeoutMs` is optional and applies only to MCP initialize, discovery, and call operations. It does not change model-call, Travis tool, process, or subagent timeouts. Omitted or non-positive values retain official SDK transport defaults.
+
+Catalog discovery rejects repeated cursors, more than 100 pages, or more than 10,000 tools. Aggregate model-visible text is limited to 50 KiB and 2,000 lines. Larger results receive a compact preview and a random mode-`0600` temporary spill path usable with ordinary Travis `read` or `grep`; session shutdown removes adapter-owned spills.
+
+## Results, errors, and cancellation
+
+Text, images, audio, embedded resources, and structured tool output are converted into Travis tool-result blocks. Unsupported content is represented by bounded metadata rather than passed through as an arbitrary object. A server's MCP `isError` result becomes a Travis tool error while preserving bounded server-provided text.
+
+Configuration and connection failures identify the server and safe error class without including resolved headers or environment values. One broken server does not prevent another configured server from connecting.
+
+The adapter does not retry calls because it cannot know whether a remote action is safe to repeat. User cancellation, `/reload`, session replacement, and `/exit` cancel adapter-owned work and close connected clients. Stdio children and spill files are owned by the session and cleaned during shutdown.
+
+## Updating configuration
+
+- Global configuration changes: use `/reload` or start a new process.
+- Project configuration changes: trust the project first, then use `/reload`.
+- First adapter installation: start a new process, or use `/reload` before the package has been imported.
+- Adapter package update: restart Travis234 to guarantee the new Python modules are loaded.
+
+Ordinary startup never installs or updates packages automatically. `--offline` allows already-installed local resources but blocks network package acquisition and server operations that require the network.
 
 ## Troubleshooting
 
-- If `--mcp` says the adapter is missing, run the pinned install command and restart.
-- If a project server is absent, approve the project and run `/reload`.
-- If a native tool is absent, inspect `mcp({})` for filter, schema, collision, budget, connection, or discovery diagnostics.
-- If a call times out, set a justified positive `requestTimeoutMs`; do not add automatic side-effect retries.
-- If Ghost desktop actions fail while its tools register, run `ghost doctor`. Accessibility and Screen Recording permission checks are external to MCP protocol discovery.
+### The model cannot see `mcp`
 
-References: [MCP specification](https://modelcontextprotocol.io/specification), [official Python SDK](https://github.com/modelcontextprotocol/python-sdk).
+Installation registers the extension but does not override the active-tool policy. Start Travis234 with `--mcp`, or use `--no-tools --mcp` for an MCP-only session. Check `travis234 list` to confirm the adapter package is installed, then restart or `/reload` as described above.
+
+### A project server is missing
+
+Project `.mcp.json` and `.travis234/mcp.json` files are ignored until the project is trusted. Use `/trust`, approve the project, then `/reload`. Global servers remain available independently.
+
+### A server remains disconnected
+
+Disconnected is the normal lazy state. Status alone never starts a server. Name the server to list, search, describe, or call its tools. For stdio, verify the command is installed in the same native or container environment that runs Travis234.
+
+### Configuration reports a missing environment variable
+
+Every referenced variable must exist and be non-empty when that server connects. Export it before starting Travis234, or pass an explicitly selected dotenv file through the existing launcher boundary. Do not replace the reference with a literal credential.
+
+### An npm server works in the host but not the sandbox
+
+The server command runs inside the sandbox. Ensure its runtime is present there, use container-visible filesystem paths, and use `host.docker.internal` rather than `localhost` for a service running on the Docker host.
+
+### A result points to a spill file
+
+The result exceeded the inline safety limit. Use an enabled Travis `read` or `grep` tool on the reported mode-`0600` path during the same session. The adapter removes its spill files at session shutdown.
+
+### A call times out
+
+Set `requestTimeoutMs` on that server if its MCP operations legitimately need longer. This setting does not extend the provider model call or any Travis process/subagent timeout. Avoid automatic retries for tools with side effects.
+
+## Supported surface
+
+| Capability | Status |
+|---|---|
+| stdio client transport | Supported |
+| Streamable HTTP client transport | Supported |
+| Lazy per-server connection | Supported |
+| Tool listing, search, schema description, and calls | Supported |
+| Text, media, embedded-resource, and structured results | Supported with Travis conversion and bounds |
+| Legacy SSE | Not supported |
+| MCP OAuth | Not supported |
+| MCP prompts and resource discovery | Not supported |
+| Sampling and elicitation | Not supported |
+| MCP Apps/UI | Not supported |
+| Eager or keep-alive lifecycle | Not supported |
+
+## Further reading
+
+- [Travis234 main guide](https://github.com/htooayelwinict/travis234#optional-mcp-adapter)
+- [Model Context Protocol](https://modelcontextprotocol.io/)
+- [Official MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)
+- [Official filesystem server](https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem)
+- [Context7 MCP server](https://github.com/upstash/context7)

@@ -18,54 +18,14 @@ from travis.ai.types import ImageContent, TextContent
 from travis234_mcp_adapter.output_guard import OutputGuard, SpillRegistry
 
 
-MAX_IMAGE_BLOCKS = 8
-MAX_IMAGE_BYTES = 10 * 1024 * 1024
-MAX_RESULT_IMAGE_BYTES = 20 * 1024 * 1024
-SUPPORTED_IMAGE_MIME_TYPES = frozenset(
-    {"image/png", "image/jpeg", "image/gif", "image/webp"}
-)
-
-
 def convert_call_result(result: CallToolResult, spills: SpillRegistry) -> AgentToolResult:
     converted: list[TextContent | ImageContent] = []
     source_texts: list[str] = []
-    image_blocks = 0
-    accepted_images = 0
-    rejected_images = 0
-    aggregate_image_bytes = 0
-    aggregate_overflow = 0
     for block in result.content:
         if isinstance(block, McpTextContent):
             source_texts.append(block.text)
             converted.append(TextContent(text=block.text))
         elif isinstance(block, McpImageContent):
-            image_blocks += 1
-            if block.mime_type not in SUPPORTED_IMAGE_MIME_TYPES:
-                rejected_images += 1
-                converted.append(
-                    TextContent(text=f"[MCP image rejected: unsupported MIME type {block.mime_type}]")
-                )
-                continue
-            try:
-                decoded = base64.b64decode(block.data, validate=True)
-            except (ValueError, TypeError):
-                rejected_images += 1
-                converted.append(TextContent(text="[MCP image rejected: malformed base64 data]"))
-                continue
-            image_size = len(decoded)
-            if image_size > MAX_IMAGE_BYTES:
-                rejected_images += 1
-                converted.append(TextContent(text="[MCP image rejected: decoded size exceeds 10 MiB]"))
-                continue
-            if (
-                accepted_images >= MAX_IMAGE_BLOCKS
-                or aggregate_image_bytes + image_size > MAX_RESULT_IMAGE_BYTES
-            ):
-                rejected_images += 1
-                aggregate_overflow += 1
-                continue
-            accepted_images += 1
-            aggregate_image_bytes += image_size
             converted.append(ImageContent(data=block.data, mime_type=block.mime_type))
         elif isinstance(block, AudioContent):
             converted.append(
@@ -98,16 +58,6 @@ def convert_call_result(result: CallToolResult, spills: SpillRegistry) -> AgentT
                 converted.append(TextContent(text=f"[Unsupported MCP resource: {type(resource).__name__}]"))
         else:
             converted.append(TextContent(text=f"[Unsupported MCP content: {type(block).__name__}]"))
-
-    if aggregate_overflow:
-        converted.append(
-            TextContent(
-                text=(
-                    f"[MCP image limit reached: {aggregate_overflow} additional image "
-                    f"block{'s' if aggregate_overflow != 1 else ''} omitted]"
-                )
-            )
-        )
 
     if result.structured_content is not None and not _has_equivalent_text(
         source_texts,
@@ -149,10 +99,6 @@ def convert_call_result(result: CallToolResult, spills: SpillRegistry) -> AgentT
     if guarded.spill_path is not None:
         marker["spillPath"] = str(guarded.spill_path)
         marker["truncatedBy"] = guarded.truncated_by
-    if image_blocks:
-        marker["acceptedImages"] = accepted_images
-        marker["rejectedImages"] = rejected_images
-        marker["imageBytes"] = aggregate_image_bytes
     return AgentToolResult(
         content=converted,
         details={"travis234Mcp": marker},
