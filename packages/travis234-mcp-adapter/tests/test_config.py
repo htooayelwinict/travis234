@@ -57,6 +57,65 @@ def test_shared_config_accepts_explicit_lazy_lifecycle(config_tree: ConfigTree) 
     assert loaded.servers["fixture"].command == "project-server"
 
 
+def test_server_tool_filters_are_exact_ordered_and_immutable(config_tree: ConfigTree) -> None:
+    config_tree.write_global_shared(
+        "large",
+        {
+            "command": "fixture",
+            "includeTools": ["search", "read_item"],
+            "excludeTools": ["delete_item"],
+        },
+    )
+
+    loaded = load_config(config_tree.cwd, config_tree.home, True)
+    server = loaded.servers["large"]
+    resolved = resolve_server(server, {})
+
+    assert server.include_tools == ("search", "read_item")
+    assert server.exclude_tools == ("delete_item",)
+    assert resolved.include_tools == ("search", "read_item")
+    assert resolved.exclude_tools == ("delete_item",)
+
+
+def test_server_tool_filter_omission_differs_from_explicit_empty_include(
+    config_tree: ConfigTree,
+) -> None:
+    config_tree.write_global_shared("omitted", {"command": "fixture"})
+    config_tree.write_global_travis(
+        "empty",
+        {"command": "fixture", "includeTools": [], "excludeTools": []},
+    )
+
+    loaded = load_config(config_tree.cwd, config_tree.home, True)
+
+    assert loaded.servers["omitted"].include_tools is None
+    assert loaded.servers["omitted"].exclude_tools == ()
+    assert loaded.servers["empty"].include_tools == ()
+    assert loaded.servers["empty"].exclude_tools == ()
+
+
+@pytest.mark.parametrize("field_name", ["includeTools", "excludeTools"])
+@pytest.mark.parametrize(
+    "invalid_value",
+    [None, "search", [1], [""], ["read", "read"]],
+)
+def test_server_tool_filters_reject_invalid_values(
+    config_tree: ConfigTree,
+    field_name: str,
+    invalid_value: object,
+) -> None:
+    config_tree.write_global_shared(
+        "fixture",
+        {"command": "fixture", field_name: invalid_value},
+    )
+
+    with pytest.raises(ConfigError) as caught:
+        load_config(config_tree.cwd, config_tree.home, True)
+
+    assert field_name in str(caught.value)
+    assert "must be an array of unique non-empty strings" in str(caught.value)
+
+
 @pytest.mark.parametrize(
     ("payload", "message"),
     [
