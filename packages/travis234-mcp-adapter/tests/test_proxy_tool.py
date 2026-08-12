@@ -59,7 +59,38 @@ def _state(connected: FakeConnected | None = None):
         catalogs={},
         spills=SpillRegistry(),
         generation=1,
+        shadowed_configured_names=(),
     )
+
+
+@pytest.mark.anyio
+async def test_status_reports_shadowed_external_packaged_server_without_connecting() -> None:
+    state = _state()
+    state.config = LoadedConfig(
+        servers={
+            "ghost-os": ServerConfig(
+                name="ghost-os",
+                source_path=Path("/payload/bin/ghost"),
+                command="/payload/bin/ghost",
+                args=("mcp",),
+            )
+        },
+        sources=(Path("/home/test/.travis234/agent/mcp.json"),),
+        ignored_project_sources=(),
+    )
+    state.shadowed_configured_names = ("ghost-os",)
+
+    result = await dispatch_proxy(state, {}, None)
+
+    assert state.runtime.connects == []
+    assert result.content[0].text == (
+        "MCP adapter status\n"
+        "- ghost-os: disconnected\n"
+        "- ignored external configuration for packaged server: ghost-os"
+    )
+    assert result.details["travis234Mcp"]["shadowedConfiguredServers"] == [
+        "ghost-os"
+    ]
 
 
 @pytest.mark.anyio

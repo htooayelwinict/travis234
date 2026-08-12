@@ -4,9 +4,11 @@ from dataclasses import dataclass, field
 import os
 from pathlib import Path
 from typing import Any
+from weakref import WeakKeyDictionary
 
 from travis234_mcp_adapter.config import ConfigError, LoadedConfig, load_config
 from travis234_mcp_adapter.output_guard import SpillRegistry
+from travis234_mcp_adapter.packaged_servers import merge_packaged_servers
 from travis234_mcp_adapter.proxy_tool import create_proxy_definition
 from travis234_mcp_adapter.runtime import McpRuntime
 
@@ -24,6 +26,7 @@ class ExtensionState:
     runtime: McpRuntime | None = None
     catalogs: dict[str, tuple[Any, ...]] = field(default_factory=dict)
     spills: SpillRegistry = field(default_factory=SpillRegistry)
+    shadowed_configured_names: tuple[str, ...] = ()
 
     async def on_session_start(self, _event, ctx) -> None:
         self.generation += 1
@@ -33,15 +36,19 @@ class ExtensionState:
         self.config = _empty_config()
         self.config_error = None
         self.runtime = None
+        self.shadowed_configured_names = ()
         self.catalogs.clear()
         self.spills.cleanup()
         self.spills = SpillRegistry()
         try:
-            self.config = load_config(
+            loaded = load_config(
                 Path(ctx.cwd),
                 Path.home(),
                 ctx.is_project_trusted(),
             )
+            merged = merge_packaged_servers(loaded)
+            self.config = merged.config
+            self.shadowed_configured_names = merged.shadowed_configured_names
         except ConfigError as error:
             self.config_error = _bounded_error(str(error))
         else:
@@ -55,6 +62,7 @@ class ExtensionState:
         self.config = _empty_config()
         self.config_error = None
         self.runtime = None
+        self.shadowed_configured_names = ()
         self.catalogs.clear()
         self.spills.cleanup()
 
@@ -68,8 +76,15 @@ class ExtensionState:
         return {"isError": marker["isError"]}
 
 
+_STATES: WeakKeyDictionary[object, ExtensionState] = WeakKeyDictionary()
+
+
 def extension(travis) -> None:
+    runner = getattr(travis, "_runner", travis)
+    if runner in _STATES:
+        return
     state = ExtensionState()
+    _STATES[runner] = state
     travis.register_tool(create_proxy_definition(state))
     travis.on("session_start", state.on_session_start)
     travis.on("session_shutdown", state.on_session_shutdown)

@@ -11,8 +11,29 @@ from travis234_mcp_adapter.config import (
     load_config,
     resolve_server,
 )
+from travis234_mcp_adapter import packaged_servers
+from travis234_mcp_adapter.packaged_servers import (
+    PackagedServer,
+    merge_packaged_servers,
+    register_packaged_server,
+)
 
 from conftest import ConfigTree
+
+
+def _packaged_server(tmp_path: Path, name: str = "ghost-os") -> PackagedServer:
+    root = tmp_path / "payload"
+    command = root / "bin" / "ghost"
+    command.parent.mkdir(parents=True, exist_ok=True)
+    command.write_text("binary", encoding="utf-8")
+    command.chmod(0o755)
+    return PackagedServer(
+        name=name,
+        package_root=root,
+        command=command,
+        args=("mcp",),
+        request_timeout_ms=1_800_000,
+    )
 
 
 def test_project_source_replaces_global_only_when_trusted(config_tree: ConfigTree) -> None:
@@ -176,3 +197,44 @@ def test_sensitive_stdio_environment_rejects_literal_but_allows_non_secret(tmp_p
         resolve_server(configured, {})
 
     assert "literal-secret" not in str(caught.value)
+
+
+def test_packaged_server_shadows_same_named_file_config_without_rewriting(
+    config_tree: ConfigTree,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(packaged_servers, "_REGISTRY", {})
+    configured = config_tree.write_global_travis(
+        "ghost-os",
+        {"command": "/tmp/external-ghost"},
+    )
+    loaded = load_config(config_tree.cwd, config_tree.home, False)
+    descriptor = _packaged_server(config_tree.home)
+    register_packaged_server(descriptor)
+
+    merged = merge_packaged_servers(loaded)
+
+    assert merged.config.servers["ghost-os"].command == str(descriptor.command)
+    assert merged.config.servers["ghost-os"].args == ("mcp",)
+    assert merged.config.servers["ghost-os"].request_timeout_ms == 1_800_000
+    assert merged.shadowed_configured_names == ("ghost-os",)
+    assert merged.config.sources == loaded.sources
+    assert "external-ghost" in configured.read_text(encoding="utf-8")
+
+
+def test_packaged_server_preserves_unrelated_config_and_trust_metadata(
+    config_tree: ConfigTree,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(packaged_servers, "_REGISTRY", {})
+    config_tree.write_global_shared("filesystem", {"command": "filesystem-server"})
+    config_tree.write_project_shared("ignored", {"command": "project-server"})
+    loaded = load_config(config_tree.cwd, config_tree.home, False)
+    register_packaged_server(_packaged_server(config_tree.home))
+
+    merged = merge_packaged_servers(loaded)
+
+    assert tuple(merged.config.servers) == ("filesystem", "ghost-os")
+    assert merged.config.servers["filesystem"] == loaded.servers["filesystem"]
+    assert merged.config.ignored_project_sources == loaded.ignored_project_sources
+    assert merged.shadowed_configured_names == ()

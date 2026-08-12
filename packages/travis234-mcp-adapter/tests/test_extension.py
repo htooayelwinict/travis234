@@ -10,8 +10,10 @@ import psutil
 import pytest
 
 from travis.coding_agent.extensions import ExtensionRunner
+from travis234_mcp_adapter import packaged_servers
 from travis234_mcp_adapter.extension import extension
 from travis234_mcp_adapter.output_guard import MAX_INLINE_BYTES
+from travis234_mcp_adapter.packaged_servers import PackagedServer, register_packaged_server
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "server.py"
@@ -47,6 +49,58 @@ def test_factory_registers_one_proxy_without_io(
     assert registered[0].definition.name == "mcp"
     assert registered[0].definition.parameters == EXPECTED_SCHEMA
     assert runner.get_registered_command("mcp-package-probe") is None
+
+
+def test_adapter_extension_is_idempotent_across_duplicate_distribution_paths(
+    tmp_path: Path,
+) -> None:
+    runner = ExtensionRunner(cwd=str(tmp_path))
+
+    extension(runner.create_extension_api("/one/extensions/mcp_adapter.py"))
+    extension(runner.create_extension_api("/two/extensions/mcp_adapter.py"))
+
+    assert [item.definition.name for item in runner.get_all_registered_tools()] == [
+        "mcp"
+    ]
+    assert len(runner._handlers["session_start"]) == 1
+    assert len(runner._handlers["session_shutdown"]) == 1
+    assert len(runner._handlers["tool_result"]) == 1
+
+
+@pytest.mark.anyio
+async def test_session_admits_packaged_server_without_mcp_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "project"
+    binary = tmp_path / "package" / "bin" / "ghost"
+    home.mkdir()
+    project.mkdir()
+    binary.parent.mkdir(parents=True)
+    binary.write_text("binary", encoding="utf-8")
+    binary.chmod(0o755)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(packaged_servers, "_REGISTRY", {})
+    register_packaged_server(
+        PackagedServer(
+            name="ghost-os",
+            package_root=binary.parents[1],
+            command=binary,
+            args=("mcp",),
+        )
+    )
+    runner = ExtensionRunner(cwd=str(project))
+    runner.bind_core(context_actions={"is_project_trusted": lambda: False})
+    extension(runner)
+
+    await runner.async_emit({"type": "session_start"})
+    definition = runner.get_all_registered_tools()[0].definition
+    result = await definition.execute("status", {}, None, None, None)
+
+    assert result.content[0].text == "MCP adapter status\n- ghost-os: disconnected"
+    assert not list(home.rglob("mcp.json"))
+    await runner.async_emit({"type": "session_shutdown"})
 
 
 @pytest.mark.anyio

@@ -41,6 +41,7 @@ class ProxyState(Protocol):
     catalogs: dict[str, tuple[Tool, ...]]
     spills: SpillRegistry
     generation: int
+    shadowed_configured_names: tuple[str, ...]
 
 
 class StaleMcpGenerationError(RuntimeError):
@@ -196,7 +197,12 @@ def _status_result(state: ProxyState) -> AgentToolResult:
     if ignored_count:
         noun = "file" if ignored_count == 1 else "files"
         lines.append(f"- {ignored_count} project configuration {noun} ignored until trust and reload")
-    elif not server_details:
+    shadowed_names = tuple(getattr(state, "shadowed_configured_names", ()))
+    lines.extend(
+        f"- ignored external configuration for packaged server: {name}"
+        for name in shadowed_names
+    )
+    if not ignored_count and not server_details and not shadowed_names:
         lines.append("- no configured servers")
     return _adapter_result(
         "\n".join(lines),
@@ -204,6 +210,7 @@ def _status_result(state: ProxyState) -> AgentToolResult:
         is_error=False,
         servers=server_details,
         ignored_project_sources=ignored_count,
+        shadowed_configured_servers=list(shadowed_names),
     )
 
 
@@ -291,6 +298,7 @@ def _adapter_result(
     server: str | None = None,
     servers: list[dict[str, str]] | None = None,
     ignored_project_sources: int | None = None,
+    shadowed_configured_servers: list[str] | None = None,
 ) -> AgentToolResult:
     marker: dict[str, object] = {"operation": operation}
     if server is not None:
@@ -299,6 +307,8 @@ def _adapter_result(
         marker["servers"] = servers
     if ignored_project_sources is not None:
         marker["ignoredProjectSources"] = ignored_project_sources
+    if shadowed_configured_servers:
+        marker["shadowedConfiguredServers"] = shadowed_configured_servers
     marker["isError"] = is_error
     return AgentToolResult(
         content=[TextContent(text=text)],
