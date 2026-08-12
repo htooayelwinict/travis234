@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -24,6 +26,7 @@ def test_ghost_catalog_registers_29_native_tools(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    initial_pids = _ghost_pids()
     home = tmp_path / "home"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -63,6 +66,36 @@ def test_ghost_catalog_registers_29_native_tools(
     assert active_names == ["mcp", *native_names]
     assert all(name == "mcp" or name.startswith("mcp__ghost-os__") for name in active_names)
 
+    ghost_pids = _ghost_pids() - initial_pids
+    assert len(ghost_pids) == 1
+
+    recipes = session.get_tool_definition("mcp__ghost-os__ghost_recipes")
+    assert recipes is not None
+    result = asyncio.run(recipes.execute("recipes", {}, None, None, None))
+    assert result.details["travis234Mcp"] == {
+        "operation": "call",
+        "isError": False,
+        "hasStructuredContent": False,
+        "spilled": False,
+        "visibleName": "mcp__ghost-os__ghost_recipes",
+        "server": "ghost-os",
+        "remoteName": "ghost_recipes",
+    }
+
     status = session.get_tool_definition("mcp").execute("status", {}, None, None, None)
     assert "Native MCP tools (29)" in status.content[0].text
     asyncio.run(runner.async_emit({"type": "session_shutdown"}))
+    deadline = time.monotonic() + 5
+    while ghost_pids & _ghost_pids() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not ghost_pids & _ghost_pids()
+
+
+def _ghost_pids() -> set[int]:
+    result = subprocess.run(
+        ["pgrep", "-f", f"{GHOST} mcp"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return {int(line) for line in result.stdout.splitlines() if line.isdigit()}
