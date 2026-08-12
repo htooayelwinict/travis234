@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Modified by Travis234 from Ghost OS revision 991aa4831295aaff6beef04cc809d0f0b53dc024.
 """
 Ghost OS Vision Sidecar — HTTP server for VLM grounding and element detection.
 
@@ -19,9 +20,8 @@ The server uses Python's built-in http.server to minimize dependencies.
 Models are loaded lazily on first request and kept warm in memory.
 
 Usage:
-  python3 server.py                           # Default: port 9876, auto-detect model
+  python3 server.py                           # Default: port 9876
   python3 server.py --port 9877               # Custom port
-  python3 server.py --model-path /path/to/model  # Explicit model path
   python3 server.py --idle-timeout 600        # Auto-exit after 10 min idle (default)
   python3 server.py --health-check            # Test model loading, then exit
   python3 server.py --version                 # Print version
@@ -54,46 +54,9 @@ IDLE_TIMEOUT = 600  # seconds (0 = no timeout)
 
 # ── Model Path Resolution ─────────────────────────────────────────
 
-def resolve_model_path(explicit_path=None):
-    """
-    Find the ShowUI-2B model in order of priority:
-      1. Explicit --model-path argument
-      2. /opt/homebrew/share/ghost-os/models/ShowUI-2B/ (Homebrew install)
-      3. ~/.ghost-os/models/ShowUI-2B/ (user-local install)
-      4. ~/.shadow/models/llm/ShowUI-2B-bf16-8bit/ (legacy Shadow path)
-
-    Returns the first path that exists and contains model.safetensors,
-    or the first candidate path (for error messages) if none found.
-    """
-    candidates = []
-
-    if explicit_path:
-        candidates.append(explicit_path)
-
-    candidates.extend([
-        "/opt/homebrew/share/ghost-os/models/ShowUI-2B",
-        str(Path.home() / ".ghost-os/models/ShowUI-2B"),
-        str(Path.home() / ".shadow/models/llm/ShowUI-2B-bf16-8bit"),
-    ])
-
-    for path in candidates:
-        if os.path.isdir(path):
-            safetensors = os.path.join(path, "model.safetensors")
-            config = os.path.join(path, "config.json")
-            if os.path.isfile(safetensors) and os.path.isfile(config):
-                return path
-            pytorch_bin = os.path.join(path, "pytorch_model.bin")
-            if os.path.isfile(pytorch_bin):
-                log(f"WARNING: Model at {path} is in PyTorch format (pytorch_model.bin). "
-                    f"Ghost OS requires MLX safetensors format. "
-                    f"Fix: rm -rf {path} && ghost setup")
-            elif os.path.isfile(config):
-                log(f"WARNING: Model at {path} has config.json but no model.safetensors. "
-                    f"Download may be incomplete. "
-                    f"Fix: rm -rf {path} && ghost setup")
-
-    # Return first candidate for error message
-    return candidates[0] if candidates else str(Path.home() / ".ghost-os/models/ShowUI-2B")
+def resolve_model_path():
+    """Return the one Travis234-owned ShowUI-2B model directory."""
+    return str(Path.home() / ".travis234/ghost-mcp/models/ShowUI-2B")
 
 
 # ── Model State (lazy-loaded, thread-safe) ─────────────────────────
@@ -536,10 +499,6 @@ def parse_args():
         help="Port to listen on (default: 9876, or GHOST_VISION_PORT env var)",
     )
     parser.add_argument(
-        "--model-path", default=None,
-        help="Path to ShowUI-2B model directory. Auto-detected if not specified.",
-    )
-    parser.add_argument(
         "--idle-timeout", type=int, default=600,
         help="Auto-exit after N seconds of no requests (default: 600, 0 to disable)",
     )
@@ -563,7 +522,7 @@ def main():
 
     HOST = args.host
     PORT = args.port
-    MODEL_PATH = resolve_model_path(args.model_path)
+    MODEL_PATH = resolve_model_path()
     IDLE_TIMEOUT = args.idle_timeout
 
     # --health-check: try to load model and exit

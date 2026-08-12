@@ -1,3 +1,4 @@
+// Modified by Travis234 from Ghost OS revision 991aa4831295aaff6beef04cc809d0f0b53dc024.
 // MCPServer.swift - MCP JSON-RPC server over stdio
 //
 // Speaks the Model Context Protocol over stdin/stdout.
@@ -251,32 +252,8 @@ public final class MCPServer {
     // MARK: - Instructions
 
     private static func loadInstructions() -> String {
-        // Try loading from GHOST-MCP.md next to the binary
-        let binaryPath = ProcessInfo.processInfo.arguments[0]
-        let binaryDir = (binaryPath as NSString).deletingLastPathComponent
-        let instructionsPath = (binaryDir as NSString).appendingPathComponent("GHOST-MCP.md")
-
-        if let content = try? String(contentsOfFile: instructionsPath, encoding: .utf8) {
-            return content
-        }
-
-        // Try Homebrew share paths
-        let sharePaths = [
-            "/opt/homebrew/share/GHOST-MCP.md",
-            "/opt/homebrew/share/ghost-os/GHOST-MCP.md",
-            "/usr/local/share/GHOST-MCP.md",
-            "/usr/local/share/ghost-os/GHOST-MCP.md",
-        ]
-        for path in sharePaths {
-            if let content = try? String(contentsOfFile: path, encoding: .utf8) {
-                return content
-            }
-        }
-
-        // Try loading from the source directory (development)
-        let binaryAncestor = ((binaryDir as NSString).deletingLastPathComponent as NSString).deletingLastPathComponent
-        let devPath = (binaryAncestor as NSString).appendingPathComponent("GHOST-MCP.md")
-        if let content = try? String(contentsOfFile: devPath, encoding: .utf8) {
+        let instructionsPath = TravisPaths().instructionsFile
+        if let content = try? String(contentsOf: instructionsPath, encoding: .utf8) {
             return content
         }
 

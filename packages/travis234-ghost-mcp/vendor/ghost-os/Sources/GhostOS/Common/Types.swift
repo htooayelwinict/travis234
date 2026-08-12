@@ -1,3 +1,4 @@
+// Modified by Travis234 from Ghost OS revision 991aa4831295aaff6beef04cc809d0f0b53dc024.
 // Types.swift - Shared types for Ghost OS v2
 //
 // Data structures used across modules. Keep these minimal and focused.
@@ -149,6 +150,6 @@ public enum GhostConstants {
     public static let defaultTimeoutSeconds: TimeInterval = 30
     public static let defaultPollInterval: TimeInterval = 0.5
     public static let maxSearchDepth = 100
-    public static let recipesDirectory = "~/.ghost-os/recipes"
-    public static let logsDirectory = "~/.ghost-os/logs"
+    public static var recipesDirectory: String { TravisPaths().recipesDirectory.path }
+    public static var logsDirectory: String { TravisPaths().logsDirectory.path }
 }

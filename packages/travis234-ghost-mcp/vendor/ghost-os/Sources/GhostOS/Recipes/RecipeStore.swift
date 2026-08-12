@@ -1,6 +1,7 @@
+// Modified by Travis234 from Ghost OS revision 991aa4831295aaff6beef04cc809d0f0b53dc024.
 // RecipeStore.swift - File-based recipe storage
 //
-// Loads/saves/lists/deletes recipes from ~/.ghost-os/recipes/
+// Loads/saves/lists/deletes recipes from the Travis234 state root.
 // Logs decode errors so broken recipes are visible, not silently skipped.
 
 import Foundation
@@ -8,7 +9,7 @@ import Foundation
 /// File-based recipe storage.
 public enum RecipeStore {
 
-    private static let recipesDir = NSString(string: "~/.ghost-os/recipes").expandingTildeInPath
+    private static var recipesDir: String { TravisPaths().recipesDirectory.path }
 
     /// List all available recipes. Logs decode errors for broken recipe files.
     public static func listRecipes() -> [Recipe] {

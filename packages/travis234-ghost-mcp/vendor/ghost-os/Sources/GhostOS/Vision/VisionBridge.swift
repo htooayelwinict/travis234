@@ -1,3 +1,4 @@
+// Modified by Travis234 from Ghost OS revision 991aa4831295aaff6beef04cc809d0f0b53dc024.
 // VisionBridge.swift - HTTP client to the Python vision sidecar
 //
 // Ghost OS v2 calls the vision sidecar when the AX tree can't find
@@ -232,58 +233,21 @@ public enum VisionBridge {
 
     /// Find the ghost-vision launcher script/binary.
     private static func findGhostVisionBinary() -> String? {
-        let candidates = [
-            // Homebrew install
-            "/opt/homebrew/bin/ghost-vision",
-            "/usr/local/bin/ghost-vision",
-            // Same directory as the ghost binary
-            (ProcessInfo.processInfo.arguments[0] as NSString)
-                .deletingLastPathComponent + "/ghost-vision",
-            // Development location
-            (ProcessInfo.processInfo.arguments[0] as NSString)
-                .deletingLastPathComponent + "/../vision-sidecar/ghost-vision",
-        ]
-
-        for path in candidates {
-            if FileManager.default.isExecutableFile(atPath: path) {
-                return path
-            }
-        }
-        return nil
+        let path = TravisPaths().visionSidecarDirectory.appending(path: "ghost-vision").path
+        return FileManager.default.isExecutableFile(atPath: path) ? path : nil
     }
 
-    /// Find the server.py script in expected locations.
+    /// Find the server.py script in the installed package.
     private static func findServerScript() -> String? {
-        let candidates = [
-            // Homebrew install
-            "/opt/homebrew/share/ghost-os/vision-sidecar/server.py",
-            "/usr/local/share/ghost-os/vision-sidecar/server.py",
-            // Next to the ghost binary (installed)
-            (ProcessInfo.processInfo.arguments[0] as NSString)
-                .deletingLastPathComponent + "/vision-sidecar/server.py",
-            // Development: .build/debug/ghost -> project root/vision-sidecar/
-            ((ProcessInfo.processInfo.arguments[0] as NSString)
-                .deletingLastPathComponent as NSString)
-                .deletingLastPathComponent + "/vision-sidecar/server.py",
-            (((ProcessInfo.processInfo.arguments[0] as NSString)
-                .deletingLastPathComponent as NSString)
-                .deletingLastPathComponent as NSString)
-                .deletingLastPathComponent + "/vision-sidecar/server.py",
-        ]
-
-        for path in candidates {
-            if FileManager.default.fileExists(atPath: path) {
-                return path
-            }
-        }
-        return nil
+        let path = TravisPaths().visionSidecarDirectory.appending(path: "server.py").path
+        return FileManager.default.fileExists(atPath: path) ? path : nil
     }
 
     /// Find the best Python executable with mlx_vlm available.
     /// Returns nil if no suitable Python is found.
     private static func findPython() -> String? {
         // Check venv first (most likely to have mlx_vlm)
-        let venvPython = NSHomeDirectory() + "/.ghost-os/venv/bin/python3"
+        let venvPython = TravisPaths().visionEnvironment.appending(path: "bin/python3").path
         if FileManager.default.isExecutableFile(atPath: venvPython) {
             return venvPython
         }
@@ -324,20 +288,13 @@ public enum VisionBridge {
     /// Check if the ShowUI-2B model exists at any known location.
     /// Returns the path if found, nil otherwise.
     public static func findModelPath() -> String? {
-        let candidates = [
-            "/opt/homebrew/share/ghost-os/models/ShowUI-2B",
-            NSHomeDirectory() + "/.ghost-os/models/ShowUI-2B",
-            NSHomeDirectory() + "/.shadow/models/llm/ShowUI-2B-bf16-8bit",
-        ]
-
-        for path in candidates {
-            let safetensors = (path as NSString).appendingPathComponent("model.safetensors")
-            let config = (path as NSString).appendingPathComponent("config.json")
-            if FileManager.default.fileExists(atPath: safetensors)
-                && FileManager.default.fileExists(atPath: config)
-            {
-                return path
-            }
+        let path = TravisPaths().visionModelDirectory.path
+        let safetensors = (path as NSString).appendingPathComponent("model.safetensors")
+        let config = (path as NSString).appendingPathComponent("config.json")
+        if FileManager.default.fileExists(atPath: safetensors)
+            && FileManager.default.fileExists(atPath: config)
+        {
+            return path
         }
         return nil
     }
