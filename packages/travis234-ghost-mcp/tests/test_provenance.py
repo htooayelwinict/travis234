@@ -29,7 +29,7 @@ def test_pinned_ghost_snapshot_is_auditable() -> None:
     assert (VENDOR_ROOT / "Package.swift").is_file()
     assert (VENDOR_ROOT / "Package.resolved").is_file()
     assert len(list((VENDOR_ROOT / "Sources").rglob("*.swift"))) == 27
-    assert len(list((VENDOR_ROOT / "Tests").rglob("*.swift"))) == 3
+    assert len(list((VENDOR_ROOT / "Tests").rglob("*.swift"))) == 4
     assert not (VENDOR_ROOT / ".git").exists()
     ignored_build = subprocess.run(
         ["git", "check-ignore", "-q", str(VENDOR_ROOT / ".build" / "probe")],

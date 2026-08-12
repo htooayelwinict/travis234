@@ -8,11 +8,24 @@ public struct TravisPaths: Sendable {
     public let executableURL: URL
 
     public init(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        homeDirectory: URL = TravisPaths.resolveHomeDirectory(),
         executableURL: URL = URL(fileURLWithPath: CommandLine.arguments[0])
     ) {
         self.homeDirectory = homeDirectory.standardizedFileURL
         self.executableURL = executableURL.standardizedFileURL
+    }
+
+    public static func resolveHomeDirectory(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fallback: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> URL {
+        if let value = environment["HOME"],
+           !value.isEmpty,
+           NSString(string: value).isAbsolutePath
+        {
+            return URL(fileURLWithPath: value, isDirectory: true).standardizedFileURL
+        }
+        return fallback.standardizedFileURL
     }
 
     public var stateRoot: URL {

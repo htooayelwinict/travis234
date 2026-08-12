@@ -1,3 +1,4 @@
+// Adapted by Travis234 to route permission recovery through /ghost-setup.
 // LearningTypes.swift - Data types for the self-learning system
 //
 // These types are the OUTPUT of recording. They are NOT recipes.
@@ -33,13 +34,13 @@ public enum LearningError: Error, Sendable {
     public var suggestion: String {
         switch self {
         case .inputMonitoringNotGranted:
-            "System Settings > Privacy & Security > Input Monitoring. Add your terminal app. Then restart the MCP server."
+            TravisPermissionGuidance.inputMonitoring
         case .alreadyRecording:
             "Call ghost_learn_stop to end the current session, or ghost_learn_status to check."
         case .notRecording:
             "Call ghost_learn_start to begin recording."
         case .tapCreationFailed:
-            "Remove and re-add your terminal app in System Settings > Privacy & Security > Input Monitoring."
+            TravisPermissionGuidance.inputMonitoring
         case .noActionsRecorded:
             "Make sure you performed actions (clicks, typing) while recording was active."
         }

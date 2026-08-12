@@ -1,3 +1,4 @@
+// Adapted by Travis234 to route permission recovery through /ghost-setup.
 // Annotate.swift - Set-of-Marks annotation for Ghost OS v2
 //
 // Maps to MCP tool: ghost_annotate
@@ -74,7 +75,7 @@ public enum Annotate {
                 return ToolResult(
                     success: false,
                     error: "Screen Recording permission not granted",
-                    suggestion: "Grant Screen Recording in System Settings > Privacy & Security > Screen Recording."
+                    suggestion: TravisPermissionGuidance.screenRecording
                 )
             }
             if case .windowListUnavailable = failure {
@@ -92,7 +93,7 @@ public enum Annotate {
                 return ToolResult(
                     success: false,
                     error: "Screenshot capture failed for '\(appDisplayName)'",
-                    suggestion: "Ensure Screen Recording permission is granted."
+                    suggestion: TravisPermissionGuidance.screenRecording
                 )
             }
             screenshot = r

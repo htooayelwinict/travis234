@@ -1,3 +1,4 @@
+// Adapted by Travis234 to route permission recovery through /ghost-setup.
 // Perception.swift - All perception functions for Ghost OS v2
 //
 // Maps to MCP tools: ghost_context, ghost_state, ghost_find, ghost_read,
@@ -385,7 +386,7 @@ public enum Perception {
             return ToolResult(
                 success: false,
                 error: "Screen Recording permission not granted",
-                suggestion: "Grant Screen Recording in System Settings > Privacy & Security > Screen Recording, then restart Ghost OS."
+                suggestion: TravisPermissionGuidance.screenRecording
             )
         case .windowListUnavailable:
             return ToolResult(
@@ -425,7 +426,7 @@ public enum Perception {
             switch retryFailure {
             case .noPermission:
                 errorMsg = "Screen Recording permission not granted"
-                suggestion = "Grant Screen Recording in System Settings > Privacy & Security > Screen Recording, then restart Ghost OS."
+                suggestion = TravisPermissionGuidance.screenRecording
             case .noWindowsForApp:
                 errorMsg = "Application '\(appDisplayName)' has no open windows"
                 suggestion = "The app is running but has no windows. Open a window first, or check ghost_state to verify."
@@ -437,7 +438,7 @@ public enum Perception {
                 suggestion = "The window may be minimized. Use ghost_window action:\"restore\" to un-minimize it, then retry."
             default:
                 errorMsg = "Screenshot capture failed for '\(appDisplayName)'"
-                suggestion = "Ensure Screen Recording permission is granted in System Settings > Privacy & Security > Screen Recording."
+                suggestion = TravisPermissionGuidance.screenRecording
             }
             return ToolResult(success: false, error: errorMsg, suggestion: suggestion)
         }

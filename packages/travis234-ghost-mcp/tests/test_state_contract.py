@@ -40,3 +40,18 @@ def test_vision_sidecar_has_one_fixed_model_path_and_no_override() -> None:
 
     assert 'Path.home() / ".travis234/ghost-mcp/models/ShowUI-2B"' in server
     assert "--model-path" not in server
+
+
+def test_permission_failures_use_shared_travis_setup_guidance() -> None:
+    sources = {
+        "Perception/Perception.swift": 3,
+        "Perception/Annotate.swift": 2,
+        "Vision/VisionPerception.swift": 2,
+        "Learning/LearningTypes.swift": 2,
+    }
+
+    for relative_path, expected_uses in sources.items():
+        source = (VENDOR_ROOT / "Sources/GhostOS" / relative_path).read_text(
+            encoding="utf-8"
+        )
+        assert source.count("TravisPermissionGuidance.") == expected_uses

@@ -11,6 +11,15 @@ struct SetupContractTests {
         #expect(GhostCLIText.versionLine == "Travis234 Ghost MCP 2.2.1")
     }
 
+    @Test("permission failures direct users through Travis setup")
+    func permissionFailuresDirectUsersThroughTravisSetup() {
+        #expect(TravisPermissionGuidance.accessibility.contains("/ghost-setup"))
+        #expect(TravisPermissionGuidance.screenRecording.contains("/ghost-setup"))
+        #expect(TravisPermissionGuidance.inputMonitoring.contains("/ghost-setup"))
+        #expect(LearningError.inputMonitoringNotGranted.suggestion.contains("/ghost-setup"))
+        #expect(LearningError.tapCreationFailed.suggestion.contains("/ghost-setup"))
+    }
+
     @Test("setup writes only below Travis state and never overwrites recipes")
     func setupWritesOnlyBelowTravisState() throws {
         let fileSystem = RecordingSetupFileSystem(existingNames: ["gmail-send.json"])

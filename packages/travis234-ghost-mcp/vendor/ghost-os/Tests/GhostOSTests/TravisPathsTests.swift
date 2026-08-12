@@ -31,4 +31,19 @@ struct TravisPathsTests {
         #expect(paths.instructionsFile.path == "/payload/travis234_ghost_mcp/assets/GHOST-MCP.md")
         #expect(paths.visionSidecarDirectory.path == "/payload/travis234_ghost_mcp/assets/vision-sidecar")
     }
+
+    @Test("process HOME defines the user root for isolated launches")
+    func processHomeDefinesUserRoot() {
+        let resolved = TravisPaths.resolveHomeDirectory(
+            environment: ["HOME": "/isolated/home"],
+            fallback: URL(fileURLWithPath: "/Users/real", isDirectory: true)
+        )
+        let fallback = TravisPaths.resolveHomeDirectory(
+            environment: ["HOME": "relative/home"],
+            fallback: URL(fileURLWithPath: "/Users/real", isDirectory: true)
+        )
+
+        #expect(resolved.path == "/isolated/home")
+        #expect(fallback.path == "/Users/real")
+    }
 }

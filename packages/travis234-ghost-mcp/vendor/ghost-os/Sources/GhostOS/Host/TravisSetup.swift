@@ -4,6 +4,15 @@ import AppKit
 import ApplicationServices
 import Foundation
 
+nonisolated public enum TravisPermissionGuidance {
+    public static let accessibility =
+        "Run /ghost-setup in Travis234, grant Accessibility in System Settings, then restart Travis234."
+    public static let screenRecording =
+        "Run /ghost-setup in Travis234, grant Screen Recording in System Settings, then restart Travis234."
+    public static let inputMonitoring =
+        "Run /ghost-setup in Travis234, grant Input Monitoring in System Settings, then restart Travis234."
+}
+
 public struct PermissionStatus: Sendable {
     public let accessibilityGranted: Bool
     public let screenRecordingGranted: Bool

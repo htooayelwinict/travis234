@@ -1,3 +1,4 @@
+// Adapted by Travis234 to route permission recovery through /ghost-setup.
 // VisionPerception.swift - Vision-based perception tools for Ghost OS v2
 //
 // Maps to MCP tools: ghost_parse_screen, ghost_ground
@@ -36,7 +37,7 @@ public enum VisionPerception {
             return ToolResult(
                 success: false,
                 error: "Screenshot capture failed",
-                suggestion: "Ensure Screen Recording permission is granted"
+                suggestion: TravisPermissionGuidance.screenRecording
             )
         }
 
@@ -79,7 +80,7 @@ public enum VisionPerception {
             return ToolResult(
                 success: false,
                 error: "Screenshot capture failed",
-                suggestion: "Ensure Screen Recording permission is granted"
+                suggestion: TravisPermissionGuidance.screenRecording
             )
         }
 
