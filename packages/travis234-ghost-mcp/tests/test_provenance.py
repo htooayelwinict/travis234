@@ -29,7 +29,7 @@ def test_pinned_ghost_snapshot_is_auditable() -> None:
     assert (VENDOR_ROOT / "Package.swift").is_file()
     assert (VENDOR_ROOT / "Package.resolved").is_file()
     assert len(list((VENDOR_ROOT / "Sources").rglob("*.swift"))) == 27
-    assert len(list((VENDOR_ROOT / "Tests").rglob("*.swift"))) == 2
+    assert len(list((VENDOR_ROOT / "Tests").rglob("*.swift"))) == 3
     assert not (VENDOR_ROOT / ".git").exists()
     ignored_build = subprocess.run(
         ["git", "check-ignore", "-q", str(VENDOR_ROOT / ".build" / "probe")],
@@ -49,7 +49,9 @@ def test_pinned_runtime_assets_are_complete_and_narrow() -> None:
         "slack-send.json",
     ]
     assert sorted(
-        path.name for path in (ASSET_ROOT / "vision-sidecar").iterdir()
+        path.name
+        for path in (ASSET_ROOT / "vision-sidecar").iterdir()
+        if path.is_file()
     ) == ["ghost-vision", "requirements.txt", "server.py"]
 
 

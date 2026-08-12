@@ -12,13 +12,15 @@ from conftest import ASSET_ROOT, PACKAGE_ROOT, VENDOR_ROOT
         "/opt/homebrew/share/ghost-os",
         "/usr/local/share/ghost-os",
         ".shadow/models",
+        ".claude",
+        "mcp.json",
     ],
 )
 def test_adapted_runtime_has_no_external_state_or_resource_fallback(
     forbidden: str,
 ) -> None:
     scanned = [
-        *(VENDOR_ROOT / "Sources" / "GhostOS").rglob("*.swift"),
+        *(VENDOR_ROOT / "Sources").rglob("*.swift"),
         *ASSET_ROOT.rglob("*.py"),
         ASSET_ROOT / "vision-sidecar" / "ghost-vision",
     ]
