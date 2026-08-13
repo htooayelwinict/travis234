@@ -59,4 +59,8 @@ The inventory contains exactly two root Python distributions, two adapter distri
 - `~/.travis234/ghost-mcp` was absent before cleanup, so no user-state directory was created or deleted.
 - Credentials from the ignored main-worktree `.env`, GitHub CLI, and npm browser approvals were never printed or staged.
 
-The sole remaining gate at this evidence point is deletion of the exact local disposable branch and final local/remote absence proof.
+## Branch-removal proof
+
+- The exact local branch `htooakalewis/mcp-addons` was deleted after its linked worktree was detached at `703a1005d7ba2846fc6deb41b8dd412209682019`.
+- Both `git branch --list htooakalewis/mcp-addons` and the exact remote-head query returned empty.
+- The disposable branch was never pushed, never merged, and cannot appear in the public `main` ancestry.
