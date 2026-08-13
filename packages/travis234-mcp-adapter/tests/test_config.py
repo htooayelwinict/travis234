@@ -21,9 +21,9 @@ from travis234_mcp_adapter.packaged_servers import (
 from conftest import ConfigTree
 
 
-def _packaged_server(tmp_path: Path, name: str = "ghost-os") -> PackagedServer:
+def _packaged_server(tmp_path: Path, name: str = "package-fixture") -> PackagedServer:
     root = tmp_path / "payload"
-    command = root / "bin" / "ghost"
+    command = root / "bin" / "fixture-server"
     command.parent.mkdir(parents=True, exist_ok=True)
     command.write_text("binary", encoding="utf-8")
     command.chmod(0o755)
@@ -205,8 +205,8 @@ def test_packaged_server_shadows_same_named_file_config_without_rewriting(
 ) -> None:
     monkeypatch.setattr(packaged_servers, "_REGISTRY", {})
     configured = config_tree.write_global_travis(
-        "ghost-os",
-        {"command": "/tmp/external-ghost"},
+        "package-fixture",
+        {"command": "/tmp/external-fixture"},
     )
     loaded = load_config(config_tree.cwd, config_tree.home, False)
     descriptor = _packaged_server(config_tree.home)
@@ -214,12 +214,12 @@ def test_packaged_server_shadows_same_named_file_config_without_rewriting(
 
     merged = merge_packaged_servers(loaded)
 
-    assert merged.config.servers["ghost-os"].command == str(descriptor.command)
-    assert merged.config.servers["ghost-os"].args == ("mcp",)
-    assert merged.config.servers["ghost-os"].request_timeout_ms == 1_800_000
-    assert merged.shadowed_configured_names == ("ghost-os",)
+    assert merged.config.servers["package-fixture"].command == str(descriptor.command)
+    assert merged.config.servers["package-fixture"].args == ("mcp",)
+    assert merged.config.servers["package-fixture"].request_timeout_ms == 1_800_000
+    assert merged.shadowed_configured_names == ("package-fixture",)
     assert merged.config.sources == loaded.sources
-    assert "external-ghost" in configured.read_text(encoding="utf-8")
+    assert "external-fixture" in configured.read_text(encoding="utf-8")
 
 
 def test_packaged_server_preserves_unrelated_config_and_trust_metadata(
@@ -234,7 +234,7 @@ def test_packaged_server_preserves_unrelated_config_and_trust_metadata(
 
     merged = merge_packaged_servers(loaded)
 
-    assert tuple(merged.config.servers) == ("filesystem", "ghost-os")
+    assert tuple(merged.config.servers) == ("filesystem", "package-fixture")
     assert merged.config.servers["filesystem"] == loaded.servers["filesystem"]
     assert merged.config.ignored_project_sources == loaded.ignored_project_sources
     assert merged.shadowed_configured_names == ()

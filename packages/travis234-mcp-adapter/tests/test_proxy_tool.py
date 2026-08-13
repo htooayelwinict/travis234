@@ -68,28 +68,28 @@ async def test_status_reports_shadowed_external_packaged_server_without_connecti
     state = _state()
     state.config = LoadedConfig(
         servers={
-            "ghost-os": ServerConfig(
-                name="ghost-os",
-                source_path=Path("/payload/bin/ghost"),
-                command="/payload/bin/ghost",
+            "package-fixture": ServerConfig(
+                name="package-fixture",
+                source_path=Path("/payload/bin/fixture-server"),
+                command="/payload/bin/fixture-server",
                 args=("mcp",),
             )
         },
         sources=(Path("/home/test/.travis234/agent/mcp.json"),),
         ignored_project_sources=(),
     )
-    state.shadowed_configured_names = ("ghost-os",)
+    state.shadowed_configured_names = ("package-fixture",)
 
     result = await dispatch_proxy(state, {}, None)
 
     assert state.runtime.connects == []
     assert result.content[0].text == (
         "MCP adapter status\n"
-        "- ghost-os: disconnected\n"
-        "- ignored external configuration for packaged server: ghost-os"
+        "- package-fixture: disconnected\n"
+        "- ignored external configuration for packaged server: package-fixture"
     )
     assert result.details["travis234Mcp"]["shadowedConfiguredServers"] == [
-        "ghost-os"
+        "package-fixture"
     ]
 
 

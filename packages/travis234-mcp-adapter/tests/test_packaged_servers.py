@@ -19,14 +19,14 @@ def isolated_registry(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def ghost_descriptor(tmp_path: Path) -> PackagedServer:
+def packaged_descriptor(tmp_path: Path) -> PackagedServer:
     root = tmp_path / "payload"
-    binary = root / "bin" / "ghost"
+    binary = root / "bin" / "fixture-server"
     binary.parent.mkdir(parents=True)
     binary.write_text("binary", encoding="utf-8")
     binary.chmod(0o755)
     return PackagedServer(
-        name="ghost-os",
+        name="package-fixture",
         package_root=root,
         command=binary,
         args=("mcp",),
@@ -37,32 +37,32 @@ def ghost_descriptor(tmp_path: Path) -> PackagedServer:
 def test_packaged_server_requires_absolute_paths(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="absolute"):
         PackagedServer(
-            name="ghost-os",
+            name="package-fixture",
             package_root=Path("payload"),
-            command=Path("payload/bin/ghost"),
+            command=Path("payload/bin/fixture-server"),
         )
 
 
 def test_packaged_server_requires_executable_inside_package(tmp_path: Path) -> None:
     root = tmp_path / "payload"
     root.mkdir()
-    outside = tmp_path / "ghost"
+    outside = tmp_path / "fixture-server"
     outside.write_text("binary", encoding="utf-8")
     outside.chmod(0o755)
 
     with pytest.raises(ValueError, match="inside package root"):
-        PackagedServer(name="ghost-os", package_root=root, command=outside)
+        PackagedServer(name="package-fixture", package_root=root, command=outside)
 
-    inside = root / "ghost"
+    inside = root / "fixture-server"
     inside.write_text("binary", encoding="utf-8")
     with pytest.raises(ValueError, match="executable file"):
-        PackagedServer(name="ghost-os", package_root=root, command=inside)
+        PackagedServer(name="package-fixture", package_root=root, command=inside)
 
 
 @pytest.mark.parametrize(
     ("changes", "message"),
     [
-        ({"name": " ghost-os"}, "non-empty and trimmed"),
+        ({"name": " package-fixture"}, "non-empty and trimmed"),
         ({"args": ["mcp"]}, "tuple of strings"),
         ({"args": ("mcp", 1)}, "tuple of strings"),
         ({"request_timeout_ms": 0}, "positive integer"),
@@ -70,42 +70,42 @@ def test_packaged_server_requires_executable_inside_package(tmp_path: Path) -> N
     ],
 )
 def test_packaged_server_rejects_malformed_fields(
-    ghost_descriptor: PackagedServer,
+    packaged_descriptor: PackagedServer,
     changes: dict[str, object],
     message: str,
 ) -> None:
     with pytest.raises(ValueError, match=message):
-        replace(ghost_descriptor, **changes)
+        replace(packaged_descriptor, **changes)
 
 
 def test_registration_is_idempotent_but_rejects_substitution(
-    ghost_descriptor: PackagedServer,
+    packaged_descriptor: PackagedServer,
 ) -> None:
-    register_packaged_server(ghost_descriptor)
-    register_packaged_server(ghost_descriptor)
+    register_packaged_server(packaged_descriptor)
+    register_packaged_server(packaged_descriptor)
 
     snapshot = get_packaged_servers()
-    assert tuple(snapshot) == ("ghost-os",)
+    assert tuple(snapshot) == ("package-fixture",)
     with pytest.raises(TypeError):
-        snapshot["other"] = ghost_descriptor  # type: ignore[index]
+        snapshot["other"] = packaged_descriptor  # type: ignore[index]
 
-    replacement = ghost_descriptor.command.parent / "other"
+    replacement = packaged_descriptor.command.parent / "other"
     replacement.write_text("replacement", encoding="utf-8")
     replacement.chmod(0o755)
     with pytest.raises(ValueError, match="already registered"):
-        register_packaged_server(replace(ghost_descriptor, command=replacement))
+        register_packaged_server(replace(packaged_descriptor, command=replacement))
 
 
 def test_registry_snapshot_is_sorted_and_detached(
-    ghost_descriptor: PackagedServer,
+    packaged_descriptor: PackagedServer,
 ) -> None:
-    alpha_binary = ghost_descriptor.command.parent / "alpha"
+    alpha_binary = packaged_descriptor.command.parent / "alpha"
     alpha_binary.write_text("alpha", encoding="utf-8")
     alpha_binary.chmod(0o755)
-    alpha = replace(ghost_descriptor, name="alpha", command=alpha_binary)
-    register_packaged_server(ghost_descriptor)
+    alpha = replace(packaged_descriptor, name="alpha", command=alpha_binary)
+    register_packaged_server(packaged_descriptor)
     first = get_packaged_servers()
     register_packaged_server(alpha)
 
-    assert tuple(first) == ("ghost-os",)
-    assert tuple(get_packaged_servers()) == ("alpha", "ghost-os")
+    assert tuple(first) == ("package-fixture",)
+    assert tuple(get_packaged_servers()) == ("alpha", "package-fixture")

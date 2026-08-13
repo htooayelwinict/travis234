@@ -106,12 +106,23 @@ test("local development image creates the travis user with limited package sudo"
   assert.match(dockerfile, /USER travis/);
 });
 
-test("ghcr workflow targets travis234 production image", () => {
+test("ghcr workflow separates version publication from production promotion", () => {
   const workflow = fs.readFileSync(path.resolve(packageRoot, "..", "..", ".github", "workflows", "travis234-release-image.yml"), "utf8");
 
   assert.match(workflow, /^name: travis234 release image/m);
-  assert.match(workflow, /IMAGE_NAME: ghcr\.io\/\$\{\{ github\.repository_owner \}\}\/travis234/);
-  assert.match(workflow, /file: Dockerfile\.release/);
+  assert.match(workflow, /promote_production:/);
+  assert.match(workflow, /docker buildx imagetools create/);
+  assert.equal(
+    (workflow.match(
+      /ref: \$\{\{ inputs\.ref \|\| github\.event\.release\.tag_name \|\| github\.ref_name \}\}/g,
+    ) ?? []).length,
+    3,
+  );
+  const buildStart = workflow.indexOf("  build-and-push:");
+  const promoteStart = workflow.indexOf("  promote-production:");
+  assert.notEqual(buildStart, -1);
+  assert.notEqual(promoteStart, -1);
+  assert.doesNotMatch(workflow.slice(buildStart, promoteStart), /:production/);
 });
 
 test("package defaults to travis234 production GHCR image and auto pull", () => {

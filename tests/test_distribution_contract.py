@@ -9,6 +9,12 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 
 
+def _locked_project_version(path: Path, name: str) -> str:
+    lock = tomllib.loads(path.read_text(encoding="utf-8"))
+    project = next(item for item in lock["package"] if item["name"] == name)
+    return project["version"]
+
+
 def test_python_distribution_names_only_travis234() -> None:
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     project = metadata["project"]
@@ -28,8 +34,13 @@ def test_npm_distribution_names_only_travis234() -> None:
 def test_release_versions_are_aligned() -> None:
     import json
 
-    expected = "2.4.5"
+    expected = "2.4.6"
     python_metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    adapter_metadata = tomllib.loads(
+        (ROOT / "packages/travis234-mcp-adapter/pyproject.toml").read_text(
+            encoding="utf-8"
+        )
+    )
     workspace = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
     npm_package = json.loads(
         (ROOT / "packages/travis234-cli/package.json").read_text(encoding="utf-8")
@@ -38,6 +49,7 @@ def test_release_versions_are_aligned() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert python_metadata["project"]["version"] == expected
+    assert adapter_metadata["project"]["version"] == "0.1.3"
     assert workspace["version"] == expected
     assert npm_package["version"] == expected
     assert f'VERSION = "{expected}"' in config_source
@@ -45,20 +57,31 @@ def test_release_versions_are_aligned() -> None:
     assert f"version-{expected}-" in readme
 
 
-def test_release_versions_include_bundled_ghost_addon() -> None:
-    adapter = tomllib.loads(
-        (ROOT / "packages/travis234-mcp-adapter/pyproject.toml").read_text(
-            encoding="utf-8"
-        )
-    )
-    ghost = tomllib.loads(
-        (ROOT / "packages/travis234-ghost-mcp/pyproject.toml").read_text(
-            encoding="utf-8"
-        )
-    )
+def test_release_locks_match_project_metadata() -> None:
+    assert _locked_project_version(
+        ROOT / "packages/travis234-mcp-adapter/uv.lock",
+        "travis234-mcp-adapter",
+    ) == "0.1.3"
 
-    assert adapter["project"]["version"] == "0.1.2"
-    assert ghost["project"]["version"] == "0.1.0"
+
+def test_retired_ghost_addon_has_no_active_product_surface() -> None:
+    retired_package = "travis234-ghost-mcp"
+    assert not (ROOT / "packages" / retired_package).exists()
+    assert not (ROOT / "evals/bundled_ghost_mcp_smoke.py").exists()
+
+    active_docs = (
+        ROOT / "README.md",
+        ROOT / "packages/travis234-mcp-adapter/README.md",
+    )
+    forbidden = (
+        "travis234 install travis234-ghost-mcp",
+        "ghost-os",
+        "/ghost-setup",
+        "/ghost-doctor",
+    )
+    for path in active_docs:
+        text = path.read_text(encoding="utf-8")
+        assert not any(value in text for value in forbidden), path
 
 
 def test_root_distribution_excludes_optional_mcp_packages(tmp_path: Path) -> None:
@@ -82,31 +105,6 @@ def test_root_distribution_excludes_optional_mcp_packages(tmp_path: Path) -> Non
     assert not any("travis234-mcp-adapter" in item for item in requirements)
     assert not any("travis234-ghost-mcp" in item for item in requirements)
     assert not any("ghost_mcp" in name or "ghost-os" in name for name in names)
-
-
-def test_bundled_ghost_documentation_matches_runtime_contract() -> None:
-    root_readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    adapter_readme = (
-        ROOT / "packages/travis234-mcp-adapter/README.md"
-    ).read_text(encoding="utf-8")
-    ghost_readme = (
-        ROOT / "packages/travis234-ghost-mcp/README.md"
-    ).read_text(encoding="utf-8")
-
-    for required in (
-        "travis234 install travis234-ghost-mcp",
-        "travis234 --mcp",
-        "/ghost-doctor",
-        "/ghost-setup",
-        "/ghost-setup vision",
-        "~/.travis234/ghost-mcp",
-        "macOS 14",
-        "Apple Silicon",
-    ):
-        assert required in root_readme
-        assert required in ghost_readme
-    assert "trusted extension API" in adapter_readme
-    assert "not a user configuration format" in adapter_readme
 
 
 def test_packaged_builtin_skills_match_npm_distribution() -> None:

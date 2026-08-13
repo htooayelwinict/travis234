@@ -176,32 +176,6 @@ def test_installed_modes_smoke_exercises_print_json_and_rpc(tmp_path: Path) -> N
     }
 
 
-def test_bundled_ghost_smoke_reports_protocol_without_config(tmp_path: Path) -> None:
-    from evals.bundled_ghost_mcp_smoke import (
-        is_bundled_ghost_smoke_supported,
-        run_bundled_ghost_smoke,
-    )
-
-    if not is_bundled_ghost_smoke_supported():
-        pytest.skip("bundled Ghost smoke requires macOS 14+ on Apple Silicon")
-
-    result = run_bundled_ghost_smoke(tmp_path)
-
-    assert result["server"] == "ghost-os"
-    assert result["tool_count"] == 29
-    assert result["configured"] is False
-    assert result["child_reaped"] is True
-    assert result["legacy_state_created"] is False
-
-
-def test_bundled_ghost_smoke_support_guard_rejects_linux(monkeypatch) -> None:
-    import evals.bundled_ghost_mcp_smoke as smoke
-
-    monkeypatch.setattr(smoke.sys, "platform", "linux")
-
-    assert smoke.is_bundled_ghost_smoke_supported() is False
-
-
 def test_fixture_builds_are_deterministic_and_secret_free(tmp_path: Path) -> None:
     for scenario in load_scenarios():
         left = build_fixture(scenario.setup, tmp_path / "left" / scenario.id)

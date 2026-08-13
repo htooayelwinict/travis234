@@ -53,12 +53,12 @@ def test_package_metadata_has_one_python_authority() -> None:
     package_json = json.loads(Path("package.json").read_text())
 
     assert pyproject["project"]["name"] == "travis234"
-    assert pyproject["project"]["version"] == "2.4.5"
+    assert pyproject["project"]["version"] == "2.4.6"
     assert pyproject["project"]["scripts"] == {"travis234": "travis.cli:main"}
     assert "travisConfig" not in package_json
 
 
-def test_root_distribution_does_not_depend_on_macos_ghost_addon() -> None:
+def test_root_distribution_keeps_optional_mcp_packages_out_of_core() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     requirements = [Requirement(item).name for item in pyproject["project"]["dependencies"]]
 

@@ -56,14 +56,16 @@ def test_release_image_includes_python_test_runner() -> None:
     assert '"pytest>=8,<10"' in dockerfile
 
 
-def test_registry_login_exists_only_in_gated_push_job() -> None:
+def test_registry_login_exists_only_in_gated_registry_mutation_jobs() -> None:
     workflow = _workflow()
     login_jobs = {
         job_name
         for job_name, job in workflow["jobs"].items()
         if any(_uses_action(step, "docker/login-action") for step in job.get("steps", []))
     }
-    assert login_jobs == {"build-and-push"}
+    assert login_jobs == {"build-and-push", "promote-production"}
+    assert "inputs.promote_production != true" in workflow["jobs"]["build-and-push"]["if"]
+    assert "inputs.promote_production == true" in workflow["jobs"]["promote-production"]["if"]
     for job_name in ("test", "image-smoke"):
         assert not any(
             step.get("with", {}).get("push") is True

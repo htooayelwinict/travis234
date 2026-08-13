@@ -10,7 +10,7 @@ TRAVIS234 // NEURAL TERMINAL ONLINE
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-39e6c7?style=for-the-badge&labelColor=10182b"></a>
   <img alt="Python 3.13" src="https://img.shields.io/badge/Python-3.13-63a7ff?style=for-the-badge&labelColor=10182b">
-  <img alt="Version 2.4.5" src="https://img.shields.io/badge/version-2.4.5-bd6cff?style=for-the-badge&labelColor=10182b">
+  <img alt="Version 2.4.6" src="https://img.shields.io/badge/version-2.4.6-bd6cff?style=for-the-badge&labelColor=10182b">
   <img alt="Terminal first" src="https://img.shields.io/badge/interface-terminal-ff7ac6?style=for-the-badge&labelColor=10182b">
 </p>
 
@@ -476,35 +476,6 @@ Status does not connect. Listing, search, describe, and calls connect only the n
 Configured servers are an operator consent boundary: review third-party packages, pin versions when reproducibility matters, and give filesystem servers only the directories they need. The adapter supports stdio and Streamable HTTP. It does not currently implement legacy SSE, MCP OAuth, prompts, resources, sampling, elicitation, Apps/UI, or direct per-server provider tools.
 
 See the [complete adapter user guide](packages/travis234-mcp-adapter/README.md) for installation management, public-server examples, security rules, output limits, TUI workflows, and troubleshooting.
-
-### Bundled Ghost computer use
-
-On Apple Silicon Macs running macOS 14 or newer, install the Ghost add-on for
-browser and desktop computer use:
-
-```bash
-travis234 install travis234-ghost-mcp
-travis234 --mcp
-```
-
-The add-on installs the MCP adapter dependency, registers its embedded
-`ghost-os` server in memory, and executes the packaged binary in place. It does
-not require a separate clone, Homebrew install, archive extraction, or Ghost
-entry in `mcp.json`. Other MCP servers continue to use the ordinary adapter
-configuration described above.
-
-Inside the TUI, inspect the installation with `/ghost-doctor`, then run
-`/ghost-setup` to request missing macOS permissions and install the bundled
-recipes. Accessibility is required for computer actions, Screen Recording is
-required for screenshots, and Input Monitoring is required only for learning
-workflows. Run `/ghost-setup vision` only when you explicitly authorize the
-large optional visual-grounding model download.
-
-All mutable add-on data stays under `~/.travis234/ghost-mcp`. Running
-`travis234 remove travis234-ghost-mcp` removes the installed package code but
-intentionally retains user recipes and models in that state directory. The
-embedded Ghost OS source is MIT-licensed and pinned to upstream commit
-`991aa4831295aaff6beef04cc809d0f0b53dc024`.
 
 ## Skills and state
 

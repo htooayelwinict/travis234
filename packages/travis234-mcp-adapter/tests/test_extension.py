@@ -74,7 +74,7 @@ async def test_session_admits_packaged_server_without_mcp_config(
 ) -> None:
     home = tmp_path / "home"
     project = tmp_path / "project"
-    binary = tmp_path / "package" / "bin" / "ghost"
+    binary = tmp_path / "package" / "bin" / "fixture-server"
     home.mkdir()
     project.mkdir()
     binary.parent.mkdir(parents=True)
@@ -84,7 +84,7 @@ async def test_session_admits_packaged_server_without_mcp_config(
     monkeypatch.setattr(packaged_servers, "_REGISTRY", {})
     register_packaged_server(
         PackagedServer(
-            name="ghost-os",
+            name="package-fixture",
             package_root=binary.parents[1],
             command=binary,
             args=("mcp",),
@@ -98,7 +98,7 @@ async def test_session_admits_packaged_server_without_mcp_config(
     definition = runner.get_all_registered_tools()[0].definition
     result = await definition.execute("status", {}, None, None, None)
 
-    assert result.content[0].text == "MCP adapter status\n- ghost-os: disconnected"
+    assert result.content[0].text == "MCP adapter status\n- package-fixture: disconnected"
     assert not list(home.rglob("mcp.json"))
     await runner.async_emit({"type": "session_shutdown"})
 
