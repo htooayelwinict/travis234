@@ -43,6 +43,20 @@ Artifacts were built from the release source SHA under `/tmp/travis234-retiremen
 
 The inventory contains exactly two root Python distributions, two adapter distributions, and one scoped npm launcher tarball.
 
-## Pending public operations
+## Public retirement results
 
-At this local gate, no commit had been pushed and no package or image had been published. PyPI publication, GHCR candidate publication and promotion, npm publication, yanking `travis234-ghost-mcp`, local Ghost add-on uninstall, and final deletion of the disposable local branch remained pending. The ignored main-worktree `.env` was not read, printed, or staged during local verification.
+- `origin/main` was updated only with the fresh `htooayelwinict` lineage; the disposable branch was never pushed and is not an ancestor of `main`.
+- PyPI `travis234==2.4.6` and `travis234-mcp-adapter==0.1.3` were published from the checked artifacts. Public filenames and SHA-256 hashes match the table above, and a clean Python 3.13 public install passed.
+- GHCR workflow run `31747649396` passed source tests and no-cache image smoke but its build job was denied `write_package`; it created no `2.4.6` tag and left `production` unchanged.
+- The immutable multi-platform image was then pushed through authenticated Docker Buildx. `ghcr.io/htooayelwinict/travis234:2.4.6` and `:production` both resolve to `sha256:2bc1d2e3a0aa7c7768efacb908216a5b23d5dd3ce96b2c8c01a8fb5ee8e4648e`, include linux/amd64 and linux/arm64, and passed pulled-image container smoke.
+- npm `@htooayelwinict/travis234@2.4.6` was published from the checked tarball. Registry integrity matched, versioned and default `npx` help passed, `latest` is `2.4.6`, and the temporary `retirement-candidate` tag was removed.
+- PyPI `travis234-ghost-mcp==0.1.0` was yanked, not deleted. Both files report: `Retired; use Travis234's standard MCP adapter for supported MCP servers.` Unpinned acquisition rejects the release; exact pins remain available under PyPI's yank semantics.
+
+## Local cleanup
+
+- `travis234 list` contains only `travis234-mcp-adapter (0.1.3)`.
+- No exact Ghost add-on install directory, Ghost-named path under `~/.travis234`, or package-owned Ghost process remains.
+- `~/.travis234/ghost-mcp` was absent before cleanup, so no user-state directory was created or deleted.
+- Credentials from the ignored main-worktree `.env`, GitHub CLI, and npm browser approvals were never printed or staged.
+
+The sole remaining gate at this evidence point is deletion of the exact local disposable branch and final local/remote absence proof.
