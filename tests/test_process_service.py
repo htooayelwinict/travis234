@@ -242,7 +242,7 @@ def test_foreground_output_is_coalesced_before_snapshot_construction(tmp_path: P
             owner,
             request("chatty"),
             Factory(transport),
-            yield_time_ms=1_000,
+            yield_time_ms=10_000,
             on_update=updates.append,
         )
 
