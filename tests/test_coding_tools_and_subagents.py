@@ -104,6 +104,43 @@ def test_read_tool_defaults_public_artifacts_to_byte_pagination(tmp_path: Path) 
     }
 
 
+def test_durable_read_tool_keeps_utf8_pages_on_codepoint_boundaries(tmp_path: Path) -> None:
+    from travis.coding_agent.artifact_manifest import ArtifactManifest
+    from travis.coding_agent.artifact_store import ArtifactLimits, DurableArtifactStore
+    from travis.coding_agent.artifacts import ArtifactRegistry
+    from travis.coding_agent.tools.read import create_read_tool
+
+    source = tmp_path / "utf8.log"
+    source.write_text("A€B", encoding="utf-8")
+    artifacts = ArtifactRegistry(
+        durable_store=DurableArtifactStore(tmp_path / "agent"),
+        manifest=ArtifactManifest.for_session(
+            tmp_path / "session.jsonl",
+            limits=ArtifactLimits(min_free_bytes=0),
+        ),
+    )
+    artifact = artifacts.promote(source, "command-output")
+    tool = create_read_tool(str(tmp_path), artifacts=artifacts)
+
+    first = tool.execute(
+        "read-first",
+        {"path": artifact.id, "byte_offset": 0, "byte_limit": 2},
+    )
+    second = tool.execute(
+        "read-second",
+        {"path": artifact.id, "byte_offset": 1, "byte_limit": 4},
+    )
+
+    assert first.content[0].text.startswith("A\n\n[Showing bytes 0-0")
+    assert "Use byte_offset=1 to continue" in first.content[0].text
+    assert second.content[0].text.startswith("€B")
+    with pytest.raises(ValueError, match="UTF-8 boundary"):
+        tool.execute(
+            "read-inside-codepoint",
+            {"path": artifact.id, "byte_offset": 2, "byte_limit": 2},
+        )
+
+
 def test_read_tool_rejects_line_pagination_for_public_artifact_with_byte_retry(tmp_path: Path) -> None:
     from travis.coding_agent.artifacts import ArtifactRegistry
     from travis.coding_agent.tools.read import create_read_tool
