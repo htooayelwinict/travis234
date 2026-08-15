@@ -210,7 +210,7 @@ class CapabilityRegistry:
                         "error",
                         provider.name,
                         "provider_load_failed",
-                        f'capability provider "{provider.name}" failed',
+                        f'capability provider "{provider.name}" failed: {error}',
                     )
                     raise CapabilityReloadError(
                         diagnostic.message, diagnostic

@@ -4,14 +4,21 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from threading import RLock
 from types import MappingProxyType
 
 from travis.agent.async_utils import run_sync
+from travis.coding_agent.capabilities import (
+    CapabilityLoadContext,
+    CapabilityProviderResult,
+    CapabilityRegistry,
+    CapabilitySnapshot,
+)
 from travis.coding_agent.config import get_agent_dir
 from travis.coding_agent.event_bus import EventBusController, create_event_bus
 from travis.coding_agent.extensions import ExtensionRunner
 from travis.coding_agent.object_utils import settings_value as _settings_value
-from travis.coding_agent.package_manager import DefaultPackageManager
+from travis.coding_agent.package_manager import DefaultPackageManager, ResolvedPaths
 from travis.coding_agent.prompt_templates import (
     load_prompt_templates as _load_prompt_templates_runtime,
 )
@@ -21,10 +28,10 @@ from travis.coding_agent.project_trust import (
     resolve_project_trust,
 )
 from travis.coding_agent.resource_candidates import (
-    ResourceContentCandidate,
     ResourceContentRequest,
-    build_resource_content,
-    extend_resource_content,
+    DefaultResourceCapabilityProvider,
+    ResourceLoadCandidate,
+    ResourceLoadRequest,
     load_context_file_from_dir,
     load_project_context_files,
     load_themes,
@@ -134,94 +141,108 @@ class DefaultResourceLoader:
             settings_manager=self.settings_manager,
             offline=self.offline,
         )
-        self.package_diagnostics: list[object] = []
-
-        self._extension_lease = create_empty_extension_runtime(
-            self.cwd, self.event_bus
+        self._reload_lock = RLock()
+        self._state_lock = RLock()
+        empty = ResourceLoadCandidate.empty(
+            create_empty_extension_runtime(self.cwd, self.event_bus)
         )
         self._pretrust_extension_lease: ExtensionRuntimeLease | None = None
-        self.extensions_result = self._extension_lease.result
-        self.skills_result: dict[str, list[object]] = {"skills": [], "diagnostics": []}
-        self.prompts_result: dict[str, list[object]] = {"prompts": [], "diagnostics": []}
-        self.themes_result: dict[str, list[object]] = {"themes": [], "diagnostics": []}
-        self.agents_files: list[dict[str, str]] = []
-        self.system_prompt: str | None = None
-        self.append_system_prompt: list[str] = []
-        self.last_skill_paths: list[str] = []
-        self.last_prompt_paths: list[str] = []
-        self.last_theme_paths: list[str] = []
-        self._content_candidate = ResourceContentCandidate(
-            skills_result=self.skills_result,
-            prompts_result=self.prompts_result,
-            themes_result=self.themes_result,
-            agents_files=(),
-            system_prompt=None,
-            append_system_prompt=(),
-            package_diagnostics=(),
-            skill_paths=(),
-            prompt_paths=(),
-            theme_paths=(),
-            metadata_by_path=MappingProxyType({}),
+        self._projection = empty
+        self._capabilities = CapabilityRegistry()
+        self._capability_provider = DefaultResourceCapabilityProvider()
+        self._capabilities.register(self._capability_provider)
+        self._capabilities.seed(
+            self._capability_provider.name,
+            CapabilityProviderResult(
+                empty.records,
+                empty.diagnostics,
+                empty,
+                empty.close,
+            ),
         )
-        self._extension_reload_generation = 0
+        self._capability_snapshot = self._capabilities.snapshot
+        self._generation = 0
 
     def get_extensions(self) -> dict[str, object]:
-        return self.extensions_result
+        with self._state_lock:
+            return self._projection.extensions.result
 
 
     def get_skills(self) -> dict[str, list[object]]:
-        return self.skills_result
+        with self._state_lock:
+            return self._projection.content.skills_result
 
 
     def get_prompts(self) -> dict[str, list[object]]:
-        return self.prompts_result
+        with self._state_lock:
+            return self._projection.content.prompts_result
 
 
     def get_themes(self) -> dict[str, list[object]]:
-        return self.themes_result
+        with self._state_lock:
+            return self._projection.content.themes_result
 
 
     def get_agents_files(self) -> dict[str, list[dict[str, str]]]:
-        return {"agentsFiles": self.agents_files}
+        with self._state_lock:
+            return {"agentsFiles": list(self._projection.content.agents_files)}
 
 
     def get_system_prompt(self) -> str | None:
-        return self.system_prompt
+        with self._state_lock:
+            return self._projection.content.system_prompt
 
 
     def get_append_system_prompt(self) -> list[str]:
-        return self.append_system_prompt
+        with self._state_lock:
+            return list(self._projection.content.append_system_prompt)
 
 
     def get_package_diagnostics(self) -> list[object]:
-        return list(self.package_diagnostics)
+        with self._state_lock:
+            return list(self._projection.content.package_diagnostics)
+
+
+    def get_capability_snapshot(self) -> CapabilitySnapshot:
+        with self._state_lock:
+            return self._capability_snapshot
 
 
     def extend_resources(self, paths: dict[str, list[dict[str, object]]]) -> None:
-        candidate = extend_resource_content(
-            self._content_candidate,
-            cwd=self.cwd,
-            skill_paths=tuple(_resource_paths(paths.get("skillPaths", []))),
-            prompt_paths=tuple(_resource_paths(paths.get("promptPaths", []))),
-            theme_paths=tuple(_resource_paths(paths.get("themePaths", []))),
-            skills_override=self.skills_override,
-            prompts_override=self.prompts_override,
-            themes_override=self.themes_override,
-        )
-        self._apply_content_candidate(candidate)
+        with self._reload_lock:
+            request = ResourceLoadRequest.extend(
+                self._projection,
+                cwd=self.cwd,
+                skill_paths=tuple(_resource_paths(paths.get("skillPaths", []))),
+                prompt_paths=tuple(
+                    _resource_paths(paths.get("promptPaths", []))
+                ),
+                theme_paths=tuple(_resource_paths(paths.get("themePaths", []))),
+                skills_override=self.skills_override,
+                prompts_override=self.prompts_override,
+                themes_override=self.themes_override,
+            )
+            self._reload_capabilities(request)
 
 
     def load_project_trust_extensions(self) -> dict[str, object]:
         """Load only resources allowed to participate in trust resolution."""
 
-        self._set_project_trusted(False)
-        self._reload_settings_and_configured_paths()
-        resolved_paths = self.package_manager.resolve()
-        self.package_diagnostics = list(resolved_paths.diagnostics)
-        extension_paths = [resource.path for resource in resolved_paths.extensions if resource.enabled]
-        self._update_extensions(extension_paths, apply_override=False)
-        self._pretrust_extension_lease = self._extension_lease
-        return self.extensions_result
+        with self._reload_lock:
+            self._set_project_trusted(False)
+            self._reload_settings_and_configured_paths()
+            resolved_paths = self.package_manager.resolve()
+            extension_paths = [
+                resource.path
+                for resource in resolved_paths.extensions
+                if resource.enabled
+            ]
+            if self._pretrust_extension_lease is not None:
+                self._pretrust_extension_lease.release()
+            self._pretrust_extension_lease = load_extension_runtime(
+                self._extension_request(extension_paths, apply_override=False)
+            )
+            return self._pretrust_extension_lease.result
 
     def reload(self, options: Mapping[str, object] | None = None) -> None:
         self.complete_reload(options)
@@ -308,88 +329,97 @@ class DefaultResourceLoader:
         self.package_manager.package_paths = list(self.package_paths)
 
     def _reload_all_resources(self, *, pretrust_extensions: dict[str, object] | None = None) -> None:
-        self._reload_settings_and_configured_paths()
-        resolved_paths = self.package_manager.resolve()
-        extension_paths = [resource.path for resource in resolved_paths.extensions if resource.enabled]
-        self._update_extensions(extension_paths, preloaded_result=pretrust_extensions)
-        self._pretrust_extension_lease = None
-        candidate = build_resource_content(
-            ResourceContentRequest(
-                cwd=self.cwd,
-                agent_dir=self.agent_dir,
-                project_trusted=self.project_trusted,
-                resolved_paths=resolved_paths,
-                additional_skill_paths=tuple(self.additional_skill_paths),
-                additional_prompt_paths=tuple(
-                    self.additional_prompt_template_paths
-                ),
-                additional_theme_paths=tuple(self.additional_theme_paths),
-                no_context_files=self.no_context_files,
-                no_skills=self.no_skills,
-                no_prompt_templates=self.no_prompt_templates,
-                no_themes=self.no_themes,
-                system_prompt_source=self.system_prompt_source,
-                append_system_prompt_source=(
-                    tuple(self.append_system_prompt_source)
-                    if self.append_system_prompt_source is not None
-                    else None
-                ),
-                agents_files_override=self.agents_files_override,
-                skills_override=self.skills_override,
-                prompts_override=self.prompts_override,
-                themes_override=self.themes_override,
-                system_prompt_override=self.system_prompt_override,
-                append_system_prompt_override=self.append_system_prompt_override,
+        with self._reload_lock:
+            self._reload_settings_and_configured_paths()
+            resolved_paths = self.package_manager.resolve()
+            extension_paths = [
+                resource.path
+                for resource in resolved_paths.extensions
+                if resource.enabled
+            ]
+            preloaded: ExtensionRuntimeLease | None = None
+            if pretrust_extensions is not None:
+                preloaded = self._pretrust_extension_lease
+                if preloaded is None or preloaded.result is not pretrust_extensions:
+                    raise ValueError(
+                        "pretrust_extensions did not originate from this loader"
+                    )
+            request = ResourceLoadRequest.full(
+                self._content_request(resolved_paths),
+                self._extension_request(extension_paths),
+                preloaded_extensions=preloaded,
             )
+            self._reload_capabilities(request)
+            if preloaded is not None:
+                preloaded.release()
+                self._pretrust_extension_lease = None
+
+    def _content_request(
+        self, resolved_paths: ResolvedPaths
+    ) -> ResourceContentRequest:
+        return ResourceContentRequest(
+            cwd=self.cwd,
+            agent_dir=self.agent_dir,
+            project_trusted=self.project_trusted,
+            resolved_paths=resolved_paths,
+            additional_skill_paths=tuple(self.additional_skill_paths),
+            additional_prompt_paths=tuple(self.additional_prompt_template_paths),
+            additional_theme_paths=tuple(self.additional_theme_paths),
+            no_context_files=self.no_context_files,
+            no_skills=self.no_skills,
+            no_prompt_templates=self.no_prompt_templates,
+            no_themes=self.no_themes,
+            system_prompt_source=self.system_prompt_source,
+            append_system_prompt_source=(
+                tuple(self.append_system_prompt_source)
+                if self.append_system_prompt_source is not None
+                else None
+            ),
+            agents_files_override=self.agents_files_override,
+            skills_override=self.skills_override,
+            prompts_override=self.prompts_override,
+            themes_override=self.themes_override,
+            system_prompt_override=self.system_prompt_override,
+            append_system_prompt_override=self.append_system_prompt_override,
         )
-        self._apply_content_candidate(candidate)
 
-    def _apply_content_candidate(self, candidate: ResourceContentCandidate) -> None:
-        self._content_candidate = candidate
-        self.skills_result = candidate.skills_result
-        self.prompts_result = candidate.prompts_result
-        self.themes_result = candidate.themes_result
-        self.agents_files = list(candidate.agents_files)
-        self.system_prompt = candidate.system_prompt
-        self.append_system_prompt = list(candidate.append_system_prompt)
-        self.package_diagnostics = list(candidate.package_diagnostics)
-        self.last_skill_paths = list(candidate.skill_paths)
-        self.last_prompt_paths = list(candidate.prompt_paths)
-        self.last_theme_paths = list(candidate.theme_paths)
-
-    def _update_extensions(
+    def _extension_request(
         self,
-        discovered_paths: list[str] | None = None,
+        discovered_paths: list[str],
         *,
-        preloaded_result: dict[str, object] | None = None,
         apply_override: bool = True,
-    ) -> None:
-        preloaded: ExtensionRuntimeLease | None = None
-        if preloaded_result is not None:
-            preloaded = self._pretrust_extension_lease
-            if preloaded is None or preloaded.result is not preloaded_result:
-                raise ValueError(
-                    "pretrust_extensions did not originate from this loader"
-                )
-
-        self._extension_reload_generation += 1
-        request = ExtensionLoadRequest(
+    ) -> ExtensionLoadRequest:
+        return ExtensionLoadRequest(
             cwd=self.cwd,
             event_bus=self.event_bus,
-            discovered_paths=tuple(discovered_paths or ()),
+            discovered_paths=tuple(discovered_paths),
             additional_paths=tuple(self.additional_extension_paths),
             factories=tuple(self.extension_factories),
             no_extensions=self.no_extensions,
-            generation=self._extension_reload_generation,
+            generation=self._generation + 1,
             apply_override=apply_override,
             override=self.extensions_override,
         )
-        candidate = load_extension_runtime(request, preloaded=preloaded)
-        replaced = self._extension_lease
-        self._extension_lease = candidate
-        self.extensions_result = candidate.result
-        if replaced is not candidate:
-            replaced.release()
+
+    def _reload_capabilities(self, request: ResourceLoadRequest) -> None:
+        context = CapabilityLoadContext(
+            cwd=self.cwd,
+            agent_dir=self.agent_dir,
+            project_trusted=self.project_trusted,
+            offline=self.offline,
+            generation=self._generation + 1,
+            data=MappingProxyType({"resource_request": request}),
+        )
+        self._capabilities.reload(context, on_commit=self._commit_snapshot)
+
+    def _commit_snapshot(self, snapshot: CapabilitySnapshot) -> None:
+        candidate = snapshot.provider_state(self._capability_provider.name)
+        if not isinstance(candidate, ResourceLoadCandidate):
+            raise TypeError("default resource provider returned invalid state")
+        with self._state_lock:
+            self._projection = candidate
+            self._capability_snapshot = snapshot
+            self._generation = snapshot.generation
 
 def _first_mapping_value(options: Mapping[str, object], *names: str) -> object | None:
     for name in names:

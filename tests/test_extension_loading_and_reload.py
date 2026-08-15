@@ -7,6 +7,7 @@ import pytest
 
 from tests._support_coding_agent import AgentSession, faux_model
 from travis.coding_agent.event_bus import create_event_bus
+from travis.coding_agent.capabilities import CapabilityReloadError
 from travis.coding_agent.agent_session_services import create_agent_session_services
 from travis.coding_agent.project_trust import ProjectTrustContext, ProjectTrustStore
 from travis.coding_agent.resource_loader import DefaultResourceLoader
@@ -192,7 +193,7 @@ def test_invalid_extension_override_keeps_active_runtime(tmp_path: Path) -> None
     active = loader.get_extensions()["runtime"]
     loader.extensions_override = lambda _result: {}
 
-    with pytest.raises(TypeError, match="extension override"):
+    with pytest.raises(CapabilityReloadError, match="extension override"):
         loader.reload()
 
     assert loader.get_extensions()["runtime"] is active

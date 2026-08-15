@@ -3,8 +3,117 @@ from __future__ import annotations
 import travis.coding_agent.system_prompt as system_prompt_module
 
 from tests._support_coding_agent import *  # noqa: F403
+from travis.coding_agent.capabilities import CapabilityReloadError
 from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.skills import format_skills_for_prompt
+
+
+def loaded_resource_loader(tmp_path: Path) -> DefaultResourceLoader:
+    project = tmp_path / "repo"
+    agent_dir = tmp_path / "agent"
+    project.mkdir()
+    agent_dir.mkdir()
+    loader = DefaultResourceLoader(
+        cwd=str(project),
+        agent_dir=str(agent_dir),
+        project_trusted=False,
+    )
+    loader.reload()
+    return loader
+
+
+def write_prompt_directory(tmp_path: Path, name: str) -> Path:
+    prompt_dir = tmp_path / "extension-prompts"
+    prompt_dir.mkdir(exist_ok=True)
+    (prompt_dir / f"{name}.md").write_text(
+        f"---\ndescription: {name}\n---\n{name}\n",
+        encoding="utf-8",
+    )
+    return prompt_dir
+
+
+def test_failed_candidate_keeps_runtime_getters_and_snapshot(tmp_path: Path) -> None:
+    loader = loaded_resource_loader(tmp_path)
+    previous_extensions = loader.get_extensions()
+    previous_skills = loader.get_skills()
+    previous_snapshot = loader.get_capability_snapshot()
+    loader.skills_override = lambda _value: (_ for _ in ()).throw(
+        RuntimeError("candidate rejected")
+    )
+
+    with pytest.raises(CapabilityReloadError, match="candidate rejected"):
+        loader.reload()
+
+    assert loader.get_extensions() is previous_extensions
+    assert loader.get_skills() is previous_skills
+    assert loader.get_capability_snapshot() is previous_snapshot
+
+
+def test_readers_see_complete_resource_generations(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    agent_dir = tmp_path / "agent"
+    project.mkdir()
+    agent_dir.mkdir()
+    prompt_dir = write_prompt_directory(project, "review")
+    prompt = prompt_dir / "review.md"
+    prompt.write_text(
+        "---\ndescription: v1\n---\nPrompt v1\n", encoding="utf-8"
+    )
+    loader = DefaultResourceLoader(
+        cwd=str(project),
+        agent_dir=str(agent_dir),
+        project_trusted=False,
+        additional_prompt_template_paths=[str(prompt_dir)],
+    )
+    loader.reload()
+    previous = loader.get_prompts()
+    prompt.write_text(
+        "---\ndescription: v2\n---\nPrompt v2\n", encoding="utf-8"
+    )
+    entered = threading.Event()
+    release = threading.Event()
+    failures: list[BaseException] = []
+
+    def block(candidate: dict[str, list[object]]) -> dict[str, list[object]]:
+        entered.set()
+        if not release.wait(2):
+            raise TimeoutError("resource reload was not released")
+        return candidate
+
+    def reload() -> None:
+        try:
+            loader.reload()
+        except BaseException as error:  # pragma: no cover - surfaced below
+            failures.append(error)
+
+    loader.prompts_override = block
+    worker = threading.Thread(target=reload)
+    worker.start()
+    assert entered.wait(2)
+    assert loader.get_prompts() is previous
+    assert previous["prompts"][0].content == "Prompt v1"
+    release.set()
+    worker.join(2)
+
+    assert not worker.is_alive()
+    assert failures == []
+    assert loader.get_prompts() is not previous
+    assert loader.get_prompts()["prompts"][0].content == "Prompt v2"
+
+
+def test_extend_resources_swaps_content_without_replacing_runtime(
+    tmp_path: Path,
+) -> None:
+    loader = loaded_resource_loader(tmp_path)
+    runtime = loader.get_extensions()["runtime"]
+    old_snapshot = loader.get_capability_snapshot()
+    prompt_dir = write_prompt_directory(tmp_path, "review")
+
+    loader.extend_resources({"promptPaths": [{"path": str(prompt_dir)}]})
+
+    assert loader.get_extensions()["runtime"] is runtime
+    assert loader.get_capability_snapshot() is not old_snapshot
+    assert [item.name for item in loader.get_prompts()["prompts"]] == ["review"]
 
 
 def test_packaged_builtin_skills_load_as_lazy_defaults(tmp_path: Path) -> None:
@@ -830,12 +939,17 @@ def test_agent_session_reload_emits_lifecycle_and_rediscover_resources(tmp_path:
     )
     loader.reload()
     runner = loader.get_extensions()["runtime"]
+    loaded_snapshot = loader.get_capability_snapshot()
     runner.set_flag_value("sticky", True)
     session = AgentSession(cwd=str(project), model=faux_model(), extension_runner=runner, resource_loader=loader)
 
     (prompt_dir / "review.md").write_text("---\ndescription: Review\n---\nReview $ARGUMENTS", encoding="utf-8")
     session.bind_extensions({})
+    discovered_snapshot = loader.get_capability_snapshot()
     assert "audit" in [template.name for template in session.prompt_templates]
+    assert discovered_snapshot is not loaded_snapshot
+    assert discovered_snapshot.generation == loaded_snapshot.generation + 1
+    assert loader.get_extensions()["runtime"] is runner
     session.reload()
 
     assert events == [("start", "startup"), ("shutdown", "reload"), ("start", "reload")]
