@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from travis.coding_agent.capabilities import CapabilityKind
 from travis.coding_agent.prompt_templates import (
     PromptTemplate,
     expand_prompt_template,
@@ -119,6 +120,72 @@ def write_extension_resources(tmp_path: Path) -> tuple[Path, Path, Path]:
         encoding="utf-8",
     )
     return skill, prompt, theme
+
+
+def configured_loader_with_every_kind(
+    tmp_path: Path,
+) -> tuple[DefaultResourceLoader, dict[str, str]]:
+    project = tmp_path / "repo"
+    agent_dir = tmp_path / "agent"
+    project.mkdir()
+    agent_dir.mkdir()
+    context = project / "AGENTS.md"
+    context.write_text("repository context\n", encoding="utf-8")
+    skill = write_skill(
+        project / "skills/audit/SKILL.md", "audit", "audit code"
+    )
+    prompt = project / "prompts/review.md"
+    prompt.parent.mkdir()
+    prompt.write_text(
+        "---\ndescription: review\n---\nReview\n", encoding="utf-8"
+    )
+    theme = project / "themes/night.json"
+    theme.parent.mkdir()
+    theme.write_text(
+        json.dumps({"name": "night", "colors": {}, "vars": {}}),
+        encoding="utf-8",
+    )
+    extension = project / "extensions/sample.py"
+    extension.parent.mkdir()
+    extension.write_text(
+        "def extension(travis):\n    return None\n", encoding="utf-8"
+    )
+    loader = DefaultResourceLoader(
+        cwd=str(project),
+        agent_dir=str(agent_dir),
+        project_trusted=True,
+        additional_skill_paths=[str(skill)],
+        additional_prompt_template_paths=[str(prompt)],
+        additional_theme_paths=[str(theme)],
+        additional_extension_paths=[str(extension)],
+    )
+    return loader, {
+        "skill": str(skill.resolve()),
+        "prompt": str(prompt.resolve()),
+        "theme": str(theme.resolve()),
+        "context": str(context.resolve()),
+        "extension": str(extension.resolve()),
+    }
+
+
+def test_loader_explains_every_phase_one_resource_source(tmp_path: Path) -> None:
+    loader, paths = configured_loader_with_every_kind(tmp_path)
+
+    loader.reload()
+    snapshot = loader.get_capability_snapshot()
+    cases = (
+        (CapabilityKind.SKILL, "audit", paths["skill"]),
+        (CapabilityKind.PROMPT_TEMPLATE, "review", paths["prompt"]),
+        (CapabilityKind.THEME, "night", paths["theme"]),
+        (CapabilityKind.CONTEXT_FILE, paths["context"], paths["context"]),
+        (CapabilityKind.EXTENSION, paths["extension"], paths["extension"]),
+    )
+
+    for kind, key, expected_path in cases:
+        resolution = snapshot.resolve(kind, key)
+        assert resolution.winner is not None
+        assert resolution.winner.source.path == expected_path
+        assert resolution.winner.source.provider == "default-resources"
 
 
 def test_candidate_preserves_package_before_bundled_skill_precedence(

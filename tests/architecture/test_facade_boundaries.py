@@ -39,6 +39,10 @@ OWNER_GLOBS = (
     "travis/ai/providers/runtime_auth.py",
     "travis/ai/providers/sse_common.py",
     "travis/ai/providers/streaming_json.py",
+    "travis/coding_agent/capabilities/*.py",
+    "travis/coding_agent/resource_candidates.py",
+    "travis/coding_agent/resource_extensions.py",
+    "travis/coding_agent/resource_loader.py",
 )
 FORBIDDEN_OWNER_IMPORTS = {
     "travis.coding_agent.agent_session",
