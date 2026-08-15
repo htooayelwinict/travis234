@@ -230,6 +230,14 @@ def create_agent_session_from_services(options: dict[str, Any]) -> CreateAgentSe
         session_id=str(session_id) if session_id else None,
         session_start_event=options.get("sessionStartEvent", options.get("session_start_event")),
         defer_session_start=bool(options.get("deferSessionStart", options.get("defer_session_start", False))),
+        model_role_bindings=options.get(
+            "modelRoleBindings",
+            options.get("model_role_bindings"),
+        ),
+        model_role_event_sink=options.get(
+            "modelRoleEventSink",
+            options.get("model_role_event_sink"),
+        ),
     )
     _record_initial_session_state(session, model, thinking_level or "off", fresh_session)
     return CreateAgentSessionResult(

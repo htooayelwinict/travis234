@@ -33,6 +33,7 @@ from travis.coding_agent.extensions import (
 from travis.coding_agent.settings_manager import SettingsManager
 from travis.coding_agent.auth_storage import AuthStorage
 from travis.coding_agent.model_registry import ModelRegistry
+from travis.coding_agent.model_roles import ModelRole
 from travis.coding_agent.processes.completions import ProcessCompletionStore
 from travis.coding_agent.processes.local import create_local_process_transport
 from travis.coding_agent.processes.service import ProcessSessionService
@@ -125,6 +126,7 @@ class CodingApp:
         offline: bool = False,
         event_trace=None,
         conversation_log=None,
+        model_role_bindings: Mapping[ModelRole, ScopedModel] | None = None,
     ) -> None:
         self.cwd = str(Path(cwd).expanduser().resolve())
         self.event_trace = event_trace
@@ -138,6 +140,12 @@ class CodingApp:
         self.model_registry.ensure_model(model)
         if compression_model is not None:
             self.model_registry.ensure_model(compression_model)
+        self._model_role_bindings = {
+            role: ScopedModel(binding.model, binding.thinking_level)
+            for role, binding in (model_role_bindings or {}).items()
+        }
+        for binding in self._model_role_bindings.values():
+            self.model_registry.ensure_model(binding.model)
         self._settings_manager = settings_manager or SettingsManager.in_memory()
         self._project_trust_override = project_trust_override
         self._project_trust_context = project_trust_context or ProjectTrustContext(False, None)
@@ -315,6 +323,12 @@ class CodingApp:
             process_service=self.process_service,
             process_owner=self._process_owner_for(resolved_cwd),
             model_change_listener=self._handle_session_model_changed,
+            model_role_bindings=self._model_role_bindings,
+            model_role_event_sink=(
+                (lambda fields: self._trace("model_role_resolved", fields))
+                if self.event_trace is not None
+                else None
+            ),
         )
         if fresh_session and session._session_store is not None:
             session._session_store.append_model_change(session.model.provider, session.model.id)

@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Mapping, Optional
 
 from travis.agent.agent import Agent
 from travis.agent.types import AbortSignal
@@ -60,6 +60,7 @@ from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import ProcessOwner
 from travis.coding_agent.auth_storage import AuthStorage
 from travis.coding_agent.model_registry import ModelRegistry
+from travis.coding_agent.model_roles import ModelRole, ModelRoleRouter
 from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.session_index import SessionIndex
 from travis.coding_agent.session_store import (
@@ -165,6 +166,8 @@ class _SessionRuntime(
         process_service: ProcessSessionService | None = None,
         process_owner: ProcessOwner | None = None,
         model_change_listener: Callable[[Model, Model], None] | None = None,
+        model_role_bindings: Mapping[ModelRole, ScopedModel] | None = None,
+        model_role_event_sink: Callable[[dict[str, object]], None] | None = None,
     ) -> None:
         self.cwd = cwd
         self.model_registry = model_registry or ModelRegistry.create(AuthStorage.create())
@@ -283,6 +286,14 @@ class _SessionRuntime(
             thinking_level = restored_context.thinking_level
             self._session_name = restored_context.session_name
             self._generation_param_overrides = restored_context.generation_params
+
+        self.model_role_router = ModelRoleRouter(
+            self.model_registry,
+            self.settings_manager,
+            ScopedModel(model, thinking_level),
+            session_bindings=model_role_bindings,
+            event_sink=model_role_event_sink,
+        )
 
         if tools is not None:
             base_tools = tools
@@ -410,6 +421,8 @@ def create_agent_session(
     agent_dir: str | None = None,
     session_index: SessionIndex | None = None,
     settings_manager: object | None = None,
+    model_role_bindings: Mapping[ModelRole, ScopedModel] | None = None,
+    model_role_event_sink: Callable[[dict[str, object]], None] | None = None,
 ) -> AgentSession:
     return AgentSession(
         cwd=cwd,
@@ -427,4 +440,6 @@ def create_agent_session(
         agent_dir=agent_dir,
         session_index=session_index,
         settings_manager=settings_manager,
+        model_role_bindings=model_role_bindings,
+        model_role_event_sink=model_role_event_sink,
     )

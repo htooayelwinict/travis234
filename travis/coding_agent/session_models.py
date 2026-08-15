@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable, Mapping, Optional
+from typing import Callable, Iterable, Mapping, Optional
 
 from travis.agent.agent import Agent
 from travis.agent.types import AbortSignal
@@ -45,6 +45,7 @@ from travis.coding_agent.config import get_packaged_context_paths
 from travis.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
 from travis.coding_agent.execution_backend import select_execution_backend
 from travis.coding_agent.mailbox import CodingTurnMailbox, MailboxKind
+from travis.coding_agent.model_roles import ModelRole, ModelRoleResolution
 from travis.coding_agent.message_utils import (
     bash_execution_text as _bash_execution_to_text,
     last_assistant_message as _last_assistant_message,
@@ -212,6 +213,7 @@ class SessionModelController:
         effective_level = level if level in available_levels else self._clamp_thinking_level(level, available_levels)
         previous = self.agent.state.thinking_level
         self.agent.state.thinking_level = effective_level
+        self.model_role_router.set_primary(self.model, effective_level)
         if effective_level != previous:
             if self._session_store:
                 self._session_store.append_thinking_level_change(effective_level)
@@ -226,6 +228,21 @@ class SessionModelController:
                     "source": "api",
                 }
             )
+
+    def resolve_model_role(
+        self,
+        role: ModelRole,
+        *,
+        override: ScopedModel | None = None,
+        selector_override: str | None = None,
+        required_inputs: Iterable[str] | None = None,
+    ) -> ModelRoleResolution:
+        return self.model_role_router.resolve(
+            role,
+            override=override,
+            selector_override=selector_override,
+            required_inputs=required_inputs,
+        )
 
     def cycle_thinking_level(self) -> str | None:
         if not self.supports_thinking():
