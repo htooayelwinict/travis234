@@ -62,6 +62,16 @@ from travis.coding_agent.processes.local import create_local_process_transport
 from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import ProcessOwner
 from travis.coding_agent.eval_trace import SecretRedactor
+from travis.coding_agent.memory import (
+    MemorySettings,
+    MemoryStore,
+    MemoryStoreUnavailable,
+    project_key_for_path,
+)
+from travis.coding_agent.memory.tool import (
+    MemoryToolRuntime,
+    create_memory_tool_definition,
+)
 from travis.coding_agent.policy import ToolApprovalBroker, ToolPolicyEngine, ToolPolicySettings
 from travis.coding_agent.auth_storage import AuthStorage
 from travis.coding_agent.model_registry import ModelRegistry
@@ -335,6 +345,41 @@ class _SessionRuntime(
             agent_dir=str(Path(agent_dir or get_agent_dir()).expanduser().resolve()),
             settings_manager=self.settings_manager,
         )
+        memory_getter = getattr(self.settings_manager, "get_memory_settings", None)
+        self._memory_settings = (
+            memory_getter() if callable(memory_getter) else MemorySettings()
+        )
+        self._memory_project_key = project_key_for_path(cwd)
+        memory_requested = (
+            tools is None
+            and self._memory_settings.enabled
+            and self._is_allowed_tool("memory")
+            and (active_tool_names is None or "memory" in active_tool_names)
+        )
+        self._memory_store: MemoryStore | None = None
+        if memory_requested:
+            try:
+                self._memory_store = MemoryStore(
+                    Path(agent_dir or get_agent_dir()).expanduser().resolve()
+                    / "memory.sqlite3",
+                    settings=self._memory_settings,
+                )
+            except MemoryStoreUnavailable:
+                self._memory_store = None
+        self._memory_tool_runtime = (
+            MemoryToolRuntime(
+                self._memory_store,
+                settings=self._memory_settings,
+                project_key=self._memory_project_key,
+                session_id=self.session_id or session_id,
+                artifacts=self._artifacts,
+                spill_dir=Path(agent_dir or get_agent_dir()).expanduser().resolve()
+                / "memory-spill",
+                redactor=self._tool_policy_engine.redactor,
+            )
+            if memory_requested
+            else None
+        )
         self._language_services: LanguageServiceManager | None = None
         language_server_getter = getattr(self.settings_manager, "get_language_server_configs", None)
         language_server_configs = (
@@ -404,6 +449,22 @@ class _SessionRuntime(
                 definition.name: create_synthetic_source_info(f"<builtin:{definition.name}>", source="builtin")
                 for definition in base_definitions
             }
+        if (
+            tools is None
+            and self._memory_tool_runtime is not None
+            and not any(definition.name == "memory" for definition in base_definitions)
+        ):
+            memory_definition = create_memory_tool_definition(self._memory_tool_runtime)
+            base_definitions.append(memory_definition)
+            base_tools.append(
+                wrap_tool_definition(
+                    memory_definition,
+                    lambda: ToolContext(cwd=self.cwd, model=self.model),
+                )
+            )
+            base_source_infos["memory"] = create_synthetic_source_info(
+                "<builtin:memory>", source="builtin"
+            )
         self._base_tool_by_name = {tool.name: tool for tool in base_tools}
         self._base_definition_by_name = {definition.name: definition for definition in base_definitions}
         self._base_source_info_by_name = dict(base_source_infos)
@@ -481,13 +542,19 @@ class AgentSession(RuntimeFacade):
         try:
             self._runtime.dispose()
         finally:
-            self._close_operation_journal()
+            self._close_optional_owners()
 
     def shutdown(self, *args, **kwargs) -> None:
         try:
             self._runtime.shutdown(*args, **kwargs)
         finally:
-            self._close_operation_journal()
+            self._close_optional_owners()
+
+    def _close_optional_owners(self) -> None:
+        memory_store = getattr(self._runtime, "_memory_store", None)
+        if memory_store is not None:
+            memory_store.close()
+        self._close_operation_journal()
 
     def _close_operation_journal(self) -> None:
         self._runtime.operation_coordinator.close()

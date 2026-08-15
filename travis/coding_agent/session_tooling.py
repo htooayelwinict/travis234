@@ -121,6 +121,8 @@ class SessionToolController:
             names.insert(2, "process")
         if getattr(self, "_language_services", None) is not None:
             names.append("lsp")
+        if getattr(self, "_memory_tool_runtime", None) is not None:
+            names.append("memory")
         return names
 
     def _settings_shell_path(self) -> str | None:

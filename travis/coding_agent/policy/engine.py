@@ -31,6 +31,7 @@ _SAFE_CONTEXT_KEYS = frozenset(
         "taskId",
         "childRole",
         "childTaskId",
+        "scope",
     }
 )
 _SAFE_CONTEXT_BYTE_LIMIT = 384

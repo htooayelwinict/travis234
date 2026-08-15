@@ -224,7 +224,11 @@ def create_agent_session_from_services(options: dict[str, Any]) -> CreateAgentSe
         thinking_level = existing_session.thinking_level if has_thinking_entry else None
     extensions_result = services["resourceLoader"].get_extensions()
     runtime = extensions_result.get("runtime")
-    active_tool_names, allowed_tool_names = _resolve_tool_options(options)
+    memory_settings = services["settingsManager"].get_memory_settings()
+    active_tool_names, allowed_tool_names = _resolve_tool_options(
+        options,
+        memory_enabled=memory_settings.enabled,
+    )
     provider_retry_settings = _provider_retry_settings(services["settingsManager"])
     if operation_runtime is None:
         operation_runtime = OperationRuntime.from_settings(
@@ -543,7 +547,11 @@ def _builtin_tool_options(settings_manager: object) -> dict[str, dict[str, objec
     }
 
 
-def _resolve_tool_options(options: Mapping[str, Any]) -> tuple[list[str] | None, list[str] | None]:
+def _resolve_tool_options(
+    options: Mapping[str, Any],
+    *,
+    memory_enabled: bool = False,
+) -> tuple[list[str] | None, list[str] | None]:
     tools = options.get("tools")
     if tools is not None:
         selected = [str(name) for name in tools]
@@ -551,7 +559,10 @@ def _resolve_tool_options(options: Mapping[str, Any]) -> tuple[list[str] | None,
     no_tools = options.get("noTools", options.get("no_tools"))
     if no_tools:
         return [], [] if no_tools == "all" else None
-    return ["read", "bash", "edit", "write"], None
+    active = ["read", "bash", "edit", "write"]
+    if memory_enabled:
+        active.append("memory")
+    return active, None
 
 
 _IMAGE_READING_DISABLED_TEXT = "Image reading is disabled."
