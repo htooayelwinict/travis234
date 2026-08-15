@@ -10,6 +10,8 @@ import uuid
 from pathlib import Path
 from typing import Callable, Literal, TypedDict
 
+from travis.coding_agent.model_roles import CONFIGURABLE_MODEL_ROLES
+
 CONFIG_DIR_NAME = ".travis234"
 DEFAULT_HTTP_IDLE_TIMEOUT_MS = 300_000
 SettingsScope = Literal["global", "project"]
@@ -556,6 +558,39 @@ class SettingsManager:
     def set_enabled_models(self, patterns: list[str] | None) -> None:
         self._set_global("enabledModels", list(patterns) if patterns is not None else None)
 
+    def get_model_roles(self) -> dict[str, str]:
+        raw = self.settings.get("modelRoles")
+        if not isinstance(raw, dict):
+            return {}
+        return {
+            role: value.strip()
+            for role, value in raw.items()
+            if role in CONFIGURABLE_MODEL_ROLES
+            and isinstance(value, str)
+            and value.strip()
+        }
+
+    def get_model_role(self, role: str) -> str | None:
+        return self.get_model_roles().get(role)
+
+    def get_model_role_source(self, role: str) -> SettingsScope | None:
+        if self._scope_has_model_role(self.project_settings, role):
+            return "project"
+        if self._scope_has_model_role(self.global_settings, role):
+            return "global"
+        return None
+
+    def set_model_role(self, role: str, selector: str | None) -> None:
+        normalized = self._validated_model_role_write(role, selector)
+        self._set_model_role_in(self.global_settings, role, normalized)
+        self._save_global()
+
+    def set_project_model_role(self, role: str, selector: str | None) -> None:
+        normalized = self._validated_model_role_write(role, selector)
+        self._assert_project_trusted_for_write()
+        self._set_model_role_in(self.project_settings, role, normalized)
+        self._save_project()
+
     def get_double_escape_action(self) -> str:
         return self.settings.get("doubleEscapeAction") or "tree"
 
@@ -612,6 +647,39 @@ class SettingsManager:
         self._assert_project_trusted_for_write()
         self.project_settings[key] = value
         self._save_project()
+
+    @staticmethod
+    def _scope_has_model_role(settings: dict, role: str) -> bool:
+        raw = settings.get("modelRoles")
+        value = raw.get(role) if isinstance(raw, dict) else None
+        return (
+            role in CONFIGURABLE_MODEL_ROLES
+            and isinstance(value, str)
+            and bool(value.strip())
+        )
+
+    @staticmethod
+    def _validated_model_role_write(role: str, selector: str | None) -> str | None:
+        if role not in CONFIGURABLE_MODEL_ROLES:
+            raise ValueError(f"Unsupported model role: {role!r}")
+        if selector is None:
+            return None
+        if not isinstance(selector, str) or not selector.strip():
+            raise ValueError("Model role selector must be a non-blank string.")
+        return selector.strip()
+
+    @staticmethod
+    def _set_model_role_in(settings: dict, role: str, selector: str | None) -> None:
+        raw = settings.get("modelRoles")
+        roles = dict(raw) if isinstance(raw, dict) else {}
+        if selector is None:
+            roles.pop(role, None)
+        else:
+            roles[role] = selector
+        if roles:
+            settings["modelRoles"] = roles
+        else:
+            settings.pop("modelRoles", None)
 
     def _save_global(self) -> None:
         self._refresh_merged()
