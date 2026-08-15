@@ -3,19 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-import json
 from pathlib import Path
+from types import MappingProxyType
 
 from travis.agent.async_utils import run_sync
-from travis.coding_agent.config import get_agent_dir, get_packaged_skills_path
+from travis.coding_agent.config import get_agent_dir
 from travis.coding_agent.event_bus import EventBusController, create_event_bus
 from travis.coding_agent.extensions import ExtensionRunner
 from travis.coding_agent.object_utils import settings_value as _settings_value
-from travis.coding_agent.package_manager import (
-    DefaultPackageManager,
-    ResolvedPaths,
-    ResolvedResource,
-)
+from travis.coding_agent.package_manager import DefaultPackageManager
 from travis.coding_agent.prompt_templates import (
     load_prompt_templates as _load_prompt_templates_runtime,
 )
@@ -24,6 +20,16 @@ from travis.coding_agent.project_trust import (
     ProjectTrustStore,
     resolve_project_trust,
 )
+from travis.coding_agent.resource_candidates import (
+    ResourceContentCandidate,
+    ResourceContentRequest,
+    build_resource_content,
+    extend_resource_content,
+    load_context_file_from_dir,
+    load_project_context_files,
+    load_themes,
+    resource_paths as _resource_paths,
+)
 from travis.coding_agent.resource_extensions import (
     ExtensionLoadRequest,
     ExtensionRuntimeLease,
@@ -31,74 +37,12 @@ from travis.coding_agent.resource_extensions import (
     load_extension_runtime,
 )
 from travis.coding_agent.settings_manager import SettingsManager
-from travis.coding_agent.resource_discovery import collect_resource_files
 from travis.coding_agent.skills import (
     ResourceDiagnostic,
     Skill,
     format_skills_for_prompt as _format_skills_for_prompt_runtime,
     load_skills as _load_skills_runtime,
 )
-from travis.coding_agent.source_info import SourceInfo, create_synthetic_source_info
-from travis.coding_agent.themes import Theme
-
-CONFIG_DIR_NAME = ".travis234"
-_CONTEXT_FILE_NAMES = ("AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD")
-
-def load_context_file_from_dir(directory: str | Path) -> dict[str, str] | None:
-    base = Path(directory).expanduser().resolve()
-    for name in _CONTEXT_FILE_NAMES:
-        candidate = base / name
-        if not candidate.is_file():
-            continue
-        try:
-            return {"path": str(candidate), "content": candidate.read_text(encoding="utf-8")}
-        except OSError:
-            continue
-    return None
-
-
-def _nearest_git_root(start: Path) -> Path | None:
-    """Return the active checkout/worktree boundary, if one exists."""
-
-    current = start
-    while True:
-        if (current / ".git").exists():
-            return current
-        parent = current.parent
-        if parent == current:
-            return None
-        current = parent
-
-
-def load_project_context_files(*, cwd: str, agent_dir: str) -> list[dict[str, str]]:
-    resolved_cwd = Path(cwd).expanduser().resolve()
-    resolved_agent_dir = Path(agent_dir).expanduser().resolve()
-    project_root = _nearest_git_root(resolved_cwd)
-    context_files: list[dict[str, str]] = []
-    seen_paths: set[str] = set()
-
-    global_context = load_context_file_from_dir(resolved_agent_dir)
-    if global_context:
-        context_files.append(global_context)
-        seen_paths.add(global_context["path"])
-
-    ancestor_context_files: list[dict[str, str]] = []
-    current_dir = resolved_cwd
-    while True:
-        context_file = load_context_file_from_dir(current_dir)
-        if context_file and context_file["path"] not in seen_paths:
-            ancestor_context_files.insert(0, context_file)
-            seen_paths.add(context_file["path"])
-
-        if project_root is not None and current_dir == project_root:
-            break
-        parent = current_dir.parent
-        if parent == current_dir:
-            break
-        current_dir = parent
-
-    context_files.extend(ancestor_context_files)
-    return context_files
 
 
 class DefaultResourceLoader:
@@ -206,6 +150,19 @@ class DefaultResourceLoader:
         self.last_skill_paths: list[str] = []
         self.last_prompt_paths: list[str] = []
         self.last_theme_paths: list[str] = []
+        self._content_candidate = ResourceContentCandidate(
+            skills_result=self.skills_result,
+            prompts_result=self.prompts_result,
+            themes_result=self.themes_result,
+            agents_files=(),
+            system_prompt=None,
+            append_system_prompt=(),
+            package_diagnostics=(),
+            skill_paths=(),
+            prompt_paths=(),
+            theme_paths=(),
+            metadata_by_path=MappingProxyType({}),
+        )
         self._extension_reload_generation = 0
 
     def get_extensions(self) -> dict[str, object]:
@@ -241,16 +198,17 @@ class DefaultResourceLoader:
 
 
     def extend_resources(self, paths: dict[str, list[dict[str, object]]]) -> None:
-        self.last_skill_paths = _merge_paths(self.cwd, self.last_skill_paths, _resource_paths(paths.get("skillPaths", [])))
-        self.last_prompt_paths = _merge_paths(
-            self.cwd,
-            self.last_prompt_paths,
-            _resource_paths(paths.get("promptPaths", [])),
+        candidate = extend_resource_content(
+            self._content_candidate,
+            cwd=self.cwd,
+            skill_paths=tuple(_resource_paths(paths.get("skillPaths", []))),
+            prompt_paths=tuple(_resource_paths(paths.get("promptPaths", []))),
+            theme_paths=tuple(_resource_paths(paths.get("themePaths", []))),
+            skills_override=self.skills_override,
+            prompts_override=self.prompts_override,
+            themes_override=self.themes_override,
         )
-        self.last_theme_paths = _merge_paths(self.cwd, self.last_theme_paths, _resource_paths(paths.get("themePaths", [])))
-        self._update_skills_from_paths(self.last_skill_paths)
-        self._update_prompts_from_paths(self.last_prompt_paths)
-        self._update_themes_from_paths(self.last_theme_paths)
+        self._apply_content_candidate(candidate)
 
 
     def load_project_trust_extensions(self) -> dict[str, object]:
@@ -352,56 +310,52 @@ class DefaultResourceLoader:
     def _reload_all_resources(self, *, pretrust_extensions: dict[str, object] | None = None) -> None:
         self._reload_settings_and_configured_paths()
         resolved_paths = self.package_manager.resolve()
-        self.package_diagnostics = list(resolved_paths.diagnostics)
-        skill_paths = [resource.path for resource in resolved_paths.skills if resource.enabled]
-        prompt_paths = [resource.path for resource in resolved_paths.prompts if resource.enabled]
-        theme_paths = [resource.path for resource in resolved_paths.themes if resource.enabled]
-        metadata_by_path = {
-            str(Path(resource.path).expanduser().resolve()): resource.metadata
-            for resources in (resolved_paths.skills, resolved_paths.prompts, resolved_paths.themes)
-            for resource in resources
-        }
         extension_paths = [resource.path for resource in resolved_paths.extensions if resource.enabled]
         self._update_extensions(extension_paths, preloaded_result=pretrust_extensions)
         self._pretrust_extension_lease = None
-        packaged_skill_paths = [] if self.no_skills else [get_packaged_skills_path()]
-        self.last_skill_paths = _merge_paths(
-            self.cwd,
-            skill_paths,
-            [*self.additional_skill_paths, *packaged_skill_paths],
+        candidate = build_resource_content(
+            ResourceContentRequest(
+                cwd=self.cwd,
+                agent_dir=self.agent_dir,
+                project_trusted=self.project_trusted,
+                resolved_paths=resolved_paths,
+                additional_skill_paths=tuple(self.additional_skill_paths),
+                additional_prompt_paths=tuple(
+                    self.additional_prompt_template_paths
+                ),
+                additional_theme_paths=tuple(self.additional_theme_paths),
+                no_context_files=self.no_context_files,
+                no_skills=self.no_skills,
+                no_prompt_templates=self.no_prompt_templates,
+                no_themes=self.no_themes,
+                system_prompt_source=self.system_prompt_source,
+                append_system_prompt_source=(
+                    tuple(self.append_system_prompt_source)
+                    if self.append_system_prompt_source is not None
+                    else None
+                ),
+                agents_files_override=self.agents_files_override,
+                skills_override=self.skills_override,
+                prompts_override=self.prompts_override,
+                themes_override=self.themes_override,
+                system_prompt_override=self.system_prompt_override,
+                append_system_prompt_override=self.append_system_prompt_override,
+            )
         )
-        self.last_prompt_paths = _merge_paths(self.cwd, prompt_paths, self.additional_prompt_template_paths)
-        self.last_theme_paths = _merge_paths(self.cwd, theme_paths, self.additional_theme_paths)
-        self._update_skills_from_paths(self.last_skill_paths, metadata_by_path)
-        self._update_prompts_from_paths(self.last_prompt_paths, metadata_by_path)
-        self._update_themes_from_paths(self.last_theme_paths, metadata_by_path)
+        self._apply_content_candidate(candidate)
 
-        agents_files = {
-            "agentsFiles": []
-            if self.no_context_files
-            else load_project_context_files(cwd=self.cwd, agent_dir=self.agent_dir)
-        }
-        resolved_agents_files = self.agents_files_override(agents_files) if self.agents_files_override else agents_files
-        self.agents_files = list(resolved_agents_files["agentsFiles"])
-
-        base_system_prompt = _resolve_prompt_input(
-            self.system_prompt_source or self._discover_system_prompt_file(),
-            cwd=self.cwd,
-        )
-        self.system_prompt = self.system_prompt_override(base_system_prompt) if self.system_prompt_override else base_system_prompt
-
-        append_sources = self.append_system_prompt_source
-        if append_sources is None:
-            discovered_append = self._discover_append_system_prompt_file()
-            append_sources = [discovered_append] if discovered_append else []
-        base_append = [
-            prompt
-            for prompt in (_resolve_prompt_input(source, cwd=self.cwd) for source in append_sources)
-            if prompt is not None
-        ]
-        self.append_system_prompt = (
-            self.append_system_prompt_override(base_append) if self.append_system_prompt_override else base_append
-        )
+    def _apply_content_candidate(self, candidate: ResourceContentCandidate) -> None:
+        self._content_candidate = candidate
+        self.skills_result = candidate.skills_result
+        self.prompts_result = candidate.prompts_result
+        self.themes_result = candidate.themes_result
+        self.agents_files = list(candidate.agents_files)
+        self.system_prompt = candidate.system_prompt
+        self.append_system_prompt = list(candidate.append_system_prompt)
+        self.package_diagnostics = list(candidate.package_diagnostics)
+        self.last_skill_paths = list(candidate.skill_paths)
+        self.last_prompt_paths = list(candidate.prompt_paths)
+        self.last_theme_paths = list(candidate.theme_paths)
 
     def _update_extensions(
         self,
@@ -437,80 +391,6 @@ class DefaultResourceLoader:
         if replaced is not candidate:
             replaced.release()
 
-    def _update_skills_from_paths(self, skill_paths: list[str], metadata_by_path: dict[str, dict[str, object]] | None = None) -> None:
-        if self.no_skills and not skill_paths:
-            result: dict[str, list[object]] = {"skills": [], "diagnostics": []}
-        else:
-            result = load_skills(skill_paths, cwd=self.cwd, metadata_by_path=metadata_by_path)
-        self.skills_result = self.skills_override(result) if self.skills_override else result
-
-    def _update_prompts_from_paths(
-        self,
-        prompt_paths: list[str],
-        metadata_by_path: dict[str, dict[str, object]] | None = None,
-    ) -> None:
-        if self.no_prompt_templates and not prompt_paths:
-            result: dict[str, list[object]] = {"prompts": [], "diagnostics": []}
-        else:
-            result = load_prompt_templates(prompt_paths, cwd=self.cwd, metadata_by_path=metadata_by_path)
-        self.prompts_result = self.prompts_override(result) if self.prompts_override else result
-
-    def _update_themes_from_paths(
-        self,
-        theme_paths: list[str],
-        metadata_by_path: dict[str, dict[str, object]] | None = None,
-    ) -> None:
-        if self.no_themes and not theme_paths:
-            result: dict[str, list[object]] = {"themes": [], "diagnostics": []}
-        else:
-            result = load_themes(theme_paths, cwd=self.cwd, metadata_by_path=metadata_by_path)
-        self.themes_result = self.themes_override(result) if self.themes_override else result
-
-    def _discover_system_prompt_file(self) -> str | None:
-        project_path = Path(self.cwd) / CONFIG_DIR_NAME / "SYSTEM.md"
-        if self.project_trusted and project_path.exists():
-            return str(project_path)
-
-        global_path = Path(self.agent_dir) / "SYSTEM.md"
-        if global_path.exists():
-            return str(global_path)
-        return None
-
-    def _discover_append_system_prompt_file(self) -> str | None:
-        project_path = Path(self.cwd) / CONFIG_DIR_NAME / "APPEND_SYSTEM.md"
-        if self.project_trusted and project_path.exists():
-            return str(project_path)
-
-        global_path = Path(self.agent_dir) / "APPEND_SYSTEM.md"
-        if global_path.exists():
-            return str(global_path)
-        return None
-
-
-def _resolve_prompt_input(source: str | None, *, cwd: str) -> str | None:
-    if not source:
-        return None
-
-    path = Path(source).expanduser()
-    if not path.is_absolute():
-        path = Path(cwd) / path
-    if path.exists():
-        try:
-            return path.read_text(encoding="utf-8")
-        except OSError:
-            return source
-    return source
-
-
-def _resource_paths(entries: list[dict[str, object]]) -> list[str]:
-    paths: list[str] = []
-    for entry in entries:
-        path = entry.get("path")
-        if isinstance(path, str):
-            paths.append(path)
-    return paths
-
-
 def _first_mapping_value(options: Mapping[str, object], *names: str) -> object | None:
     for name in names:
         if name in options:
@@ -538,90 +418,19 @@ def _settings_package_paths(settings_manager: object) -> list[str]:
     return paths
 
 
-def _merge_paths(cwd: str, primary: list[str], additional: list[str]) -> list[str]:
-    merged: list[str] = []
-    seen: set[str] = set()
-    for path in [*primary, *additional]:
-        resolved = Path(path).expanduser()
-        if not resolved.is_absolute():
-            resolved = Path(cwd) / resolved
-        resolved_text = str(resolved.resolve())
-        if resolved_text in seen:
-            continue
-        seen.add(resolved_text)
-        merged.append(resolved_text)
-    return merged
-
-
 def load_skills_from_dir(options: dict[str, object]) -> dict[str, list[object]]:
     directory = str(options.get("dir") or options.get("path") or "")
     cwd = str(options.get("cwd") or Path(directory).parent or ".")
     metadata_by_path = options.get("metadataByPath") or options.get("metadata_by_path")
-    return load_skills([directory], cwd=cwd, metadata_by_path=metadata_by_path if isinstance(metadata_by_path, dict) else None)
-def load_themes(
-    theme_paths: list[str],
-    *,
-    cwd: str,
-    metadata_by_path: dict[str, dict[str, object]] | None = None,
-) -> dict[str, list[object]]:
-    themes: list[Theme] = []
-    diagnostics: list[ResourceDiagnostic] = []
-    seen_names: set[str] = set()
-    for path_text in theme_paths:
-        path = _resolve_path(path_text, cwd)
-        paths = collect_resource_files(path, "themes") if path.is_dir() else [path]
-        for theme_file in paths:
-            if not theme_file.exists() or theme_file.suffix != ".json":
-                continue
-            try:
-                data = json.loads(theme_file.read_text(encoding="utf-8"))
-                name = str(data.get("name") or theme_file.stem)
-                if name in seen_names:
-                    diagnostics.append(
-                        ResourceDiagnostic(type="collision", message=f'name "{name}" collision', path=str(theme_file))
-                    )
-                    continue
-                seen_names.add(name)
-                themes.append(
-                    Theme(
-                        name=name,
-                        colors=dict(data.get("colors") or {}),
-                        vars=dict(data.get("vars") or {}),
-                        source_path=str(theme_file),
-                        source_info=_source_info_for_path(theme_file, metadata_by_path),
-                    )
-                )
-            except (OSError, json.JSONDecodeError) as error:
-                diagnostics.append(ResourceDiagnostic(type="warning", message=str(error), path=str(theme_file)))
-    return {"themes": themes, "diagnostics": diagnostics}
-def _resolve_path(path: str, cwd: str) -> Path:
-    resolved = Path(path).expanduser()
-    if not resolved.is_absolute():
-        resolved = Path(cwd) / resolved
-    return resolved.resolve()
+    return load_skills(
+        [directory],
+        cwd=cwd,
+        metadata_by_path=(
+            metadata_by_path if isinstance(metadata_by_path, dict) else None
+        ),
+    )
 
 
-def _source_info_for_path(path: Path, metadata_by_path: dict[str, dict[str, object]] | None) -> SourceInfo:
-    resolved = str(path.resolve())
-    metadata = metadata_by_path.get(resolved) if metadata_by_path else None
-    if metadata is None and metadata_by_path:
-        for source_path, source_metadata in metadata_by_path.items():
-            source_root = Path(source_path).resolve()
-            try:
-                path.resolve().relative_to(source_root)
-                metadata = source_metadata
-                break
-            except ValueError:
-                continue
-    if metadata:
-        return create_synthetic_source_info(
-            str(path),
-            source=str(metadata.get("source", "local")),
-            scope=str(metadata.get("scope", "temporary")),
-            origin=str(metadata.get("origin", "top-level")),
-            base_dir=metadata.get("baseDir") if isinstance(metadata.get("baseDir"), str) else None,
-        )
-    return create_synthetic_source_info(str(path), source="local", base_dir=str(path.parent))
 # Compatibility imports: callers keep the historical resource_loader surface,
 # while focused modules own parsing, validation, and ignored traversal.
 load_skills = _load_skills_runtime

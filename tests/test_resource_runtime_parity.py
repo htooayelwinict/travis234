@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,12 @@ from travis.coding_agent.prompt_templates import (
     PromptTemplate,
     expand_prompt_template,
     load_prompt_templates,
+)
+from travis.coding_agent.package_manager import ResolvedPaths
+from travis.coding_agent.resource_candidates import (
+    ResourceContentRequest,
+    build_resource_content,
+    extend_resource_content,
 )
 from travis.coding_agent.skills import load_skills, parse_frontmatter
 from travis.coding_agent.source_info import create_synthetic_source_info
@@ -27,6 +34,168 @@ def _user_text(message: UserMessage) -> str:
     if isinstance(message.content, str):
         return message.content
     return "".join(getattr(block, "text", "") for block in message.content)
+
+
+def make_resource_roots(tmp_path: Path) -> tuple[Path, Path, Path]:
+    project = tmp_path / "repo"
+    agent_dir = tmp_path / "agent"
+    package = tmp_path / "package"
+    project.mkdir()
+    agent_dir.mkdir()
+    package.mkdir()
+    return project, agent_dir, package
+
+
+def write_skill(path: Path, name: str, description: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"---\nname: {name}\ndescription: {description}\n---\nbody\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def write_package_manifest(package: Path, *, skills: list[str]) -> None:
+    (package / "package.json").write_text(
+        json.dumps({"name": "fixture", "travis": {"skills": skills}}),
+        encoding="utf-8",
+    )
+
+
+def write_prompt(path: Path, version: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"---\ndescription: {version}\n---\nPrompt {version}\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def content_request(
+    tmp_path: Path,
+    *,
+    prompt_paths: tuple[str, ...] = (),
+) -> ResourceContentRequest:
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir(exist_ok=True)
+    return ResourceContentRequest(
+        cwd=str(tmp_path),
+        agent_dir=str(agent_dir),
+        project_trusted=False,
+        resolved_paths=ResolvedPaths(),
+        additional_skill_paths=(),
+        additional_prompt_paths=prompt_paths,
+        additional_theme_paths=(),
+        no_context_files=True,
+        no_skills=True,
+        no_prompt_templates=False,
+        no_themes=False,
+        system_prompt_source=None,
+        append_system_prompt_source=None,
+        agents_files_override=None,
+        skills_override=None,
+        prompts_override=None,
+        themes_override=None,
+        system_prompt_override=None,
+        append_system_prompt_override=None,
+    )
+
+
+def write_extension_resources(tmp_path: Path) -> tuple[Path, Path, Path]:
+    skill = write_skill(
+        tmp_path / "skills/extension-skill/SKILL.md",
+        "extension-skill",
+        "skill",
+    )
+    prompt = tmp_path / "prompts/extension-prompt.md"
+    prompt.parent.mkdir()
+    prompt.write_text(
+        "---\ndescription: prompt\n---\nPrompt\n", encoding="utf-8"
+    )
+    theme = tmp_path / "themes/extension-theme.json"
+    theme.parent.mkdir()
+    theme.write_text(
+        json.dumps({"name": "extension-theme", "colors": {}, "vars": {}}),
+        encoding="utf-8",
+    )
+    return skill, prompt, theme
+
+
+def test_candidate_preserves_package_before_bundled_skill_precedence(
+    tmp_path: Path,
+) -> None:
+    project, agent_dir, package = make_resource_roots(tmp_path)
+    package_skill = write_skill(
+        package / "skills/web-search/SKILL.md",
+        "web-search",
+        "package winner",
+    )
+    write_package_manifest(package, skills=["skills/web-search/SKILL.md"])
+    loader = DefaultResourceLoader(
+        cwd=str(project),
+        agent_dir=str(agent_dir),
+        project_trusted=False,
+        package_paths=[str(package)],
+    )
+
+    loader.reload()
+
+    skill = next(
+        item for item in loader.get_skills()["skills"] if item.name == "web-search"
+    )
+    assert skill.description == "package winner"
+    assert skill.source_info.origin == "package"
+    collisions = [
+        item
+        for item in loader.get_skills()["diagnostics"]
+        if item.type == "collision"
+    ]
+    assert any(
+        item.collision
+        and item.collision["winnerPath"] == str(package_skill)
+        for item in collisions
+    )
+
+
+def test_content_build_does_not_mutate_previous_candidate(tmp_path: Path) -> None:
+    prompt = write_prompt(tmp_path / "prompts/review.md", "v1")
+    request = content_request(tmp_path, prompt_paths=(str(prompt.parent),))
+    first = build_resource_content(request)
+    write_prompt(prompt, "v2")
+
+    second = build_resource_content(request)
+
+    assert first.prompts_result["prompts"][0].content == "Prompt v1"
+    assert second.prompts_result["prompts"][0].content == "Prompt v2"
+
+
+def test_extend_builds_skill_prompt_and_theme_as_one_candidate(
+    tmp_path: Path,
+) -> None:
+    initial = build_resource_content(content_request(tmp_path))
+    skill, prompt, theme = write_extension_resources(tmp_path)
+
+    extended = extend_resource_content(
+        initial,
+        cwd=str(tmp_path),
+        skill_paths=(str(skill),),
+        prompt_paths=(str(prompt),),
+        theme_paths=(str(theme),),
+        skills_override=None,
+        prompts_override=None,
+        themes_override=None,
+    )
+
+    assert [item.name for item in extended.skills_result["skills"]] == [
+        "extension-skill"
+    ]
+    assert [item.name for item in extended.prompts_result["prompts"]] == [
+        "extension-prompt"
+    ]
+    assert [item.name for item in extended.themes_result["themes"]] == [
+        "extension-theme"
+    ]
+    assert initial.skills_result["skills"] == []
 
 
 def test_resource_loader_default_agent_dir_honors_environment_override(
