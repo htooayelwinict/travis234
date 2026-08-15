@@ -1055,6 +1055,32 @@ def test_file_mutation_queue_serializes_same_path(tmp_path: Path) -> None:
 
     assert max_active == 1
 
+
+def test_multi_file_mutation_queues_use_canonical_order_without_deadlock(tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from travis.coding_agent.tools.file_mutation_queue import with_file_mutation_queues
+
+    first = str(tmp_path / "a.txt")
+    second = str(tmp_path / "b.txt")
+    completed: list[str] = []
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        one = pool.submit(
+            with_file_mutation_queues,
+            [first, second],
+            lambda: completed.append("one"),
+        )
+        two = pool.submit(
+            with_file_mutation_queues,
+            [second, first],
+            lambda: completed.append("two"),
+        )
+        one.result(timeout=2)
+        two.result(timeout=2)
+
+    assert sorted(completed) == ["one", "two"]
+
 def test_bash_tool_runs_command(tmp_path: Path) -> None:
     tool = create_tool("bash", str(tmp_path))
     result = tool.execute("c1", {"command": "echo hi"})

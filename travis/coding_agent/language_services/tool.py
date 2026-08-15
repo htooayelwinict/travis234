@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,7 @@ _READ_ACTIONS = (
     "code_actions",
     "rename_preview",
     "code_action_preview",
+    "apply",
 )
 
 LSP_SCHEMA = {
@@ -62,6 +64,7 @@ LSP_SCHEMA = {
         },
         "newName": {"type": "string", "minLength": 1},
         "actionToken": {"type": "string", "pattern": "^lsp-action-[0-9a-f]{32}$"},
+        "previewToken": {"type": "string", "pattern": "^lsp-preview-[0-9a-f]{32}$"},
     },
     "required": ["action"],
     "additionalProperties": False,
@@ -95,10 +98,12 @@ def _validate_args(args: object) -> tuple[str, dict[str, object]]:
         if has_path == has_query:
             raise ValueError("lsp symbols requires exactly one of path or query")
         return action, args
-    if action == "code_action_preview":
-        token = args.get("actionToken")
-        if not isinstance(token, str) or not token.startswith("lsp-action-"):
-            raise ValueError("lsp code_action_preview requires an actionToken")
+    if action in {"code_action_preview", "apply"}:
+        field = "actionToken" if action == "code_action_preview" else "previewToken"
+        prefix = "lsp-action-" if action == "code_action_preview" else "lsp-preview-"
+        token = args.get(field)
+        if not isinstance(token, str) or not token.startswith(prefix):
+            raise ValueError(f"lsp {action} requires a {field}")
         return action, args
     path = _path_arg(args)
     if action in {"hover", "definition", "references", "rename_preview"}:
@@ -455,6 +460,7 @@ async def _create_mutation_preview(
         position_encoding=str(context["positionEncoding"]),  # type: ignore[arg-type]
         server_generation=int(context["generation"]),
         config_generation=int(context.get("configGeneration", 1)),
+        source_path=path,
     )
     if action == "code_action_preview":
         action_store.consume(
@@ -520,7 +526,32 @@ def create_lsp_tool_definition(
     async def execute(tool_call_id, args, signal=None, on_update=None, ctx=None):
         del on_update, ctx
         action, validated = _validate_args(args)
-        if action in {"rename_preview", "code_action_preview"}:
+        if action == "apply":
+            preview = preview_store.get(str(validated["previewToken"]))
+            current_generation = preview.server_generation
+            current_config_generation = int(
+                getattr(manager, "config_generation", preview.config_generation)
+            )
+            if preview.source_path is not None:
+                context = manager.response_context(preview.source_path)
+                current_generation = int(context["generation"])
+                current_config_generation = int(
+                    context.get("configGeneration", current_config_generation)
+                )
+            report = await asyncio.to_thread(
+                preview_store.apply,
+                str(validated["previewToken"]),
+                server_generation=current_generation,
+                config_generation=current_config_generation,
+                signal=signal,
+            )
+            payload = {
+                "applied": report.applied,
+                "changed": list(report.changed),
+                "restored": list(report.restored),
+                "unresolved": list(report.unresolved),
+            }
+        elif action in {"rename_preview", "code_action_preview"}:
             payload = await _create_mutation_preview(
                 manager,
                 preview_store,

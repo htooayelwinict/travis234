@@ -5,6 +5,7 @@ from __future__ import annotations
 import difflib
 import hashlib
 import secrets
+import stat
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -20,6 +21,8 @@ from travis.coding_agent.language_services.documents import (
     text_offset_from_position,
 )
 from travis.coding_agent.language_services.types import DocumentPosition, LanguageServiceLimits
+from travis.coding_agent.tools.atomic_file import atomic_replace_bytes
+from travis.coding_agent.tools.file_mutation_queue import with_file_mutation_queues
 
 
 class WorkspaceEditError(ValueError):
@@ -46,6 +49,15 @@ class WorkspaceEditPreview:
     server_generation: int
     config_generation: int
     created_at: float
+    source_path: Path | None = None
+
+
+@dataclass(frozen=True)
+class WorkspaceEditApplyReport:
+    applied: bool
+    changed: tuple[str, ...]
+    restored: tuple[str, ...]
+    unresolved: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -232,6 +244,7 @@ class WorkspaceEditPreviewStore:
         position_encoding: PositionEncoding,
         server_generation: int,
         config_generation: int,
+        source_path: str | Path | None = None,
     ) -> WorkspaceEditPreview:
         entries = _document_entries(edit, self.workspace)
         files = [
@@ -254,6 +267,11 @@ class WorkspaceEditPreviewStore:
             server_generation=server_generation,
             config_generation=config_generation,
             created_at=now,
+            source_path=(
+                Path(source_path).expanduser().resolve()
+                if source_path is not None
+                else None
+            ),
         )
         self._previews[preview.token] = preview
         while len(self._previews) > self.limits.max_preview_tokens:
@@ -287,6 +305,106 @@ class WorkspaceEditPreviewStore:
         preview = self.get(token)
         self._previews.pop(token, None)
         return preview
+
+    def apply(
+        self,
+        token: str,
+        *,
+        server_generation: int,
+        config_generation: int,
+        signal: object | None = None,
+        write_bytes: Callable[[Path, bytes, int], None] = atomic_replace_bytes,
+    ) -> WorkspaceEditApplyReport:
+        preview = self.get(
+            token,
+            server_generation=server_generation,
+            config_generation=config_generation,
+        )
+        if bool(getattr(signal, "aborted", False)):
+            raise WorkspaceEditError("workspace edit apply was aborted before locking")
+
+        def mutate() -> WorkspaceEditApplyReport:
+            staged: list[tuple[PreparedFileEdit, bytes, int]] = []
+            total_original_bytes = 0
+            for file in preview.files:
+                if bool(getattr(signal, "aborted", False)):
+                    raise WorkspaceEditError("workspace edit apply was aborted before mutation")
+                if file.path.is_symlink():
+                    raise WorkspaceEditError("workspace edit containment changed after preview (symlink)")
+                try:
+                    resolved = file.path.resolve(strict=True)
+                except (FileNotFoundError, OSError) as error:
+                    raise WorkspaceEditError("workspace edit target must remain an existing regular file") from error
+                if resolved != file.path or (
+                    resolved != self.workspace and self.workspace not in resolved.parents
+                ):
+                    raise WorkspaceEditError("workspace edit containment changed after preview")
+                if not resolved.is_file():
+                    raise WorkspaceEditError("workspace edit target must remain an existing regular file")
+                current_mode = stat.S_IMODE(resolved.stat().st_mode)
+                parent_mode = stat.S_IMODE(resolved.parent.stat().st_mode)
+                if not current_mode & 0o222 or not parent_mode & 0o222:
+                    raise WorkspaceEditError("workspace edit target and parent must be writable")
+                current = resolved.read_bytes()
+                if hashlib.sha256(current).hexdigest() != file.original_hash:
+                    raise WorkspaceEditError(
+                        f"workspace edit target {file.relative_path!r} changed since preview"
+                    )
+                total_original_bytes += len(current)
+                if total_original_bytes > self.limits.max_apply_original_bytes:
+                    raise WorkspaceEditError("workspace edit original bytes exceed the apply limit")
+                staged.append((file, current, current_mode))
+
+            if bool(getattr(signal, "aborted", False)):
+                raise WorkspaceEditError("workspace edit apply was aborted before mutation")
+            self.consume(token)
+            changed: list[tuple[PreparedFileEdit, bytes, int]] = []
+            try:
+                for file, original, mode in staged:
+                    if file.target_bytes == original:
+                        continue
+                    if bool(getattr(signal, "aborted", False)):
+                        raise WorkspaceEditError("workspace edit apply was aborted during writes")
+                    try:
+                        write_bytes(file.path, file.target_bytes, mode=mode)
+                    except BaseException:
+                        try:
+                            current_hash = hashlib.sha256(file.path.read_bytes()).hexdigest()
+                        except OSError:
+                            current_hash = "unreadable"
+                        if current_hash != file.original_hash:
+                            changed.append((file, original, mode))
+                        raise
+                    else:
+                        changed.append((file, original, mode))
+                    if bool(getattr(signal, "aborted", False)):
+                        raise WorkspaceEditError("workspace edit apply was aborted during writes")
+                return WorkspaceEditApplyReport(
+                    applied=True,
+                    changed=tuple(file.relative_path for file, _original, _mode in changed),
+                    restored=(),
+                    unresolved=(),
+                )
+            except BaseException:  # noqa: BLE001 - report best-effort restoration explicitly.
+                restored: list[str] = []
+                unresolved: list[str] = []
+                for file, original, mode in reversed(changed):
+                    try:
+                        write_bytes(file.path, original, mode=mode)
+                        restored.append(file.relative_path)
+                    except BaseException:  # noqa: BLE001 - unresolved paths are returned to the caller.
+                        unresolved.append(file.relative_path)
+                return WorkspaceEditApplyReport(
+                    applied=False,
+                    changed=tuple(file.relative_path for file, _original, _mode in changed),
+                    restored=tuple(restored),
+                    unresolved=tuple(unresolved),
+                )
+
+        return with_file_mutation_queues(
+            [str(file.path) for file in preview.files],
+            mutate,
+        )
 
 
 class ActionTokenStore:
@@ -365,6 +483,7 @@ __all__ = [
     "ActionTokenStore",
     "PreparedFileEdit",
     "WorkspaceEditError",
+    "WorkspaceEditApplyReport",
     "WorkspaceEditPreview",
     "WorkspaceEditPreviewStore",
 ]

@@ -69,6 +69,7 @@ def test_lsp_tool_has_one_exact_schema_and_all_conservative_effects(tmp_path: Pa
         "code_actions",
         "rename_preview",
         "code_action_preview",
+        "apply",
     }
     assert definition.effects == frozenset({"read", "write", "execute", "network"})
 
