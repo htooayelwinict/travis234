@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Callable, Literal, TypedDict
 
 from travis.coding_agent.artifact_store import ArtifactLimits
+from travis.coding_agent.language_services.config import parse_language_server_entries
+from travis.coding_agent.language_services.types import LanguageServerConfig
 from travis.coding_agent.model_roles import CONFIGURABLE_MODEL_ROLES
 from travis.coding_agent.policy.types import (
     TOOL_EFFECT_ORDER,
@@ -699,6 +701,35 @@ class SettingsManager:
                 effect for effect in TOOL_EFFECT_ORDER if effect in effective_effects
             ],
         }
+
+    def get_language_server_configs(self) -> list[LanguageServerConfig]:
+        global_configs = self._language_servers_from(self.global_settings, "global")
+        ordered = list(global_configs)
+        positions = {config.name: index for index, config in enumerate(ordered)}
+        if self.project_trusted:
+            project_configs = self._language_servers_from(self.project_settings, "project")
+            for config in project_configs:
+                position = positions.get(config.name)
+                if position is None:
+                    positions[config.name] = len(ordered)
+                    ordered.append(config)
+                else:
+                    ordered[position] = config
+        return ordered
+
+    def _language_servers_from(
+        self,
+        settings: dict,
+        scope: SettingsScope,
+    ) -> list[LanguageServerConfig]:
+        configs, errors = parse_language_server_entries(settings.get("languageServers"))
+        for error in errors:
+            if not any(
+                existing["scope"] == scope and str(existing["error"]) == str(error)
+                for existing in self.errors
+            ):
+                self._record_error(scope, error)
+        return configs
 
     def _tool_policy_scope(
         self,
