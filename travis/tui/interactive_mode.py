@@ -278,7 +278,7 @@ class _InteractiveRuntime(
         self.tool_approval_broker = InteractiveToolApprovalBroker()
         self.tool_approval_broker.bind(self)
         self.tool_approval_broker.bind_session(app.session)
-        self._subagent_snapshot = app.session.subagents.snapshot()
+        self._subagent_snapshot = self._current_subagent_snapshot()
         self._bind_subagent_supervisor()
         if callable(getattr(app, "subscribe_session_rebound", None)):
             self._extension_host = ExtensionHostAdapter(

@@ -10,6 +10,13 @@ from travis.tui.components.subagent_roster import SubagentRoster
 
 
 class InteractiveSubagents:
+    def _current_subagent_snapshot(self) -> SupervisorSnapshot:
+        supervisor = getattr(self.app.session, "subagents", None)
+        snapshot = getattr(supervisor, "snapshot", None)
+        if callable(snapshot):
+            return snapshot()
+        return SupervisorSnapshot(0, 0, 0, ())
+
     def _bind_subagent_supervisor(self) -> None:
         self._shutdown_subagent_ui()
         supervisor = getattr(self.app.session, "subagents", None)
@@ -29,10 +36,7 @@ class InteractiveSubagents:
         self.tui.request_render()
 
     def _rebind_subagent_supervisor(self) -> None:
-        supervisor = getattr(self.app.session, "subagents", None)
-        snapshot = getattr(supervisor, "snapshot", None)
-        if callable(snapshot):
-            self._subagent_snapshot = snapshot()
+        self._subagent_snapshot = self._current_subagent_snapshot()
         self._bind_subagent_supervisor()
 
     def _shutdown_subagent_ui(self) -> None:
