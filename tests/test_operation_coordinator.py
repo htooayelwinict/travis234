@@ -21,6 +21,7 @@ from travis.coding_agent.operations.coordinator import (
     OperationCoordinatorOrderError,
     OperationRuntime,
 )
+from travis.coding_agent.operations.recovery import RecoveryReport
 from travis.coding_agent.operations.store import OperationStore
 
 
@@ -414,6 +415,32 @@ def test_agent_session_services_create_and_forward_owned_runtime(tmp_path: Path)
     assert result.session.operation_coordinator.enabled is True
     result.session.dispose()
     assert services["operationRuntime"].heartbeat_thread_alive is False
+
+
+def test_owned_runtime_recovery_report_becomes_sanitized_diagnostic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = _TrackingRuntime()
+    runtime.recovery_report = RecoveryReport(
+        inspected_runtime_count=1,
+        stale_runtime_count=1,
+        uncertain_effect_count=2,
+        uncertain_operation_count=1,
+    )
+    monkeypatch.setattr(
+        "travis.coding_agent.agent_session_services.OperationRuntime.from_settings",
+        lambda *_args, **_kwargs: runtime,
+    )
+    services = create_agent_session_services(
+        {"cwd": str(tmp_path), "agentDir": str(tmp_path / "agent")}
+    )
+
+    result = create_agent_session_from_services(
+        {"services": services, "model": faux_model()}
+    )
+
+    assert services["diagnostics"] == [runtime.recovery_report.as_dict()]
+    result.session.dispose()
 
 
 def test_agent_session_services_borrow_supplied_runtime(tmp_path: Path) -> None:

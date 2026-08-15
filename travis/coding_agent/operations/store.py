@@ -31,6 +31,10 @@ from travis.coding_agent.operations.rows import (
     usage_identity,
 )
 from travis.coding_agent.operations.schema import has_required_schema
+from travis.coding_agent.operations.recovery_store import (
+    claim_uncertain_runtimes,
+    load_recovery_leases,
+)
 from travis.coding_agent.sqlite_utils import open_secure_sqlite, secure_sqlite_files
 
 _SCHEMA_VERSION = "1"
@@ -653,6 +657,17 @@ class OperationStore:
             self._require_open()
             rows = self._connection.execute(sql, parameters).fetchall()
             return tuple(self._snapshot_from_row(row) for row in rows)
+
+    def recovery_leases(self) -> tuple[RuntimeLease, ...]:
+        try:
+            return load_recovery_leases(self)
+        except sqlite3.DatabaseError:
+            raise OperationStoreUnavailable() from None
+
+    def mark_runtimes_uncertain(
+        self, runtime_ids: tuple[str, ...], now_ms: int
+    ) -> dict[str, int]:
+        return claim_uncertain_runtimes(self, runtime_ids, now_ms)
 
     def prune_settled_before(self, cutoff_ms: int) -> dict[str, int]:
         if isinstance(cutoff_ms, bool) or not isinstance(cutoff_ms, int) or cutoff_ms < 0:

@@ -234,6 +234,9 @@ def create_agent_session_from_services(options: dict[str, Any]) -> CreateAgentSe
         )
         services["operationRuntime"] = operation_runtime
         owns_operation_runtime = True
+        recovery_report = getattr(operation_runtime, "recovery_report", None)
+        if recovery_report is not None and recovery_report.has_diagnostic:
+            services["diagnostics"].append(recovery_report.as_dict())
     try:
         session = AgentSession(
             cwd=services["cwd"],

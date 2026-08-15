@@ -31,6 +31,7 @@ from travis.coding_agent.operations.coordinator import (
     OperationJournalDiagnostic,
     OperationRuntime,
 )
+from travis.coding_agent.operations.recovery import OperationRecovery, RecoveryReport
 
 __all__ = [
     "EFFECT_STATES",
@@ -43,6 +44,7 @@ __all__ = [
     "OperationCoordinatorOrderError",
     "OperationJournalDiagnostic",
     "OperationMode",
+    "OperationRecovery",
     "OperationRecord",
     "OperationRegister",
     "OperationSnapshot",
@@ -54,6 +56,7 @@ __all__ = [
     "OperationStoreUnavailable",
     "OperationRuntime",
     "ReplayPolicy",
+    "RecoveryReport",
     "RuntimeLease",
     "UsageLedgerEntry",
     "validate_effect_transition",

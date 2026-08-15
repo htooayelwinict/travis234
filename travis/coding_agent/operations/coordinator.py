@@ -15,6 +15,7 @@ from typing import Callable, Mapping
 import psutil
 
 from travis.coding_agent.operations.store import OperationStore
+from travis.coding_agent.operations.recovery import OperationRecovery, RecoveryReport
 
 
 Clock = Callable[[], int]
@@ -384,6 +385,9 @@ class OperationRuntime:
         self._closed = False
         self._unavailable_reason = unavailable_reason
         self.path = path or (store.path if store is not None else None)
+        self.recovery_report = RecoveryReport(
+            unavailable=unavailable_reason == "journal_unavailable"
+        )
         if store is None:
             return
         store.open_runtime(
@@ -419,11 +423,16 @@ class OperationRuntime:
         store: OperationStore | None = None
         try:
             store = OperationStore(path, max_bytes=int(settings["maxBytes"]))
-            return cls(
+            runtime = cls(
                 store,
                 path=path,
                 heartbeat_interval_seconds=heartbeat_interval_seconds,
             )
+            runtime.recovery_report = OperationRecovery.inspect(
+                store,
+                exclude_runtime_id=runtime.runtime_id,
+            )
+            return runtime
         except Exception:
             if store is not None:
                 try:
