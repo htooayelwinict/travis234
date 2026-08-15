@@ -191,6 +191,26 @@ class SubagentTask:
         ]
         if self.context_pack.strip():
             parts.append(f"Context pack:\n{self.context_pack.strip()}")
+        if self.result_schema is not None:
+            schema = json.dumps(
+                self.result_schema,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            artifact_instruction = (
+                "Set artifacts to [] because this role does not retain declared files."
+                if self.artifact_policy == "none"
+                else "Artifacts may list only declared workspace-relative UTF-8 regular files."
+            )
+            parts.append(
+                "Typed result contract:\n"
+                "- The final response must be only one JSON object, without Markdown fences.\n"
+                '- Use exactly {"summary": string, "output": value, "artifacts": string[]}.\n'
+                "- output must satisfy the JSON Schema Draft 2020-12 schema below.\n"
+                f"- {artifact_instruction}\n"
+                f"Output schema: {schema}"
+            )
         return "\n\n".join(parts)
 
 

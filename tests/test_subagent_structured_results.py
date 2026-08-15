@@ -98,6 +98,37 @@ def test_legacy_plain_text_result_remains_valid_without_schema(tmp_path) -> None
     assert result.structured_output is None
 
 
+def test_typed_task_prompt_declares_envelope_schema_and_artifact_policy(tmp_path) -> None:
+    task = SubagentTask(
+        role="reviewer",
+        goal="review",
+        cwd=str(tmp_path),
+        role_definition_name="reviewer",
+        result_schema={
+            "type": "object",
+            "required": ["verdict"],
+            "properties": {"verdict": {"enum": ["pass", "fail"]}},
+        },
+        artifact_policy="declared",
+    )
+
+    prompt = task.prompt()
+
+    assert "Typed result contract" in prompt
+    assert '"summary"' in prompt
+    assert '"output"' in prompt
+    assert '"artifacts"' in prompt
+    assert '"required":["verdict"]' in prompt
+    assert "JSON Schema Draft 2020-12" in prompt
+    assert "declared workspace-relative UTF-8 regular files" in prompt
+
+
+def test_legacy_task_prompt_does_not_require_json_envelope(tmp_path) -> None:
+    task = SubagentTask(role="worker", goal="work", cwd=str(tmp_path))
+
+    assert "Typed result contract" not in task.prompt()
+
+
 def test_existing_expand_result_can_page_structured_output(tmp_path) -> None:
     result = _run(
         tmp_path,
