@@ -102,6 +102,24 @@ async def test_status_reports_shadowed_external_packaged_server_without_connecti
         {"tool": "search_issues"},
         {"server": "github", "search": "issue", "tool": "search_issues"},
         {"server": "github", "args": {"query": "x"}},
+        {
+            "server": "github",
+            "operation": "resources.read",
+            "resource": "mcp-resource-" + "a" * 32,
+            "tool": "echo",
+        },
+        {
+            "server": "github",
+            "operation": "resources.read",
+            "resource": "https://user:secret@example.test/private?token=hidden",
+        },
+        {
+            "server": "github",
+            "operation": "prompts.get",
+            "prompt": "review",
+            "arguments": {"private": 1},
+        },
+        {"server": "github", "operation": "tools.search"},
     ],
 )
 async def test_invalid_dispatch_shape_does_not_connect(params) -> None:
@@ -112,6 +130,44 @@ async def test_invalid_dispatch_shape_does_not_connect(params) -> None:
     assert state.runtime.connects == []
     assert result.details["travis234Mcp"]["isError"] is True
     assert "Example:" in result.content[0].text
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("explicit", "legacy"),
+    [
+        ({"server": "github", "operation": "tools.list"}, {"server": "github"}),
+        (
+            {"server": "github", "operation": "tools.search", "query": "echo"},
+            {"server": "github", "search": "echo"},
+        ),
+        (
+            {"server": "github", "operation": "tools.describe", "name": "echo"},
+            {"server": "github", "describe": "echo"},
+        ),
+        (
+            {
+                "server": "github",
+                "operation": "tools.call",
+                "name": "echo",
+                "arguments": {"text": "hello"},
+            },
+            {"server": "github", "tool": "echo", "args": {"text": "hello"}},
+        ),
+    ],
+)
+async def test_explicit_tool_operations_preserve_legacy_alias_behavior(
+    explicit,
+    legacy,
+) -> None:
+    explicit_state = _state()
+    legacy_state = _state()
+
+    explicit_result = await dispatch_proxy(explicit_state, explicit, None)
+    legacy_result = await dispatch_proxy(legacy_state, legacy, None)
+
+    assert explicit_result.content == legacy_result.content
+    assert explicit_result.details == legacy_result.details
 
 
 @pytest.mark.anyio

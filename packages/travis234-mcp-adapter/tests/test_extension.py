@@ -27,6 +27,27 @@ EXPECTED_SCHEMA = {
     "type": "object",
     "properties": {
         "server": {"type": "string"},
+        "operation": {
+            "type": "string",
+            "enum": [
+                "tools.list",
+                "tools.search",
+                "tools.describe",
+                "tools.call",
+                "resources.list",
+                "resources.read",
+                "prompts.list",
+                "prompts.get",
+            ],
+        },
+        "query": {"type": "string"},
+        "name": {"type": "string"},
+        "resource": {
+            "type": "string",
+            "pattern": "^mcp-resource-[0-9a-f]{32}$",
+        },
+        "prompt": {"type": "string"},
+        "arguments": {"type": "object", "additionalProperties": True},
         "search": {"type": "string"},
         "describe": {"type": "string"},
         "tool": {"type": "string"},
@@ -62,6 +83,14 @@ def test_factory_registers_one_proxy_without_io(
             "args": {"token": "secret-never-approved", "title": "private"},
         }
     ) == {"server": "github", "operation": "call"}
+    assert registered[0].definition.policy_context(
+        {
+            "server": "github",
+            "operation": "prompts.get",
+            "prompt": "private-review",
+            "arguments": {"secret": "never-approved"},
+        }
+    ) == {"server": "github", "operation": "prompts.get"}
     assert runner.get_registered_command("mcp-package-probe") is None
 
 

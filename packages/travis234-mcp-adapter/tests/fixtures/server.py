@@ -40,6 +40,41 @@ def create_server() -> MCPServer:
     created.tool()(slow)
     created.tool()(large_output)
     created.tool()(controlled_error)
+
+    @created.resource(
+        "fixture://manual",
+        name="fixture-manual",
+        description="Fixture text resource",
+        mime_type="text/plain",
+    )
+    def fixture_manual() -> str:
+        return "fixture resource text"
+
+    @created.resource(
+        "fixture://binary",
+        name="fixture-binary",
+        description="Fixture binary resource",
+        mime_type="application/octet-stream",
+    )
+    def fixture_binary() -> bytes:
+        return b"fixture-binary-data"
+
+    @created.resource(
+        "fixture://items/{item}",
+        name="fixture-item",
+        description="Fixture resource template",
+        mime_type="text/plain",
+    )
+    def fixture_item(item: str) -> str:
+        return f"fixture item {item}"
+
+    @created.prompt(name="fixture-review", description="Review a fixture topic")
+    def fixture_review(topic: str, tone: str = "brief") -> list[dict[str, str]]:
+        return [
+            {"role": "user", "content": f"Review {topic}."},
+            {"role": "assistant", "content": f"Use a {tone} response."},
+        ]
+
     return created
 
 

@@ -18,7 +18,15 @@ from travis.agent.types import AbortSignal
 from travis234_mcp_adapter.config import ResolvedServer, ServerConfig, resolve_server
 
 
-Operation = Literal["list_tools", "call_tool"]
+Operation = Literal[
+    "list_tools",
+    "call_tool",
+    "list_resources",
+    "list_resource_templates",
+    "read_resource",
+    "list_prompts",
+    "get_prompt",
+]
 
 
 class _LoopOwner:
@@ -130,6 +138,55 @@ class ConnectedServer:
         return await self._runtime._request(
             self._actor,
             "call_tool",
+            (name, arguments),
+            signal,
+        )
+
+    async def list_resources(self, signal: AbortSignal | None, cursor: str | None = None):
+        return await self._runtime._request(
+            self._actor,
+            "list_resources",
+            (cursor,),
+            signal,
+        )
+
+    async def list_resource_templates(
+        self,
+        signal: AbortSignal | None,
+        cursor: str | None = None,
+    ):
+        return await self._runtime._request(
+            self._actor,
+            "list_resource_templates",
+            (cursor,),
+            signal,
+        )
+
+    async def read_resource(self, uri: str, signal: AbortSignal | None):
+        return await self._runtime._request(
+            self._actor,
+            "read_resource",
+            (uri,),
+            signal,
+        )
+
+    async def list_prompts(self, signal: AbortSignal | None, cursor: str | None = None):
+        return await self._runtime._request(
+            self._actor,
+            "list_prompts",
+            (cursor,),
+            signal,
+        )
+
+    async def get_prompt(
+        self,
+        name: str,
+        arguments: dict[str, str],
+        signal: AbortSignal | None,
+    ):
+        return await self._runtime._request(
+            self._actor,
+            "get_prompt",
             (name, arguments),
             signal,
         )
@@ -251,8 +308,19 @@ class _ServerActor:
         if request.operation == "list_tools":
             cursor = request.arguments[0]
             return await client.list_tools(cursor=cursor)
+        if request.operation == "call_tool":
+            name, arguments = request.arguments
+            return await client.call_tool(str(name), dict(arguments))
+        if request.operation == "list_resources":
+            return await client.list_resources(cursor=request.arguments[0])
+        if request.operation == "list_resource_templates":
+            return await client.list_resource_templates(cursor=request.arguments[0])
+        if request.operation == "read_resource":
+            return await client.read_resource(str(request.arguments[0]))
+        if request.operation == "list_prompts":
+            return await client.list_prompts(cursor=request.arguments[0])
         name, arguments = request.arguments
-        return await client.call_tool(str(name), dict(arguments))
+        return await client.get_prompt(str(name), dict(arguments))
 
     def _finish(self, request: _ActorRequest, task: asyncio.Task[object]) -> None:
         self._active.discard(task)
