@@ -60,6 +60,7 @@ from travis.tui.interactive_extensions import *  # noqa: F403
 from travis.tui.interactive_lsp import *  # noqa: F403
 from travis.tui.interactive_model_auth import *  # noqa: F403
 from travis.tui.interactive_motion import *  # noqa: F403
+from travis.tui.interactive_operations import *  # noqa: F403
 from travis.tui.interactive_params import *  # noqa: F403
 from travis.tui.interactive_process_commands import *  # noqa: F403
 from travis.tui.interactive_session_commands import *  # noqa: F403
@@ -107,6 +108,7 @@ class _InteractiveRuntime(
     InteractiveLsp,
     InteractiveModelAuth,
     InteractiveMotion,
+    InteractiveOperations,
     InteractiveParams,
     InteractiveProcessCommands,
     InteractiveSubagents,

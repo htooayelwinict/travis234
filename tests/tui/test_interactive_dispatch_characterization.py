@@ -10,8 +10,13 @@ from travis.tui.interactive_mode import (
     _parse_auth_command,
     _parse_bash_command,
     _parse_model_command,
+    _parse_operations_command,
     _parse_params_command,
     _parse_session_command,
+)
+from travis.tui.interactive_command_dispatcher import (
+    _INVALID_OPERATIONS_COMMAND,
+    _NOT_OPERATIONS_COMMAND,
 )
 
 
@@ -56,3 +61,12 @@ def test_params_command_preserves_direct_set_value_remainder() -> None:
 def test_params_command_does_not_steal_similar_slash_or_agent_prompts() -> None:
     assert _parse_params_command("/parameters temperature 0.2") is None
     assert _parse_params_command("please set params temperature 0.2") is None
+
+
+def test_operations_command_accepts_summary_or_one_opaque_id_only() -> None:
+    operation_id = "op_" + "a" * 32
+
+    assert _parse_operations_command("/operations") is None
+    assert _parse_operations_command(f"/operations {operation_id}") == operation_id
+    assert _parse_operations_command("/operations one two") is _INVALID_OPERATIONS_COMMAND
+    assert _parse_operations_command("/operational") is _NOT_OPERATIONS_COMMAND

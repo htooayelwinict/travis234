@@ -102,6 +102,33 @@ receive delegation tools today. Role model selection uses only the existing
 definition matches, and `/subagents` continues to select the existing
 delegation skill rather than becoming a supervisor command.
 
+## Observe-only operation-journal ownership
+
+- `coding_agent/operations/store.py` owns the versioned SQLite schema,
+  transactions, bounds, restrictive permissions, and explicit settled-row
+  pruning at the existing agent state root.
+- `coordinator.py` owns session operation order and fail-open degradation.
+  Provider/tool intents are durable before execution and settlements are
+  durable afterward without changing generic agent-loop ordering.
+- `recovery.py` compares runtime PID plus process creation time, with a bounded
+  heartbeat fallback only when liveness cannot be determined. Dead-runtime
+  intents become uncertain atomically; recovery exports no replay executor.
+- `session_operations.py` binds one operation to a real prompt/continue turn.
+  Provider retries and tool continuations remain separate effects, and usage is
+  idempotent by bounded source identity.
+- `interactive_operations.py` projects read-only metadata for the active
+  session fingerprint. It never renders registers, fingerprints, provider
+  payloads, tool arguments/results, or content from JSONL.
+
+SQLite and JSONL intentionally have different authority. JSONL is durable
+conversation history and remains independently resumable. The operation
+journal observes effect boundaries but is not a transactional ledger and does
+not synthesize messages. A crash between effect execution and settlement is
+therefore reported as uncertain with replay policy `never`; exactly-once is not
+claimed. Corruption, capacity exhaustion, and journal I/O errors degrade
+observation without failing the coding turn. Retention is explicit and cannot
+be triggered by TUI inspection.
+
 ## Invariants
 
 - No object digest or host object path is model-visible.
@@ -122,3 +149,6 @@ delegation skill rather than becoming a supervisor command.
 - Acceptance output contains role names and sanitized provenance plus
   supervisor limits only. It excludes role context, goals, result bodies,
   model credentials, and host paths.
+- Operation-journal acceptance output contains mode, schema version, and
+  contract counts only. It excludes operation IDs, session fingerprints,
+  effect names, usage identities, provider/model names, and all content.

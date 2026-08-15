@@ -30,14 +30,15 @@ from travis.coding_agent.operations.rows import (
     usage_from_row,
     usage_identity,
 )
-from travis.coding_agent.operations.schema import has_required_schema
+from travis.coding_agent.operations.schema import SCHEMA_VERSION, has_required_schema
 from travis.coding_agent.operations.recovery_store import (
     claim_uncertain_runtimes,
     load_recovery_leases,
 )
+from travis.coding_agent.operations.inspection_store import load_operations
 from travis.coding_agent.sqlite_utils import open_secure_sqlite, secure_sqlite_files
 
-_SCHEMA_VERSION = "1"
+_SCHEMA_VERSION = str(SCHEMA_VERSION)
 _TERMINAL_OPERATION_STATES = ("settled", "failed", "cancelled")
 
 
@@ -636,13 +637,13 @@ class OperationStore:
         )
         return OperationSnapshot(operation_from_row(row), registers, effects, usage)
 
-    def list_operations(self) -> tuple[OperationSnapshot, ...]:
-        with self._lock:
-            self._require_open()
-            rows = self._connection.execute(
-                "SELECT * FROM operations ORDER BY created_at_ms, operation_id"
-            ).fetchall()
-            return tuple(self._snapshot_from_row(row) for row in rows)
+    def list_operations(
+        self,
+        session_fingerprint: str | None = None,
+        *,
+        limit: int | None = None,
+    ) -> tuple[OperationSnapshot, ...]:
+        return load_operations(self, session_fingerprint, limit)
 
     def list_uncertain(
         self, session_fingerprint: str | None = None

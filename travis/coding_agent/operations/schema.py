@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 
 
+SCHEMA_VERSION = 1
 REQUIRED_COLUMNS = {
     "store_meta": frozenset({"key", "value"}),
     "runtime_leases": frozenset(
@@ -85,4 +86,4 @@ def has_required_schema(connection: sqlite3.Connection) -> bool:
     return True
 
 
-__all__ = ["REQUIRED_COLUMNS", "has_required_schema"]
+__all__ = ["REQUIRED_COLUMNS", "SCHEMA_VERSION", "has_required_schema"]

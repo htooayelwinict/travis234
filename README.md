@@ -214,11 +214,35 @@ The npm package exposes only the `travis234` command and launches the release co
 | `/packages` | List installed resource packages (`--local` selects project scope) |
 | `/install`, `/remove`, `/update` | Confirm and manage local, Git, or Python resource packages |
 | `/processes` | Inspect managed and user-command processes |
+| `/operations [operation-id]` | Inspect bounded operation-journal metadata for the active session |
 | `/agents [status\|inspect\|steer\|cancel]` | Inspect or control session-owned delegated agents |
 | `/help` | Show available commands and shortcuts |
 | `/exit` | Shut down cleanly and terminate owned work |
 
 User `!command` and `!!command` run asynchronously. Output from `!command` is added to context; `!!command` output remains outside model context.
+
+### Observe-only operation journal
+
+Travis234 keeps a separate SQLite intent/effect/settlement journal at
+`~/.travis234/agent/operations.sqlite3`. It complements the existing JSONL
+conversation history; it does not replace it. JSONL remains authoritative for
+resuming conversation, while the journal makes an interrupted provider or tool
+boundary visible after a process crash.
+
+The journal defaults to `observe` mode with a 1 GiB cap. It records bounded
+identifiers, state, timestamps, counters, sanitized effect names, and usage
+totals. It never records prompts, completions, tool arguments or results,
+environment values, credentials, steering text, or subagent goals. An intent
+owned by a provably dead runtime becomes `uncertain` on startup and always has
+`replay=never`; Travis does not infer success and does not automatically retry
+it. This exposes the unavoidable uncertainty window rather than claiming
+exactly-once execution.
+
+Use `/operations` or `/operations <operation-id>` to inspect only the active
+session's hashed identity. Other sessions appear unknown even when an opaque ID
+is supplied. Inspection is read-only and never prunes data. Journal corruption
+or capacity failure disables observation without preventing JSONL conversation
+recovery or the coding turn.
 
 ### Session generation parameters
 

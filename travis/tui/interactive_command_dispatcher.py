@@ -75,6 +75,15 @@ def _is_processes_command(prompt: str) -> bool:
     return prompt == "/processes"
 
 
+def _parse_operations_command(prompt: str) -> str | None | object:
+    if prompt == "/operations":
+        return None
+    if prompt.startswith("/operations "):
+        operation_id = prompt[len("/operations ") :].strip()
+        return operation_id if operation_id and " " not in operation_id else _INVALID_OPERATIONS_COMMAND
+    return _NOT_OPERATIONS_COMMAND
+
+
 def _is_lsp_status_command(prompt: str) -> bool:
     return prompt == "/lsp status"
 
@@ -156,6 +165,8 @@ def _parse_params_command(prompt: str) -> str | None:
 
 _NOT_MOTION_COMMAND = object()
 _INVALID_MOTION_COMMAND = object()
+_NOT_OPERATIONS_COMMAND = object()
+_INVALID_OPERATIONS_COMMAND = object()
 
 
 def _parse_motion_command(prompt: str) -> bool | None | object:
@@ -306,6 +317,16 @@ class InteractiveCommandDispatcher:
                 if session_command == "theme":
                     self._run_theme_command(prompt)
                     continue
+                operations_command = _parse_operations_command(prompt)
+                if operations_command is not _NOT_OPERATIONS_COMMAND:
+                    if operations_command is _INVALID_OPERATIONS_COMMAND:
+                        self.history.add(
+                            StatusLine("Usage: /operations [operation-id]", kind="error")
+                        )
+                        self.tui.request_render()
+                    else:
+                        self._run_operations_command(operations_command)
+                    continue
                 if _is_processes_command(prompt):
                     self._run_processes_command()
                     continue
@@ -442,6 +463,7 @@ __all__ = (
     '_parse_bash_command',
     '_parse_model_command',
     '_parse_motion_command',
+    '_parse_operations_command',
     '_parse_params_command',
     '_parse_session_command',
 )

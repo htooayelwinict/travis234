@@ -87,11 +87,21 @@ def test_parity_report_has_only_resolved_evidence() -> None:
         "maxDepth": 1,
         "activeCount": 0,
     }
+    assert report["operationJournal"] == {
+        "mode": "observe",
+        "schemaVersion": 1,
+        "counts": {
+            "operationStates": 5,
+            "effectStates": 5,
+            "replayPolicies": 1,
+        },
+    }
 
     encoded = json.dumps(
         {
             "agentRoles": report["agentRoles"],
             "subagentSupervisor": report["subagentSupervisor"],
+            "operationJournal": report["operationJournal"],
         },
         sort_keys=True,
     )

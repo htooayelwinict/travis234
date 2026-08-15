@@ -35,6 +35,7 @@ OWNER_GLOBS = (
     "travis/tui/interactive_prompt_input.py",
     "travis/tui/interactive_extensions.py",
     "travis/tui/interactive_lsp.py",
+    "travis/tui/interactive_operations.py",
     "travis/tui/footer_data.py",
     "travis/tui/interactive_shutdown.py",
     "travis/ai/providers/*_stream.py",

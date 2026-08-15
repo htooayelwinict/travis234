@@ -16,6 +16,8 @@ if _SOURCE_ROOT not in sys.path:
 
 from travis.coding_agent.config import get_agent_dir
 from travis.coding_agent.policy import TOOL_EFFECT_ORDER
+from travis.coding_agent.operations.schema import SCHEMA_VERSION
+from travis.coding_agent.operations.types import EFFECT_STATES, OPERATION_STATES
 from travis.coding_agent.language_services.types import LanguageServiceLimits
 from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.settings_manager import SettingsManager
@@ -214,6 +216,16 @@ def verify_parity_contracts(*, root: str | Path) -> dict[str, object]:
         "maxThreads": DEFAULT_SUBAGENT_MAX_THREADS,
         "maxDepth": DEFAULT_SUBAGENT_MAX_DEPTH,
         "activeCount": 0,
+    }
+    operation_settings = SettingsManager.in_memory().get_operation_settings()
+    report["operationJournal"] = {
+        "mode": operation_settings["mode"],
+        "schemaVersion": SCHEMA_VERSION,
+        "counts": {
+            "operationStates": len(OPERATION_STATES),
+            "effectStates": len(EFFECT_STATES),
+            "replayPolicies": 1,
+        },
     }
     return report
 

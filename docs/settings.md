@@ -2,6 +2,45 @@
 
 Global settings live at `~/.travis234/agent/settings.json`. A trusted project may add `.travis234/settings.json`; project code and project settings remain trust-gated. Invalid hand-edited values are ignored at their own scope rather than hiding a valid value from the other scope.
 
+## Observe-only operations
+
+The operation journal is enabled by default and stored only at
+`~/.travis234/agent/operations.sqlite3`:
+
+```json
+{
+  "operations": {
+    "mode": "observe",
+    "maxBytes": 1073741824
+  }
+}
+```
+
+Global `mode` is `observe` or `disabled`. A trusted project's `maxBytes` may
+only lower the global cap; project settings cannot enable, disable, or widen
+the global journal. Disabled mode performs no journal database writes.
+
+The SQLite journal records intent before an external provider/tool effect and
+settlement afterward. It contains bounded metadata only and is not conversation
+history: JSONL remains the source for resume, fork, clone, steering, and
+subagent results. Prompts, completions, tool arguments/results, environment
+values, file contents, credentials, steering text, and subagent goals are never
+stored in the journal.
+
+If Travis234 can prove that an intent's runtime died, the intent and its running
+operation become `uncertain`. Replay policy is always `never`; restart never
+calls the provider or tool on the intent's behalf. A settled effect remains
+settled even if a crash occurred before its conversation output reached JSONL.
+This means the journal reports the real uncertainty window and does not promise
+exactly-once effects.
+
+`/operations [operation-id]` is a read-only native-TUI view scoped to the active
+session's hashed identity. It displays identifiers, kinds, states, counters,
+effect names, replay policy, and timestamps only. Retention remains the explicit
+programmatic `prune_settled_before` action and is never coupled to inspection.
+An unreadable, full, or incompatible journal fails open for the coding turn and
+does not alter readable JSONL history.
+
 ## Typed agent roles
 
 Agent roles are optional JSON resources that narrow a delegated child for a
