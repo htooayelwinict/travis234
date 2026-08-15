@@ -12,6 +12,9 @@ from travis.agent.types import AgentMessage
 from travis.ai.model_resolver import find_initial_model
 from travis.ai.types import Context, ImageContent, Message, Model, SimpleStreamOptions, TextContent
 from travis.coding_agent.agent_session import AgentSession, default_convert_to_llm
+from travis.coding_agent.artifact_manifest import ArtifactManifest
+from travis.coding_agent.artifact_store import ArtifactLimits, DurableArtifactStore
+from travis.coding_agent.artifacts import ArtifactRegistry
 from travis.coding_agent.auth_storage import AuthStorage
 from travis.coding_agent.extensions import ExtensionRunner, apply_extension_flag_values
 from travis.coding_agent.model_registry import ModelRegistry
@@ -29,6 +32,24 @@ class CreateAgentSessionResult:
     session: AgentSession
     extensions_result: dict[str, object]
     model_fallback_message: str | None = None
+
+
+def create_session_artifact_registry(
+    *,
+    session_path: str | None,
+    agent_dir: str,
+    settings_manager: SettingsManager,
+) -> ArtifactRegistry:
+    if session_path is None:
+        return ArtifactRegistry()
+    getter = getattr(settings_manager, "get_artifact_limits", None)
+    limits = getter() if callable(getter) else ArtifactLimits()
+    if not isinstance(limits, ArtifactLimits):
+        limits = ArtifactLimits()
+    return ArtifactRegistry(
+        durable_store=DurableArtifactStore(agent_dir),
+        manifest=ArtifactManifest.for_session(session_path, limits=limits),
+    )
 
 
 

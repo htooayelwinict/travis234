@@ -185,6 +185,21 @@ class ArtifactRegistry:
             byte_limit=byte_limit,
         )
 
+    def fork_manifest_to(
+        self,
+        target_session_path: str | Path,
+        *,
+        allowed_entry_ids: set[str],
+        allowed_tool_call_ids: set[str],
+    ) -> None:
+        if self._manifest is None:
+            return
+        self._manifest.fork_to(
+            target_session_path,
+            allowed_entry_ids=allowed_entry_ids,
+            allowed_tool_call_ids=allowed_tool_call_ids,
+        )
+
     def close(self, remove_files: bool = True) -> None:
         with self._lock:
             if self._closed:

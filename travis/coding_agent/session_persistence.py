@@ -235,7 +235,28 @@ class SessionPersistence:
     def create_branched_session(self, leaf_id: str, path: str | None = None) -> str:
         if self._session_store is None:
             raise RuntimeError("No session store configured")
-        return self._session_store.create_branched_session(leaf_id, path=path)
+        branch_entries = self._session_store.get_branch(leaf_id)
+        target_existed = Path(path).exists() if path is not None else False
+        target = self._session_store.create_branched_session(leaf_id, path=path)
+        target_path = Path(target)
+        try:
+            self._artifacts.fork_manifest_to(
+                target_path,
+                allowed_entry_ids={
+                    str(entry["id"])
+                    for entry in branch_entries
+                    if isinstance(entry.get("id"), str)
+                },
+                allowed_tool_call_ids=_branch_tool_call_ids(branch_entries),
+            )
+        except BaseException:
+            if not target_existed:
+                target_path.unlink(missing_ok=True)
+                manifest_path = Path(f"{target_path}.artifacts.jsonl")
+                manifest_path.unlink(missing_ok=True)
+                manifest_path.with_name(f"{manifest_path.name}.lock").unlink(missing_ok=True)
+            raise
+        return target
 
     def export_to_jsonl(self, output_path: str | None = None) -> str:
         if self._session_store is None:
@@ -545,6 +566,27 @@ class SessionPersistence:
             tools=tools,
         )
         return estimate_full_context_tokens(context) if force_full else estimate_context_tokens(context)
+
+
+def _branch_tool_call_ids(entries: list[dict]) -> set[str]:
+    identifiers: set[str] = set()
+
+    def visit(value: object, parent_key: str | None = None) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                normalized = key.replace("_", "").lower()
+                if normalized == "toolcallid" and isinstance(child, str) and child:
+                    identifiers.add(child)
+                elif normalized == "id" and parent_key in {"toolcalls", "toolcall"}:
+                    if isinstance(child, str) and child:
+                        identifiers.add(child)
+                visit(child, normalized)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child, parent_key)
+
+    visit(entries)
+    return identifiers
 
 __all__ = (
     'SessionPersistence',

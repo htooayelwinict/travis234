@@ -174,7 +174,6 @@ class _SessionRuntime(
         self.model_registry.ensure_model(model)
         self.auth_storage = self.model_registry.auth_storage
         self._workspace = WorkspaceCapability(Path(cwd))
-        self._artifacts = ArtifactRegistry()
         self.execution_backend = select_execution_backend(cwd)
         if (process_service is None) != (process_owner is None):
             raise ValueError("process_service and process_owner must be provided together")
@@ -277,6 +276,13 @@ class _SessionRuntime(
             )
             if session_path
             else None
+        )
+        from travis.coding_agent.agent_session_services import create_session_artifact_registry
+
+        self._artifacts = create_session_artifact_registry(
+            session_path=session_path,
+            agent_dir=str(Path(agent_dir or Path.home() / ".travis234" / "agent").expanduser().resolve()),
+            settings_manager=self.settings_manager,
         )
         self._session_start_event = session_start_event or {"type": "session_start", "reason": "startup"}
         self._defer_session_start = bool(defer_session_start)

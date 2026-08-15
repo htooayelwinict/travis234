@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import stat
+import tempfile
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -259,22 +262,42 @@ class AgentSessionRuntime:
             return before_result
 
         previous_session_file = self._session.session_path
+        copied_session = False
+        copied_sidecar = False
         if destination_path.resolve() != resolved_path:
             shutil.copyfile(resolved_path, destination_path)
+            copied_session = True
+            source_sidecar = Path(f"{resolved_path}.artifacts.jsonl")
+            if source_sidecar.exists() or source_sidecar.is_symlink():
+                destination_sidecar = Path(f"{destination_path}.artifacts.jsonl")
+                try:
+                    _atomic_copy_sidecar(source_sidecar, destination_sidecar)
+                    copied_sidecar = True
+                except BaseException:
+                    destination_path.unlink(missing_ok=True)
+                    destination_sidecar.unlink(missing_ok=True)
+                    raise
 
-        replacement = self._create_runtime(
-            {
-                "cwd": next_cwd,
-                "agentDir": self._services.get("agentDir"),
-                "session_path": destination,
-                "session_start_event": {
-                    "type": "session_start",
-                    "reason": "resume",
-                    "previousSessionFile": previous_session_file,
-                },
-                "defer_session_start": True,
-            }
-        )
+        try:
+            replacement = self._create_runtime(
+                {
+                    "cwd": next_cwd,
+                    "agentDir": self._services.get("agentDir"),
+                    "session_path": destination,
+                    "session_start_event": {
+                        "type": "session_start",
+                        "reason": "resume",
+                        "previousSessionFile": previous_session_file,
+                    },
+                    "defer_session_start": True,
+                }
+            )
+        except BaseException:
+            if copied_session:
+                destination_path.unlink(missing_ok=True)
+            if copied_sidecar:
+                Path(f"{destination_path}.artifacts.jsonl").unlink(missing_ok=True)
+            raise
         self._activate_replacement(
             replacement,
             reason="resume",
@@ -527,6 +550,37 @@ def _collision_safe_import_path(path: Path) -> Path:
         candidate = path.with_name(f"{path.stem}-import-{uuid.uuid4().hex[:8]}{path.suffix}")
         if not candidate.exists():
             return candidate
+
+
+def _atomic_copy_sidecar(source: Path, destination: Path) -> None:
+    metadata = source.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        raise InvalidSessionImportError(str(source), "artifact sidecar must be a regular file")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.",
+        dir=destination.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with source.open("rb") as source_handle, os.fdopen(descriptor, "wb") as target_handle:
+            shutil.copyfileobj(source_handle, target_handle)
+            target_handle.flush()
+            os.fsync(target_handle.fileno())
+        os.replace(temporary, destination)
+        directory_descriptor = os.open(destination.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def _session_source_file_and_cwd(options: dict[str, Any]) -> tuple[str | None, str | None]:
