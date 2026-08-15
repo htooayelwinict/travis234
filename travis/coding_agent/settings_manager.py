@@ -515,6 +515,15 @@ class SettingsManager:
     def set_project_theme_paths(self, paths: list[str]) -> None:
         self._set_project("themes", list(paths))
 
+    def get_agent_role_paths(self) -> list[str]:
+        return list(self.settings.get("roles", []))
+
+    def set_agent_role_paths(self, paths: list[str]) -> None:
+        self._set_global("roles", list(paths))
+
+    def set_project_agent_role_paths(self, paths: list[str]) -> None:
+        self._set_project("roles", list(paths))
+
     def get_enable_skill_commands(self) -> bool:
         return self.settings.get("enableSkillCommands", True)
 

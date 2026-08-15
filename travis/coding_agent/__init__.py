@@ -36,6 +36,7 @@ from travis.coding_agent.artifact_store import (
     DurableArtifactStore,
     StoredArtifactObject,
 )
+from travis.coding_agent.agent_roles import AgentRoleDefinition, AgentRoleRegistry
 from travis.coding_agent.auth_storage import AuthStorage, FileAuthStorageBackend, InMemoryAuthStorageBackend
 from travis.coding_agent.subagents import (
     CallableSubagentBackend,

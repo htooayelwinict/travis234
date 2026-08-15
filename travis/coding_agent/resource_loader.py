@@ -19,6 +19,7 @@ from travis.coding_agent.event_bus import EventBusController, create_event_bus
 from travis.coding_agent.extensions import ExtensionRunner
 from travis.coding_agent.object_utils import settings_value as _settings_value
 from travis.coding_agent.package_manager import DefaultPackageManager, ResolvedPaths
+from travis.coding_agent.agent_roles import AgentRoleRegistry
 from travis.coding_agent.prompt_templates import (
     load_prompt_templates as _load_prompt_templates_runtime,
 )
@@ -74,9 +75,11 @@ class DefaultResourceLoader:
         additional_skill_paths: list[str] | None = None,
         additional_prompt_template_paths: list[str] | None = None,
         additional_theme_paths: list[str] | None = None,
+        additional_role_paths: list[str] | None = None,
         no_skills: bool = False,
         no_prompt_templates: bool = False,
         no_themes: bool = False,
+        no_agent_roles: bool = False,
         offline: bool = False,
         agents_files_override: Callable[[dict[str, list[dict[str, str]]]], dict[str, list[dict[str, str]]]]
         | None = None,
@@ -113,6 +116,7 @@ class DefaultResourceLoader:
         self._explicit_skill_paths = list(additional_skill_paths or [])
         self._explicit_prompt_paths = list(additional_prompt_template_paths or [])
         self._explicit_theme_paths = list(additional_theme_paths or [])
+        self._explicit_role_paths = list(additional_role_paths or [])
         self.package_paths = _settings_package_paths(self.settings_manager) + self._explicit_package_paths
         self.additional_skill_paths = _settings_list(self.settings_manager, "get_skill_paths") + self._explicit_skill_paths
         self.additional_prompt_template_paths = _settings_list(
@@ -123,9 +127,14 @@ class DefaultResourceLoader:
             self.settings_manager,
             "get_theme_paths",
         ) + self._explicit_theme_paths
+        self.additional_role_paths = _settings_list(
+            self.settings_manager,
+            "get_agent_role_paths",
+        ) + self._explicit_role_paths
         self.no_skills = no_skills
         self.no_prompt_templates = no_prompt_templates
         self.no_themes = no_themes
+        self.no_agent_roles = no_agent_roles
         self.offline = bool(offline)
         self.agents_files_override = agents_files_override
         self.skills_override = skills_override
@@ -181,6 +190,10 @@ class DefaultResourceLoader:
     def get_themes(self) -> dict[str, list[object]]:
         with self._state_lock:
             return self._projection.content.themes_result
+
+    def get_agent_roles(self) -> AgentRoleRegistry:
+        with self._state_lock:
+            return AgentRoleRegistry(self._capability_snapshot)
 
 
     def get_agents_files(self) -> dict[str, list[dict[str, str]]]:
@@ -344,6 +357,10 @@ class DefaultResourceLoader:
             self.settings_manager,
             "get_theme_paths",
         ) + self._explicit_theme_paths
+        self.additional_role_paths = _settings_list(
+            self.settings_manager,
+            "get_agent_role_paths",
+        ) + self._explicit_role_paths
         self.package_manager.package_paths = list(self.package_paths)
 
     def _reload_all_resources(self, *, pretrust_extensions: dict[str, object] | None = None) -> None:
@@ -407,6 +424,8 @@ class DefaultResourceLoader:
             themes_override=self.themes_override,
             system_prompt_override=self.system_prompt_override,
             append_system_prompt_override=self.append_system_prompt_override,
+            additional_role_paths=tuple(self.additional_role_paths),
+            no_agent_roles=self.no_agent_roles,
         )
 
     def _extension_request(

@@ -19,7 +19,7 @@ from typing import Literal, Mapping, Sequence
 from travis.coding_agent.resource_discovery import collect_resource_files
 
 CONFIG_DIR_NAME = ".travis234"
-RESOURCE_TYPES = ("extensions", "skills", "prompts", "themes")
+RESOURCE_TYPES = ("extensions", "skills", "prompts", "themes", "roles")
 
 PackageScope = Literal["global", "project", "temporary"]
 PackageKind = Literal["local", "git", "python"]
@@ -61,6 +61,7 @@ class ResolvedPaths:
     skills: list[ResolvedResource] = field(default_factory=list)
     prompts: list[ResolvedResource] = field(default_factory=list)
     themes: list[ResolvedResource] = field(default_factory=list)
+    roles: list[ResolvedResource] = field(default_factory=list)
     diagnostics: list[PackageDiagnostic] = field(default_factory=list)
 
 

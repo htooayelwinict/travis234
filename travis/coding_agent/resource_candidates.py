@@ -15,6 +15,7 @@ from travis.coding_agent.capabilities import (
     CapabilitySource,
 )
 from travis.coding_agent.config import get_packaged_skills_path
+from travis.coding_agent.agent_roles import load_agent_roles
 from travis.coding_agent.package_manager import PackageDiagnostic, ResolvedPaths
 from travis.coding_agent.prompt_templates import load_prompt_templates
 from travis.coding_agent.resource_discovery import collect_resource_files
@@ -49,6 +50,8 @@ class ResourceContentRequest:
     themes_override: Callable[[dict[str, list[object]]], dict[str, list[object]]] | None
     system_prompt_override: Callable[[str | None], str | None] | None
     append_system_prompt_override: Callable[[list[str]], list[str]] | None
+    additional_role_paths: tuple[str, ...] = ()
+    no_agent_roles: bool = False
 @dataclass(frozen=True)
 class ResourceContentCandidate:
     skills_result: dict[str, list[object]]
@@ -62,6 +65,9 @@ class ResourceContentCandidate:
     prompt_paths: tuple[str, ...]
     theme_paths: tuple[str, ...]
     metadata_by_path: Mapping[str, dict[str, object]]
+    agent_role_records: tuple[CapabilityRecord, ...] = ()
+    agent_role_diagnostics: tuple[CapabilityDiagnostic, ...] = ()
+    role_paths: tuple[str, ...] = ()
 @dataclass(frozen=True)
 class ResourceLoadCandidate:
     extensions: ExtensionRuntimeLease
@@ -87,6 +93,9 @@ class ResourceLoadCandidate:
             prompt_paths=(),
             theme_paths=(),
             metadata_by_path=MappingProxyType({}),
+            agent_role_records=(),
+            agent_role_diagnostics=(),
+            role_paths=(),
         )
         return cls(
             extensions=extensions,
@@ -220,6 +229,7 @@ def build_resource_content(
             request.resolved_paths.skills,
             request.resolved_paths.prompts,
             request.resolved_paths.themes,
+            request.resolved_paths.roles,
         )
         for resource in resources
     }
@@ -242,6 +252,11 @@ def build_resource_content(
         [item.path for item in request.resolved_paths.themes if item.enabled],
         list(request.additional_theme_paths),
     )
+    role_paths = _merge_paths(
+        request.cwd,
+        [item.path for item in request.resolved_paths.roles if item.enabled],
+        list(request.additional_role_paths),
+    )
     skills_result = _load_skills_result(
         request.cwd,
         skill_paths,
@@ -262,6 +277,11 @@ def build_resource_content(
         metadata_by_path,
         no_resources=request.no_themes,
         override=request.themes_override,
+    )
+    role_records, role_diagnostics = (
+        ((), ())
+        if request.no_agent_roles and not role_paths
+        else load_agent_roles(tuple(role_paths), metadata_by_path=metadata_by_path)
     )
     agents_result = {
         "agentsFiles": (
@@ -315,6 +335,9 @@ def build_resource_content(
         prompt_paths=tuple(prompt_paths),
         theme_paths=tuple(theme_paths),
         metadata_by_path=MappingProxyType(dict(metadata_by_path)),
+        agent_role_records=role_records,
+        agent_role_diagnostics=role_diagnostics,
+        role_paths=tuple(role_paths),
     )
 def extend_resource_content(
     current: ResourceContentCandidate,
@@ -361,6 +384,9 @@ def extend_resource_content(
         prompt_paths=tuple(merged_prompts),
         theme_paths=tuple(merged_themes),
         metadata_by_path=current.metadata_by_path,
+        agent_role_records=current.agent_role_records,
+        agent_role_diagnostics=current.agent_role_diagnostics,
+        role_paths=current.role_paths,
     )
 def content_capability_records(
     content: ResourceContentCandidate,
@@ -391,6 +417,7 @@ def content_capability_records(
                 CapabilitySource("default-resources", path),
             )
         )
+    records.extend(content.agent_role_records)
     return tuple(records)
 def content_capability_diagnostics(
     content: ResourceContentCandidate,
@@ -414,6 +441,7 @@ def content_capability_diagnostics(
                     CapabilitySource("default-resources", item.path),
                 )
             )
+    diagnostics.extend(content.agent_role_diagnostics)
     return tuple(diagnostics)
 def load_context_file_from_dir(directory: str | Path) -> dict[str, str] | None:
     base = Path(directory).expanduser().resolve()
