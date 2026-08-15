@@ -14,6 +14,7 @@ from travis.coding_agent.artifact_store import ArtifactLimits
 from travis.coding_agent.language_services.config import parse_language_server_entries
 from travis.coding_agent.language_services.types import LanguageServerConfig
 from travis.coding_agent.model_roles import CONFIGURABLE_MODEL_ROLES
+from travis.coding_agent.memory import MemorySettings
 from travis.coding_agent.policy.types import (
     TOOL_EFFECT_ORDER,
     TOOL_POLICY_MODE_ORDER,
@@ -731,6 +732,98 @@ class SettingsManager:
             )
             effective_max = min(global_max, project_max)
         return {"mode": global_mode, "maxBytes": effective_max}
+
+    def get_memory_settings(self) -> MemorySettings:
+        defaults = MemorySettings()
+        global_value = self._memory_settings_scope(
+            self.global_settings,
+            scope="global",
+            base=defaults,
+            allow_controls=True,
+        )
+        if not self.project_trusted or "memory" not in self.project_settings:
+            return global_value
+        project_value = self._memory_settings_scope(
+            self.project_settings,
+            scope="project",
+            base=global_value,
+            allow_controls=False,
+        )
+        return MemorySettings(
+            enabled=global_value.enabled,
+            allowed_scopes=global_value.allowed_scopes,
+            max_fact_bytes=min(global_value.max_fact_bytes, project_value.max_fact_bytes),
+            max_facts_per_scope=min(
+                global_value.max_facts_per_scope, project_value.max_facts_per_scope
+            ),
+            max_total_bytes=min(global_value.max_total_bytes, project_value.max_total_bytes),
+            recall_limit=min(global_value.recall_limit, project_value.recall_limit),
+            recall_bytes=min(global_value.recall_bytes, project_value.recall_bytes),
+        )
+
+    def _memory_settings_scope(
+        self,
+        settings: dict,
+        *,
+        scope: SettingsScope,
+        base: MemorySettings,
+        allow_controls: bool,
+    ) -> MemorySettings:
+        raw = settings.get("memory")
+        if raw is None:
+            return base
+        if not isinstance(raw, dict):
+            self._record_memory_error_once(scope, "memory must be an object")
+            return base
+        errors: list[str] = []
+        enabled = raw.get("enabled", base.enabled)
+        if not isinstance(enabled, bool):
+            errors.append("enabled must be a boolean")
+            enabled = base.enabled
+        elif not allow_controls and enabled != base.enabled:
+            errors.append("project enabled cannot change the global value")
+            enabled = base.enabled
+        scopes = raw.get("allowedScopes", list(base.allowed_scopes))
+        if (
+            not isinstance(scopes, list)
+            or not scopes
+            or any(item not in {"project", "global"} for item in scopes)
+            or len(scopes) != len(set(scopes))
+        ):
+            errors.append("allowedScopes must contain unique project/global values")
+            scopes = list(base.allowed_scopes)
+        elif not allow_controls and tuple(scopes) != base.allowed_scopes:
+            errors.append("project allowedScopes cannot change global scopes")
+            scopes = list(base.allowed_scopes)
+        values: dict[str, int] = {}
+        for camel, snake in (
+            ("maxFactBytes", "max_fact_bytes"),
+            ("maxFactsPerScope", "max_facts_per_scope"),
+            ("maxTotalBytes", "max_total_bytes"),
+            ("recallLimit", "recall_limit"),
+            ("recallBytes", "recall_bytes"),
+        ):
+            candidate = raw.get(camel, getattr(base, snake))
+            if isinstance(candidate, bool) or not isinstance(candidate, int) or candidate < 1:
+                errors.append(f"{camel} must be a positive integer")
+                candidate = getattr(base, snake)
+            values[snake] = candidate
+        if errors:
+            self._record_memory_error_once(scope, "; ".join(errors))
+        return MemorySettings(
+            enabled=enabled,
+            allowed_scopes=tuple(scopes),
+            **values,
+        )
+
+    def _record_memory_error_once(self, scope: SettingsScope, detail: str) -> None:
+        message = f"Invalid memory setting: {detail}"
+        if any(
+            error["scope"] == scope and str(error["error"]) == message
+            for error in self.errors
+        ):
+            return
+        self._record_error(scope, RuntimeError(message))
 
     def _operation_settings_scope(
         self,
