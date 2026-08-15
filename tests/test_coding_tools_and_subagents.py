@@ -1110,6 +1110,47 @@ def test_synchronous_bash_exposes_truncated_artifact_id_to_the_model(tmp_path: P
     assert "byte_offset=0" in result.content[0].text
     assert artifacts.resolve_read(result.details["artifactId"]) is not None
 
+
+def test_successful_bash_keeps_success_when_artifact_promotion_fails(tmp_path: Path) -> None:
+    from travis.coding_agent.artifact_manifest import ArtifactManifest
+    from travis.coding_agent.artifact_store import (
+        ArtifactLimits,
+        ArtifactPromotionError,
+        DurableArtifactStore,
+    )
+    from travis.coding_agent.artifacts import ArtifactRegistry
+
+    class FailingStore(DurableArtifactStore):
+        def promote(self, source, limits=None):
+            raise ArtifactPromotionError("physical_limit", "Artifact storage limit reached")
+
+    def exec_command(command: str, cwd: str, options) -> dict[str, int | None]:
+        options.on_data(b"x" * 80_000)
+        return {"exit_code": 0}
+
+    artifacts = ArtifactRegistry(
+        durable_store=FailingStore(tmp_path / "agent"),
+        manifest=ArtifactManifest.for_session(
+            tmp_path / "session.jsonl",
+            limits=ArtifactLimits(min_free_bytes=0),
+        ),
+    )
+    tool = create_bash_tool(
+        str(tmp_path),
+        operations=BashOperations(exec=exec_command),
+        artifacts=artifacts,
+    )
+
+    result = tool.execute("call-1", {"command": "emit-large-output"})
+
+    assert result.details["artifactId"] is None
+    assert result.details["fullOutputPath"] is None
+    assert result.details["artifactUnavailable"] == {
+        "code": "physical_limit",
+        "message": "Artifact storage limit reached",
+    }
+    assert len(result.content[0].text) > 0
+
 def test_bash_tool_replaces_invalid_utf8_without_dropping_output(tmp_path: Path) -> None:
     def exec_command(command: str, cwd: str, options) -> dict[str, int | None]:
         options.on_data(b"before-\xff-after")

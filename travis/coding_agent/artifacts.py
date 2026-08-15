@@ -69,6 +69,10 @@ class ArtifactRegistry:
                 self._by_id[ref.id] = ref
                 self._durable_ids.add(ref.id)
 
+    @property
+    def is_durable(self) -> bool:
+        return self._resolver is not None
+
     def register(
         self,
         path: Path,

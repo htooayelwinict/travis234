@@ -10,6 +10,7 @@ from pathlib import Path
 
 from travis.agent.types import AgentTool, AgentToolResult
 from travis.ai.types import TextContent
+from travis.coding_agent.artifact_store import ArtifactPromotionError
 from travis.coding_agent.artifacts import ArtifactRegistry, artifact_read_instruction
 from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import (
@@ -330,7 +331,7 @@ def _execute_process(
     service: ProcessSessionService,
     owner: ProcessOwner,
     artifacts: ArtifactRegistry | None,
-    _tool_call_id,
+    tool_call_id,
     raw_args,
     signal=None,
     on_update=None,
@@ -353,7 +354,15 @@ def _execute_process(
                 max_bytes=args.get("max_bytes", 51_200),
             )
         except InvalidCursorError as error:
-            return _recover_invalid_cursor(service, owner, session_id, args, error, artifacts)
+            return _recover_invalid_cursor(
+                service,
+                owner,
+                session_id,
+                args,
+                error,
+                artifacts,
+                tool_call_id=tool_call_id,
+            )
     elif action == "wait":
         try:
             snapshot = service.wait_terminal(
@@ -375,10 +384,17 @@ def _execute_process(
                 args,
                 error,
                 artifacts,
+                tool_call_id=tool_call_id,
                 include_poll_hint=False,
             )
         if snapshot.state.terminal:
-            return _terminal_process_result(service, owner, snapshot, artifacts)
+            return _terminal_process_result(
+                service,
+                owner,
+                snapshot,
+                artifacts,
+                tool_call_id=tool_call_id,
+            )
     elif action in {"write", "write_raw"}:
         input_text = args["input"]
         if action == "write":
@@ -417,6 +433,7 @@ def _recover_invalid_cursor(
     error: InvalidCursorError,
     artifacts: ArtifactRegistry | None,
     *,
+    tool_call_id: str | None = None,
     include_poll_hint: bool = True,
 ) -> AgentToolResult:
     snapshot = service.poll(
@@ -427,7 +444,13 @@ def _recover_invalid_cursor(
         max_bytes=args.get("max_bytes", 51_200),
     )
     result = (
-        _terminal_process_result(service, owner, snapshot, artifacts)
+        _terminal_process_result(
+            service,
+            owner,
+            snapshot,
+            artifacts,
+            tool_call_id=tool_call_id,
+        )
         if snapshot.state.terminal
         else _snapshot_result(snapshot, include_poll_hint=include_poll_hint)
     )
@@ -537,27 +560,62 @@ def _terminal_process_result(
     owner: ProcessOwner,
     snapshot: ProcessSnapshot,
     artifacts: ArtifactRegistry | None,
+    *,
+    tool_call_id: str | None = None,
 ) -> AgentToolResult:
     tail = service.tail_snapshot(owner, snapshot.session_id)
     details = snapshot.as_details()
     details["nextCursor"] = snapshot.output_size
     full_output_path = Path(snapshot.full_output_path) if snapshot.full_output_path else None
     artifact = None
+    artifact_unavailable: dict[str, str] | None = None
+    exported_temporary = False
     if full_output_path is not None and artifacts is not None:
-        artifact = artifacts.register(
-            full_output_path,
-            kind="process-output",
-            access="read",
-            remove_on_close=False,
-        )
+        if artifacts.is_durable:
+            try:
+                artifact = artifacts.promote(
+                    full_output_path,
+                    kind="process-output",
+                    tool_call_id=tool_call_id,
+                )
+            except ArtifactPromotionError as error:
+                artifact_unavailable = _artifact_unavailable(error)
+            except OSError:
+                artifact_unavailable = _artifact_unavailable(None)
+        else:
+            artifact = artifacts.register(
+                full_output_path,
+                kind="process-output",
+                access="read",
+                remove_on_close=False,
+            )
     elif tail.truncated:
         full_output_path = service.export_output(owner, snapshot.session_id, tempfile.gettempdir())
+        exported_temporary = True
         if artifacts is not None:
-            artifact = artifacts.register(full_output_path, kind="process-output", access="read")
-    if full_output_path is not None:
+            if artifacts.is_durable:
+                try:
+                    artifact = artifacts.promote(
+                        full_output_path,
+                        kind="process-output",
+                        tool_call_id=tool_call_id,
+                    )
+                except ArtifactPromotionError as error:
+                    artifact_unavailable = _artifact_unavailable(error)
+                except OSError:
+                    artifact_unavailable = _artifact_unavailable(None)
+            else:
+                artifact = artifacts.register(full_output_path, kind="process-output", access="read")
+    if exported_temporary and artifacts is not None and artifacts.is_durable and full_output_path is not None:
+        full_output_path.unlink(missing_ok=True)
+    if full_output_path is not None and not (artifacts is not None and artifacts.is_durable):
         details["fullOutputPath"] = str(full_output_path)
+    else:
+        details.pop("fullOutputPath", None)
     if artifact is not None:
         details["artifactId"] = artifact.id
+    if artifact_unavailable is not None:
+        details["artifactUnavailable"] = artifact_unavailable
     if tail.truncated:
         details["truncation"] = truncation_to_details(tail)
     terminal = ProcessSnapshot(
@@ -574,13 +632,28 @@ def _terminal_process_result(
         cwd=snapshot.cwd,
         suggested_poll_delay_ms=snapshot.suggested_poll_delay_ms,
         durable_output=snapshot.durable_output,
-        full_output_path=str(full_output_path) if full_output_path is not None else None,
+        full_output_path=(
+            str(full_output_path)
+            if full_output_path is not None and not (artifacts is not None and artifacts.is_durable)
+            else None
+        ),
         failure_code=snapshot.failure_code,
     )
     result = _snapshot_result(terminal)
     if artifact is not None:
         result.content[0].text += f"\n\n[{artifact_read_instruction(artifact.id)}]"
+    elif artifact_unavailable is not None:
+        result.content[0].text += (
+            f"\n\n[Full output artifact unavailable ({artifact_unavailable['code']}).]"
+        )
     return AgentToolResult(content=result.content, details=details)
+
+
+def _artifact_unavailable(error: ArtifactPromotionError | None) -> dict[str, str]:
+    if error is None:
+        return {"code": "unavailable", "message": "Artifact storage is unavailable"}
+    message = " ".join(str(error).split())[:240] or "Artifact storage is unavailable"
+    return {"code": error.code, "message": message}
 
 
 def _list_result(snapshots: tuple[ProcessSnapshot, ...]) -> AgentToolResult:

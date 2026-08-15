@@ -756,6 +756,46 @@ def test_managed_bash_preserves_tail_truncation_and_exports_independent_artifact
         registry.close(remove_files=True)
 
 
+def test_managed_bash_promotes_completed_output_for_durable_registry(tmp_path: Path) -> None:
+    from travis.coding_agent.artifact_manifest import ArtifactManifest
+    from travis.coding_agent.artifact_store import ArtifactLimits, DurableArtifactStore
+
+    service = ProcessSessionService(directory=tmp_path / ".processes")
+    owner = ProcessOwner("app", str(tmp_path.resolve()), "agent")
+    registry = ArtifactRegistry(
+        durable_store=DurableArtifactStore(tmp_path / "agent"),
+        manifest=ArtifactManifest.for_session(
+            tmp_path / "session.jsonl",
+            limits=ArtifactLimits(min_free_bytes=0),
+        ),
+    )
+    backend = TrustedLocalBackend()
+    tool = create_bash_tool(
+        str(tmp_path),
+        artifacts=registry,
+        process_service=service,
+        process_owner=owner,
+        transport_factory=lambda launch: create_local_process_transport(launch, backend),
+    )
+    try:
+        result = tool.execute(
+            "bash-call",
+            {
+                "command": python_command("print('x' * 70000); print('FINAL-MARKER')"),
+                "yield_time_ms": 2_000,
+            },
+        )
+
+        assert result.details["artifactId"].startswith("artifact-")
+        assert result.details.get("fullOutputPath") is None
+        resolved = registry.resolve_read(result.details["artifactId"])
+        assert resolved is not None
+        assert resolved.read_text(encoding="utf-8").endswith("FINAL-MARKER\n")
+    finally:
+        service.close()
+        registry.close(remove_files=True)
+
+
 def test_detached_nonzero_is_successful_process_observation(managed_tools) -> None:
     service, owner, bash, process = managed_tools
     started = bash.execute(
@@ -1389,6 +1429,59 @@ def test_process_wait_collapses_large_output_to_bounded_borrowed_artifact(tmp_pa
         service.close()
         artifacts.close(remove_files=True)
         store.close()
+
+
+def test_process_wait_promotes_terminal_output_for_durable_registry(tmp_path: Path) -> None:
+    from travis.coding_agent.artifact_manifest import ArtifactManifest
+    from travis.coding_agent.artifact_store import ArtifactLimits, DurableArtifactStore
+
+    completion_store = ProcessCompletionStore(tmp_path / "completions")
+    service = ProcessSessionService(
+        directory=tmp_path / "processes",
+        completion_store=completion_store,
+    )
+    artifacts = ArtifactRegistry(
+        durable_store=DurableArtifactStore(tmp_path / "agent"),
+        manifest=ArtifactManifest.for_session(
+            tmp_path / "session.jsonl",
+            limits=ArtifactLimits(min_free_bytes=0),
+        ),
+    )
+    owner = ProcessOwner("app", str(tmp_path.resolve()), "agent")
+    backend = TrustedLocalBackend()
+    bash = create_bash_tool(
+        str(tmp_path),
+        artifacts=artifacts,
+        process_service=service,
+        process_owner=owner,
+        transport_factory=lambda launch: create_local_process_transport(launch, backend),
+    )
+    process = create_process_tool(service, owner, artifacts)
+    try:
+        started = bash.execute(
+            "bash-call",
+            {"command": python_command("print('x' * (2 * 1024 * 1024))"), "yield_time_ms": 0},
+        )
+        result = process.execute(
+            "wait-call",
+            {
+                "action": "wait",
+                "session_id": started.details["sessionId"],
+                "cursor": started.details["nextCursor"],
+                "wait_time_ms": 60_000,
+            },
+        )
+
+        artifact_id = result.details["artifactId"]
+        assert artifact_id.startswith("artifact-")
+        assert result.details.get("fullOutputPath") is None
+        resolved = artifacts.resolve_read(artifact_id)
+        assert resolved is not None
+        assert resolved.stat().st_size == 2 * 1024 * 1024 + 1
+    finally:
+        service.close()
+        artifacts.close(remove_files=True)
+        completion_store.close()
 
 
 def test_agent_uses_one_wait_call_despite_multiple_process_updates(tmp_path: Path) -> None:

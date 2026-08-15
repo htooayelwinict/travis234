@@ -17,6 +17,7 @@ from typing import Callable
 
 from travis.agent.types import AgentTool, AgentToolResult
 from travis.ai.types import TextContent
+from travis.coding_agent.artifact_store import ArtifactPromotionError
 from travis.coding_agent.artifacts import ArtifactRegistry, artifact_read_instruction
 from travis.coding_agent.config import get_bin_dir
 from travis.coding_agent.execution_backend import ExecutionBackend, TrustedLocalBackend
@@ -296,14 +297,18 @@ def _format_output(output: OutputSpool, snapshot: OutputSnapshot, empty_text: st
             "truncation": truncation_to_details(truncation),
             "fullOutputPath": snapshot.full_output_path,
             "artifactId": snapshot.artifact_id,
+            "artifactUnavailable": snapshot.artifact_unavailable,
         }
         start_line = truncation.total_lines - truncation.output_lines + 1
         end_line = truncation.total_lines
-        full_output = (
-            artifact_read_instruction(snapshot.artifact_id)
-            if snapshot.artifact_id
-            else f"Full output: {snapshot.full_output_path}"
-        )
+        if snapshot.artifact_id:
+            full_output = artifact_read_instruction(snapshot.artifact_id)
+        elif snapshot.artifact_unavailable:
+            full_output = f"Full output artifact unavailable ({snapshot.artifact_unavailable['code']})"
+        elif snapshot.full_output_path:
+            full_output = f"Full output: {snapshot.full_output_path}"
+        else:
+            full_output = "Full output will be available after command completion"
         if truncation.last_line_partial:
             last_line_size = format_size(output.get_last_line_bytes())
             text += (
@@ -354,6 +359,7 @@ def _execute_bash(
             shell_path,
             artifacts,
             launch_session_id,
+            tool_call_id,
             args,
             signal,
             on_update,
@@ -362,6 +368,7 @@ def _execute_bash(
         temp_file_prefix="travis-bash",
         artifact_registry=artifacts,
         artifact_kind="bash-output",
+        tool_call_id=str(tool_call_id) if tool_call_id is not None else None,
     )
     update_dirty = False
     last_update_at = 0.0
@@ -380,6 +387,7 @@ def _execute_bash(
                     "truncation": truncation_to_details(snapshot.truncation) if snapshot.truncation.truncated else None,
                     "fullOutputPath": snapshot.full_output_path,
                     "artifactId": snapshot.artifact_id,
+                    "artifactUnavailable": snapshot.artifact_unavailable,
                 },
             )
         )
@@ -447,6 +455,7 @@ def _execute_managed_bash(
     shell_path: str | None,
     artifacts: ArtifactRegistry | None,
     launch_session_id: str | None,
+    tool_call_id: str | None,
     args,
     signal,
     on_update,
@@ -519,6 +528,7 @@ def _execute_managed_bash(
         signal,
         artifacts,
         timeout,
+        tool_call_id=tool_call_id,
         input_open=tty or stdin_mode == "open",
     )
 
@@ -531,6 +541,7 @@ def _managed_bash_result(
     artifacts: ArtifactRegistry | None,
     timeout: float | None,
     *,
+    tool_call_id: str | None,
     input_open: bool,
 ) -> AgentToolResult:
     details = snapshot.as_details()
@@ -544,29 +555,50 @@ def _managed_bash_result(
             if borrowed
             else service.export_output(owner, snapshot.session_id, tempfile.gettempdir())
         )
-        artifact = (
-            artifacts.register(
-                exported,
-                kind="bash-output",
-                access="read",
-                remove_on_close=not borrowed,
-            )
-            if artifacts is not None
-            else None
-        )
+        artifact = None
+        artifact_unavailable: dict[str, str] | None = None
+        if artifacts is not None:
+            if artifacts.is_durable:
+                try:
+                    artifact = artifacts.promote(
+                        exported,
+                        kind="bash-output",
+                        tool_call_id=tool_call_id,
+                    )
+                except ArtifactPromotionError as error:
+                    message = " ".join(str(error).split())[:240] or "Artifact storage is unavailable"
+                    artifact_unavailable = {"code": error.code, "message": message}
+                except OSError:
+                    artifact_unavailable = {
+                        "code": "unavailable",
+                        "message": "Artifact storage is unavailable",
+                    }
+                if not borrowed:
+                    exported.unlink(missing_ok=True)
+            else:
+                artifact = artifacts.register(
+                    exported,
+                    kind="bash-output",
+                    access="read",
+                    remove_on_close=not borrowed,
+                )
         details.update(
             {
                 "truncation": truncation_to_details(tail),
-                "fullOutputPath": str(exported),
+                "fullOutputPath": (
+                    None if artifacts is not None and artifacts.is_durable else str(exported)
+                ),
                 "artifactId": artifact.id if artifact is not None else None,
+                "artifactUnavailable": artifact_unavailable,
             }
         )
         start_line = tail.total_lines - tail.output_lines + 1
-        full_output = (
-            artifact_read_instruction(artifact.id)
-            if artifact is not None
-            else f"Full output: {exported}"
-        )
+        if artifact is not None:
+            full_output = artifact_read_instruction(artifact.id)
+        elif artifact_unavailable is not None:
+            full_output = f"Full output artifact unavailable ({artifact_unavailable['code']})"
+        else:
+            full_output = f"Full output: {exported}"
         output = _append_status(
             output,
             f"[Showing lines {start_line}-{tail.total_lines} of {tail.total_lines}. {full_output}]",

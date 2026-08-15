@@ -4,6 +4,8 @@ import stat
 from pathlib import Path
 
 from travis.coding_agent.tools.output_spool import OutputSpool
+from travis.coding_agent.artifact_manifest import ArtifactManifest
+from travis.coding_agent.artifact_store import ArtifactLimits, DurableArtifactStore
 from travis.coding_agent.artifacts import ArtifactRegistry
 
 
@@ -83,6 +85,30 @@ def test_output_spool_registers_truncated_artifact(tmp_path: Path) -> None:
 
     assert snapshot.artifact_id is not None
     assert registry.resolve_read(snapshot.artifact_id) == Path(snapshot.full_output_path).resolve()
+
+
+def test_spool_does_not_promote_incomplete_bytes(tmp_path: Path) -> None:
+    registry = ArtifactRegistry(
+        durable_store=DurableArtifactStore(tmp_path / "agent"),
+        manifest=ArtifactManifest.for_session(
+            tmp_path / "session.jsonl",
+            limits=ArtifactLimits(min_free_bytes=0),
+        ),
+    )
+    spool = OutputSpool(max_bytes=4, directory=tmp_path, artifact_registry=registry)
+    spool.append(b"first")
+    interim = spool.snapshot(persist_if_truncated=True)
+    spool.append(b"-last")
+    spool.finish()
+    final = spool.snapshot(persist_if_truncated=True)
+    spool.close()
+
+    assert interim.artifact_id is None
+    assert final.artifact_id is not None
+    resolved = registry.resolve_read(final.artifact_id)
+    assert resolved is not None
+    assert resolved.read_bytes() == b"first-last"
+    assert final.full_output_path is None
 
 
 def test_artifact_registry_preserves_borrowed_files_on_close(tmp_path: Path) -> None:
