@@ -18,9 +18,11 @@ import threading
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Literal, Protocol, Sequence
+
+from jsonschema import Draft202012Validator
 
 from travis.coding_agent.policy import ToolEffect
 from travis.coding_agent.policy.types import normalize_effects
@@ -215,6 +217,8 @@ class SubagentResult:
     started_at_ms: int = 0
     ended_at_ms: int = 0
     tool_trace: list[dict[str, object]] = field(default_factory=list)
+    structured_output: object | None = None
+    validation_errors: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not isinstance(self.task_id, str) or not self.task_id.strip() or not _TASK_ID_PATTERN.fullmatch(self.task_id):
@@ -247,6 +251,10 @@ class SubagentResult:
             raise ValueError("Subagent usage must be a dict")
         if not isinstance(self.tool_trace, list) or any(not isinstance(item, dict) for item in self.tool_trace):
             raise ValueError("Subagent tool_trace must be a list of dicts")
+        if not isinstance(self.validation_errors, list) or any(
+            not isinstance(item, str) for item in self.validation_errors
+        ):
+            raise ValueError("Subagent validation_errors must be a list of strings")
 
     @property
     def duration_ms(self) -> int:
@@ -272,7 +280,77 @@ class SubagentResult:
             "endedAtMs": self.ended_at_ms,
             "durationMs": self.duration_ms,
             "toolTrace": [dict(item) for item in self.tool_trace],
+            "structuredOutput": self.structured_output,
+            "validationErrors": list(self.validation_errors),
         }
+
+
+def _settle_typed_result(task: SubagentTask, result: SubagentResult) -> SubagentResult:
+    if task.result_schema is None or result.status != "completed":
+        return result
+    text = result.final_response or result.summary
+    errors: list[str] = []
+    envelope: object | None = None
+    parsed = False
+    if len(text.encode("utf-8")) > 256 * 1024:
+        errors.append("typed result envelope exceeds 256 KiB")
+    else:
+        try:
+            envelope = json.loads(text)
+            parsed = True
+        except json.JSONDecodeError:
+            errors.append("typed result envelope must be valid JSON")
+    output: object | None = None
+    summary = result.summary[:4096]
+    artifacts: list[str] = []
+    if parsed:
+        if not isinstance(envelope, dict):
+            errors.append("typed result envelope must be an object")
+        else:
+            unknown = sorted(set(envelope).difference({"summary", "output", "artifacts"}))
+            if unknown:
+                errors.append(f"typed result has unknown envelope keys: {', '.join(unknown)}")
+            raw_summary = envelope.get("summary")
+            if not isinstance(raw_summary, str):
+                errors.append("typed result summary must be a string")
+            else:
+                summary = raw_summary[:4096]
+            if "output" not in envelope:
+                errors.append("typed result output is required")
+            else:
+                output = envelope["output"]
+            raw_artifacts = envelope.get("artifacts", [])
+            if not isinstance(raw_artifacts, list) or any(
+                not isinstance(item, str) for item in raw_artifacts
+            ):
+                errors.append("typed result artifacts must be a list of strings")
+            elif task.artifact_policy != "none":
+                artifacts = list(dict.fromkeys(raw_artifacts))[:256]
+    if not errors and parsed:
+        validator = Draft202012Validator(task.result_schema)
+        for error in sorted(validator.iter_errors(output), key=lambda item: list(item.path))[:8]:
+            path = "$" + "".join(
+                f"[{part}]" if isinstance(part, int) else f".{part}"
+                for part in error.path
+            )
+            errors.append(f"typed result schema mismatch at {path}: {error.message}"[:300])
+    if errors:
+        return replace(
+            result,
+            status="failed",
+            summary=summary or "Typed subagent result validation failed.",
+            artifacts=[],
+            structured_output=None,
+            validation_errors=errors,
+            errors=[*result.errors, *errors],
+        )
+    return replace(
+        result,
+        summary=summary,
+        artifacts=artifacts,
+        structured_output=output,
+        validation_errors=[],
+    )
 
 
 class SubagentBackend(Protocol):
@@ -874,6 +952,11 @@ class SubagentSupervisor:
                 return self._results[task_id]
         return None
 
+    def get_task(self, task_id: str) -> SubagentTask | None:
+        _validate_task_id_reference(task_id)
+        with self._lock:
+            return self._tasks.get(task_id)
+
     def _run_backend(self, task: SubagentTask) -> SubagentResult:
         with self._lock:
             existing = self._results.get(task.id)
@@ -890,6 +973,7 @@ class SubagentSupervisor:
                 raise ValueError(f"Subagent backend returned mismatched backend: {result.backend}")
             if result.role != task.role:
                 raise ValueError(f"Subagent backend returned mismatched role: {result.role}")
+            result = _settle_typed_result(task, result)
         except Exception as error:  # noqa: BLE001 - child failures must be data, not parent crashes.
             ended = _now_ms()
             error_text = f"Subagent backend failed: {error}"
@@ -949,6 +1033,8 @@ class SubagentSupervisor:
                 "files_changed": list(result.files_changed),
                 "artifacts": list(result.artifacts),
                 "errors": list(result.errors),
+                "structured_output": result.structured_output,
+                "validation_errors": list(result.validation_errors),
                 "usage": dict(result.usage),
                 "backend": task.backend,
             }

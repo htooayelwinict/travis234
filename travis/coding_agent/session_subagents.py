@@ -92,7 +92,7 @@ from travis.coding_agent.tools.types import (
 )
 
 from travis.coding_agent.session_types import _CANCEL_SUBAGENT_SCHEMA, _DEFAULT_SUBAGENT_ALLOWED_TOOLS, _EXPAND_SUBAGENT_RESULT_SCHEMA, _LIST_SUBAGENTS_SCHEMA, _MODEL_SUBAGENT_SPAWN_LIMIT_PER_TURN, _SKILL_SUBAGENT_ALLOWED_TOOL_NAMES, _SPAWN_SUBAGENT_SCHEMA, _SUBAGENT_RESULT_SUMMARY_LIMIT, _TASK_ID_SCHEMA
-from travis.coding_agent.subagent_trace import _coerce_subagent_timeout_seconds, _expanded_subagent_result_details, _format_subagent_expansion, _model_subagent_timeout_seconds_arg, _optional_timeout_arg, _public_subagent_result_details, _reject_unexpected_args, _replace_artifact_paths, _required_text_arg, _subagent_changed_files, _subagent_expansion_budget_arg, _subagent_expansion_offset_arg, _subagent_expansion_section_arg, _task_id_arg
+from travis.coding_agent.subagent_trace import _coerce_subagent_timeout_seconds, _expanded_subagent_result_details, _format_subagent_expansion, _model_subagent_timeout_seconds_arg, _optional_timeout_arg, _public_subagent_result_details, _public_subagent_tool_trace, _reject_unexpected_args, _replace_artifact_paths, _required_text_arg, _subagent_changed_files, _subagent_expansion_budget_arg, _subagent_expansion_offset_arg, _subagent_expansion_section_arg, _task_id_arg
 
 
 def _merge_role_context(role_context: str, task_context: str) -> str:
@@ -467,10 +467,21 @@ class SessionSubagentController:
         cached = self._public_subagent_results.get(result.task_id)
         if cached is not None:
             return cached
+        task = self.subagents.get_task(result.task_id)
+        typed = task is not None and task.role_definition_name is not None
+        policy = task.artifact_policy if typed and task is not None else "declared"
+        declared = result.artifacts if policy != "none" else []
         artifact_ids, errors, replacements = self._promote_declared_subagent_artifacts(
             result.task_id,
-            result.artifacts,
+            declared,
+            require_utf8=typed,
         )
+        if policy == "declared_and_trace" and result.tool_trace:
+            trace_id, trace_error = self._promote_subagent_trace(result)
+            if trace_id is not None:
+                artifact_ids.append(trace_id)
+            if trace_error is not None:
+                errors.append(trace_error)
         summary = _replace_artifact_paths(result.summary, replacements)
         final_response = _replace_artifact_paths(result.final_response, replacements)
         prepared = replace(
@@ -487,6 +498,8 @@ class SessionSubagentController:
         self,
         task_id: str,
         declared: list[str],
+        *,
+        require_utf8: bool = False,
     ) -> tuple[list[str], list[str], dict[str, str]]:
         raw_paths = tuple(declared)
         cached = self._subagent_artifact_promotions.get(task_id)
@@ -509,6 +522,13 @@ class SessionSubagentController:
                     raise ArtifactPromotionError("outside_workspace", "Declared artifact is outside workspace")
                 if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
                     raise ArtifactPromotionError("invalid_source", "Declared artifact must be a regular file")
+                if require_utf8:
+                    try:
+                        resolved.read_text(encoding="utf-8")
+                    except UnicodeDecodeError as error:
+                        raise ArtifactPromotionError(
+                            "invalid_utf8", "Declared artifact must be valid UTF-8"
+                        ) from error
                 ref = self._artifacts.promote(
                     resolved,
                     "subagent-output",
@@ -531,6 +551,26 @@ class SessionSubagentController:
             dict(replacements),
         )
         return artifact_ids, errors, replacements
+
+    def _promote_subagent_trace(
+        self, result: SubagentResult
+    ) -> tuple[str | None, str | None]:
+        try:
+            self._subagent_log_dir.mkdir(parents=True, exist_ok=True)
+            path = self._subagent_log_dir / f"{result.task_id}.sanitized-trace.json"
+            path.write_text(
+                json.dumps(
+                    _public_subagent_tool_trace(result.tool_trace),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            ref = self._artifacts.promote(path, "subagent-trace", retained=True)
+            return ref.id, None
+        except (ArtifactPromotionError, OSError, RuntimeError, ValueError) as error:
+            code = error.code if isinstance(error, ArtifactPromotionError) else "invalid_trace"
+            return None, f"artifact_unavailable:{code}"
 
     def _subagent_tool_result(self, content: str, details: dict[str, object]) -> AgentToolResult:
         return AgentToolResult(content=[TextContent(text=content)], details=details)

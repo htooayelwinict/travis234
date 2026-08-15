@@ -175,13 +175,15 @@ def _public_subagent_result_details(result: SubagentResult) -> dict[str, object]
         "durationMs": result.duration_ms,
         "toolTrace": _public_subagent_tool_trace(result.tool_trace),
         "toolTraceCount": len(result.tool_trace),
+        "structuredOutput": result.structured_output,
+        "validationErrors": list(result.validation_errors),
     }
     return details
 
 
 def _subagent_expansion_section_arg(args: Mapping[str, object]) -> str:
     section = str(args.get("section", "summary") or "summary").strip().lower().replace("-", "_")
-    valid = {"summary", "final_response", "tool_trace", "files", "errors", "findings", "all"}
+    valid = {"summary", "final_response", "output", "tool_trace", "files", "errors", "findings", "all"}
     if section not in valid:
         raise ValueError(f"Unsupported subagent expansion section: {section}")
     return section
@@ -207,6 +209,8 @@ def _available_subagent_expansion_sections(result: SubagentResult) -> list[str]:
         sections.append("findings")
     if result.final_response.strip():
         sections.append("final_response")
+    if result.structured_output is not None:
+        sections.append("output")
     if result.tool_trace:
         sections.append("tool_trace")
     if result.files_changed or result.artifacts:
@@ -222,6 +226,12 @@ def _subagent_expansion_source_text(result: SubagentResult, section: str) -> str
         return result.summary.strip()
     if section == "final_response":
         return (result.final_response or result.summary).strip()
+    if section == "output":
+        return json.dumps(
+            result.structured_output,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
     if section == "tool_trace":
         if not result.tool_trace:
             return "No child tool trace is available."
@@ -255,6 +265,8 @@ def _subagent_expansion_source_text(result: SubagentResult, section: str) -> str
             parts.extend(["", "files:", _subagent_expansion_source_text(result, "files")])
         if result.errors:
             parts.extend(["", "errors:", _subagent_expansion_source_text(result, "errors")])
+        if result.structured_output is not None:
+            parts.extend(["", "output:", _subagent_expansion_source_text(result, "output")])
         if result.tool_trace:
             parts.extend(["", "toolTrace:", _subagent_expansion_source_text(result, "tool_trace")])
         return "\n".join(parts).strip()
@@ -662,9 +674,14 @@ class SessionSubagentTraceController:
             task_id = str(event.get("child_subagent_id") or "")
             declared = event.get("artifacts")
             if task_id and isinstance(declared, list) and all(isinstance(item, str) for item in declared):
+                task = self.subagents.get_task(task_id)
+                typed = task is not None and task.role_definition_name is not None
+                if typed and task is not None and task.artifact_policy == "none":
+                    declared = []
                 artifact_ids, errors, replacements = self._promote_declared_subagent_artifacts(
                     task_id,
                     list(declared),
+                    require_utf8=typed,
                 )
                 event = dict(event)
                 event["artifacts"] = artifact_ids
