@@ -92,6 +92,14 @@ from travis.coding_agent.extensions import (
     wrap_registered_tools,
 )
 from travis.coding_agent.model_registry import ModelRegistry
+from travis.coding_agent.model_roles import (
+    CONFIGURABLE_MODEL_ROLES,
+    MODEL_ROLES,
+    ModelRole,
+    ModelRoleResolution,
+    ModelRoleRouter,
+    ModelRoleTraceStep,
+)
 from travis.coding_agent.mailbox import CodingTurnMailbox, MailboxKind, QueuedCodingMessage
 from travis.coding_agent.package_manager import (
     DefaultPackageManager,
@@ -223,6 +231,12 @@ __all__ = [
     "InvalidSessionImportError",
     "InstalledPackage",
     "ModelRegistry",
+    "CONFIGURABLE_MODEL_ROLES",
+    "MODEL_ROLES",
+    "ModelRole",
+    "ModelRoleResolution",
+    "ModelRoleRouter",
+    "ModelRoleTraceStep",
     "CodingTurnMailbox",
     "MailboxKind",
     "QueuedCodingMessage",

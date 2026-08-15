@@ -14,6 +14,7 @@ FACADE_LIMITS = {
 OWNER_GLOBS = (
     "travis/coding_agent/session_types.py",
     "travis/coding_agent/session_models.py",
+    "travis/coding_agent/model_roles.py",
     "travis/coding_agent/session_bash.py",
     "travis/coding_agent/session_tooling.py",
     "travis/coding_agent/session_persistence.py",
