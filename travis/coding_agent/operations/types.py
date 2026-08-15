@@ -22,6 +22,7 @@ _EFFECT_ID = re.compile(r"^effect_[0-9a-f]{32}$")
 _RUNTIME_ID = re.compile(r"^[0-9a-f]{32}$")
 _FINGERPRINT = re.compile(r"^[0-9a-f]{64}$")
 _CODE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_EFFECT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$")
 _SENSITIVE_KEY = re.compile(
     r"(?:auth|cookie|credential|password|secret|token|api[_-]?key)", re.IGNORECASE
 )
@@ -238,6 +239,7 @@ class EffectRecord:
     created_at_ms: int
     settled_at_ms: int | None = None
     outcome_code: str | None = None
+    effect_classes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _require_pattern(self.effect_id, _EFFECT_ID, "effect id")
@@ -245,7 +247,7 @@ class EffectRecord:
         _require_pattern(self.runtime_id, _RUNTIME_ID, "runtime id")
         _require_nonnegative_int(self.ordinal, "effect ordinal")
         _require_code(self.kind, "effect kind")
-        _require_code(self.name, "effect name")
+        _require_pattern(self.name, _EFFECT_NAME, "effect name")
         _require_pattern(self.fingerprint, _FINGERPRINT, "effect fingerprint")
         if self.state not in EFFECT_STATES:
             raise ValueError("unknown effect state")
@@ -254,6 +256,12 @@ class EffectRecord:
         created = _require_timestamp(self.created_at_ms, "created_at_ms")
         settled = _require_timestamp(self.settled_at_ms, "settled_at_ms", optional=True)
         _require_code(self.outcome_code, "outcome code", optional=True)
+        classes = tuple(self.effect_classes)
+        if len(classes) > 16 or len(set(classes)) != len(classes):
+            raise ValueError("effect classes must be unique and bounded")
+        for effect_class in classes:
+            _require_code(effect_class, "effect class")
+        object.__setattr__(self, "effect_classes", classes)
         if settled is not None and settled < created:
             raise ValueError("effect timestamps must be monotonic")
 
@@ -271,6 +279,7 @@ class EffectRecord:
             "createdAtMs": self.created_at_ms,
             "settledAtMs": self.settled_at_ms,
             "outcomeCode": self.outcome_code,
+            "effectClasses": list(self.effect_classes),
         }
 
 

@@ -64,6 +64,7 @@ def effect_from_row(row: sqlite3.Row) -> EffectRecord:
         row["created_at_ms"],
         row["settled_at_ms"],
         row["outcome_code"],
+        tuple(json.loads(row["effect_classes_json"])),
     )
 
 

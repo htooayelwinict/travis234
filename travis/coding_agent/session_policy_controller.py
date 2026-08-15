@@ -8,6 +8,8 @@ the execution boundary.  This bridge only applies extension hook results.
 from __future__ import annotations
 
 from travis.agent.types import AfterToolCallResult, BeforeToolCallResult
+from travis.coding_agent.policy import argument_fingerprint
+from travis.coding_agent.policy.types import TOOL_EFFECT_ORDER
 from travis.coding_agent.session_types import _MALFORMED_STREAM_RECOVERY_PREFIX
 
 
@@ -53,6 +55,7 @@ class SessionPolicyController:
         )
         self._emit_tool_policy_decision(decision)
         if decision.allow:
+            self._journal_tool_intent(context, decision.effects)
             return None
         return BeforeToolCallResult(
             block=True,
@@ -60,7 +63,7 @@ class SessionPolicyController:
         )
 
     async def _after_tool_call(self, context, signal=None) -> AfterToolCallResult | None:
-        del signal
+        self._settle_tool_effect(context, signal)
         if not self._extension_runner.has_handlers("tool_result"):
             return None
         result = await self._extension_runner.async_emit_tool_result(
@@ -86,6 +89,51 @@ class SessionPolicyController:
             details=details,
             is_error=bool(raw_is_error) if raw_is_error is not None else None,
         )
+
+    def _journal_tool_intent(self, context, effects) -> None:
+        coordinator = self.operation_coordinator
+        try:
+            handle = coordinator.begin_effect(
+                "tool",
+                context.tool_call.name,
+                argument_fingerprint(context.args),
+                tuple(effect for effect in TOOL_EFFECT_ORDER if effect in effects),
+            )
+        except Exception:
+            self._disable_operation_journal()
+            return
+        if handle is None:
+            return
+        with self._operation_tool_effects_lock:
+            self._operation_tool_effects[context.tool_call.id] = handle
+
+    def _settle_tool_effect(self, context, signal) -> None:
+        call_id = context.tool_call.id
+        with self._operation_tool_effects_lock:
+            handle = self._operation_tool_effects.get(call_id)
+        if handle is None:
+            return
+        outcome_code = (
+            "cancelled"
+            if signal is not None and signal.aborted
+            else "tool_error"
+            if context.is_error
+            else "ok"
+        )
+        try:
+            self.operation_coordinator.settle_effect(handle, outcome_code)
+        except Exception:
+            self._disable_operation_journal()
+        finally:
+            with self._operation_tool_effects_lock:
+                if self._operation_tool_effects.get(call_id) is handle:
+                    self._operation_tool_effects.pop(call_id, None)
+
+    def _disable_operation_journal(self) -> None:
+        try:
+            self.operation_coordinator.disable("journal_unavailable")
+        except Exception:
+            pass
 
 
 __all__ = ("SessionPolicyController", "_is_internal_steering_user_message")

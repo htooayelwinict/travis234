@@ -100,6 +100,21 @@ def test_effect_and_runtime_values_are_strict() -> None:
     with pytest.raises(ValueError, match="pid"):
         RuntimeLease(RUNTIME_ID, 0, 1.0, 1, 1)
 
+    named = EffectRecord(
+        EFFECT_ID,
+        OP_ID,
+        RUNTIME_ID,
+        1,
+        "tool",
+        "extension-probe",
+        FINGERPRINT,
+        "intent",
+        "never",
+        1,
+        effect_classes=("write", "network"),
+    )
+    assert named.effect_classes == ("write", "network")
+
 
 def test_register_values_are_redacted_bounded_and_defensively_frozen() -> None:
     source = {

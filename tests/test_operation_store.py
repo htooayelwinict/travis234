@@ -93,7 +93,12 @@ def test_operation_counter_registers_effects_usage_and_snapshot_round_trip(tmp_p
     )
     register = store.set_register(operation.operation_id, "role", "worker", 13)
     effect = store.begin_effect(
-        operation.operation_id, "provider", "openrouter", EFFECT_FP, 14
+        operation.operation_id,
+        "tool",
+        "extension-probe",
+        EFFECT_FP,
+        14,
+        effect_classes=("write", "network"),
     )
     settled_effect = store.settle_effect(effect.effect_id, "settled", "ok", 15)
     usage = store.record_usage(
@@ -121,6 +126,7 @@ def test_operation_counter_registers_effects_usage_and_snapshot_round_trip(tmp_p
     assert [item.key for item in snapshot.registers] == ["attempt", "auth_token", "phase", "role"]
     assert next(item for item in snapshot.registers if item.key == "auth_token").as_dict()["value"] == "[redacted]"
     assert snapshot.effects == (settled_effect,)
+    assert snapshot.effects[0].effect_classes == ("write", "network")
     assert snapshot.usage == (usage,)
     store.close()
 
@@ -284,6 +290,25 @@ def test_corrupt_or_incompatible_store_is_not_rebuilt(tmp_path: Path) -> None:
     with pytest.raises(OperationStoreUnavailable, match="journal_unavailable"):
         OperationStore(incompatible)
     assert incompatible.exists()
+
+    incomplete = tmp_path / "incomplete.sqlite3"
+    connection = sqlite3.connect(incomplete)
+    connection.execute(
+        "CREATE TABLE store_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+    )
+    connection.execute("INSERT INTO store_meta VALUES ('schema_version', '1')")
+    for table in (
+        "runtime_leases",
+        "operations",
+        "registers",
+        "effects",
+        "usage_ledger",
+    ):
+        connection.execute(f"CREATE TABLE {table} (placeholder TEXT)")
+    connection.commit()
+    connection.close()
+    with pytest.raises(OperationStoreUnavailable, match="journal_unavailable"):
+        OperationStore(incomplete)
 
 
 def test_read_only_directory_open_is_shaped_without_exposing_path(tmp_path: Path) -> None:

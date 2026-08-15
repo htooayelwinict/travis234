@@ -30,6 +30,7 @@ from travis.coding_agent.operations.rows import (
     usage_from_row,
     usage_identity,
 )
+from travis.coding_agent.operations.schema import has_required_schema
 from travis.coding_agent.sqlite_utils import open_secure_sqlite, secure_sqlite_files
 
 _SCHEMA_VERSION = "1"
@@ -108,7 +109,12 @@ class OperationStore:
                 "effects",
                 "usage_ledger",
             }
-            if row is None or row["value"] != _SCHEMA_VERSION or not required.issubset(tables):
+            if (
+                row is None
+                or row["value"] != _SCHEMA_VERSION
+                or not required.issubset(tables)
+                or not has_required_schema(self._connection)
+            ):
                 raise OperationStoreUnavailable()
             return
         if tables:
@@ -159,6 +165,7 @@ class OperationStore:
                 ordinal INTEGER NOT NULL,
                 kind TEXT NOT NULL,
                 name TEXT NOT NULL,
+                effect_classes_json TEXT NOT NULL,
                 fingerprint TEXT NOT NULL,
                 state TEXT NOT NULL,
                 replay_policy TEXT NOT NULL,
@@ -421,6 +428,8 @@ class OperationStore:
         name: str,
         fingerprint: str,
         now_ms: int,
+        *,
+        effect_classes: tuple[str, ...] = (),
     ) -> EffectRecord:
         with self._transaction() as connection:
             operation = operation_from_row(self._operation_row(connection, operation_id))
@@ -443,9 +452,10 @@ class OperationStore:
                 "intent",
                 "never",
                 now_ms,
+                effect_classes=effect_classes,
             )
             connection.execute(
-                "INSERT INTO effects VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)",
+                "INSERT INTO effects VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)",
                 (
                     effect.effect_id,
                     effect.operation_id,
@@ -453,6 +463,7 @@ class OperationStore:
                     effect.ordinal,
                     effect.kind,
                     effect.name,
+                    json.dumps(list(effect.effect_classes), separators=(",", ":")),
                     effect.fingerprint,
                     effect.state,
                     effect.replay_policy,
@@ -493,6 +504,7 @@ class OperationStore:
                 current.created_at_ms,
                 now_ms,
                 outcome_code,
+                current.effect_classes,
             )
             connection.execute(
                 "UPDATE effects SET state=?, settled_at_ms=?, outcome_code=? WHERE effect_id=?",

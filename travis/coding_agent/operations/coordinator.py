@@ -86,9 +86,13 @@ class NullOperationCoordinator:
         return 0
 
     def begin_effect(
-        self, kind: str, name: str, fingerprint: str
+        self,
+        kind: str,
+        name: str,
+        fingerprint: str,
+        effect_classes: tuple[str, ...] = (),
     ) -> None:
-        del kind, name, fingerprint
+        del kind, name, fingerprint, effect_classes
         return None
 
     def settle_effect(
@@ -204,7 +208,11 @@ class OperationCoordinator:
             return operation.program_counter
 
     def begin_effect(
-        self, kind: str, name: str, fingerprint: str
+        self,
+        kind: str,
+        name: str,
+        fingerprint: str,
+        effect_classes: tuple[str, ...] = (),
     ) -> EffectHandle | None:
         with self._lock:
             operation_id = self._require_operation()
@@ -212,7 +220,12 @@ class OperationCoordinator:
                 return None
             try:
                 effect = self._store.begin_effect(
-                    operation_id, kind, name, fingerprint, self._clock_ms()
+                    operation_id,
+                    kind,
+                    name,
+                    fingerprint,
+                    self._clock_ms(),
+                    effect_classes=effect_classes,
                 )
             except Exception:
                 self.disable("journal_unavailable")

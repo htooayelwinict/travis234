@@ -235,6 +235,8 @@ class _SessionRuntime(
         self._extension_provider_original_models: dict[str, Model] = {}
         self._extension_provider_registrations: dict[str, object] = {}
         self._event_listeners: list[Callable[[object], None]] = []
+        self._operation_tool_effects: dict[str, object] = {}
+        self._operation_tool_effects_lock = threading.RLock()
         self._turn_index = 0
         self._model_change_listener = model_change_listener
         self._subagent_observer_errors: list[str] = []
