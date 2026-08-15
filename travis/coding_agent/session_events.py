@@ -171,6 +171,7 @@ class SessionEventController:
                 )
             elif message_role in ("user", "assistant", "toolResult"):
                 self._session_store.append_message(event.message)
+                self._operation_record_persisted_message(event.message)
         self._emit(event)
 
     async def _emit_extension_event(self, event) -> None:

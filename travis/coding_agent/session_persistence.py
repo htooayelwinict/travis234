@@ -194,7 +194,7 @@ class SessionPersistence:
                 manager=manager,
                 run_coordinator=self._compaction_coordinator,
                 adapter=self._compaction_adapter,
-                continue_agent=self.agent.continue_,
+                continue_agent=self._operation_continue,
                 extension_runner=self._extension_runner,
                 branch_entries=lambda: self.session_entries,
                 signal=lambda: self.agent.signal,

@@ -110,6 +110,7 @@ from travis.coding_agent.session_generation_params import SessionGenerationParam
 from travis.coding_agent.session_persistence import SessionPersistence
 from travis.coding_agent.session_bash import SessionBashController
 from travis.coding_agent.session_policy_controller import SessionPolicyController
+from travis.coding_agent.session_operations import SessionOperationController
 
 from travis.coding_agent.session_types import default_convert_to_llm
 
@@ -125,6 +126,7 @@ class _SessionRuntime(
         SessionPersistence,
         SessionBashController,
         SessionPolicyController,
+        SessionOperationController,
 ):
     """Internal runtime assembled from focused behavior owners."""
 
@@ -178,6 +180,8 @@ class _SessionRuntime(
         tool_policy_redactor: SecretRedactor | None = None,
         operation_runtime: object | None = None,
         owns_operation_runtime: bool = False,
+        operation_role: str | None = None,
+        operation_task_id: str | None = None,
     ) -> None:
         self.cwd = cwd
         self.model_registry = model_registry or ModelRegistry.create(AuthStorage.create())
@@ -319,6 +323,10 @@ class _SessionRuntime(
             )
             if operation_runtime is not None
             else NullOperationCoordinator()
+        )
+        self._initialize_session_operations(
+            role=operation_role,
+            task_id=operation_task_id,
         )
         from travis.coding_agent.agent_session_services import create_session_artifact_registry
 
@@ -510,6 +518,8 @@ def create_agent_session(
     tool_policy_redactor: SecretRedactor | None = None,
     operation_runtime: object | None = None,
     owns_operation_runtime: bool = False,
+    operation_role: str | None = None,
+    operation_task_id: str | None = None,
 ) -> AgentSession:
     return AgentSession(
         cwd=cwd,
@@ -534,4 +544,6 @@ def create_agent_session(
         tool_policy_redactor=tool_policy_redactor,
         operation_runtime=operation_runtime,
         owns_operation_runtime=owns_operation_runtime,
+        operation_role=operation_role,
+        operation_task_id=operation_task_id,
     )

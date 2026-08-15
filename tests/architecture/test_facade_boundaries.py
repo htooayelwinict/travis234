@@ -23,6 +23,7 @@ OWNER_GLOBS = (
     "travis/coding_agent/subagent_trace.py",
     "travis/coding_agent/session_turns.py",
     "travis/coding_agent/session_policy_controller.py",
+    "travis/coding_agent/session_operations.py",
     "travis/coding_agent/session_events.py",
     "travis/tui/components/*.py",
     "travis/tui/interactive_turn_controller.py",
@@ -72,6 +73,13 @@ FORBIDDEN_COORDINATION_PREFIXES = (
     "travis.app",
     "travis.tui",
     "travis.coding_agent.agent_session",
+)
+OPERATION_OWNERS = "travis/coding_agent/operations/*.py"
+FORBIDDEN_OPERATION_PREFIXES = (
+    "travis.app",
+    "travis.tui",
+    "travis.coding_agent.agent_session",
+    "travis.ai.providers",
 )
 
 
@@ -152,6 +160,27 @@ def test_coordination_owners_do_not_import_tui_app_session_or_agent_loop() -> No
                 imported = tuple(alias.name for alias in node.names)
             for module in imported:
                 if module.startswith(FORBIDDEN_COORDINATION_PREFIXES):
+                    failures.append(f"{relative}:{node.lineno}: imports {module}")
+
+    assert failures == []
+
+
+def test_operation_owners_are_bounded_and_do_not_import_runtime_facades() -> None:
+    failures: list[str] = []
+    for path in sorted(ROOT.glob(OPERATION_OWNERS)):
+        relative = path.relative_to(ROOT).as_posix()
+        source = path.read_text(encoding="utf-8")
+        if len(source.splitlines()) > 750:
+            failures.append(f"{relative}: exceeds 750 lines")
+        tree = ast.parse(source, filename=relative)
+        for node in ast.walk(tree):
+            imported: tuple[str, ...] = ()
+            if isinstance(node, ast.ImportFrom) and node.module is not None:
+                imported = (node.module,)
+            elif isinstance(node, ast.Import):
+                imported = tuple(alias.name for alias in node.names)
+            for module in imported:
+                if module.startswith(FORBIDDEN_OPERATION_PREFIXES):
                     failures.append(f"{relative}:{node.lineno}: imports {module}")
 
     assert failures == []

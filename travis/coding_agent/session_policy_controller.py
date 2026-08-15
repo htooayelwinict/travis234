@@ -122,6 +122,7 @@ class SessionPolicyController:
         )
         try:
             self.operation_coordinator.settle_effect(handle, outcome_code)
+            self._operation_record_tools_settled(call_id)
         except Exception:
             self._disable_operation_journal()
         finally:

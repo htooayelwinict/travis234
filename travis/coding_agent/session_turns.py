@@ -349,7 +349,7 @@ class SessionTurnController:
 
     def continue_(self, stream_fn=None) -> list[AgentMessage]:
         try:
-            return self.agent.continue_(stream_fn=stream_fn or self._stream_fn)
+            return self._operation_continue(stream_fn or self._stream_fn)
         finally:
             if not self._defer_agent_settled:
                 self.emit_agent_settled()
@@ -598,6 +598,7 @@ class SessionTurnController:
     def _run_agent_prompt(self, prompt_message, stream_fn=None) -> list[AgentMessage]:
         self._flush_pending_bash_messages()
         self._partial_stream_continue_retries = 0
+        self._operation_start_turn()
         active_stream_fn = stream_fn or self._stream_fn
         selected_binding: ScopedModel | None = None
 
@@ -614,10 +615,13 @@ class SessionTurnController:
             if selected_binding is None and pending_context_has_images(context):
                 selected_binding = require_vision_binding()
             if selected_binding is None:
-                return active_stream_fn(model, context, options)
+                return self._operation_invoke_provider(
+                    active_stream_fn, model, context, options
+                )
 
             routed_options = model_role_stream_options(selected_binding, options)
-            return active_stream_fn(
+            return self._operation_invoke_provider(
+                active_stream_fn,
                 selected_binding.model,
                 context,
                 routed_options,
@@ -650,6 +654,7 @@ class SessionTurnController:
             try:
                 self._flush_pending_bash_messages()
             finally:
+                self._operation_finish_turn()
                 if not self._defer_agent_settled:
                     self.emit_agent_settled()
 

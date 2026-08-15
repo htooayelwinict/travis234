@@ -667,6 +667,8 @@ class SessionSubagentController:
             tool_policy_event_sink=self._tool_policy_event_sink,
             tool_policy_redactor=self._tool_policy_engine.redactor,
             operation_runtime=self.operation_runtime,
+            operation_role=task.role,
+            operation_task_id=task.id,
         )
         self.subagents.attach_control_handle(
             task.id, _InternalSubagentControlHandle(child)
