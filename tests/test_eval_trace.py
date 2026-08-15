@@ -47,6 +47,44 @@ def test_eval_trace_accepts_capability_grant_synchronization_event(tmp_path: Pat
     assert json.loads(path.read_text(encoding="utf-8"))["event"] == "capability_granted"
 
 
+def test_eval_trace_accepts_sanitized_model_role_resolution(tmp_path: Path) -> None:
+    path = tmp_path / "trace.jsonl"
+    writer = EvalTraceWriter(path)
+
+    writer.write(
+        "model_role_resolved",
+        {
+            "role": "reviewer",
+            "selectedRole": "worker",
+            "source": "project",
+            "model": "provider/worker",
+            "fallbackTrace": [
+                {
+                    "role": "reviewer",
+                    "source": "settings",
+                    "selector": None,
+                    "outcome": "missing",
+                    "model_ref": None,
+                    "detail": None,
+                },
+                {
+                    "role": "worker",
+                    "source": "project",
+                    "selector": "provider/worker:low",
+                    "outcome": "selected",
+                    "model_ref": "provider/worker",
+                    "detail": None,
+                },
+            ],
+        },
+    )
+
+    event = json.loads(path.read_text(encoding="utf-8"))
+    assert event["event"] == "model_role_resolved"
+    assert event["selectedRole"] == "worker"
+    assert event["fallbackTrace"][-1]["outcome"] == "selected"
+
+
 def test_eval_trace_accepts_sanitized_feature_audit_metadata(tmp_path: Path) -> None:
     path = tmp_path / "trace.jsonl"
     writer = EvalTraceWriter(path)

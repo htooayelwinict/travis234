@@ -1325,6 +1325,73 @@ def test_coding_app_routes_compaction_through_configured_auxiliary_model(tmp_pat
     assert any("auxiliary summary" in str(message.content) for message in status.messages)
 
 
+def test_coding_app_routes_compaction_through_settings_role(tmp_path: Path) -> None:
+    calls: list[tuple[Model, object | None]] = []
+
+    def stream(model, context, options=None):
+        del context
+        calls.append((model, options))
+        result = create_assistant_message_event_stream()
+        for event in text_response_events(
+            model,
+            "## Historical Task Snapshot\nrole summary",
+        ):
+            result.push(event)
+        return result
+
+    register_api_provider(ApiProvider(api="capturing", stream=stream, stream_simple=stream))
+    auth = AuthStorage.in_memory()
+    model_registry = ModelRegistry.in_memory(auth)
+    main_model = Model(
+        id="coding-model",
+        name="Coding",
+        api="capturing",
+        provider="main-provider",
+        base_url="https://main.invalid/v1",
+        reasoning=True,
+    )
+    summary_model = Model(
+        id="summary-model",
+        name="Summary",
+        api="capturing",
+        provider="summary-provider",
+        base_url="https://summary.invalid/v1",
+        reasoning=True,
+    )
+    for model in (main_model, summary_model):
+        model_registry.ensure_model(model)
+        auth.set_runtime_api_key(model.provider, "secret-test-key")
+    settings = SettingsManager.in_memory(
+        {"modelRoles": {"compression": "summary-provider/summary-model:low"}}
+    )
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=main_model,
+        terminal=FakeTerminal(),
+        context_length=2000,
+        model_registry=model_registry,
+        settings_manager=settings,
+    )
+    app.session.agent.state.messages = [
+        UserMessage(content=f"old context {index} " * 200, timestamp=now_ms())
+        for index in range(16)
+    ]
+    try:
+        status = app.compaction.compress_manual_with_status(app.messages)
+
+        assert status.compressed is True
+        assert status.warning is None
+        assert calls[-1][0] is summary_model
+        assert getattr(calls[-1][1], "reasoning", None) == "low"
+        assert app.compressor.model == "main-provider/coding-model"
+        assert app.compressor.summary_model == "summary-provider/summary-model"
+        assert status.summary_model_requested == "summary-provider/summary-model"
+        assert status.summary_model_used == "summary-provider/summary-model"
+        assert status.summary_model_fallback is False
+    finally:
+        app.close()
+
+
 def test_coding_app_wires_compaction_manager_into_session_api(tmp_path: Path) -> None:
     model = faux_model()
     app = CodingApp(

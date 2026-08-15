@@ -144,6 +144,11 @@ class CodingApp:
             role: ScopedModel(binding.model, binding.thinking_level)
             for role, binding in (model_role_bindings or {}).items()
         }
+        if compression_model is not None:
+            self._model_role_bindings["compression"] = ScopedModel(
+                compression_model,
+                "off",
+            )
         for binding in self._model_role_bindings.values():
             self.model_registry.ensure_model(binding.model)
         self._settings_manager = settings_manager or SettingsManager.in_memory()
@@ -204,22 +209,11 @@ class CodingApp:
             )
         self._summarizer = summarizer
         self._compression_model = compression_model
-        self._compression_summarizer = (
-            _model_summarizer(
-                compression_model,
-                thinking_level="off",
-                api_key=compression_api_key,
-                timeout_seconds=compression_timeout_seconds,
-                generation_params=compression_generation_params,
-                complete_fn=lambda active_model, context, options: self.model_registry.stream_simple(
-                    active_model,
-                    context,
-                    options,
-                ).result_sync(),
-            )
-            if compression_model is not None
-            else None
-        )
+        self._compression_api_key = compression_api_key
+        self._compression_timeout_seconds = compression_timeout_seconds
+        self._compression_generation_params = compression_generation_params
+        self._active_compression_model: Model | None = None
+        self._compression_summarizer = None
         initial_session = self._create_session(
             cwd=self.cwd,
             fallback_model=model,
@@ -351,10 +345,39 @@ class CodingApp:
         return restored or fallback
 
     def _configure_session_components(self) -> None:
+        compression_resolution = self.session.resolve_model_role("compression")
+        compression_binding = (
+            compression_resolution.scoped_model
+            if compression_resolution.source != "active_primary"
+            else None
+        )
+        self._active_compression_model = (
+            compression_binding.model if compression_binding is not None else None
+        )
+        if compression_binding is not None:
+            uses_legacy_options = compression_binding.model is self._compression_model
+            self._compression_summarizer = _model_summarizer(
+                compression_binding.model,
+                thinking_level=compression_binding.thinking_level or "off",
+                api_key=self._compression_api_key if uses_legacy_options else None,
+                timeout_seconds=(
+                    self._compression_timeout_seconds if uses_legacy_options else None
+                ),
+                generation_params=(
+                    self._compression_generation_params if uses_legacy_options else None
+                ),
+                complete_fn=lambda active_model, context, options: self.model_registry.stream_simple(
+                    active_model,
+                    context,
+                    options,
+                ).result_sync(),
+            )
+        else:
+            self._compression_summarizer = None
         compaction_policy = _resolve_compaction_policy(
             self.session.model,
             explicit_context_length=self._context_length,
-            summarizer_model=self._compression_model,
+            summarizer_model=self._active_compression_model,
         )
         self.compressor = ContextCompressor(
             context_length=compaction_policy.context_window,
@@ -366,8 +389,8 @@ class CodingApp:
             summary_summarizer=self._compression_summarizer,
             model=_model_route(self.session.model),
             summary_model_override=(
-                _model_route(self._compression_model)
-                if self._compression_model is not None
+                _model_route(self._active_compression_model)
+                if self._active_compression_model is not None
                 else None
             ),
         )
@@ -397,7 +420,7 @@ class CodingApp:
         compaction_policy = _resolve_compaction_policy(
             model,
             explicit_context_length=self._context_length,
-            summarizer_model=self._compression_model,
+            summarizer_model=self._active_compression_model,
         )
         self.compressor.update_context_window(
             compaction_policy.context_window,
