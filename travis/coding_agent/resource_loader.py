@@ -264,9 +264,11 @@ class DefaultResourceLoader:
         if trust_override is None:
             trust_override = self._project_trust_override
 
+        bootstrap_lease: ExtensionRuntimeLease | None = None
         if trust_override is None:
             if pretrust_extensions is None:
                 pretrust_extensions = self.load_project_trust_extensions()
+            bootstrap_lease = self._verified_pretrust_lease(pretrust_extensions)
             context = _first_mapping_value(
                 resolved_options,
                 "projectTrustContext",
@@ -295,8 +297,23 @@ class DefaultResourceLoader:
         else:
             trusted = trust_override
 
+        if pretrust_extensions is not None and bootstrap_lease is None:
+            bootstrap_lease = self._verified_pretrust_lease(pretrust_extensions)
+
+        previous_trust = self.project_trusted
         self._set_project_trusted(bool(trusted))
-        self._reload_all_resources(pretrust_extensions=pretrust_extensions)
+        try:
+            self._reload_all_resources(pretrust_extensions=pretrust_extensions)
+        except Exception:
+            self._set_project_trusted(previous_trust)
+            raise
+        finally:
+            if (
+                bootstrap_lease is not None
+                and self._pretrust_extension_lease is bootstrap_lease
+            ):
+                self._pretrust_extension_lease = None
+                bootstrap_lease.release()
 
     def _set_project_trusted(self, trusted: bool) -> None:
         self.project_trusted = trusted
@@ -350,9 +367,17 @@ class DefaultResourceLoader:
                 preloaded_extensions=preloaded,
             )
             self._reload_capabilities(request)
-            if preloaded is not None:
-                preloaded.release()
-                self._pretrust_extension_lease = None
+
+    def _verified_pretrust_lease(
+        self,
+        result: dict[str, object],
+    ) -> ExtensionRuntimeLease:
+        lease = self._pretrust_extension_lease
+        if lease is None:
+            raise ValueError("no pre-trust extension candidate is active")
+        if result is not lease.result:
+            raise ValueError("pretrust_extensions did not originate from this loader")
+        return lease
 
     def _content_request(
         self, resolved_paths: ResolvedPaths

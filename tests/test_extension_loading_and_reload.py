@@ -200,6 +200,76 @@ def test_invalid_extension_override_keeps_active_runtime(tmp_path: Path) -> None
     assert active.get_registered_command("extension-version") is not None
 
 
+def test_failed_trusted_candidate_restores_active_trust_and_runtime(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    agent_dir = tmp_path / "agent"
+    project_extension = project / ".travis234/extensions/project.py"
+    project_extension.parent.mkdir(parents=True)
+    agent_dir.mkdir()
+    project_extension.write_text(
+        "def extension(travis):\n"
+        "    travis.register_flag('project-only', {'type': 'boolean'})\n",
+        encoding="utf-8",
+    )
+    loader = DefaultResourceLoader(
+        cwd=str(project),
+        agent_dir=str(agent_dir),
+        project_trusted=False,
+    )
+    loader.reload()
+    previous_runtime = loader.get_extensions()["runtime"]
+    loader.skills_override = lambda _value: (_ for _ in ()).throw(
+        RuntimeError("reject trusted candidate")
+    )
+
+    with pytest.raises(CapabilityReloadError, match="reject trusted candidate"):
+        loader.complete_reload({"projectTrustOverride": True})
+
+    assert loader.project_trusted is False
+    assert loader.package_manager.project_trusted is False
+    assert loader.get_extensions()["runtime"] is previous_runtime
+    assert previous_runtime.get_flag("project-only") is None
+
+
+def test_pretrust_runtime_transfers_once_then_disposes_on_replacement(
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+    events: list[str] = []
+
+    def factory(travis) -> None:
+        calls.append("factory")
+        owner = f"runtime-{len(calls)}"
+        travis.register_flag("profile", {"type": "string"})
+        travis.events.on("ownership-probe", lambda _value: events.append(owner))
+
+    loader = DefaultResourceLoader(
+        cwd=str(tmp_path),
+        agent_dir=str(tmp_path / "agent"),
+        extension_factories=[factory],
+    )
+    pretrust = loader.load_project_trust_extensions()
+    first_runtime = pretrust["runtime"]
+
+    loader.complete_reload(
+        {"projectTrustOverride": False}, pretrust_extensions=pretrust
+    )
+
+    assert loader.get_extensions()["runtime"] is first_runtime
+    assert calls == ["factory"]
+    loader.event_bus.emit("ownership-probe", None)
+    assert events == ["runtime-1"]
+
+    loader.reload({"projectTrustOverride": False})
+
+    assert loader.get_extensions()["runtime"] is not first_runtime
+    assert calls == ["factory", "factory"]
+    loader.event_bus.emit("ownership-probe", None)
+    assert events == ["runtime-1", "runtime-2"]
+
+
 def test_extension_context_reads_project_trust_dynamically(tmp_path: Path) -> None:
     settings = SettingsManager.in_memory()
     loader = DefaultResourceLoader(
