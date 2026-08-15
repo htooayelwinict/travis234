@@ -18,16 +18,21 @@ import threading
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Literal, Protocol, Sequence
 
-from jsonschema import Draft202012Validator
-
 from travis.coding_agent.policy import ToolEffect
-from travis.coding_agent.policy.types import normalize_effects
+from travis.coding_agent.subagent_results import (
+    settle_typed_result,
+    validate_typed_task_fields,
+)
+from travis.coding_agent.subagent_result_types import SubagentResult, SubagentStatus
+from travis.coding_agent.subagent_supervision import (
+    SupervisorSnapshot,
+    SupervisorSnapshotStore,
+)
 
-SubagentStatus = Literal["queued", "running", "completed", "failed", "cancelled", "timeout"]
 SubagentSandbox = Literal["read_only", "workspace_write", "full_access"]
 
 CODING_SUBAGENT_TOOLS = (
@@ -41,7 +46,6 @@ CODING_SUBAGENT_TOOLS = (
     "write",
     "tmux",
 )
-_SUBAGENT_STATUSES = {"queued", "running", "completed", "failed", "cancelled", "timeout"}
 _SANDBOX_FLAGS: dict[str, str] = {
     "read_only": "read-only",
     "workspace_write": "workspace-write",
@@ -147,23 +151,7 @@ class SubagentTask:
             raise ValueError("Subagent parent_session_id must be a string when set")
         if self.parent_turn_id is not None and not isinstance(self.parent_turn_id, str):
             raise ValueError("Subagent parent_turn_id must be a string when set")
-        if self.role_definition_name is not None and (
-            not isinstance(self.role_definition_name, str)
-            or not _TASK_ID_PATTERN.fullmatch(self.role_definition_name)
-        ):
-            raise ValueError("Subagent role_definition_name is invalid")
-        if self.allowed_effects is not None:
-            object.__setattr__(
-                self,
-                "allowed_effects",
-                tuple(effect for effect in ("read", "write", "execute", "network") if effect in normalize_effects(self.allowed_effects)),
-            )
-        if self.model_role not in (None, "worker", "reviewer"):
-            raise ValueError("Subagent model_role must be worker or reviewer")
-        if self.result_schema is not None and not isinstance(self.result_schema, dict):
-            raise ValueError("Subagent result_schema must be an object")
-        if self.artifact_policy not in ("none", "declared", "declared_and_trace"):
-            raise ValueError("Subagent artifact_policy is invalid")
+        object.__setattr__(self, "allowed_effects", validate_typed_task_fields(self))
 
     def prompt(self) -> str:
         parts = [
@@ -198,159 +186,6 @@ class SubagentTask:
         if self.context_pack.strip():
             parts.append(f"Context pack:\n{self.context_pack.strip()}")
         return "\n\n".join(parts)
-
-
-@dataclass(frozen=True)
-class SubagentResult:
-    task_id: str
-    backend: str
-    role: str
-    status: SubagentStatus
-    summary: str
-    final_response: str = ""
-    files_changed: list[str] = field(default_factory=list)
-    artifacts: list[str] = field(default_factory=list)
-    errors: list[str] = field(default_factory=list)
-    usage: dict[str, object] = field(default_factory=dict)
-    child_session_id: str | None = None
-    raw_log_path: str | None = None
-    started_at_ms: int = 0
-    ended_at_ms: int = 0
-    tool_trace: list[dict[str, object]] = field(default_factory=list)
-    structured_output: object | None = None
-    validation_errors: list[str] = field(default_factory=list)
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.task_id, str) or not self.task_id.strip() or not _TASK_ID_PATTERN.fullmatch(self.task_id):
-            raise ValueError(f"Unsupported subagent task id: {self.task_id}")
-        if not isinstance(self.backend, str) or not self.backend.strip() or not _TASK_ID_PATTERN.fullmatch(self.backend):
-            raise ValueError(f"Unsupported subagent backend: {self.backend}")
-        if not isinstance(self.role, str) or not self.role.strip() or not _TASK_ID_PATTERN.fullmatch(self.role):
-            raise ValueError(f"Unsupported subagent role: {self.role}")
-        if not isinstance(self.status, str) or self.status not in _SUBAGENT_STATUSES:
-            raise ValueError(f"Unsupported subagent status: {self.status}")
-        if not isinstance(self.summary, str) or not self.summary.strip():
-            raise ValueError("Subagent summary is required")
-        if not isinstance(self.final_response, str):
-            raise ValueError("Subagent final_response must be a string")
-        if self.child_session_id is not None and not isinstance(self.child_session_id, str):
-            raise ValueError("Subagent child_session_id must be a string when set")
-        if self.raw_log_path is not None and not isinstance(self.raw_log_path, str):
-            raise ValueError("Subagent raw_log_path must be a string when set")
-        for field_name in ("started_at_ms", "ended_at_ms"):
-            value = getattr(self, field_name)
-            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-                raise ValueError("Subagent timestamps must be non-negative integers")
-        if self.started_at_ms and self.ended_at_ms and self.ended_at_ms < self.started_at_ms:
-            raise ValueError("Subagent ended_at_ms cannot be before started_at_ms")
-        for field_name in ("files_changed", "artifacts", "errors"):
-            value = getattr(self, field_name)
-            if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
-                raise ValueError(f"Subagent {field_name} must be a list of strings")
-        if not isinstance(self.usage, dict):
-            raise ValueError("Subagent usage must be a dict")
-        if not isinstance(self.tool_trace, list) or any(not isinstance(item, dict) for item in self.tool_trace):
-            raise ValueError("Subagent tool_trace must be a list of dicts")
-        if not isinstance(self.validation_errors, list) or any(
-            not isinstance(item, str) for item in self.validation_errors
-        ):
-            raise ValueError("Subagent validation_errors must be a list of strings")
-
-    @property
-    def duration_ms(self) -> int:
-        if not self.started_at_ms or not self.ended_at_ms:
-            return 0
-        return max(0, self.ended_at_ms - self.started_at_ms)
-
-    def as_dict(self) -> dict[str, object]:
-        return {
-            "taskId": self.task_id,
-            "backend": self.backend,
-            "role": self.role,
-            "status": self.status,
-            "summary": self.summary,
-            "finalResponse": self.final_response,
-            "filesChanged": list(self.files_changed),
-            "artifacts": list(self.artifacts),
-            "errors": list(self.errors),
-            "usage": dict(self.usage),
-            "childSessionId": self.child_session_id,
-            "rawLogPath": self.raw_log_path,
-            "startedAtMs": self.started_at_ms,
-            "endedAtMs": self.ended_at_ms,
-            "durationMs": self.duration_ms,
-            "toolTrace": [dict(item) for item in self.tool_trace],
-            "structuredOutput": self.structured_output,
-            "validationErrors": list(self.validation_errors),
-        }
-
-
-def _settle_typed_result(task: SubagentTask, result: SubagentResult) -> SubagentResult:
-    if task.result_schema is None or result.status != "completed":
-        return result
-    text = result.final_response or result.summary
-    errors: list[str] = []
-    envelope: object | None = None
-    parsed = False
-    if len(text.encode("utf-8")) > 256 * 1024:
-        errors.append("typed result envelope exceeds 256 KiB")
-    else:
-        try:
-            envelope = json.loads(text)
-            parsed = True
-        except json.JSONDecodeError:
-            errors.append("typed result envelope must be valid JSON")
-    output: object | None = None
-    summary = result.summary[:4096]
-    artifacts: list[str] = []
-    if parsed:
-        if not isinstance(envelope, dict):
-            errors.append("typed result envelope must be an object")
-        else:
-            unknown = sorted(set(envelope).difference({"summary", "output", "artifacts"}))
-            if unknown:
-                errors.append(f"typed result has unknown envelope keys: {', '.join(unknown)}")
-            raw_summary = envelope.get("summary")
-            if not isinstance(raw_summary, str):
-                errors.append("typed result summary must be a string")
-            else:
-                summary = raw_summary[:4096]
-            if "output" not in envelope:
-                errors.append("typed result output is required")
-            else:
-                output = envelope["output"]
-            raw_artifacts = envelope.get("artifacts", [])
-            if not isinstance(raw_artifacts, list) or any(
-                not isinstance(item, str) for item in raw_artifacts
-            ):
-                errors.append("typed result artifacts must be a list of strings")
-            elif task.artifact_policy != "none":
-                artifacts = list(dict.fromkeys(raw_artifacts))[:256]
-    if not errors and parsed:
-        validator = Draft202012Validator(task.result_schema)
-        for error in sorted(validator.iter_errors(output), key=lambda item: list(item.path))[:8]:
-            path = "$" + "".join(
-                f"[{part}]" if isinstance(part, int) else f".{part}"
-                for part in error.path
-            )
-            errors.append(f"typed result schema mismatch at {path}: {error.message}"[:300])
-    if errors:
-        return replace(
-            result,
-            status="failed",
-            summary=summary or "Typed subagent result validation failed.",
-            artifacts=[],
-            structured_output=None,
-            validation_errors=errors,
-            errors=[*result.errors, *errors],
-        )
-    return replace(
-        result,
-        summary=summary,
-        artifacts=artifacts,
-        structured_output=output,
-        validation_errors=[],
-    )
 
 
 class SubagentBackend(Protocol):
@@ -741,6 +576,15 @@ class SubagentSupervisor:
         self._started_at_ms: dict[str, int] = {}
         self._shutdown = False
         self._lock = threading.RLock()
+        self._snapshot_store = SupervisorSnapshotStore(max_threads)
+
+    def snapshot(self) -> SupervisorSnapshot:
+        return self._snapshot_store.snapshot()
+
+    def subscribe(
+        self, callback: Callable[[SupervisorSnapshot], None]
+    ) -> Callable[[], None]:
+        return self._snapshot_store.subscribe(callback)
 
     def register_backend(self, backend: SubagentBackend) -> None:
         with self._lock:
@@ -771,6 +615,10 @@ class SubagentSupervisor:
             self._tasks[task.id] = task
             self._statuses[task.id] = "queued"
             self._started_at_ms[task.id] = _now_ms()
+            started_at_ms = self._started_at_ms[task.id]
+        self._snapshot_store.publish(
+            task, "queued", started_at_ms=started_at_ms
+        )
         self._emit_start(task)
         with self._lock:
             if task.id in self._results:
@@ -843,6 +691,12 @@ class SubagentSupervisor:
                 )
                 self._statuses[task_id] = "timeout"
                 self._results[task_id] = result
+            self._snapshot_store.publish(
+                task,
+                "timeout",
+                started_at_ms=self._started_at_ms.get(task_id, ended),
+                result=result,
+            )
             self._emit_stop(task, result)
             return result
         with self._lock:
@@ -877,6 +731,12 @@ class SubagentSupervisor:
             )
             self._statuses[task_id] = "cancelled"
             self._results[task_id] = result
+        self._snapshot_store.publish(
+            task,
+            "cancelled",
+            started_at_ms=self._started_at_ms.get(task_id, ended),
+            result=result,
+        )
         if callable(backend_cancel):
             try:
                 backend_cancel(task_id)
@@ -900,6 +760,7 @@ class SubagentSupervisor:
             if status in {"queued", "running"} and task_id not in self._results:
                 results.append(self.cancel(task_id, reason=reason))
         self._executor.shutdown(wait=wait, cancel_futures=True)
+        self._snapshot_store.publish_shutdown()
         return results
 
     def wait_all(self, task_ids: Sequence[str] | None = None, timeout: float | None = None) -> list[SubagentResult]:
@@ -965,6 +826,9 @@ class SubagentSupervisor:
             self._statuses[task.id] = "running"
             backend = self._backends[task.backend]
             started = self._started_at_ms.get(task.id, _now_ms())
+        self._snapshot_store.publish(
+            task, "running", started_at_ms=started
+        )
         try:
             result = backend.run(task)
             if result.task_id != task.id:
@@ -973,7 +837,7 @@ class SubagentSupervisor:
                 raise ValueError(f"Subagent backend returned mismatched backend: {result.backend}")
             if result.role != task.role:
                 raise ValueError(f"Subagent backend returned mismatched role: {result.role}")
-            result = _settle_typed_result(task, result)
+            result = settle_typed_result(task, result)
         except Exception as error:  # noqa: BLE001 - child failures must be data, not parent crashes.
             ended = _now_ms()
             error_text = f"Subagent backend failed: {error}"
@@ -992,6 +856,12 @@ class SubagentSupervisor:
                 return self._results[task.id]
             self._statuses[task.id] = result.status
             self._results[task.id] = result
+        self._snapshot_store.publish(
+            task,
+            result.status,
+            started_at_ms=started,
+            result=result,
+        )
         self._emit_stop(task, result)
         return result
 
