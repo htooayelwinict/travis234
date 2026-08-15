@@ -84,8 +84,16 @@ def extension(travis) -> None:
     if runner in _STATES:
         return
     state = ExtensionState()
+    try:
+        definition = create_proxy_definition(state)
+    except TypeError as error:
+        if not any(field in str(error) for field in ("effects", "policy_context")):
+            raise
+        raise RuntimeError(
+            "travis234-mcp-adapter requires a Travis234 host with tool effect metadata support"
+        ) from error
+    travis.register_tool(definition)
     _STATES[runner] = state
-    travis.register_tool(create_proxy_definition(state))
     travis.on("session_start", state.on_session_start)
     travis.on("session_shutdown", state.on_session_shutdown)
     travis.on("tool_result", state.on_tool_result)

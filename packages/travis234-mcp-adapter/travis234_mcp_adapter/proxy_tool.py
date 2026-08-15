@@ -65,7 +65,27 @@ def create_proxy_definition(state: ProxyState) -> ToolDefinition:
             "Call mcp with no arguments before using an unfamiliar configured server.",
             "Use one explicit server and one operation per call.",
         ],
+        effects=frozenset({"read", "write", "execute", "network"}),
+        policy_context=_policy_context,
     )
+
+
+def _policy_context(params: dict[str, object]) -> dict[str, str]:
+    if not params:
+        return {"operation": "status"}
+    operation = next(
+        (
+            "call" if name == "tool" else name
+            for name in ("search", "describe", "tool")
+            if params.get(name) is not None
+        ),
+        "list",
+    )
+    context = {"operation": operation}
+    server = params.get("server")
+    if isinstance(server, str) and server.strip():
+        context["server"] = server
+    return context
 
 
 async def dispatch_proxy(

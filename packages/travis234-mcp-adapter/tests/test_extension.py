@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import asyncio
+import importlib
 import json
 import os
 import sys
@@ -14,6 +15,9 @@ from travis234_mcp_adapter import packaged_servers
 from travis234_mcp_adapter.extension import extension
 from travis234_mcp_adapter.output_guard import MAX_INLINE_BYTES
 from travis234_mcp_adapter.packaged_servers import PackagedServer, register_packaged_server
+
+
+extension_module = importlib.import_module("travis234_mcp_adapter.extension")
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "server.py"
@@ -48,6 +52,16 @@ def test_factory_registers_one_proxy_without_io(
     assert len(registered) == 1
     assert registered[0].definition.name == "mcp"
     assert registered[0].definition.parameters == EXPECTED_SCHEMA
+    assert registered[0].definition.effects == frozenset(
+        {"read", "write", "execute", "network"}
+    )
+    assert registered[0].definition.policy_context(
+        {
+            "server": "github",
+            "tool": "create_issue",
+            "args": {"token": "secret-never-approved", "title": "private"},
+        }
+    ) == {"server": "github", "operation": "call"}
     assert runner.get_registered_command("mcp-package-probe") is None
 
 
@@ -65,6 +79,23 @@ def test_adapter_extension_is_idempotent_across_duplicate_distribution_paths(
     assert len(runner._handlers["session_start"]) == 1
     assert len(runner._handlers["session_shutdown"]) == 1
     assert len(runner._handlers["tool_result"]) == 1
+
+
+def test_adapter_fails_clearly_when_host_lacks_effect_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = ExtensionRunner(cwd=str(tmp_path))
+
+    def unsupported(_state):
+        raise TypeError("ToolDefinition got an unexpected keyword argument 'effects'")
+
+    monkeypatch.setattr(extension_module, "create_proxy_definition", unsupported)
+
+    with pytest.raises(RuntimeError, match="tool effect metadata support"):
+        extension(runner)
+
+    assert runner.get_all_registered_tools() == []
 
 
 @pytest.mark.anyio

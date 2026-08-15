@@ -11,6 +11,15 @@ The adapter is designed for controlled coding-agent use:
 - bounded discovery and result handling; and
 - session-owned cancellation, shutdown, and temporary-file cleanup.
 
+The single `mcp` proxy declares `read`, `write`, `execute`, and `network`
+effects because a remote server's operation cannot be proven locally. In
+Travis234's enforcing tool-policy mode, the approval prompt identifies only the
+configured server and normalized proxy operation (`status`, `list`, `search`,
+`describe`, or `call`). Tool arguments, headers, environment references, and
+resolved secrets are never approval context. Hosts that predate tool-effect
+metadata fail adapter loading explicitly instead of silently running the proxy
+as an undeclared tool.
+
 It is an MCP client adapter, not an MCP server and not a general compatibility layer for every MCP client feature.
 
 ## Requirements
