@@ -60,12 +60,15 @@ _SIGINT_HANDLER_UNCHANGED = object()
 class InteractiveShutdown:
     """Owns a focused interactive runtime concern."""
 
+    def _defer_sigint(self, signum, frame) -> None:
+        self.tui.dispatcher.post(lambda: self._handle_sigint(signum, frame))
+
     def _install_sigint_handler(self):
         if threading.current_thread() is not threading.main_thread():
             return _SIGINT_HANDLER_UNCHANGED
         try:
             previous = signal_module.getsignal(signal_module.SIGINT)
-            signal_module.signal(signal_module.SIGINT, self._handle_sigint)
+            signal_module.signal(signal_module.SIGINT, self._defer_sigint)
             return previous
         except (AttributeError, OSError, ValueError):
             return _SIGINT_HANDLER_UNCHANGED
