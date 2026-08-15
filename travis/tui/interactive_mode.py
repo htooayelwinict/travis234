@@ -286,6 +286,26 @@ class _InteractiveRuntime(
         if missing:
             self.theme_registry.register_many(missing)
 
+    def _reload_resource_themes(self) -> str | None:
+        resource_loader = getattr(self.app.session, "resource_loader", None)
+        discovered = (
+            resource_loader.get_themes().get("themes", [])
+            if resource_loader is not None
+            else []
+        )
+        resource_themes = [theme for theme in discovered if isinstance(theme, Theme)]
+        resource_names = {theme.name for theme in resource_themes}
+        return self.theme_registry.reload(
+            [
+                *resource_themes,
+                *(
+                    theme
+                    for theme in self._builtin_theme_records
+                    if theme.name not in resource_names
+                ),
+            ]
+        )
+
 
 class InteractiveMode(RuntimeFacade):
     """Stable public facade over the composed interactive runtime."""

@@ -327,6 +327,7 @@ class InteractiveCommandDispatcher:
                     _is_command_like_slash_prompt(prompt)
                     and not _is_prompt_level_skill_trigger(prompt)
                     and not self._is_registered_extension_command(prompt)
+                    and not self._is_registered_prompt_template(prompt)
                 ):
                     self._run_unknown_command(prompt)
                     continue

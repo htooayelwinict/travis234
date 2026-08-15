@@ -111,6 +111,8 @@ class InteractiveView:
             self._extension_host.start()
         else:
             self.app.session.bind_extensions(self._extension_bindings())
+        self._reload_resource_themes()
+        self.theme_controller.sync()
         self.setup_autocomplete_provider()
         if self.app.event_trace is not None:
             self.app.event_trace.write(
@@ -190,6 +192,16 @@ class InteractiveView:
                 if callable(get_argument_completions):
                     command_info["getArgumentCompletions"] = get_argument_completions
                 commands.append(command_info)
+        command_names = {str(command.get("name", "")) for command in commands}
+        for template in getattr(self.app.session, "prompt_templates", []):
+            name = str(getattr(template, "name", ""))
+            if not name or name in command_names:
+                continue
+            commands.append({
+                "name": name,
+                "description": str(getattr(template, "description", "")),
+            })
+            command_names.add(name)
         return CombinedAutocompleteProvider(commands, str(self.app.cwd))
 
     def setup_autocomplete_provider(self) -> None:

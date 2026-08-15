@@ -248,6 +248,7 @@ class SessionExtensionController:
         self._extension_runner.emit(self._session_start_event)
         reason = "reload" if self._session_start_event.get("reason") == "reload" else "startup"
         if self._extend_resources_from_extensions(reason):
+            self._register_skill_commands()
             self.set_active_tools_by_name(self.get_active_tool_names())
 
     def _apply_extension_bindings(self) -> None:
@@ -292,6 +293,7 @@ class SessionExtensionController:
         if self._extensions_bound or self._extension_error_listener is not None:
             self._extension_runner.emit({"type": "session_start", "reason": "reload"})
             if self._extend_resources_from_extensions("reload"):
+                self._register_skill_commands()
                 self.set_active_tools_by_name(self.get_active_tool_names())
 
     def dispose(self) -> None:
@@ -413,29 +415,26 @@ class SessionExtensionController:
                 "handler": self._cancel_agent_command,
             },
         )
+        self._register_skill_commands()
+
+    def _register_skill_commands(self) -> None:
         enable_skill_commands = _settings_value(
-            self.settings_manager,
-            "getEnableSkillCommands",
-            "get_enable_skill_commands",
-            "enableSkillCommands",
-            "enable_skill_commands",
-        )
+            self.settings_manager, "getEnableSkillCommands", "get_enable_skill_commands", "enableSkillCommands", "enable_skill_commands")
         if enable_skill_commands is False:
             return
         for skill in self._resource_loader.get_skills()["skills"]:
             if not isinstance(skill, Skill):
                 continue
-            self._extension_runner.register_command(
-                f"skill:{skill.name}",
-                {
-                    "description": skill.description,
-                    "sourceInfo": replace(skill.source_info, source="skill"),
-                    "handler": lambda args, _ctx=None, selected=skill: self.prompt(
-                        format_skill_invocation(selected, args),
-                        expand_prompt_templates=False,
-                    ),
-                },
-            )
+            command_name = f"skill:{skill.name}"
+            if self._extension_runner.get_registered_command(command_name) is not None:
+                continue
+            handler = lambda args, _ctx=None, selected=skill: self.prompt(
+                format_skill_invocation(selected, args), expand_prompt_templates=False)
+            self._extension_runner.register_command(command_name, {
+                "description": skill.description,
+                "sourceInfo": replace(skill.source_info, source="skill"),
+                "handler": handler,
+            })
 
     def _agents_command(self, args: str = "", _ctx: object | None = None) -> list[AgentMessage]:
         tasks = self.subagents.list_tasks()
