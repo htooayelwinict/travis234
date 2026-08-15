@@ -119,6 +119,8 @@ class SessionToolController:
         names = list(_DEFAULT_ACTIVE_TOOL_NAMES)
         if self.process_service is not None and self._is_allowed_tool("process"):
             names.insert(2, "process")
+        if getattr(self, "_language_services", None) is not None:
+            names.append("lsp")
         return names
 
     def _settings_shell_path(self) -> str | None:

@@ -11,9 +11,18 @@ from typing import Callable, Protocol
 
 from travis.agent.types import AbortSignal
 from travis.coding_agent.language_services.config import select_server_config
-from travis.coding_agent.language_services.documents import DocumentSnapshot, DocumentTracker, PositionEncoding
+from travis.coding_agent.language_services.documents import (
+    DocumentSnapshot,
+    DocumentTracker,
+    PositionEncoding,
+    position_to_server,
+)
 from travis.coding_agent.language_services.jsonrpc import JsonRpcProtocolError, JsonRpcStdioClient
-from travis.coding_agent.language_services.types import LanguageServerConfig, LanguageServiceLimits
+from travis.coding_agent.language_services.types import (
+    DocumentPosition,
+    LanguageServerConfig,
+    LanguageServiceLimits,
+)
 
 
 class LanguageServiceUnavailable(RuntimeError):
@@ -87,6 +96,9 @@ class LanguageServiceManager:
             config, root = select_server_config(self.configs, path, self.workspace)
         except (LookupError, ValueError) as error:
             raise LanguageServiceUnavailable(str(error)) from error
+        return await self._state_for(config, root)
+
+    async def _state_for(self, config: LanguageServerConfig, root: Path) -> _ServerState:
         key = (config.name, root)
         async with self._lock:
             if self._close_requested:
@@ -110,6 +122,59 @@ class LanguageServiceManager:
                 await self._close_state(state)
                 raise LanguageServiceUnavailable("language service manager is closed")
             return state
+
+    async def workspace_request(
+        self,
+        method: str,
+        params: object,
+        signal: AbortSignal | None = None,
+    ) -> list[object]:
+        results: list[object] = []
+        for config in self.configs:
+            state = await self._state_for(config, self.workspace)
+            state.active_requests += 1
+            generation = state.generation
+            try:
+                result = await state.client.request(method, params, signal=signal)
+                if generation != state.generation:
+                    raise JsonRpcProtocolError("stale language server generation")
+                results.append(result)
+            except JsonRpcProtocolError as error:
+                if signal is not None and signal.aborted:
+                    raise asyncio.CancelledError from error
+                await self._restart(state, failed_generation=generation)
+                results.append(await state.client.request(method, params, signal=signal))
+            finally:
+                state.active_requests = max(0, state.active_requests - 1)
+                state.last_used = self._clock()
+        return results
+
+    async def prepare_position(
+        self,
+        path: str | Path,
+        line: int,
+        character: int,
+    ) -> dict[str, int]:
+        state = await self.for_path(path)
+        snapshot = self.documents.open_or_update(path)
+        converted = position_to_server(
+            snapshot.text,
+            DocumentPosition(line, character),
+            state.position_encoding,
+        )
+        return {"line": converted.line, "character": converted.character}
+
+    def response_context(self, path: str | Path) -> dict[str, object]:
+        config, root = select_server_config(self.configs, path, self.workspace)
+        state = self._servers.get((config.name, root))
+        if state is None:
+            raise LanguageServiceUnavailable("language server is not active")
+        snapshot = self.documents.snapshot(path)
+        return {
+            "generation": state.generation,
+            "positionEncoding": state.position_encoding,
+            "documentHash": snapshot.sha256,
+        }
 
     async def _start_state(self, state: _ServerState) -> None:
         await state.client.start()

@@ -48,6 +48,8 @@ from travis.coding_agent.config import get_agent_dir, get_packaged_context_paths
 from travis.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
 from travis.coding_agent.execution_backend import select_execution_backend
 from travis.coding_agent.mailbox import CodingTurnMailbox, MailboxKind
+from travis.coding_agent.language_services.manager import LanguageServiceManager
+from travis.coding_agent.language_services.tool import create_lsp_tool_definition
 from travis.coding_agent.message_utils import (
     bash_execution_text as _bash_execution_to_text,
     last_assistant_message as _last_assistant_message,
@@ -310,6 +312,18 @@ class _SessionRuntime(
             agent_dir=str(Path(agent_dir or get_agent_dir()).expanduser().resolve()),
             settings_manager=self.settings_manager,
         )
+        self._language_services: LanguageServiceManager | None = None
+        language_server_getter = getattr(self.settings_manager, "get_language_server_configs", None)
+        language_server_configs = (
+            language_server_getter() if callable(language_server_getter) else []
+        )
+        if (
+            tools is None
+            and tool_definitions is None
+            and language_server_configs
+            and self._is_allowed_tool("lsp")
+        ):
+            self._language_services = LanguageServiceManager(cwd, language_server_configs)
         self._session_start_event = session_start_event or {"type": "session_start", "reason": "startup"}
         self._defer_session_start = bool(defer_session_start)
         self._defer_agent_settled = bool(defer_agent_settled)
@@ -351,6 +365,10 @@ class _SessionRuntime(
                 *create_all_tool_definitions(cwd, self._builtin_tool_options()),
                 *self._create_subagent_tool_definitions(),
             ]
+            if self._language_services is not None:
+                base_definitions.append(
+                    create_lsp_tool_definition(self._language_services, self._artifacts, cwd)
+                )
             if self.process_service is not None and self.process_owner is not None and self._is_allowed_tool("process"):
                 base_definitions.append(
                     create_process_tool_definition(self.process_service, self.process_owner, self._artifacts)
