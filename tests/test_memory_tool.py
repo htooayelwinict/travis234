@@ -76,6 +76,9 @@ def test_disabled_or_filtered_memory_registers_no_tool_and_opens_no_database(
     assert disabled.get_tool_definition("memory") is None
     assert excluded.get_tool_definition("memory") is None
     assert no_tools.get_tool_definition("memory") is None
+    assert "memory" in excluded.get_known_tool_names()
+    assert "memory" in no_tools.get_known_tool_names()
+    assert "memory" not in disabled.get_known_tool_names()
     assert not list(tmp_path.rglob("memory.sqlite3"))
     disabled.dispose()
     excluded.dispose()

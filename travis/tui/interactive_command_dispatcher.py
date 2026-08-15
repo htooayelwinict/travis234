@@ -84,6 +84,14 @@ def _parse_operations_command(prompt: str) -> str | None | object:
     return _NOT_OPERATIONS_COMMAND
 
 
+def _parse_memory_command(prompt: str) -> bool | object:
+    if prompt == "/memory status":
+        return True
+    if prompt == "/memory" or prompt.startswith("/memory "):
+        return _INVALID_MEMORY_COMMAND
+    return _NOT_MEMORY_COMMAND
+
+
 def _is_lsp_status_command(prompt: str) -> bool:
     return prompt == "/lsp status"
 
@@ -165,6 +173,8 @@ def _parse_params_command(prompt: str) -> str | None:
 
 _NOT_MOTION_COMMAND = object()
 _INVALID_MOTION_COMMAND = object()
+_NOT_MEMORY_COMMAND = object()
+_INVALID_MEMORY_COMMAND = object()
 _NOT_OPERATIONS_COMMAND = object()
 _INVALID_OPERATIONS_COMMAND = object()
 
@@ -317,6 +327,16 @@ class InteractiveCommandDispatcher:
                 if session_command == "theme":
                     self._run_theme_command(prompt)
                     continue
+                memory_command = _parse_memory_command(prompt)
+                if memory_command is not _NOT_MEMORY_COMMAND:
+                    if memory_command is _INVALID_MEMORY_COMMAND:
+                        self.history.add(
+                            StatusLine("Usage: /memory status", kind="error")
+                        )
+                        self.tui.request_render()
+                    else:
+                        self._run_memory_status_command()
+                    continue
                 operations_command = _parse_operations_command(prompt)
                 if operations_command is not _NOT_OPERATIONS_COMMAND:
                     if operations_command is _INVALID_OPERATIONS_COMMAND:
@@ -463,6 +483,7 @@ __all__ = (
     '_parse_bash_command',
     '_parse_model_command',
     '_parse_motion_command',
+    '_parse_memory_command',
     '_parse_operations_command',
     '_parse_params_command',
     '_parse_session_command',

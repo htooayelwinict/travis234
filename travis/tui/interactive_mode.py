@@ -58,6 +58,7 @@ from travis.tui.theme_controller import ThemeController
 from travis.tui.interactive_command_dispatcher import *  # noqa: F403
 from travis.tui.interactive_extensions import *  # noqa: F403
 from travis.tui.interactive_lsp import *  # noqa: F403
+from travis.tui.interactive_memory import *  # noqa: F403
 from travis.tui.interactive_model_auth import *  # noqa: F403
 from travis.tui.interactive_motion import *  # noqa: F403
 from travis.tui.interactive_operations import *  # noqa: F403
@@ -107,6 +108,7 @@ class _InteractiveRuntime(
     InteractiveExtensions,
     InteractiveLsp,
     InteractiveModelAuth,
+    InteractiveMemory,
     InteractiveMotion,
     InteractiveOperations,
     InteractiveParams,

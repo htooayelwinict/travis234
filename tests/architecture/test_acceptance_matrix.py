@@ -96,12 +96,28 @@ def test_parity_report_has_only_resolved_evidence() -> None:
             "replayPolicies": 1,
         },
     }
+    assert report["memory"] == {
+        "enabled": False,
+        "storeAvailable": False,
+        "allowedScopes": ["project"],
+        "limits": {
+            "maxFactBytes": 65536,
+            "maxFactsPerScope": 5000,
+            "maxTotalBytes": 1073741824,
+            "recallLimit": 20,
+            "recallBytes": 32768,
+        },
+        "counts": {"project": None, "global": None},
+        "automaticRetention": False,
+        "automaticInjection": False,
+    }
 
     encoded = json.dumps(
         {
             "agentRoles": report["agentRoles"],
             "subagentSupervisor": report["subagentSupervisor"],
             "operationJournal": report["operationJournal"],
+            "memory": report["memory"],
         },
         sort_keys=True,
     )

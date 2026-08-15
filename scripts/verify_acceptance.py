@@ -227,6 +227,22 @@ def verify_parity_contracts(*, root: str | Path) -> dict[str, object]:
             "replayPolicies": 1,
         },
     }
+    memory_settings = SettingsManager.in_memory().get_memory_settings()
+    report["memory"] = {
+        "enabled": memory_settings.enabled,
+        "storeAvailable": False,
+        "allowedScopes": list(memory_settings.allowed_scopes),
+        "limits": {
+            "maxFactBytes": memory_settings.max_fact_bytes,
+            "maxFactsPerScope": memory_settings.max_facts_per_scope,
+            "maxTotalBytes": memory_settings.max_total_bytes,
+            "recallLimit": memory_settings.recall_limit,
+            "recallBytes": memory_settings.recall_bytes,
+        },
+        "counts": {"project": None, "global": None},
+        "automaticRetention": False,
+        "automaticInjection": False,
+    }
     return report
 
 

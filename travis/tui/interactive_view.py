@@ -165,6 +165,11 @@ class InteractiveView:
             {"name": "model", "description": "Switch model"},
             {"name": "models", "description": "List available models"},
             {"name": "motion", "description": "Enable, disable, or inspect restrained TUI motion"},
+            {
+                "name": "memory",
+                "description": "Inspect explicit memory status",
+                "getArgumentCompletions": lambda _prefix: ["status"],
+            },
             {"name": "operations", "description": "Inspect the observe-only operation journal"},
             {"name": "install", "description": "Install a resource package"},
             {"name": "remove", "description": "Remove an installed resource package"},

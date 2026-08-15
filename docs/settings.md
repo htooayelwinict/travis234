@@ -2,6 +2,54 @@
 
 Global settings live at `~/.travis234/agent/settings.json`. A trusted project may add `.travis234/settings.json`; project code and project settings remain trust-gated. Invalid hand-edited values are ignored at their own scope rather than hiding a valid value from the other scope.
 
+## Explicit memory
+
+Persistent fact memory is disabled by default. It uses the existing Travis234
+state root at `~/.travis234/agent/memory.sqlite3` only after the global user
+setting enables it and the `memory` tool remains active:
+
+```json
+{
+  "memory": {
+    "enabled": true,
+    "allowedScopes": ["project"],
+    "maxFactBytes": 65536,
+    "maxFactsPerScope": 5000,
+    "maxTotalBytes": 1073741824,
+    "recallLimit": 20,
+    "recallBytes": 32768
+  }
+}
+```
+
+The global user setting is the authority for `enabled` and `allowedScopes`.
+A trusted project may lower numeric limits but cannot enable memory, disable it,
+or add the `global` scope. Untrusted project memory settings are ignored.
+`--no-tools`, an explicit tool list, and `--exclude-tools memory` prevent the
+tool and store connection from being created.
+
+There is exactly one model-facing `memory` tool with exact `status`, `recall`,
+`retain`, and `delete` actions. Retention always requires an explicit tool call
+and provenance label; recall is never injected into the system prompt or
+conversation automatically. Recalled facts are repeated inside `[Untrusted
+memory data]` envelopes so saved text cannot acquire instruction authority.
+Credential-shaped content is rejected without echoing it. Delete requires an
+exact opaque memory ID, expiry makes facts invisible, and oversized complete
+recall output becomes a session artifact.
+
+The tool declares both `read` and `write` effects because policy metadata is
+tool-level rather than action-level. This is deliberately conservative: in
+enforced policy, even status or recall may need approval unless both effects
+are allowed. Internal subagents do not receive `memory` through their coding
+tool allowlist.
+
+Use `/memory status` for the read-only native-TUI view. It reports enablement,
+store availability, allowed scopes, effective limits, and current project and
+global counts. It never displays fact content, tags, query history, project
+paths or hashes, session identity, or credentials, and it never opens storage
+when memory is disabled. An unreadable or incompatible store is reported as
+unavailable without failing the coding turn.
+
 ## Observe-only operations
 
 The operation journal is enabled by default and stored only at

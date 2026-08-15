@@ -292,6 +292,9 @@ class SessionToolController:
         """Return the unfiltered registry used to validate CLI selections."""
 
         names = list(self._base_definition_by_name)
+        memory_settings = getattr(self, "_memory_settings", None)
+        if getattr(memory_settings, "enabled", False) and "memory" not in names:
+            names.append("memory")
         for registered in self._extension_runner.get_all_registered_tools():
             if registered.definition.name not in names:
                 names.append(registered.definition.name)

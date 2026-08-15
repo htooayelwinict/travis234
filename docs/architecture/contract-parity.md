@@ -102,6 +102,30 @@ receive delegation tools today. Role model selection uses only the existing
 definition matches, and `/subagents` continues to select the existing
 delegation skill rather than becoming a supervisor command.
 
+## Explicit memory ownership
+
+- `coding_agent/memory/types.py` owns immutable limits and scope/provenance
+  vocabulary; global settings alone enable memory or allow global scope.
+- `coding_agent/memory/store.py` owns the bounded private SQLite schema,
+  normalized idempotent facts, project hashing, expiry visibility, and exact-ID
+  deletion under the existing agent state root.
+- `coding_agent/memory/tool.py` owns exactly one explicit model tool. It never
+  retains or recalls automatically, declares conservative `read` plus `write`
+  effects, and exposes only action/scope to approval context.
+- `coding_agent/memory/safety.py` rejects credential-shaped retention and
+  repeats an untrusted-data envelope around each recalled fact. Complete output
+  too large for the inline limit uses the existing durable artifact boundary.
+- `interactive_memory.py` reads metadata from the active session's existing
+  store connection. `/memory status` cannot open storage or display fact/query,
+  project-path/hash, session, or credential material.
+
+Memory is a private opt-in notebook, not hidden context. Project facts are
+isolated by a canonical-path hash; global facts exist only when the user
+explicitly allows that scope. Corruption and capacity errors become bounded
+tool/status diagnostics without changing conversation history. Memory is not
+part of the internal subagent coding allowlist, so enabling it does not widen
+child capabilities or alter expanded result packs.
+
 ## Observe-only operation-journal ownership
 
 - `coding_agent/operations/store.py` owns the versioned SQLite schema,
@@ -152,3 +176,7 @@ be triggered by TUI inspection.
 - Operation-journal acceptance output contains mode, schema version, and
   contract counts only. It excludes operation IDs, session fingerprints,
   effect names, usage identities, provider/model names, and all content.
+- Memory acceptance output contains disabled-by-default settings, bounds,
+  null counts for unopened storage, and explicit false automatic-retention and
+  automatic-injection flags only. It excludes facts, queries, tags, project
+  identity, session identity, and credentials.

@@ -7,6 +7,7 @@ from travis.tui.interactive_mode import (
     _is_manual_compression_command,
     _is_processes_command,
     _is_reload_command,
+    _parse_memory_command,
     _parse_auth_command,
     _parse_bash_command,
     _parse_model_command,
@@ -15,7 +16,9 @@ from travis.tui.interactive_mode import (
     _parse_session_command,
 )
 from travis.tui.interactive_command_dispatcher import (
+    _INVALID_MEMORY_COMMAND,
     _INVALID_OPERATIONS_COMMAND,
+    _NOT_MEMORY_COMMAND,
     _NOT_OPERATIONS_COMMAND,
 )
 
@@ -70,3 +73,10 @@ def test_operations_command_accepts_summary_or_one_opaque_id_only() -> None:
     assert _parse_operations_command(f"/operations {operation_id}") == operation_id
     assert _parse_operations_command("/operations one two") is _INVALID_OPERATIONS_COMMAND
     assert _parse_operations_command("/operational") is _NOT_OPERATIONS_COMMAND
+
+
+def test_memory_command_accepts_read_only_status_only() -> None:
+    assert _parse_memory_command("/memory status") is True
+    assert _parse_memory_command("/memory") is _INVALID_MEMORY_COMMAND
+    assert _parse_memory_command("/memory retain private") is _INVALID_MEMORY_COMMAND
+    assert _parse_memory_command("/memories status") is _NOT_MEMORY_COMMAND

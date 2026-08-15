@@ -431,6 +431,7 @@ class InteractiveSessionCommands:
             "/share - Report configured sharing support.",
             "/theme [name] - Select a discovered theme.",
             "/motion [on|off] - Inspect or change restrained TUI motion for this process.",
+            "/memory status - Inspect explicit memory configuration and counts.",
             "/operations [operation-id] - Inspect this session's operation journal.",
             "/trust - View or change the project trust decision.",
             "/processes - Inspect and control managed processes.",

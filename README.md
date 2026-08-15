@@ -214,12 +214,30 @@ The npm package exposes only the `travis234` command and launches the release co
 | `/packages` | List installed resource packages (`--local` selects project scope) |
 | `/install`, `/remove`, `/update` | Confirm and manage local, Git, or Python resource packages |
 | `/processes` | Inspect managed and user-command processes |
+| `/memory status` | Inspect opt-in explicit-memory settings, availability, limits, and counts without displaying facts |
 | `/operations [operation-id]` | Inspect bounded operation-journal metadata for the active session |
 | `/agents [status\|inspect\|steer\|cancel]` | Inspect or control session-owned delegated agents |
 | `/help` | Show available commands and shortcuts |
 | `/exit` | Shut down cleanly and terminate owned work |
 
 User `!command` and `!!command` run asynchronously. Output from `!command` is added to context; `!!command` output remains outside model context.
+
+### Explicit opt-in memory
+
+Travis234 includes a disabled-by-default private fact store under its existing
+`~/.travis234` state root. When the global user enables it, one
+policy-controlled `memory` tool can explicitly retain, recall, inspect, or
+delete project-scoped facts; global scope requires a separate explicit
+allowance. Facts are never retained automatically and recalled facts are never
+injected automatically.
+
+Recall labels every fact as untrusted data, rejects credential-shaped
+retention, bounds results, and promotes larger complete output to a session
+artifact. The tool conservatively declares both read and write effects, so an
+enforced policy may require approval even for recall. `/memory status` displays
+configuration and counts only—never facts, queries, paths, session identity, or
+credentials. See [settings](docs/settings.md#explicit-memory) for the exact
+limits and tradeoffs.
 
 ### Observe-only operation journal
 
