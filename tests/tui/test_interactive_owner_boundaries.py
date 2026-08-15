@@ -12,6 +12,7 @@ def test_interactive_mode_composes_bounded_runtime_owners(tmp_path) -> None:
     from travis.tui.interactive_session_commands import InteractiveSessionCommands
     from travis.tui.interactive_shutdown import InteractiveShutdown
     from travis.tui.interactive_turn_controller import InteractiveTurnController
+    from travis.tui.interactive_tool_approval import InteractiveToolApprovalBroker
     from travis.tui.interactive_view import InteractiveView
 
     app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=FakeTerminal(), enable_tui=True)
@@ -26,6 +27,7 @@ def test_interactive_mode_composes_bounded_runtime_owners(tmp_path) -> None:
     assert isinstance(runtime, InteractiveShutdown)
     assert isinstance(runtime, InteractiveTurnController)
     assert isinstance(runtime, InteractiveView)
+    assert isinstance(runtime.tool_approval_broker, InteractiveToolApprovalBroker)
 
 
 def test_interactive_mode_forwards_runtime_overrides(tmp_path) -> None:

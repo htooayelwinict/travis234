@@ -29,6 +29,8 @@ class ToolApprovalRequest:
     argument_fingerprint: str
     safe_context: Mapping[str, str]
     reason_code: str
+    child_role: str | None = None
+    child_task_id: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "effects", normalize_effects(self.effects))

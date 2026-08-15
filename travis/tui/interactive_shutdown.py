@@ -85,6 +85,8 @@ class InteractiveShutdown:
         *,
         timeout_seconds: float = ACTIVE_TURN_SHUTDOWN_TIMEOUT_SECONDS,
     ) -> bool:
+        if self._shutdown_requested:
+            self._shutdown_tool_approvals()
         if timeout_seconds < 0:
             raise ValueError("timeout_seconds must be nonnegative")
         deadline = time.monotonic() + timeout_seconds
@@ -132,6 +134,13 @@ class InteractiveShutdown:
 
     def _request_shutdown(self) -> None:
         self._shutdown_requested = True
+        self._shutdown_tool_approvals()
+
+    def _shutdown_tool_approvals(self) -> None:
+        broker = getattr(self, "tool_approval_broker", None)
+        shutdown = getattr(broker, "shutdown", None)
+        if callable(shutdown):
+            shutdown()
 
 __all__ = (
     'ACTIVE_TURN_SHUTDOWN_TIMEOUT_SECONDS',

@@ -70,6 +70,7 @@ from travis.runtime_facade import RuntimeFacade
 
 from travis.tui.footer_data import _ExtensionFooterDataProvider
 from travis.tui.interactive_shutdown import InputFn
+from travis.tui.interactive_tool_approval import InteractiveToolApprovalBroker
 
 
 def _builtin_theme_records() -> list[Theme]:
@@ -269,6 +270,9 @@ class _InteractiveRuntime(
         self._last_idle_ctrl_c_at = 0.0
         self._agent_abort_requested = False
         self._last_compaction_failure_notice_key: tuple[str, str] | None = None
+        self.tool_approval_broker = InteractiveToolApprovalBroker()
+        self.tool_approval_broker.bind(self)
+        self.tool_approval_broker.bind_session(app.session)
         if callable(getattr(app, "subscribe_session_rebound", None)):
             self._extension_host = ExtensionHostAdapter(
                 app,

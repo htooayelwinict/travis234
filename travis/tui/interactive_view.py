@@ -612,7 +612,11 @@ class InteractiveView:
             except EOFError:
                 return None
         else:
-            value = self._prompt_tui_value(f"{clean_title} [1-{len(normalized_choices)}]: ")
+            value = self._prompt_tui_value(
+                f"{clean_title} [1-{len(normalized_choices)}]: ",
+                cancel_event=options.get("cancelEvent") if isinstance(options, dict) else None,
+                cancel_on_escape=bool(options.get("cancelOnEscape")) if isinstance(options, dict) else False,
+            )
         if value is None:
             return None
         raw_value = str(value)
@@ -682,9 +686,18 @@ class InteractiveView:
             self.theme_controller.restore_preview()
             handle.hide()
 
-    def _prompt_tui_value(self, prompt: str, *, mask: bool = False) -> str | None:
-        submitted_queue: queue.Queue[str] = queue.Queue()
+    def _prompt_tui_value(
+        self,
+        prompt: str,
+        *,
+        mask: bool = False,
+        cancel_event: threading.Event | None = None,
+        cancel_on_escape: bool = False,
+    ) -> str | None:
+        submitted_queue: queue.Queue[str | None] = queue.Queue()
         prompt_component = Input(prompt=prompt, on_submit=lambda value: submitted_queue.put(value), mask=mask)
+        if cancel_on_escape:
+            prompt_component.on_escape = lambda: submitted_queue.put(None)
         previous_focus = self.tui.focused_component
         self.active_editor = prompt_component
         self.editor_container.add(prompt_component)
@@ -693,6 +706,8 @@ class InteractiveView:
         self._emit_pending_model_picker_trace()
         try:
             while not self._shutdown_requested:
+                if cancel_event is not None and cancel_event.is_set():
+                    return None
                 try:
                     value = submitted_queue.get(timeout=self.tui.time_until_next_work(0.05))
                     if self.tui.dispatcher.is_owner_thread():

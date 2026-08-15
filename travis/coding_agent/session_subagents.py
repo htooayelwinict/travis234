@@ -522,6 +522,10 @@ class SessionSubagentController:
         tool_trace: list[dict[str, object]] = []
         trace_by_call_id: dict[str, dict[str, object]] = {}
         child_owner = self._subagent_process_owner(task)
+        child_broker = self._tool_approval_broker
+        contextualize = getattr(child_broker, "for_child", None)
+        if callable(contextualize):
+            child_broker = contextualize(task.role, task.id)
         child = self._session_factory(
             cwd=task.cwd,
             model=binding.model,
@@ -533,6 +537,9 @@ class SessionSubagentController:
             settings_manager=self.settings_manager,
             process_service=self.process_service if child_owner is not None else None,
             process_owner=child_owner,
+            tool_approval_broker=child_broker,
+            tool_policy_event_sink=self._tool_policy_event_sink,
+            tool_policy_redactor=self._tool_policy_engine.redactor,
         )
         child.agent.subscribe(self._subagent_tool_trace_listener(task, child, tool_trace, trace_by_call_id))
         child.agent._after_tool_call = self._subagent_after_tool_call_tracer(  # noqa: SLF001 - parent observes delegated child tools.

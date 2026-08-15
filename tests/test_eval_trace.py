@@ -209,6 +209,43 @@ def test_interactive_trace_emits_ordered_safe_lifecycle(tmp_path: Path) -> None:
     assert "private response text" not in encoded
 
 
+def test_coding_app_wires_sanitized_tool_policy_decisions_to_trace(tmp_path: Path) -> None:
+    path = tmp_path / "trace.jsonl"
+    writer = EvalTraceWriter(path)
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(),
+        enable_tui=False,
+        event_trace=writer,
+    )
+
+    assert app.session._tool_policy_event_sink is not None
+    assert app.session._tool_policy_engine.redactor is writer.redactor
+    app.session._tool_policy_event_sink(
+        {
+            "type": "tool_policy_decision",
+            "tool": "write",
+            "effects": ["write"],
+            "mode": "audit",
+            "allow": True,
+            "reason_code": "audit_only",
+        }
+    )
+
+    event = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
+    assert event == {
+        "event": "tool_policy_decision",
+        "timestamp_ms": event["timestamp_ms"],
+        "run_id": writer.run_id,
+        "tool": "write",
+        "effects": ["write"],
+        "mode": "audit",
+        "allow": True,
+        "reason_code": "audit_only",
+    }
+
+
 def test_conversation_log_records_semantic_turn_and_redacts_secret_shapes(tmp_path: Path) -> None:
     path = tmp_path / "conversation.jsonl"
     writer = ConversationLogWriter(path)

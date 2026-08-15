@@ -323,6 +323,21 @@ class CodingApp:
                 if self.event_trace is not None
                 else None
             ),
+            tool_policy_event_sink=(
+                (
+                    lambda event: self._trace(
+                        "tool_policy_decision",
+                        {key: value for key, value in event.items() if key != "type"},
+                    )
+                )
+                if self.event_trace is not None
+                else None
+            ),
+            tool_policy_redactor=(
+                getattr(self.event_trace, "redactor", None)
+                if self.event_trace is not None
+                else None
+            ),
         )
         if fresh_session and session._session_store is not None:
             session._session_store.append_model_change(session.model.provider, session.model.id)
