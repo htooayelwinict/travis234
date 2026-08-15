@@ -2,6 +2,67 @@
 
 Global settings live at `~/.travis234/agent/settings.json`. A trusted project may add `.travis234/settings.json`; project code and project settings remain trust-gated. Invalid hand-edited values are ignored at their own scope rather than hiding a valid value from the other scope.
 
+## Typed agent roles
+
+Agent roles are optional JSON resources that narrow a delegated child for a
+specific job. Put global definitions in
+`~/.travis234/agent/roles/<name>.json`. A trusted project may add
+`.travis234/roles/<name>.json`; the project definition wins a same-name
+collision while trust remains active. Installed resource packages may also
+declare role JSON files. The optional `roles` settings list adds explicit role
+file paths at that settings scope.
+
+```json
+{
+  "name": "reviewer",
+  "description": "Review a change and return structured findings.",
+  "modelRole": "reviewer",
+  "allowedTools": ["read", "grep", "find", "ls"],
+  "allowedEffects": ["read"],
+  "canSpawn": false,
+  "maxDepth": 1,
+  "skills": ["review-guidance.md"],
+  "context": ["architecture.md"],
+  "resultSchema": {
+    "type": "object",
+    "required": ["findings"],
+    "properties": {
+      "findings": {"type": "array", "items": {"type": "string"}}
+    },
+    "additionalProperties": false
+  },
+  "defaultTimeoutSeconds": 900,
+  "artifactPolicy": "declared"
+}
+```
+
+`name` must be a lowercase identifier. `modelRole` is `worker` or `reviewer`.
+`allowedTools` and `allowedEffects` are ceilings: missing fields inherit the
+parent's current capability ceiling, while an explicit empty list grants none.
+Every typed tool must declare effects and fit completely inside both ceilings.
+Role context and skill paths are relative to the role file, cannot escape its
+directory, and are read into a bounded context pack when the child is spawned.
+A reload changes future children only.
+
+`defaultTimeoutSeconds` is between 1 and 3600; a caller may lower it but cannot
+raise it. The scheduler remains authoritative at three concurrent children and
+one child level. Therefore `canSpawn` and `maxDepth` cannot enable recursive
+delegation in the current runtime.
+
+When `resultSchema` is present, the child must return one JSON object with
+`summary`, `output`, and optional `artifacts`. The complete envelope is capped
+at 256 KiB and `output` is validated with JSON Schema Draft 2020-12. Invalid
+JSON or schema mismatch becomes a bounded failed child result; it does not
+throw from the parent wait operation. `artifactPolicy` is `none`, `declared`,
+or `declared_and_trace`. Declared artifacts must be real UTF-8 regular files
+inside the workspace; public results expose durable artifact IDs, never host
+paths. Without a matching role definition, existing untyped subagent behavior
+is unchanged.
+
+Use `/agents status`, `/agents inspect <id>`, `/agents steer <id> <message>`,
+and `/agents cancel <id>` in the native TUI. `/subagents` keeps its existing
+meaning: select the delegation skill for the next prompt.
+
 ## Tool effect policy
 
 Every coding tool declares one or more effects: `read` observes state, `write`

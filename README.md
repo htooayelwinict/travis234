@@ -214,6 +214,7 @@ The npm package exposes only the `travis234` command and launches the release co
 | `/packages` | List installed resource packages (`--local` selects project scope) |
 | `/install`, `/remove`, `/update` | Confirm and manage local, Git, or Python resource packages |
 | `/processes` | Inspect managed and user-command processes |
+| `/agents [status\|inspect\|steer\|cancel]` | Inspect or control session-owned delegated agents |
 | `/help` | Show available commands and shortcuts |
 | `/exit` | Shut down cleanly and terminate owned work |
 
@@ -263,6 +264,28 @@ model that advertises image input and fails before a provider call when none is 
 `/model` changes the implicit primary fallback only and never rewrites an explicit role.
 External Codex subagents keep their own explicit model contract and do not consume these
 Travis model-role settings.
+
+### Typed subagent roles
+
+Optional role resources let a delegation inherit a named, reviewable contract.
+Global JSON roles live in `~/.travis234/agent/roles/`; trusted projects may
+override them from `.travis234/roles/`, and packages may contribute roles through
+the shared capability registry. A role can narrow tools and effects, choose the
+existing `worker` or `reviewer` model route, add bounded relative context, lower
+the timeout, require a JSON-schema result, and allow declared artifacts.
+
+Role permissions are intersections, never grants: the child receives only tools
+already active for its parent, with declared effects inside the role ceiling.
+Explicit empty tool or effect lists grant none. The existing scheduler remains
+capped at three concurrent children and one child level, so a role cannot enable
+recursive delegation. Missing role definitions preserve the established
+untyped behavior. See [settings](docs/settings.md#typed-agent-roles) for the JSON
+fields and failure semantics.
+
+The native TUI exposes `/agents status`, `/agents inspect <id>`, `/agents steer
+<id> <message>`, and `/agents cancel <id>`. Immutable roster snapshots show
+bounded status and summary previews without goals, role context, raw traces, or
+host paths. `/subagents` still selects the delegation skill for the next prompt.
 
 ### Terminal history and selection
 
@@ -592,7 +615,7 @@ When a persistent session truncates command or managed-process output, Travis234
 
 Artifact objects live below `~/.travis234/agent/artifacts/objects/`, while authorization lives in `<session>.artifacts.jsonl`. Default per-object, per-session, installation, and free-space limits are documented in [settings](docs/settings.md). A storage or quota failure does not change a successful tool effect: the bounded result carries `artifactUnavailable` and no host path. Collection is explicit, conservative, and fails closed if any manifest cannot be validated.
 
-Subagent management tools stay outside ordinary model turns. Explicit delegation, multiple-agent, parallel-worker, split-work, or independent-review requests expose them temporarily; an explicit request not to use subagents always wins. Coding children receive bounded workspace-write access to `read`, `grep`, `find`, `ls`, `bash`, `process`, `tmux`, `edit`, and `write`. Concurrent children must own disjoint files, verify requested changes, and report changed-file evidence. Child-owned managed processes are cleaned up when the child ends, while parent processes and durable tmux sessions remain independently owned.
+Subagent management tools stay outside ordinary model turns. Explicit delegation, multiple-agent, parallel-worker, split-work, or independent-review requests expose them temporarily; an explicit request not to use subagents always wins. Coding children receive bounded workspace-write access to `read`, `grep`, `find`, `ls`, `bash`, `process`, `tmux`, `edit`, and `write`, further narrowed by a matching typed role. Concurrent children must own disjoint files, verify requested changes, and report changed-file evidence. Typed results may return schema-validated structured output and explicitly declared durable artifacts; legacy expanded result access remains available. Child-owned managed processes are cleaned up when the child ends, while parent processes and durable tmux sessions remain independently owned.
 
 ## Production sandbox
 

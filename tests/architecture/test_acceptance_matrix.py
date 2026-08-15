@@ -71,6 +71,34 @@ def test_parity_report_has_only_resolved_evidence() -> None:
         "maxInlineOutputBytes",
         "maxApplyOriginalBytes",
     }
+    assert set(report["agentRoles"]) == {"roles"}
+    assert all(
+        set(role) == {"name", "provenance"}
+        and set(role["provenance"]) == {"provider", "source", "scope", "origin"}
+        for role in report["agentRoles"]["roles"]
+    )
+    assert set(report["subagentSupervisor"]) == {
+        "maxThreads",
+        "maxDepth",
+        "activeCount",
+    }
+    assert report["subagentSupervisor"] == {
+        "maxThreads": 3,
+        "maxDepth": 1,
+        "activeCount": 0,
+    }
+
+    encoded = json.dumps(
+        {
+            "agentRoles": report["agentRoles"],
+            "subagentSupervisor": report["subagentSupervisor"],
+        },
+        sort_keys=True,
+    )
+    assert all(
+        forbidden not in encoded
+        for forbidden in ("description", "context", "goal", "result", "credential")
+    )
 
 
 def test_current_commit_verifier_rejects_stale_evidence(

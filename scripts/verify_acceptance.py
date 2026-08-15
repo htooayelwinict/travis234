@@ -14,9 +14,15 @@ _SOURCE_ROOT = str(Path(__file__).resolve().parents[1])
 if _SOURCE_ROOT not in sys.path:
     sys.path.insert(0, _SOURCE_ROOT)
 
+from travis.coding_agent.config import get_agent_dir
 from travis.coding_agent.policy import TOOL_EFFECT_ORDER
 from travis.coding_agent.language_services.types import LanguageServiceLimits
+from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.settings_manager import SettingsManager
+from travis.coding_agent.subagents import (
+    DEFAULT_SUBAGENT_MAX_DEPTH,
+    DEFAULT_SUBAGENT_MAX_THREADS,
+)
 from travis.coding_agent.tools import create_all_tool_definitions
 
 try:
@@ -170,6 +176,44 @@ def verify_parity_contracts(*, root: str | Path) -> dict[str, object]:
             "maxInlineOutputBytes": language_limits.max_inline_output_bytes,
             "maxApplyOriginalBytes": language_limits.max_apply_original_bytes,
         },
+    }
+    agent_dir = get_agent_dir()
+    role_settings = SettingsManager.create(
+        str(repository),
+        agent_dir,
+        {"projectTrusted": False},
+    )
+    role_loader = DefaultResourceLoader(
+        cwd=str(repository),
+        agent_dir=agent_dir,
+        project_trusted=False,
+        settings_manager=role_settings,
+        no_context_files=True,
+        no_extensions=True,
+        no_skills=True,
+        no_prompt_templates=True,
+        no_themes=True,
+        offline=True,
+    )
+    role_loader.reload()
+    report["agentRoles"] = {
+        "roles": [
+            {
+                "name": role.name,
+                "provenance": {
+                    "provider": role.source.provider,
+                    "source": role.source.source,
+                    "scope": role.source.scope,
+                    "origin": role.source.origin,
+                },
+            }
+            for role in role_loader.get_agent_roles().list()
+        ]
+    }
+    report["subagentSupervisor"] = {
+        "maxThreads": DEFAULT_SUBAGENT_MAX_THREADS,
+        "maxDepth": DEFAULT_SUBAGENT_MAX_DEPTH,
+        "activeCount": 0,
     }
     return report
 

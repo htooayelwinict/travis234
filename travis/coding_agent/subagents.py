@@ -38,6 +38,8 @@ from travis.coding_agent.subagent_supervision import (
 )
 
 SubagentSandbox = Literal["read_only", "workspace_write", "full_access"]
+DEFAULT_SUBAGENT_MAX_THREADS = 3
+DEFAULT_SUBAGENT_MAX_DEPTH = 1
 
 CODING_SUBAGENT_TOOLS = (
     "read",
@@ -557,8 +559,8 @@ class SubagentSupervisor:
     def __init__(
         self,
         *,
-        max_threads: int = 3,
-        max_depth: int = 1,
+        max_threads: int = DEFAULT_SUBAGENT_MAX_THREADS,
+        max_depth: int = DEFAULT_SUBAGENT_MAX_DEPTH,
         event_sink: Callable[[dict[str, object]], None] | None = None,
     ) -> None:
         if isinstance(max_threads, bool) or not isinstance(max_threads, int) or max_threads < 1:

@@ -243,7 +243,7 @@ class _SessionRuntime(
         self._model_subagents_spawned_this_turn = 0
         self._model_subagent_spawn_signatures_this_turn: set[tuple[str, str, str]] = set()
         self._subagent_log_dir = Path(self._default_subagent_log_dir(session_path=session_path, session_id=session_id))
-        self.subagents = SubagentSupervisor(max_threads=3, max_depth=1, event_sink=self._handle_subagent_event)
+        self.subagents = SubagentSupervisor(event_sink=self._handle_subagent_event)
         self.subagents.register_backend(CallableSubagentBackend("internal", self._run_internal_subagent))
         self.subagents.register_backend(CodexExecBackend(log_dir=self._subagent_log_dir))
         self._turn_mailbox = CodingTurnMailbox()

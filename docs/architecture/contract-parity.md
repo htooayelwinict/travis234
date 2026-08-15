@@ -71,6 +71,37 @@ Preview/apply reduces accidental edits but cannot provide filesystem-wide
 isolation from unrelated host processes; failed restoration is therefore
 reported honestly instead of claimed as guaranteed rollback.
 
+## Typed coordination ownership
+
+- `agent_roles.py` owns strict immutable role resources and their projection
+  from the shared capability registry. Global roles load from
+  `~/.travis234/agent/roles/*.json`; project roles load only from a trusted
+  `.travis234/roles/*.json`; packages may contribute the same resource kind.
+- `subagent_roles.py` freezes a role at spawn by intersecting its tools and
+  effects with the parent's already-active tool definitions. Missing ceilings
+  inherit, explicit empty ceilings grant nothing, undeclared typed tools are
+  excluded, and a requested timeout can only lower the role timeout.
+- `subagent_result_types.py` retains the public task-result vocabulary, while
+  `subagent_results.py` validates the bounded `summary`/`output`/`artifacts`
+  envelope and converts schema mismatch into a failed result rather than an
+  exception from `wait()`.
+- `subagent_supervision.py` owns immutable revisioned snapshots,
+  subscriptions, and shaped steering/cancellation results around the existing
+  futures scheduler. It never owns child execution or call a subscriber while
+  holding the supervisor lock.
+- `interactive_subagents.py` and `components/subagent_roster.py` are the TUI
+  projection. `/agents status`, `inspect`, `steer`, and `cancel` consume local
+  supervisor state; they do not add goals, role context, or raw traces to the
+  roster.
+
+The established executor remains capped at three concurrent children and one
+child level. `canSpawn` and `maxDepth` are validated role contract fields, but
+they cannot widen that authoritative depth-one ceiling; typed children do not
+receive delegation tools today. Role model selection uses only the existing
+`worker` or `reviewer` route. Legacy subagents remain valid when no role
+definition matches, and `/subagents` continues to select the existing
+delegation skill rather than becoming a supervisor command.
+
 ## Invariants
 
 - No object digest or host object path is model-visible.
@@ -86,3 +117,8 @@ reported honestly instead of claimed as guaranteed rollback.
 - Generic agent-loop ordering, iteration budgets, cancellation, steering, follow-ups, and bounded parallel execution are unchanged.
 - Language-server commands and initialization options never enter status,
   acceptance output, model-facing schemas, or session history.
+- Role reload affects new children only; a running task retains its frozen
+  tools, effects, model role, context, timeout, schema, and artifact policy.
+- Acceptance output contains role names and sanitized provenance plus
+  supervisor limits only. It excludes role context, goals, result bodies,
+  model credentials, and host paths.
