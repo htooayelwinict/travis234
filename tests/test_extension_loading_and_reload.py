@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+import sys
 
 import pytest
 
+import travis.coding_agent.resource_loader as resource_loader_module
 from tests._support_coding_agent import AgentSession, faux_model
 from travis.coding_agent.event_bus import create_event_bus
 from travis.coding_agent.capabilities import CapabilityReloadError
@@ -268,6 +270,37 @@ def test_pretrust_runtime_transfers_once_then_disposes_on_replacement(
     assert calls == ["factory", "factory"]
     loader.event_bus.emit("ownership-probe", None)
     assert events == ["runtime-1", "runtime-2"]
+
+
+def test_failed_trust_resolution_releases_pretrust_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    extension = tmp_path / "agent" / "extensions" / "probe.py"
+    _write_extension(extension, "probe")
+    loader = DefaultResourceLoader(
+        cwd=str(tmp_path),
+        agent_dir=str(tmp_path / "agent"),
+    )
+    pretrust = loader.load_project_trust_extensions()
+    lease = loader._pretrust_extension_lease
+    assert lease is not None
+    module_names = lease.module_names
+
+    async def reject_trust(**_kwargs: object) -> bool:
+        raise RuntimeError("trust resolution failed")
+
+    monkeypatch.setattr(
+        resource_loader_module,
+        "resolve_project_trust",
+        reject_trust,
+    )
+
+    with pytest.raises(RuntimeError, match="trust resolution failed"):
+        loader.complete_reload(pretrust_extensions=pretrust)
+
+    assert loader._pretrust_extension_lease is None
+    assert all(name not in sys.modules for name in module_names)
 
 
 def test_extension_context_reads_project_trust_dynamically(tmp_path: Path) -> None:

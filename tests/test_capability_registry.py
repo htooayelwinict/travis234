@@ -47,6 +47,11 @@ def test_capability_records_and_context_are_immutable() -> None:
     with pytest.raises(TypeError):
         context.data["reason"] = "changed"  # type: ignore[index]
 
+    registry = CapabilityRegistry()
+    snapshot = registry.snapshot
+    with pytest.raises(FrozenInstanceError):
+        snapshot.generation = 2  # type: ignore[misc]
+
 
 def test_diagnostic_attribution_is_stable() -> None:
     source = CapabilitySource("skills", "/repo/SKILL.md")

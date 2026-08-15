@@ -265,48 +265,49 @@ class DefaultResourceLoader:
             trust_override = self._project_trust_override
 
         bootstrap_lease: ExtensionRuntimeLease | None = None
-        if trust_override is None:
-            if pretrust_extensions is None:
-                pretrust_extensions = self.load_project_trust_extensions()
-            bootstrap_lease = self._verified_pretrust_lease(pretrust_extensions)
-            context = _first_mapping_value(
-                resolved_options,
-                "projectTrustContext",
-                "project_trust_context",
-            )
-            if context is None:
-                context = ProjectTrustContext(has_ui=False, select=None)
-            if not isinstance(context, ProjectTrustContext):
-                raise TypeError("project trust context must be a ProjectTrustContext")
-            trust_store = _first_mapping_value(resolved_options, "trustStore", "trust_store")
-            if trust_store is None:
-                trust_store = ProjectTrustStore(self.agent_dir)
-            if not isinstance(trust_store, ProjectTrustStore):
-                raise TypeError("trust store must be a ProjectTrustStore")
-            get_default_project_trust = getattr(self.settings_manager, "get_default_project_trust", None)
-            default_project_trust = get_default_project_trust() if callable(get_default_project_trust) else "ask"
-            trusted = run_sync(
-                resolve_project_trust(
-                    cwd=self.cwd,
-                    trust_store=trust_store,
-                    context=context,
-                    default_project_trust=default_project_trust,
-                    extension_runner=pretrust_extensions.get("runtime"),
-                )
-            )
-        else:
-            trusted = trust_override
-
-        if pretrust_extensions is not None and bootstrap_lease is None:
-            bootstrap_lease = self._verified_pretrust_lease(pretrust_extensions)
-
-        previous_trust = self.project_trusted
-        self._set_project_trusted(bool(trusted))
         try:
-            self._reload_all_resources(pretrust_extensions=pretrust_extensions)
-        except Exception:
-            self._set_project_trusted(previous_trust)
-            raise
+            if trust_override is None:
+                if pretrust_extensions is None:
+                    pretrust_extensions = self.load_project_trust_extensions()
+                bootstrap_lease = self._verified_pretrust_lease(pretrust_extensions)
+                context = _first_mapping_value(
+                    resolved_options,
+                    "projectTrustContext",
+                    "project_trust_context",
+                )
+                if context is None:
+                    context = ProjectTrustContext(has_ui=False, select=None)
+                if not isinstance(context, ProjectTrustContext):
+                    raise TypeError("project trust context must be a ProjectTrustContext")
+                trust_store = _first_mapping_value(resolved_options, "trustStore", "trust_store")
+                if trust_store is None:
+                    trust_store = ProjectTrustStore(self.agent_dir)
+                if not isinstance(trust_store, ProjectTrustStore):
+                    raise TypeError("trust store must be a ProjectTrustStore")
+                get_default_project_trust = getattr(self.settings_manager, "get_default_project_trust", None)
+                default_project_trust = get_default_project_trust() if callable(get_default_project_trust) else "ask"
+                trusted = run_sync(
+                    resolve_project_trust(
+                        cwd=self.cwd,
+                        trust_store=trust_store,
+                        context=context,
+                        default_project_trust=default_project_trust,
+                        extension_runner=pretrust_extensions.get("runtime"),
+                    )
+                )
+            else:
+                trusted = trust_override
+
+            if pretrust_extensions is not None and bootstrap_lease is None:
+                bootstrap_lease = self._verified_pretrust_lease(pretrust_extensions)
+
+            previous_trust = self.project_trusted
+            self._set_project_trusted(bool(trusted))
+            try:
+                self._reload_all_resources(pretrust_extensions=pretrust_extensions)
+            except Exception:
+                self._set_project_trusted(previous_trust)
+                raise
         finally:
             if (
                 bootstrap_lease is not None

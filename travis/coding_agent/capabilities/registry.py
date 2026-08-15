@@ -29,7 +29,18 @@ class CapabilityReloadError(RuntimeError):
         self.diagnostic = diagnostic
 
 
+@dataclass(frozen=True)
 class CapabilitySnapshot:
+    generation: int
+    diagnostics: tuple[CapabilityDiagnostic, ...]
+    _records_by_kind: Mapping[
+        CapabilityKind, tuple[CapabilityRecord, ...]
+    ]
+    _resolutions: Mapping[
+        tuple[CapabilityKind, str], CapabilityResolution
+    ]
+    _provider_states: Mapping[str, object]
+
     def __init__(
         self,
         generation: int,
@@ -40,11 +51,23 @@ class CapabilitySnapshot:
         ],
         provider_states: Mapping[str, object],
     ) -> None:
-        self.generation = generation
-        self.diagnostics = diagnostics
-        self._records_by_kind = MappingProxyType(dict(records_by_kind))
-        self._resolutions = MappingProxyType(dict(resolutions))
-        self._provider_states = MappingProxyType(dict(provider_states))
+        object.__setattr__(self, "generation", generation)
+        object.__setattr__(self, "diagnostics", diagnostics)
+        object.__setattr__(
+            self,
+            "_records_by_kind",
+            MappingProxyType(dict(records_by_kind)),
+        )
+        object.__setattr__(
+            self,
+            "_resolutions",
+            MappingProxyType(dict(resolutions)),
+        )
+        object.__setattr__(
+            self,
+            "_provider_states",
+            MappingProxyType(dict(provider_states)),
+        )
 
     def records(self, kind: CapabilityKind) -> tuple[CapabilityRecord, ...]:
         return self._records_by_kind.get(kind, ())
