@@ -89,7 +89,7 @@ from travis.coding_agent.tools.types import (
 )
 
 from travis.coding_agent.session_types import _CANCEL_SUBAGENT_SCHEMA, _DEFAULT_SUBAGENT_ALLOWED_TOOLS, _EXPAND_SUBAGENT_RESULT_SCHEMA, _LIST_SUBAGENTS_SCHEMA, _MODEL_SUBAGENT_SPAWN_LIMIT_PER_TURN, _SKILL_SUBAGENT_ALLOWED_TOOL_NAMES, _SPAWN_SUBAGENT_SCHEMA, _SUBAGENT_RESULT_SUMMARY_LIMIT, _TASK_ID_SCHEMA
-from travis.coding_agent.subagent_trace import _coerce_subagent_timeout_seconds, _expanded_subagent_result_details, _format_subagent_expansion, _model_subagent_timeout_seconds_arg, _optional_timeout_arg, _public_subagent_result_details, _reject_unexpected_args, _required_text_arg, _subagent_changed_files, _subagent_expansion_budget_arg, _subagent_expansion_offset_arg, _subagent_expansion_section_arg, _task_id_arg
+from travis.coding_agent.subagent_trace import _coerce_subagent_timeout_seconds, _expanded_subagent_result_details, _format_subagent_expansion, _model_subagent_timeout_seconds_arg, _optional_timeout_arg, _public_subagent_result_details, _reject_unexpected_args, _replace_artifact_paths, _required_text_arg, _subagent_changed_files, _subagent_expansion_budget_arg, _subagent_expansion_offset_arg, _subagent_expansion_section_arg, _task_id_arg
 
 class SessionSubagentController:
     """Owns a focused AgentSession runtime concern."""
@@ -396,8 +396,8 @@ class SessionSubagentController:
             result.task_id,
             result.artifacts,
         )
-        summary = self._replace_declared_artifact_paths(result.summary, replacements)
-        final_response = self._replace_declared_artifact_paths(result.final_response, replacements)
+        summary = _replace_artifact_paths(result.summary, replacements)
+        final_response = _replace_artifact_paths(result.final_response, replacements)
         prepared = replace(
             result,
             summary=summary,
@@ -456,13 +456,6 @@ class SessionSubagentController:
             dict(replacements),
         )
         return artifact_ids, errors, replacements
-
-    @staticmethod
-    def _replace_declared_artifact_paths(text: str, replacements: dict[str, str]) -> str:
-        rendered = text
-        for raw_path in sorted(replacements, key=len, reverse=True):
-            rendered = rendered.replace(raw_path, replacements[raw_path])
-        return rendered
 
     def _subagent_tool_result(self, content: str, details: dict[str, object]) -> AgentToolResult:
         return AgentToolResult(content=[TextContent(text=content)], details=details)

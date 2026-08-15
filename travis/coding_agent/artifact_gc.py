@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import os
 import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
 
 from travis.coding_agent.artifact_manifest import read_artifact_manifest_strict
-from travis.coding_agent.artifact_store import DurableArtifactStore
+from travis.coding_agent.artifact_store import DurableArtifactStore, fsync_artifact_directory
 from travis.coding_agent.session_catalog import SessionCatalog
 
 _DIGEST_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -79,7 +78,7 @@ class ArtifactGarbageCollector:
                     path.unlink()
                     changed_directories.add(path.parent)
                 for directory in changed_directories:
-                    _fsync_directory(directory)
+                    fsync_artifact_directory(directory)
             return ArtifactGcReport(
                 completed=True,
                 scanned_manifests=scanned,
@@ -108,15 +107,6 @@ class ArtifactGarbageCollector:
                 continue
             objects[path.name] = path
         return objects, errors
-
-
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
 
 __all__ = [
     "ArtifactGarbageCollector",

@@ -162,7 +162,7 @@ class DurableArtifactStore:
                     self.verify(digest)
                 else:
                     os.chmod(destination, 0o600, follow_symlinks=False)
-                    _fsync_directory(destination_dir)
+                    fsync_artifact_directory(destination_dir)
             finally:
                 try:
                     temporary.unlink()
@@ -311,7 +311,7 @@ def _ensure_directory(path: Path) -> None:
     path.chmod(0o700)
 
 
-def _fsync_directory(path: Path) -> None:
+def fsync_artifact_directory(path: Path) -> None:
     descriptor = os.open(path, os.O_RDONLY)
     try:
         os.fsync(descriptor)
@@ -325,4 +325,5 @@ __all__ = [
     "ArtifactPromotionError",
     "DurableArtifactStore",
     "StoredArtifactObject",
+    "fsync_artifact_directory",
 ]
