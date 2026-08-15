@@ -12,6 +12,7 @@ from typing import Any, Callable
 from travis.agent.types import AgentTool, AgentToolResult
 from travis.ai.types import TextContent
 from travis.coding_agent.capabilities import WorkspaceCapability
+from travis.coding_agent.policy.context import workspace_path_context
 from travis.coding_agent.tools.path_utils import is_ignored_by_gitignore, load_gitignore_rules, resolve_to_cwd
 from travis.coding_agent.tools.truncate import DEFAULT_MAX_BYTES, format_size, truncate_head, truncation_to_details
 from travis.coding_agent.tools.types import ToolContext, ToolDefinition, wrap_tool_definition
@@ -161,6 +162,8 @@ def create_find_tool_definition(
             cwd, workspace, ops, tid, args, signal, on_update, ctx
         ),
         render_call=lambda args, ctx=None: f"find {args.get('pattern', '')}",
+        effects=frozenset({"read"}),
+        policy_context=workspace_path_context(cwd, "find"),
     )
 
 

@@ -57,6 +57,8 @@ from travis.coding_agent.process_context import ProcessContextResolver
 from travis.coding_agent.processes.local import create_local_process_transport
 from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import ProcessOwner
+from travis.coding_agent.policy.context import fixed_action_context, subagent_policy_context
+from travis.coding_agent.policy.types import ALL_TOOL_EFFECTS
 from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.session_index import SessionIndex
 from travis.coding_agent.session_store import (
@@ -185,6 +187,8 @@ class SessionSubagentController:
                     "Spawn independent children together with wait=false; collect every result and verify child evidence before finalizing.",
                 ],
                 execute=self._execute_spawn_subagent_tool,
+                effects=ALL_TOOL_EFFECTS,
+                policy_context=subagent_policy_context,
             ),
             ToolDefinition(
                 name="wait_subagent",
@@ -193,6 +197,8 @@ class SessionSubagentController:
                 parameters=_TASK_ID_SCHEMA,
                 prompt_snippet="Wait for a delegated child task by task id.",
                 execute=self._execute_wait_subagent_tool,
+                effects=frozenset({"read"}),
+                policy_context=fixed_action_context("wait"),
             ),
             ToolDefinition(
                 name="list_subagents",
@@ -201,6 +207,8 @@ class SessionSubagentController:
                 parameters=_LIST_SUBAGENTS_SCHEMA,
                 prompt_snippet="Inspect active and completed child subagents.",
                 execute=self._execute_list_subagents_tool,
+                effects=frozenset({"read"}),
+                policy_context=fixed_action_context("list"),
             ),
             ToolDefinition(
                 name="get_subagent_result",
@@ -209,6 +217,8 @@ class SessionSubagentController:
                 parameters=_TASK_ID_SCHEMA,
                 prompt_snippet="Fetch a child subagent result by task id without blocking indefinitely.",
                 execute=self._execute_get_subagent_result_tool,
+                effects=frozenset({"read"}),
+                policy_context=fixed_action_context("result"),
             ),
             ToolDefinition(
                 name="expand_subagent_result",
@@ -225,6 +235,8 @@ class SessionSubagentController:
                     "Use the smallest useful section and budget; page with offset when the expansion is still truncated.",
                 ],
                 execute=self._execute_expand_subagent_result_tool,
+                effects=frozenset({"read"}),
+                policy_context=fixed_action_context("expand"),
             ),
             ToolDefinition(
                 name="cancel_subagent",
@@ -233,6 +245,8 @@ class SessionSubagentController:
                 parameters=_CANCEL_SUBAGENT_SCHEMA,
                 prompt_snippet="Cancel a child subagent that is no longer needed.",
                 execute=self._execute_cancel_subagent_tool,
+                effects=frozenset({"execute"}),
+                policy_context=fixed_action_context("cancel"),
             ),
         ]
 

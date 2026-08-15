@@ -14,6 +14,7 @@ TOOL_EFFECT_ORDER: tuple[ToolEffect, ...] = (
     "execute",
     "network",
 )
+ALL_TOOL_EFFECTS: frozenset[ToolEffect] = frozenset(TOOL_EFFECT_ORDER)
 TOOL_POLICY_MODE_ORDER: tuple[ToolPolicyMode, ...] = (
     "disabled",
     "audit",

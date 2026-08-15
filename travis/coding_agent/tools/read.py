@@ -13,6 +13,7 @@ from travis.agent.types import AgentTool, AgentToolResult
 from travis.ai.types import ImageContent, TextContent
 from travis.coding_agent.artifacts import ARTIFACT_READ_BYTE_LIMIT, ArtifactRegistry
 from travis.coding_agent.capabilities import CapabilityViolation, WorkspaceCapability
+from travis.coding_agent.policy.context import workspace_path_context
 from travis.coding_agent.tools.common import context_value as _ctx_value
 from travis.coding_agent.tools.path_utils import format_path_relative_to_cwd, resolve_read_path, resolve_to_cwd
 from travis.coding_agent.tools.truncate import (
@@ -484,6 +485,8 @@ def create_read_tool_definition(
         prepare_arguments=lambda args: _prepare_read_arguments(args, artifacts),
         render_call=_render_read_call,
         render_result=_render_read_result,
+        effects=frozenset({"read"}),
+        policy_context=workspace_path_context(cwd, "read"),
     )
 
 

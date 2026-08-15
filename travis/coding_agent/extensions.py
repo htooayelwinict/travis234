@@ -12,6 +12,7 @@ from typing import Any
 
 from travis.agent.async_utils import resolve, run_sync
 from travis.coding_agent.event_bus import EventBusController, create_event_bus
+from travis.coding_agent.policy.types import normalize_effects
 from travis.coding_agent.source_info import SourceInfo, create_synthetic_source_info
 from travis.coding_agent.tools.types import ToolDefinition, wrap_tool_definition
 
@@ -1343,6 +1344,9 @@ class ExtensionRunner:
 
 
     def register_tool(self, definition: ToolDefinition, source_info: SourceInfo | None = None) -> None:
+        definition.effects = normalize_effects(definition.effects)
+        if definition.policy_context is not None and not callable(definition.policy_context):
+            raise ValueError("Extension tool policy_context must be callable")
         extension_path = self._current_extension_path(f"<extension:{definition.name}>")
         self._registered_tools[definition.name] = RegisteredTool(
             definition=definition,

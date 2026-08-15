@@ -21,6 +21,8 @@ from travis.coding_agent.artifact_store import ArtifactPromotionError
 from travis.coding_agent.artifacts import ArtifactRegistry, artifact_read_instruction
 from travis.coding_agent.config import get_bin_dir
 from travis.coding_agent.execution_backend import ExecutionBackend, TrustedLocalBackend
+from travis.coding_agent.policy.context import shell_policy_context
+from travis.coding_agent.policy.types import ALL_TOOL_EFFECTS
 from travis.coding_agent.processes.service import ProcessSessionService, ProcessTransportFactory
 from travis.coding_agent.processes.types import ProcessLaunchRequest, ProcessOwner, ProcessSnapshot, ProcessState
 from travis.coding_agent.subprocess_environment import sanitize_tool_environment
@@ -679,6 +681,8 @@ def create_bash_tool_definition(
             ctx,
         ),
         render_call=lambda args, ctx=None: f"bash {args.get('command', '')}",
+        effects=ALL_TOOL_EFFECTS,
+        policy_context=shell_policy_context,
     )
 
 

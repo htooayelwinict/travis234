@@ -12,6 +12,8 @@ from travis.agent.types import AgentTool, AgentToolResult
 from travis.ai.types import TextContent
 from travis.coding_agent.artifact_store import ArtifactPromotionError
 from travis.coding_agent.artifacts import ArtifactRegistry, artifact_read_instruction
+from travis.coding_agent.policy.context import action_policy_context
+from travis.coding_agent.policy.types import ALL_TOOL_EFFECTS
 from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import (
     DEFAULT_PROCESS_POLL_DELAY_MS,
@@ -316,6 +318,8 @@ def create_process_tool_definition(
         render_call=_render_process_call,
         execution_mode="sequential",
         prepare_arguments=prepare_process_arguments,
+        effects=ALL_TOOL_EFFECTS,
+        policy_context=action_policy_context,
     )
 
 

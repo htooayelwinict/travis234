@@ -10,6 +10,7 @@ from typing import Callable
 from travis.agent.types import AgentTool, AgentToolResult
 from travis.ai.types import TextContent
 from travis.coding_agent.capabilities import WorkspaceCapability
+from travis.coding_agent.policy.context import workspace_path_context
 from travis.coding_agent.tools.atomic_file import atomic_replace_text
 from travis.coding_agent.tools.common import context_value as _ctx_value
 from travis.coding_agent.tools.common import file_content_metadata as _file_content_metadata
@@ -113,6 +114,8 @@ def create_write_tool_definition(
         ),
         render_call=_render_write_call,
         render_result=_render_write_result,
+        effects=frozenset({"write"}),
+        policy_context=workspace_path_context(cwd, "write"),
     )
 
 

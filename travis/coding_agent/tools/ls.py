@@ -11,6 +11,7 @@ from typing import Any, Callable
 from travis.agent.types import AgentTool, AgentToolResult
 from travis.ai.types import TextContent
 from travis.coding_agent.capabilities import WorkspaceCapability
+from travis.coding_agent.policy.context import workspace_path_context
 from travis.coding_agent.tools.common import context_value as _ctx_value
 from travis.coding_agent.tools.path_utils import render_tool_path, resolve_to_cwd
 from travis.coding_agent.tools.truncate import DEFAULT_MAX_BYTES, format_size, truncate_head, truncation_to_details
@@ -125,6 +126,8 @@ def create_ls_tool_definition(
             cwd, workspace, ops, tid, args, signal, on_update, ctx
         ),
         render_call=_render_ls_call,
+        effects=frozenset({"read"}),
+        policy_context=workspace_path_context(cwd, "list"),
     )
 
 
