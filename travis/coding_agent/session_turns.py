@@ -7,8 +7,6 @@ import os
 import re
 import subprocess
 import time
-from dataclasses import dataclass
-from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Mapping, Optional, Sequence
 
@@ -46,6 +44,11 @@ from travis.coding_agent.config import get_packaged_context_paths
 from travis.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
 from travis.coding_agent.execution_backend import select_execution_backend
 from travis.coding_agent.mailbox import CodingTurnMailbox, MailboxKind
+from travis.coding_agent.model_roles import (
+    model_input_has_images,
+    model_role_stream_options,
+    pending_context_has_images,
+)
 from travis.coding_agent.message_utils import (
     bash_execution_text as _bash_execution_to_text,
     last_assistant_message as _last_assistant_message,
@@ -91,7 +94,7 @@ from travis.coding_agent.session_policy_controller import (
 )
 from travis.coding_agent.session_types import AgentSettledEvent, AutoRetryEndEvent, AutoRetryStartEvent, _MALFORMED_STREAMED_TOOL_ARGS_MARKER, _MALFORMED_STREAMED_TOOL_CALL_ARGUMENTS_CODE, _MALFORMED_STREAM_RECOVERY_PREFIX, _MAX_PARTIAL_STREAM_CONTINUATIONS, _NON_RETRYABLE_PROVIDER_LIMIT_MARKERS, _PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE, _PARTIAL_STREAM_STUB_ID, _RETRYABLE_ERROR_MARKERS, _SUBAGENT_TOOL_NAMES, _prompt_rejects_subagent_tools, _prompt_requests_subagent_tools
 from travis.coding_agent.prompt_templates import expand_prompt_template
-from travis.coding_agent.input_expansion import InputExpansionError, expand_user_input
+from travis.coding_agent.input_expansion import expand_user_input
 from travis.coding_agent.skills import format_skill_invocation
 from travis.coding_agent.subagent_trace import _message_content_text
 
@@ -392,10 +395,6 @@ class SessionTurnController:
         referenced_images = [
             block for block in expanded.content if isinstance(block, ImageContent)
         ]
-        if referenced_images and "image" not in self.model.input:
-            raise InputExpansionError(
-                f"Model {self.model.provider}/{self.model.id} does not support image input"
-            )
         merged_images = [*(images or []), *referenced_images]
         return expanded.text, merged_images or None
 
@@ -600,10 +599,36 @@ class SessionTurnController:
         self._flush_pending_bash_messages()
         self._partial_stream_continue_retries = 0
         active_stream_fn = stream_fn or self._stream_fn
+        selected_binding: ScopedModel | None = None
+
+        def require_vision_binding() -> ScopedModel:
+            resolution = self.resolve_model_role("vision")
+            if not resolution.available or resolution.scoped_model is None:
+                raise RuntimeError(
+                    "No image-capable model is available for the vision role."
+                )
+            return resolution.scoped_model
+
+        def routed_stream(model, context, options=None):
+            nonlocal selected_binding
+            if selected_binding is None and pending_context_has_images(context):
+                selected_binding = require_vision_binding()
+            if selected_binding is None:
+                return active_stream_fn(model, context, options)
+
+            routed_options = model_role_stream_options(selected_binding, options)
+            return active_stream_fn(
+                selected_binding.model,
+                context,
+                routed_options,
+            )
+
         try:
-            new_messages = list(self.agent.prompt(prompt_message, stream_fn=active_stream_fn))
+            if model_input_has_images(prompt_message):
+                selected_binding = require_vision_binding()
+            new_messages = list(self.agent.prompt(prompt_message, stream_fn=routed_stream))
             while self._prepare_retry(_last_assistant_message(new_messages)):
-                retry_messages = list(self.agent.continue_(stream_fn=active_stream_fn))
+                retry_messages = list(self.agent.continue_(stream_fn=routed_stream))
                 new_messages.extend(retry_messages)
                 latest = _last_assistant_message(retry_messages)
                 if latest and latest.stop_reason != "error":

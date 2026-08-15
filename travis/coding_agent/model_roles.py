@@ -4,11 +4,18 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Literal, cast
 
 from travis.ai.model_resolver import ScopedModel, parse_model_pattern
-from travis.ai.types import Model
+from travis.ai.types import (
+    AssistantMessage,
+    Context,
+    ImageContent,
+    Model,
+    SimpleStreamOptions,
+    UserMessage,
+)
 
 ModelRole = Literal["primary", "compression", "worker", "reviewer", "vision"]
 MODEL_ROLES: tuple[ModelRole, ...] = (
@@ -291,6 +298,41 @@ class ModelRoleRouter:
 
 def _copy_scope(scope: ScopedModel) -> ScopedModel:
     return ScopedModel(model=scope.model, thinking_level=scope.thinking_level)
+
+
+def pending_context_has_images(context: Context) -> bool:
+    for message in reversed(context.messages):
+        if isinstance(message, AssistantMessage):
+            break
+        if isinstance(message, UserMessage) and isinstance(message.content, list):
+            if any(isinstance(block, ImageContent) for block in message.content):
+                return True
+    return False
+
+
+def model_input_has_images(prompt_message: object) -> bool:
+    messages = prompt_message if isinstance(prompt_message, list) else [prompt_message]
+    return any(
+        isinstance(message, UserMessage)
+        and isinstance(message.content, list)
+        and any(isinstance(block, ImageContent) for block in message.content)
+        for message in messages
+    )
+
+
+def model_role_stream_options(
+    binding: ScopedModel,
+    options: SimpleStreamOptions | None,
+) -> SimpleStreamOptions:
+    active_options = options or SimpleStreamOptions()
+    thinking_level = binding.thinking_level
+    return replace(
+        active_options,
+        max_tokens=binding.model.max_tokens or active_options.max_tokens,
+        reasoning=(None if thinking_level == "off" else thinking_level)
+        if thinking_level is not None
+        else active_options.reasoning,
+    )
 
 
 def _model_ref(model: Model) -> str:
