@@ -44,7 +44,7 @@ from travis.coding_agent.compaction_coordinator import (
     CompactionTransactionCoordinator,
 )
 from travis.coding_agent.capabilities import WorkspaceCapability
-from travis.coding_agent.config import get_packaged_context_paths
+from travis.coding_agent.config import get_agent_dir, get_packaged_context_paths
 from travis.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
 from travis.coding_agent.execution_backend import select_execution_backend
 from travis.coding_agent.mailbox import CodingTurnMailbox, MailboxKind
@@ -286,7 +286,7 @@ class _SessionRuntime(
 
         self._artifacts = create_session_artifact_registry(
             session_path=session_path,
-            agent_dir=str(Path(agent_dir or Path.home() / ".travis234" / "agent").expanduser().resolve()),
+            agent_dir=str(Path(agent_dir or get_agent_dir()).expanduser().resolve()),
             settings_manager=self.settings_manager,
         )
         self._session_start_event = session_start_event or {"type": "session_start", "reason": "startup"}

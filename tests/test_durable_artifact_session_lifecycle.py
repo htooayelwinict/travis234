@@ -5,6 +5,7 @@ from pathlib import Path
 from tests._support_coding_agent import *  # noqa: F403
 from travis.coding_agent.artifact_manifest import ArtifactManifest
 from travis.coding_agent.session_catalog import SessionCatalog
+from travis.coding_agent.config import ENV_AGENT_DIR
 
 
 def _session(tmp_path: Path, session_path: Path | None) -> AgentSession:
@@ -125,3 +126,27 @@ def test_session_catalog_ignores_artifact_sidecar_jsonl(tmp_path: Path) -> None:
         assert catalog.diagnostics == ()
     finally:
         catalog.close()
+
+
+def test_direct_session_uses_canonical_configured_agent_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configured = tmp_path / "configured-agent"
+    monkeypatch.setenv("HOME", str(tmp_path / "fake-home"))
+    monkeypatch.setenv(ENV_AGENT_DIR, str(configured))
+    source = tmp_path / "output.log"
+    source.write_text("configured state", encoding="utf-8")
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        tools=[],
+        session_path=str(tmp_path / "configured.jsonl"),
+    )
+    try:
+        session._artifacts.promote(source, "command-output", retained=True)
+    finally:
+        session.dispose()
+
+    assert any((configured / "artifacts/objects").rglob("*"))
+    assert not (tmp_path / "fake-home/.travis234/agent/artifacts").exists()
