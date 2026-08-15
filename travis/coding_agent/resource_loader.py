@@ -3,15 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-import hashlib
-import inspect
-from contextlib import nullcontext
 import json
-import sys
-from types import ModuleType
 from pathlib import Path
 
-from travis.agent.async_utils import resolve, run_sync
+from travis.agent.async_utils import run_sync
 from travis.coding_agent.config import get_agent_dir, get_packaged_skills_path
 from travis.coding_agent.event_bus import EventBusController, create_event_bus
 from travis.coding_agent.extensions import ExtensionRunner
@@ -28,6 +23,12 @@ from travis.coding_agent.project_trust import (
     ProjectTrustContext,
     ProjectTrustStore,
     resolve_project_trust,
+)
+from travis.coding_agent.resource_extensions import (
+    ExtensionLoadRequest,
+    ExtensionRuntimeLease,
+    create_empty_extension_runtime,
+    load_extension_runtime,
 )
 from travis.coding_agent.settings_manager import SettingsManager
 from travis.coding_agent.resource_discovery import collect_resource_files
@@ -191,11 +192,11 @@ class DefaultResourceLoader:
         )
         self.package_diagnostics: list[object] = []
 
-        self.extensions_result: dict[str, object] = {
-            "extensions": [],
-            "errors": [],
-            "runtime": ExtensionRunner(cwd=self.cwd, event_bus=self.event_bus),
-        }
+        self._extension_lease = create_empty_extension_runtime(
+            self.cwd, self.event_bus
+        )
+        self._pretrust_extension_lease: ExtensionRuntimeLease | None = None
+        self.extensions_result = self._extension_lease.result
         self.skills_result: dict[str, list[object]] = {"skills": [], "diagnostics": []}
         self.prompts_result: dict[str, list[object]] = {"prompts": [], "diagnostics": []}
         self.themes_result: dict[str, list[object]] = {"themes": [], "diagnostics": []}
@@ -206,7 +207,6 @@ class DefaultResourceLoader:
         self.last_prompt_paths: list[str] = []
         self.last_theme_paths: list[str] = []
         self._extension_reload_generation = 0
-        self._extension_module_names: list[str] = []
 
     def get_extensions(self) -> dict[str, object]:
         return self.extensions_result
@@ -262,6 +262,7 @@ class DefaultResourceLoader:
         self.package_diagnostics = list(resolved_paths.diagnostics)
         extension_paths = [resource.path for resource in resolved_paths.extensions if resource.enabled]
         self._update_extensions(extension_paths, apply_override=False)
+        self._pretrust_extension_lease = self._extension_lease
         return self.extensions_result
 
     def reload(self, options: Mapping[str, object] | None = None) -> None:
@@ -362,6 +363,7 @@ class DefaultResourceLoader:
         }
         extension_paths = [resource.path for resource in resolved_paths.extensions if resource.enabled]
         self._update_extensions(extension_paths, preloaded_result=pretrust_extensions)
+        self._pretrust_extension_lease = None
         packaged_skill_paths = [] if self.no_skills else [get_packaged_skills_path()]
         self.last_skill_paths = _merge_paths(
             self.cwd,
@@ -408,120 +410,32 @@ class DefaultResourceLoader:
         preloaded_result: dict[str, object] | None = None,
         apply_override: bool = True,
     ) -> None:
-        if preloaded_result is None:
-            previous_runtime = self.extensions_result.get("runtime")
-            if isinstance(previous_runtime, ExtensionRunner):
-                previous_runtime.dispose()
-            runtime = ExtensionRunner(cwd=self.cwd, event_bus=self.event_bus)
-            errors: list[dict[str, str]] = []
-            loaded_by_path: dict[str, dict[str, str]] = {}
-            inline_loaded: list[dict[str, str]] = []
-            failed_paths: set[str] = set()
-            for module_name in self._extension_module_names:
-                sys.modules.pop(module_name, None)
-            self._extension_module_names = []
-            self._extension_reload_generation += 1
-        else:
-            runtime = preloaded_result.get("runtime")
-            if not isinstance(runtime, ExtensionRunner):
-                raise RuntimeError("Pre-trust extension load did not produce an extension runtime")
-            errors = [dict(error) for error in preloaded_result.get("errors", []) if isinstance(error, dict)]
-            preloaded = [entry for entry in preloaded_result.get("extensions", []) if isinstance(entry, dict)]
-            loaded_by_path = {
-                str(entry["path"]): dict(entry)
-                for entry in preloaded
-                if isinstance(entry.get("path"), str) and not str(entry["path"]).startswith("<inline:")
-            }
-            inline_loaded = [
-                dict(entry)
-                for entry in preloaded
-                if isinstance(entry.get("path"), str) and str(entry["path"]).startswith("<inline:")
-            ]
-            failed_paths = {
-                str(error["path"])
-                for error in errors
-                if isinstance(error.get("path"), str)
-            }
+        preloaded: ExtensionRuntimeLease | None = None
+        if preloaded_result is not None:
+            preloaded = self._pretrust_extension_lease
+            if preloaded is None or preloaded.result is not preloaded_result:
+                raise ValueError(
+                    "pretrust_extensions did not originate from this loader"
+                )
 
-        extension_files: list[Path] = []
-        if not self.no_extensions:
-            seen: set[str] = set()
-            for path_text in [*(discovered_paths or []), *self.additional_extension_paths]:
-                path = _resolve_path(path_text, self.cwd)
-                if not path.exists():
-                    if str(path) not in failed_paths:
-                        errors.append({"path": str(path), "error": f"Extension path does not exist: {path}"})
-                        failed_paths.add(str(path))
-                    continue
-                for extension_file in collect_resource_files(path, "extensions"):
-                    resolved = str(extension_file.resolve())
-                    if resolved not in seen:
-                        seen.add(resolved)
-                        extension_files.append(extension_file.resolve())
-
-        for extension_file in extension_files:
-            extension_path = str(extension_file)
-            if extension_path in loaded_by_path or extension_path in failed_paths:
-                continue
-            try:
-                module = self._load_extension_module(extension_file)
-                factory = getattr(module, "extension", None)
-                if not callable(factory):
-                    raise RuntimeError("Extension module must export callable extension(travis)")
-                self._run_extension_factory(runtime, factory, extension_path)
-                loaded_by_path[extension_path] = {"path": extension_path}
-            except Exception as error:  # noqa: BLE001 - extension load failures are diagnostics.
-                errors.append({"path": extension_path, "error": str(error)})
-                failed_paths.add(extension_path)
-
-        if preloaded_result is None:
-            factories = [] if self.no_extensions else self.extension_factories
-            for index, factory in enumerate(factories, start=1):
-                extension_path = f"<inline:{index}>"
-                try:
-                    self._run_extension_factory(runtime, factory, extension_path)
-                    inline_loaded.append({"path": extension_path})
-                except Exception as error:  # noqa: BLE001 - extension failures become diagnostics.
-                    errors.append({"path": extension_path, "error": str(error)})
-        loaded = [loaded_by_path[str(path)] for path in extension_files if str(path) in loaded_by_path]
-        loaded.extend(inline_loaded)
-        result = {"extensions": loaded, "errors": errors, "runtime": runtime}
-        self.extensions_result = (
-            self.extensions_override(result)
-            if apply_override and self.extensions_override
-            else result
+        self._extension_reload_generation += 1
+        request = ExtensionLoadRequest(
+            cwd=self.cwd,
+            event_bus=self.event_bus,
+            discovered_paths=tuple(discovered_paths or ()),
+            additional_paths=tuple(self.additional_extension_paths),
+            factories=tuple(self.extension_factories),
+            no_extensions=self.no_extensions,
+            generation=self._extension_reload_generation,
+            apply_override=apply_override,
+            override=self.extensions_override,
         )
-
-    def _load_extension_module(self, path: Path) -> ModuleType:
-        digest = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:16]
-        module_name = f"_travis234_extension_{digest}_{self._extension_reload_generation}"
-        module = ModuleType(module_name)
-        module.__file__ = str(path)
-        module.__package__ = module_name
-        module.__path__ = [str(path.parent)]  # type: ignore[attr-defined]
-        sys.modules[module_name] = module
-        self._extension_module_names.append(module_name)
-        source = path.read_text(encoding="utf-8")
-        exec(compile(source, str(path), "exec"), module.__dict__)  # noqa: S102 - trusted extension execution.
-        return module
-
-    @staticmethod
-    def _run_extension_factory(
-        runtime: ExtensionRunner,
-        factory: Callable[[ExtensionRunner], object],
-        extension_path: str,
-    ) -> None:
-        pending_start = len(runtime.pending_provider_registrations)
-        owner_scope = getattr(runtime.events, "owner", None)
-        scope = owner_scope(runtime._event_bus_owner) if callable(owner_scope) else nullcontext()  # noqa: SLF001
-        api = runtime.create_extension_api(extension_path)
-        with scope, runtime.source_scope(extension_path):
-            result = factory(api)  # type: ignore[arg-type]
-            if inspect.isawaitable(result):
-                run_sync(resolve(result))
-        for pending_index in range(pending_start, len(runtime._pending_provider_registrations)):  # noqa: SLF001
-            name, config, _old_path = runtime._pending_provider_registrations[pending_index]  # noqa: SLF001
-            runtime._pending_provider_registrations[pending_index] = (name, config, extension_path)  # noqa: SLF001
+        candidate = load_extension_runtime(request, preloaded=preloaded)
+        replaced = self._extension_lease
+        self._extension_lease = candidate
+        self.extensions_result = candidate.result
+        if replaced is not candidate:
+            replaced.release()
 
     def _update_skills_from_paths(self, skill_paths: list[str], metadata_by_path: dict[str, dict[str, object]] | None = None) -> None:
         if self.no_skills and not skill_paths:

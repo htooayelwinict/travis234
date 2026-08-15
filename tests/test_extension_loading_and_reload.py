@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from tests._support_coding_agent import AgentSession, faux_model
 from travis.coding_agent.event_bus import create_event_bus
 from travis.coding_agent.agent_session_services import create_agent_session_services
@@ -175,6 +177,26 @@ def test_resource_loader_reuses_shared_event_bus_for_extension_runtime(tmp_path:
     loader.reload({"projectTrustContext": ProjectTrustContext(False, None)})
 
     assert loader.get_extensions()["runtime"].events is event_bus
+
+
+def test_invalid_extension_override_keeps_active_runtime(tmp_path: Path) -> None:
+    extension = tmp_path / "extensions" / "active.py"
+    _write_extension(extension, "active")
+    loader = DefaultResourceLoader(
+        cwd=str(tmp_path),
+        agent_dir=str(tmp_path / "agent"),
+        additional_extension_paths=[str(extension)],
+        project_trusted=False,
+    )
+    loader.reload()
+    active = loader.get_extensions()["runtime"]
+    loader.extensions_override = lambda _result: {}
+
+    with pytest.raises(TypeError, match="extension override"):
+        loader.reload()
+
+    assert loader.get_extensions()["runtime"] is active
+    assert active.get_registered_command("extension-version") is not None
 
 
 def test_extension_context_reads_project_trust_dynamically(tmp_path: Path) -> None:
