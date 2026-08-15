@@ -4,6 +4,7 @@ from pathlib import Path
 
 from tests._support_coding_agent import *  # noqa: F403
 from travis.coding_agent.artifact_manifest import ArtifactManifest
+from travis.coding_agent.session_catalog import SessionCatalog
 
 
 def _session(tmp_path: Path, session_path: Path | None) -> AgentSession:
@@ -109,3 +110,18 @@ def test_historical_session_without_manifest_resumes_unchanged(tmp_path: Path) -
         assert resumed._artifacts.is_durable is True
     finally:
         resumed.dispose()
+
+
+def test_session_catalog_ignores_artifact_sidecar_jsonl(tmp_path: Path) -> None:
+    sessions = tmp_path / "sessions"
+    session_path = sessions / "session.jsonl"
+    SessionStore(str(session_path), cwd=str(tmp_path))
+    ArtifactManifest.for_session(session_path).path.write_text("", encoding="utf-8")
+    catalog = SessionCatalog(str(tmp_path / "agent"), session_dir=str(sessions))
+    try:
+        listed = catalog.list_all()
+
+        assert [item.path for item in listed] == [session_path]
+        assert catalog.diagnostics == ()
+    finally:
+        catalog.close()

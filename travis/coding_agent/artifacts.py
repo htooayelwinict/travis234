@@ -118,7 +118,7 @@ class ArtifactRegistry:
         retained: bool = False,
     ) -> ArtifactRef:
         if self._durable_store is None or self._manifest is None:
-            return self.register(path, kind)
+            return self.register(path, kind, remove_on_close=False)
         resolved = path.expanduser().resolve(strict=False)
         with self._lock:
             if self._closed:

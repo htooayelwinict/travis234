@@ -212,6 +212,11 @@ class _SessionRuntime(
         self._turn_index = 0
         self._model_change_listener = model_change_listener
         self._subagent_observer_errors: list[str] = []
+        self._subagent_artifact_promotions: dict[
+            str,
+            tuple[tuple[str, ...], list[str], list[str], dict[str, str]],
+        ] = {}
+        self._public_subagent_results: dict[str, SubagentResult] = {}
         self._model_subagents_spawned_this_turn = 0
         self._model_subagent_spawn_signatures_this_turn: set[tuple[str, str, str]] = set()
         self._subagent_log_dir = Path(self._default_subagent_log_dir(session_path=session_path, session_id=session_id))

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import subprocess
 import time
 from dataclasses import dataclass
@@ -33,6 +34,7 @@ from travis.compaction.compressor import LEGACY_SUMMARY_PREFIX, SUMMARY_END_MARK
 from travis.compaction.timing import CompactionManager
 from travis.coding_agent.branch_summarization import generate_branch_summary
 from travis.coding_agent.artifacts import ArtifactRegistry
+from travis.coding_agent.artifact_store import ArtifactPromotionError
 from travis.coding_agent.compaction_adapter import (
     SessionCompactionAdapter,
     compaction_summary_with_details,
@@ -156,11 +158,13 @@ class SessionSubagentController:
         signal: AbortSignal | None = None,
     ) -> SubagentResult:
         task_id, task = self._spawn_subagent_task(role, goal, options)
-        return self.subagents.wait(
-            task_id,
-            timeout=task.timeout_seconds + 1,
-            signal=signal,
-            cancel_reason="Cancelled by parent abort.",
+        return self._prepare_public_subagent_result(
+            self.subagents.wait(
+                task_id,
+                timeout=task.timeout_seconds + 1,
+                signal=signal,
+                cancel_reason="Cancelled by parent abort.",
+            )
         )
 
     def _create_subagent_tool_definitions(self) -> list[ToolDefinition]:
@@ -298,6 +302,7 @@ class SessionSubagentController:
                 signal=signal,
                 cancel_reason="Cancelled by parent abort.",
             )
+            result = self._prepare_public_subagent_result(result)
             return self._subagent_tool_result(self._format_subagent_result(result), _public_subagent_result_details(result))
         details = {
             "taskId": task_id,
@@ -320,6 +325,7 @@ class SessionSubagentController:
             signal=signal,
             cancel_reason="Cancelled by parent abort.",
         )
+        result = self._prepare_public_subagent_result(result)
         return self._subagent_tool_result(self._format_subagent_result(result), _public_subagent_result_details(result))
 
     def _execute_list_subagents_tool(self, _tool_call_id, args, signal=None, on_update=None, ctx=None) -> AgentToolResult:
@@ -336,6 +342,7 @@ class SessionSubagentController:
         result = self.subagents.get_result(task_id)
         if result is None:
             return self._subagent_tool_result(f"No result is available for subagent {task_id}.", {"taskId": task_id})
+        result = self._prepare_public_subagent_result(result)
         return self._subagent_tool_result(self._format_subagent_result(result), _public_subagent_result_details(result))
 
     def _execute_expand_subagent_result_tool(self, _tool_call_id, args, signal=None, on_update=None, ctx=None) -> AgentToolResult:
@@ -347,6 +354,7 @@ class SessionSubagentController:
                 f"No result is available for subagent {task_id}.",
                 {"taskId": task_id, "status": "unavailable"},
             )
+        result = self._prepare_public_subagent_result(result)
         section = _subagent_expansion_section_arg(args)
         budget = _subagent_expansion_budget_arg(args)
         offset = _subagent_expansion_offset_arg(args)
@@ -360,6 +368,7 @@ class SessionSubagentController:
             raise ValueError("reason must be a string")
         existing = self.subagents.get_result(task_id)
         if existing is not None:
+            existing = self._prepare_public_subagent_result(existing)
             details = {
                 "taskId": existing.task_id,
                 "role": existing.role,
@@ -376,7 +385,84 @@ class SessionSubagentController:
                 details,
             )
         result = self.subagents.cancel(task_id, reason or "Cancelled by user.")
+        result = self._prepare_public_subagent_result(result)
         return self._subagent_tool_result(self._format_subagent_result(result), _public_subagent_result_details(result))
+
+    def _prepare_public_subagent_result(self, result: SubagentResult) -> SubagentResult:
+        cached = self._public_subagent_results.get(result.task_id)
+        if cached is not None:
+            return cached
+        artifact_ids, errors, replacements = self._promote_declared_subagent_artifacts(
+            result.task_id,
+            result.artifacts,
+        )
+        summary = self._replace_declared_artifact_paths(result.summary, replacements)
+        final_response = self._replace_declared_artifact_paths(result.final_response, replacements)
+        prepared = replace(
+            result,
+            summary=summary,
+            final_response=final_response,
+            artifacts=artifact_ids,
+            errors=[*result.errors, *errors],
+        )
+        self._public_subagent_results[result.task_id] = prepared
+        return prepared
+
+    def _promote_declared_subagent_artifacts(
+        self,
+        task_id: str,
+        declared: list[str],
+    ) -> tuple[list[str], list[str], dict[str, str]]:
+        raw_paths = tuple(declared)
+        cached = self._subagent_artifact_promotions.get(task_id)
+        if cached is not None and cached[0] == raw_paths:
+            return list(cached[1]), list(cached[2]), dict(cached[3])
+
+        artifact_ids: list[str] = []
+        errors: list[str] = []
+        replacements: dict[str, str] = {}
+        for raw_path in raw_paths:
+            if self._artifacts.is_readable_reference(raw_path):
+                artifact_ids.append(raw_path)
+                continue
+            try:
+                requested = Path(raw_path).expanduser()
+                lexical = requested if requested.is_absolute() else self._workspace.root / requested
+                metadata = lexical.lstat()
+                resolved = lexical.resolve(strict=True)
+                if not resolved.is_relative_to(self._workspace.root):
+                    raise ArtifactPromotionError("outside_workspace", "Declared artifact is outside workspace")
+                if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+                    raise ArtifactPromotionError("invalid_source", "Declared artifact must be a regular file")
+                ref = self._artifacts.promote(
+                    resolved,
+                    "subagent-output",
+                    retained=True,
+                )
+                artifact_ids.append(ref.id)
+                replacements[raw_path] = ref.id
+                replacements[str(resolved)] = ref.id
+            except ArtifactPromotionError as error:
+                errors.append(f"artifact_unavailable:{error.code}")
+                replacements[raw_path] = "[artifact unavailable]"
+            except (OSError, RuntimeError, ValueError):
+                errors.append("artifact_unavailable:invalid_source")
+                replacements[raw_path] = "[artifact unavailable]"
+
+        self._subagent_artifact_promotions[task_id] = (
+            raw_paths,
+            list(artifact_ids),
+            list(errors),
+            dict(replacements),
+        )
+        return artifact_ids, errors, replacements
+
+    @staticmethod
+    def _replace_declared_artifact_paths(text: str, replacements: dict[str, str]) -> str:
+        rendered = text
+        for raw_path in sorted(replacements, key=len, reverse=True):
+            rendered = rendered.replace(raw_path, replacements[raw_path])
+        return rendered
 
     def _subagent_tool_result(self, content: str, details: dict[str, object]) -> AgentToolResult:
         return AgentToolResult(content=[TextContent(text=content)], details=details)

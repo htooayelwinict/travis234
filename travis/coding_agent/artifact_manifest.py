@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import tempfile
 import threading
 import uuid
@@ -199,6 +200,41 @@ class ArtifactManifest:
         return quarantine
 
 
+def read_artifact_manifest_strict(path: str | Path) -> tuple[ArtifactManifestEntry, ...]:
+    manifest_path = Path(path)
+    metadata = manifest_path.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        raise ArtifactManifestCorruptionError(manifest_path, 0, "manifest is not a regular file")
+    raw = manifest_path.read_bytes()
+    entries: list[ArtifactManifestEntry] = []
+    by_id: dict[str, ArtifactManifestEntry] = {}
+    for index, raw_line in enumerate(raw.splitlines(keepends=True)):
+        if not raw_line.strip():
+            continue
+        if not raw_line.endswith((b"\n", b"\r")):
+            raise ArtifactManifestCorruptionError(
+                manifest_path,
+                index + 1,
+                "record is not newline terminated",
+            )
+        try:
+            value = json.loads(raw_line.decode("utf-8"))
+            entry = _entry_from_record(value)
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as error:
+            raise ArtifactManifestCorruptionError(manifest_path, index + 1, str(error)) from error
+        existing = by_id.get(entry.id)
+        if existing is not None and existing != entry:
+            raise ArtifactManifestCorruptionError(
+                manifest_path,
+                index + 1,
+                "duplicate artifact ID has different metadata",
+            )
+        if existing is None:
+            entries.append(entry)
+            by_id[entry.id] = entry
+    return tuple(entries)
+
+
 def _validate_entry(entry: ArtifactManifestEntry) -> None:
     if _ARTIFACT_ID_PATTERN.fullmatch(entry.id) is None:
         raise ValueError("artifact ID must use artifact- plus 32 lowercase hex characters")
@@ -315,4 +351,5 @@ __all__ = [
     "ArtifactManifestCorruptionError",
     "ArtifactManifestEntry",
     "ArtifactProducer",
+    "read_artifact_manifest_strict",
 ]

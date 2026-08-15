@@ -86,6 +86,50 @@ def test_supervisor_stop_event_includes_result_observability_fields(tmp_path):
     assert stop_event["ended_at_ms"] == 160
 
 
+def test_declared_subagent_artifact_is_promoted_and_host_path_is_hidden(tmp_path):
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    report = reports / "review.md"
+    report.write_text("review evidence", encoding="utf-8")
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        tools=[],
+        session_path=str(tmp_path / "session.jsonl"),
+        agent_dir=str(tmp_path / "agent"),
+    )
+
+    def backend(task):
+        return SubagentResult(
+            task_id=task.id,
+            backend=task.backend,
+            role=task.role,
+            status="completed",
+            summary=f"Created {report}",
+            final_response=f"Evidence is at {report}",
+            artifacts=["reports/review.md"],
+        )
+
+    session.subagents.register_backend(CallableSubagentBackend("artifact-backend", backend))
+    try:
+        result = session._spawn_and_wait_for_subagent(
+            "reviewer",
+            "create a report",
+            {"backend": "artifact-backend"},
+        )
+
+        assert len(result.artifacts) == 1
+        assert result.artifacts[0].startswith("artifact-")
+        assert str(tmp_path) not in result.summary
+        assert str(tmp_path) not in result.final_response
+        assert str(tmp_path) not in json.dumps(result.as_dict())
+        resolved = session._artifacts.resolve_read(result.artifacts[0])
+        assert resolved is not None
+        assert resolved.read_text(encoding="utf-8") == "review evidence"
+    finally:
+        session.shutdown()
+
+
 def test_supervisor_rejects_mismatched_backend_result_identity(tmp_path):
     def backend(task):
         return SubagentResult(

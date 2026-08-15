@@ -112,6 +112,13 @@ def _truncate_preview(text: str, *, limit: int = 240) -> str:
     return text[: max(0, limit - 3)].rstrip() + "..."
 
 
+def _replace_artifact_paths(text: str, replacements: dict[str, str]) -> str:
+    rendered = text
+    for raw_path in sorted(replacements, key=len, reverse=True):
+        rendered = rendered.replace(raw_path, replacements[raw_path])
+    return rendered
+
+
 def _subagent_tool_event(task: SubagentTask, event_type: str, entry: Mapping[str, object]) -> dict[str, object]:
     payload = {
         "type": event_type,
@@ -651,6 +658,20 @@ class SessionSubagentTraceController:
         return "\n".join(lines).strip()
 
     def _handle_subagent_event(self, event: dict[str, object]) -> None:
+        if event.get("type") == "subagent_stop":
+            task_id = str(event.get("child_subagent_id") or "")
+            declared = event.get("artifacts")
+            if task_id and isinstance(declared, list) and all(isinstance(item, str) for item in declared):
+                artifact_ids, errors, replacements = self._promote_declared_subagent_artifacts(
+                    task_id,
+                    list(declared),
+                )
+                event = dict(event)
+                event["artifacts"] = artifact_ids
+                event["errors"] = [*list(event.get("errors") or []), *errors]
+                summary = event.get("child_summary")
+                if isinstance(summary, str):
+                    event["child_summary"] = _replace_artifact_paths(summary, replacements)
         self._emit(event)
         try:
             self._extension_runner.emit(event)
