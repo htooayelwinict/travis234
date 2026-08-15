@@ -12,6 +12,12 @@ from typing import Callable, Literal, TypedDict
 
 from travis.coding_agent.artifact_store import ArtifactLimits
 from travis.coding_agent.model_roles import CONFIGURABLE_MODEL_ROLES
+from travis.coding_agent.policy.types import (
+    TOOL_EFFECT_ORDER,
+    TOOL_POLICY_MODE_ORDER,
+    ToolEffect,
+    ToolPolicyMode,
+)
 
 CONFIG_DIR_NAME = ".travis234"
 DEFAULT_HTTP_IDLE_TIMEOUT_MS = 300_000
@@ -665,6 +671,82 @@ class SettingsManager:
                 else global_value
             )
         return ArtifactLimits(**effective)
+
+    def get_tool_policy_settings(self) -> dict[str, object]:
+        global_mode, global_effects = self._tool_policy_scope(
+            self.global_settings,
+            scope="global",
+            default_mode="audit",
+            default_effects=frozenset({"read"}),
+        )
+        effective_mode = global_mode
+        effective_effects = global_effects
+        if self.project_trusted and "toolPolicy" in self.project_settings:
+            project_mode, project_effects = self._tool_policy_scope(
+                self.project_settings,
+                scope="project",
+                default_mode=global_mode,
+                default_effects=global_effects,
+            )
+            effective_mode = max(
+                (global_mode, project_mode),
+                key=TOOL_POLICY_MODE_ORDER.index,
+            )
+            effective_effects = global_effects.intersection(project_effects)
+        return {
+            "mode": effective_mode,
+            "autoAllowEffects": [
+                effect for effect in TOOL_EFFECT_ORDER if effect in effective_effects
+            ],
+        }
+
+    def _tool_policy_scope(
+        self,
+        settings: dict,
+        *,
+        scope: SettingsScope,
+        default_mode: ToolPolicyMode,
+        default_effects: frozenset[ToolEffect],
+    ) -> tuple[ToolPolicyMode, frozenset[ToolEffect]]:
+        if "toolPolicy" not in settings:
+            return default_mode, default_effects
+        raw = settings.get("toolPolicy")
+        if not isinstance(raw, dict):
+            self._record_policy_error_once(scope, "toolPolicy must be an object")
+            return default_mode, frozenset()
+
+        errors: list[str] = []
+        mode = raw.get("mode", default_mode)
+        if mode not in TOOL_POLICY_MODE_ORDER:
+            errors.append("mode must be disabled, audit, or enforce")
+            mode = default_mode
+
+        raw_effects = raw.get("autoAllowEffects", list(default_effects))
+        effects: frozenset[ToolEffect]
+        if not isinstance(raw_effects, list):
+            errors.append("autoAllowEffects must be a list")
+            effects = frozenset()
+        elif any(
+            not isinstance(effect, str) or effect not in TOOL_EFFECT_ORDER
+            for effect in raw_effects
+        ):
+            errors.append("autoAllowEffects contains an unknown effect")
+            effects = frozenset()
+        else:
+            effects = frozenset(raw_effects)
+
+        if errors:
+            self._record_policy_error_once(scope, "; ".join(errors))
+        return mode, effects  # type: ignore[return-value]
+
+    def _record_policy_error_once(self, scope: SettingsScope, detail: str) -> None:
+        message = f"Invalid toolPolicy setting: {detail}"
+        if any(
+            error["scope"] == scope and str(error["error"]) == message
+            for error in self.errors
+        ):
+            return
+        self._record_error(scope, RuntimeError(message))
 
     def set_warnings(self, warnings: dict) -> None:
         self._set_global("warnings", copy.deepcopy(warnings))
