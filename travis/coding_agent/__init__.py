@@ -29,6 +29,13 @@ from travis.coding_agent.agent_session_services import (
     create_agent_session_from_services,
     create_agent_session_services,
 )
+from travis.coding_agent.artifact_store import (
+    ArtifactLimits,
+    ArtifactMaintenanceLock,
+    ArtifactPromotionError,
+    DurableArtifactStore,
+    StoredArtifactObject,
+)
 from travis.coding_agent.auth_storage import AuthStorage, FileAuthStorageBackend, InMemoryAuthStorageBackend
 from travis.coding_agent.subagents import (
     CallableSubagentBackend,
@@ -183,6 +190,9 @@ __all__ = [
     "APP_NAME",
     "APP_TITLE",
     "AuthStorage",
+    "ArtifactLimits",
+    "ArtifactMaintenanceLock",
+    "ArtifactPromotionError",
     "BashOperations",
     "BashExecutorOptions",
     "BashResult",
@@ -198,6 +208,7 @@ __all__ = [
     "DEFAULT_MAX_LINES",
     "DefaultPackageManager",
     "DefaultResourceLoader",
+    "DurableArtifactStore",
     "ENV_AGENT_DIR",
     "ENV_SESSION_DIR",
     "EventBus",
@@ -218,6 +229,7 @@ __all__ = [
     "CallableSubagentBackend",
     "CodexExecBackend",
     "SubagentResult",
+    "StoredArtifactObject",
     "SubagentStatus",
     "SubagentSupervisor",
     "SubagentTask",
