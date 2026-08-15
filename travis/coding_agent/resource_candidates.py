@@ -8,21 +8,26 @@ from types import MappingProxyType
 from typing import Literal
 from travis.coding_agent.capabilities import (
     CapabilityDiagnostic,
-    CapabilityKind,
     CapabilityLoadContext,
     CapabilityProviderResult,
     CapabilityRecord,
-    CapabilitySource,
 )
 from travis.coding_agent.config import get_packaged_skills_path
 from travis.coding_agent.agent_roles import load_agent_roles
-from travis.coding_agent.package_manager import PackageDiagnostic, ResolvedPaths
+from travis.coding_agent.package_manager import ResolvedPaths
 from travis.coding_agent.prompt_templates import load_prompt_templates
 from travis.coding_agent.resource_discovery import collect_resource_files
 from travis.coding_agent.resource_extensions import (
     ExtensionLoadRequest,
     ExtensionRuntimeLease,
     load_extension_runtime,
+)
+from travis.coding_agent.resource_capability_projection import (
+    content_capability_diagnostics,
+    content_capability_records,
+    extension_capability_diagnostics,
+    extension_capability_records,
+    package_capability_diagnostics,
 )
 from travis.coding_agent.skills import ResourceDiagnostic, load_skills
 from travis.coding_agent.source_info import SourceInfo, create_synthetic_source_info
@@ -192,13 +197,13 @@ class ResourceLoadRequest:
                 extensions.release()
                 raise
         records = (
-            *_extension_capability_records(extensions),
+            *extension_capability_records(extensions),
             *content_capability_records(content),
         )
         diagnostics = (
-            *_extension_capability_diagnostics(extensions),
+            *extension_capability_diagnostics(extensions),
             *content_capability_diagnostics(content),
-            *_package_capability_diagnostics(content.package_diagnostics),
+            *package_capability_diagnostics(content.package_diagnostics),
         )
         return ResourceLoadCandidate(
             extensions=extensions,
@@ -388,61 +393,6 @@ def extend_resource_content(
         agent_role_diagnostics=current.agent_role_diagnostics,
         role_paths=current.role_paths,
     )
-def content_capability_records(
-    content: ResourceContentCandidate,
-) -> tuple[CapabilityRecord, ...]:
-    records: list[CapabilityRecord] = []
-    for kind, result_name, result in (
-        (CapabilityKind.SKILL, "skills", content.skills_result),
-        (CapabilityKind.PROMPT_TEMPLATE, "prompts", content.prompts_result),
-        (CapabilityKind.THEME, "themes", content.themes_result),
-    ):
-        for value in result[result_name]:
-            source_info = value.source_info
-            records.append(
-                CapabilityRecord(
-                    kind,
-                    value.name,
-                    value,
-                    _capability_source(source_info),
-                )
-            )
-    for context_file in content.agents_files:
-        path = str(Path(context_file["path"]).expanduser().resolve())
-        records.append(
-            CapabilityRecord(
-                CapabilityKind.CONTEXT_FILE,
-                path,
-                context_file,
-                CapabilitySource("default-resources", path),
-            )
-        )
-    records.extend(content.agent_role_records)
-    return tuple(records)
-def content_capability_diagnostics(
-    content: ResourceContentCandidate,
-) -> tuple[CapabilityDiagnostic, ...]:
-    diagnostics: list[CapabilityDiagnostic] = []
-    for result in (
-        content.skills_result,
-        content.prompts_result,
-        content.themes_result,
-    ):
-        for item in result["diagnostics"]:
-            if not isinstance(item, ResourceDiagnostic):
-                continue
-            collision = item.type == "collision"
-            diagnostics.append(
-                CapabilityDiagnostic(
-                    "collision" if collision else "warning",
-                    "default-resources",
-                    "resource_collision" if collision else "resource_warning",
-                    item.message,
-                    CapabilitySource("default-resources", item.path),
-                )
-            )
-    diagnostics.extend(content.agent_role_diagnostics)
-    return tuple(diagnostics)
 def load_context_file_from_dir(directory: str | Path) -> dict[str, str] | None:
     base = Path(directory).expanduser().resolve()
     for name in _CONTEXT_FILE_NAMES:
@@ -672,14 +622,6 @@ def _source_info_for_path(
     return create_synthetic_source_info(
         str(path), source="local", base_dir=str(path.parent)
     )
-def _capability_source(source_info: SourceInfo) -> CapabilitySource:
-    return CapabilitySource(
-        "default-resources",
-        source_info.path,
-        source_info.source,
-        source_info.scope,
-        source_info.origin,
-    )
 def _build_extension_candidate(
     request: ExtensionLoadRequest,
     preloaded: ExtensionRuntimeLease | None,
@@ -692,68 +634,6 @@ def _build_extension_candidate(
     except Exception:
         retained.release()
         raise
-def _extension_capability_records(
-    extensions: ExtensionRuntimeLease,
-) -> tuple[CapabilityRecord, ...]:
-    records: list[CapabilityRecord] = []
-    entries = extensions.result.get("extensions")
-    if not isinstance(entries, list):
-        return ()
-    for entry in entries:
-        if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
-            continue
-        path = str(entry["path"])
-        records.append(
-            CapabilityRecord(
-                CapabilityKind.EXTENSION,
-                path,
-                entry,
-                CapabilitySource("default-resources", path),
-            )
-        )
-    return tuple(records)
-def _extension_capability_diagnostics(
-    extensions: ExtensionRuntimeLease,
-) -> tuple[CapabilityDiagnostic, ...]:
-    diagnostics: list[CapabilityDiagnostic] = []
-    entries = extensions.result.get("errors")
-    if not isinstance(entries, list):
-        return ()
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        path = entry.get("path")
-        message = entry.get("error")
-        diagnostics.append(
-            CapabilityDiagnostic(
-                "error",
-                "default-resources",
-                "extension_load_failed",
-                str(message or "extension load failed"),
-                CapabilitySource(
-                    "default-resources",
-                    str(path) if isinstance(path, str) else None,
-                ),
-            )
-        )
-    return tuple(diagnostics)
-def _package_capability_diagnostics(
-    entries: tuple[object, ...],
-) -> tuple[CapabilityDiagnostic, ...]:
-    diagnostics: list[CapabilityDiagnostic] = []
-    for entry in entries:
-        if not isinstance(entry, PackageDiagnostic):
-            continue
-        diagnostics.append(
-            CapabilityDiagnostic(
-                "error" if entry.type == "error" else "warning",
-                "default-resources",
-                "package_resolution_warning",
-                entry.message,
-                CapabilitySource("default-resources", entry.source),
-            )
-        )
-    return tuple(diagnostics)
 __all__ = [
     "DefaultResourceCapabilityProvider",
     "ResourceContentCandidate",

@@ -46,6 +46,7 @@ OWNER_GLOBS = (
     "travis/coding_agent/resource_candidates.py",
     "travis/coding_agent/resource_extensions.py",
     "travis/coding_agent/resource_loader.py",
+    "travis/coding_agent/resource_capability_projection.py",
     "travis/coding_agent/artifact_store.py",
     "travis/coding_agent/artifact_manifest.py",
     "travis/coding_agent/artifacts.py",
@@ -59,6 +60,19 @@ FORBIDDEN_OWNER_IMPORTS = {
     "travis.tui.component",
     "travis.ai.providers.travis_env",
 }
+COORDINATION_OWNERS = (
+    "travis/coding_agent/agent_roles.py",
+    "travis/coding_agent/subagent_roles.py",
+    "travis/coding_agent/subagent_result_types.py",
+    "travis/coding_agent/subagent_results.py",
+    "travis/coding_agent/subagent_supervision.py",
+)
+FORBIDDEN_COORDINATION_PREFIXES = (
+    "travis.agent",
+    "travis.app",
+    "travis.tui",
+    "travis.coding_agent.agent_session",
+)
 
 
 def _defined_method_count(tree: ast.Module, class_name: str | None) -> int:
@@ -121,5 +135,23 @@ def test_language_services_do_not_import_tui_or_facades() -> None:
                 imported is not None and imported.startswith("travis.tui")
             ):
                 failures.append(f"{path.relative_to(ROOT)}:{node.lineno}: imports {imported}")
+
+    assert failures == []
+
+
+def test_coordination_owners_do_not_import_tui_app_session_or_agent_loop() -> None:
+    failures: list[str] = []
+    for relative in COORDINATION_OWNERS:
+        path = ROOT / relative
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=relative)
+        for node in ast.walk(tree):
+            imported: tuple[str, ...] = ()
+            if isinstance(node, ast.ImportFrom) and node.module is not None:
+                imported = (node.module,)
+            elif isinstance(node, ast.Import):
+                imported = tuple(alias.name for alias in node.names)
+            for module in imported:
+                if module.startswith(FORBIDDEN_COORDINATION_PREFIXES):
+                    failures.append(f"{relative}:{node.lineno}: imports {module}")
 
     assert failures == []
