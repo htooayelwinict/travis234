@@ -75,6 +75,10 @@ def _is_processes_command(prompt: str) -> bool:
     return prompt == "/processes"
 
 
+def _is_lsp_status_command(prompt: str) -> bool:
+    return prompt == "/lsp status"
+
+
 def _is_reload_command(prompt: str) -> bool:
     return prompt == "/reload"
 
@@ -292,6 +296,9 @@ class InteractiveCommandDispatcher:
                 if _is_processes_command(prompt):
                     self._run_processes_command()
                     continue
+                if _is_lsp_status_command(prompt):
+                    self._run_lsp_status_command()
+                    continue
                 if _is_reload_command(prompt):
                     self._run_reload_command()
                     continue
@@ -406,6 +413,7 @@ __all__ = (
     '_is_manual_compression_command',
     '_is_openrouter_model',
     '_is_processes_command',
+    '_is_lsp_status_command',
     '_is_reload_command',
     '_is_trust_command',
     '_is_prompt_level_skill_trigger',

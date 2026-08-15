@@ -15,6 +15,7 @@ if _SOURCE_ROOT not in sys.path:
     sys.path.insert(0, _SOURCE_ROOT)
 
 from travis.coding_agent.policy import TOOL_EFFECT_ORDER
+from travis.coding_agent.language_services.types import LanguageServiceLimits
 from travis.coding_agent.settings_manager import SettingsManager
 from travis.coding_agent.tools import create_all_tool_definitions
 
@@ -153,6 +154,22 @@ def verify_parity_contracts(*, root: str | Path) -> dict[str, object]:
             for effect in TOOL_EFFECT_ORDER
         },
         "undeclaredToolCount": sum(not definition.effects for definition in definitions),
+    }
+    language_configs = SettingsManager.in_memory().get_language_server_configs()
+    language_limits = LanguageServiceLimits()
+    report["languageServices"] = {
+        "configured": len(language_configs),
+        "active": 0,
+        "limits": {
+            "maxActiveServers": language_limits.max_active_servers,
+            "startupSeconds": language_limits.startup_timeout_seconds,
+            "requestSeconds": language_limits.request_timeout_seconds,
+            "maxRestarts": language_limits.max_restarts,
+            "restartWindowSeconds": language_limits.restart_window_seconds,
+            "maxFrameBytes": language_limits.max_frame_bytes,
+            "maxInlineOutputBytes": language_limits.max_inline_output_bytes,
+            "maxApplyOriginalBytes": language_limits.max_apply_original_bytes,
+        },
     }
     return report
 

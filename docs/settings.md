@@ -48,6 +48,60 @@ and the effective auto-allow list is the intersection. An untrusted project's
 policy is ignored. Project trust decides whether project settings and code are
 loaded; it never counts as a tool-effect grant.
 
+## Language servers
+
+Language-server support is optional. Travis234 never downloads a server: the
+user owns the executable and configures its command and argument vector in
+`languageServers`. A trusted project may replace the global list; an untrusted
+project list is ignored. Invalid entries are skipped independently, so one bad
+project entry does not hide a valid global configuration.
+
+```json
+{
+  "languageServers": [
+    {
+      "name": "python",
+      "command": "pyright-langserver",
+      "args": ["--stdio"],
+      "languages": ["python"],
+      "extensions": {".py": "python", ".pyi": "python"},
+      "rootMarkers": ["pyproject.toml", ".git"],
+      "initializationOptions": {}
+    }
+  ]
+}
+```
+
+`command` must be one bare executable name or an absolute path. Shell command
+strings are rejected; arguments belong in `args`. Extensions are normalized to
+lowercase suffixes and must map to a declared language. Root markers must be
+relative and stay inside the workspace. Initialization options must be JSON and
+keys resembling credentials, tokens, passwords, cookies, or authentication are
+rejected. Put server credentials in the server's own protected environment,
+not in tracked settings.
+
+The single optional `lsp` tool exposes status, diagnostics, symbols, hover,
+definition, references, code actions, reviewed rename/code-action previews,
+and apply. Tool coordinates are zero-based lines and UTF-16 columns. The tool
+conservatively declares all four effects—read, write, execute, and network—so
+enforced policy approves or denies the whole boundary before a server is
+started or a preview token is consumed.
+
+At most three servers are active. Startup is bounded to 10 seconds, requests to
+20 seconds, raw protocol frames to 2 MiB, and restarts to two in 60 seconds.
+Normalized inline output is capped at 256 KiB and larger completed output is
+promoted to an artifact. Action and preview tokens last ten minutes, with at
+most 32 of each per session. One reviewed apply may stage at most 64 MiB of
+original bytes.
+
+Preview never changes files. Apply rechecks workspace containment, regular-file
+status, permissions, and exact content hashes under the same mutation queues as
+other coding tools. If a later write fails, Travis234 restores earlier writes
+in reverse order and reports `changed`, `restored`, and `unresolved` paths; an
+external process can still interfere, so unresolved paths require manual
+inspection. Run `/lsp status` to inspect configured, active, and
+restart-exhausted state without starting a server or displaying its command.
+
 ## Durable artifact limits
 
 The optional `artifacts` object accepts positive integers only:

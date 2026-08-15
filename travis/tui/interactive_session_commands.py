@@ -433,6 +433,7 @@ class InteractiveSessionCommands:
             "/motion [on|off] - Inspect or change restrained TUI motion for this process.",
             "/trust - View or change the project trust decision.",
             "/processes - Inspect and control managed processes.",
+            "/lsp status - Show configured and active language services.",
             "/reload - Reload extensions, skills, prompts, and themes.",
             "/install <source> [--local] - Install a resource package.",
             "/remove <source> [--local] - Remove a resource package.",

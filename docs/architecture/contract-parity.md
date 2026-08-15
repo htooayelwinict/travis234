@@ -1,6 +1,9 @@
 # Contract-parity architecture
 
-Travis234 adopts reference-runtime capabilities through narrow owners rather than widening the behavior-sensitive agent loop. Durable artifacts and uniform coding-tool policy are completed contract-parity slices.
+Travis234 adopts reference-runtime capabilities through narrow owners rather
+than widening the behavior-sensitive agent loop. Durable artifacts, uniform
+coding-tool policy, and bounded language services are completed contract-parity
+slices.
 
 ## Durable artifact ownership
 
@@ -39,6 +42,35 @@ context contains only server and normalized operation. Internal subagents share
 the app-owned prompt queue for presentation but receive their own policy engine
 and session grant set.
 
+## Bounded language-service ownership
+
+- `language_services/config.py` owns strict, trust-aware server definitions and
+  deterministic workspace-root selection. Travis234 does not install or own the
+  configured executable.
+- `jsonrpc.py` owns framed stdio JSON-RPC, minimal child environments, request
+  cancellation, stderr bounds, and graceful process shutdown.
+- `documents.py` owns workspace containment, versions, hashes, and conversion
+  between the tool's zero-based UTF-16 coordinates and a server's negotiated
+  position encoding.
+- `manager.py` owns lazy server startup, document synchronization, three-server
+  LRU capacity, restart budgets, configuration generations, and session close.
+- `workspace_edit.py` owns expiring action/preview tokens, normalized edit
+  previews, content-hash preconditions, deterministic cross-file locking, and
+  explicit best-effort restoration reports.
+- `tool.py` is the one model-facing `lsp` boundary. Reads are bounded and can
+  promote completed oversized output to artifacts. Mutation requires preview
+  followed by the exact token; apply never requests the server.
+- `interactive_lsp.py` reads manager status only. It cannot start a server and
+  never exposes executable paths or initialization options.
+
+Language services are session-owned. Session replacement and app shutdown
+close them before the app tears down its managed-process owner. Server retries
+are recovery within a live session, not durable scheduling, and exhausted
+restart budgets remain visible until that manager is replaced or reloaded.
+Preview/apply reduces accidental edits but cannot provide filesystem-wide
+isolation from unrelated host processes; failed restoration is therefore
+reported honestly instead of claimed as guaranteed rollback.
+
 ## Invariants
 
 - No object digest or host object path is model-visible.
@@ -52,3 +84,5 @@ and session grant set.
   and centrally sanitized bounded context; raw arguments and credentials are
   excluded.
 - Generic agent-loop ordering, iteration budgets, cancellation, steering, follow-ups, and bounded parallel execution are unchanged.
+- Language-server commands and initialization options never enter status,
+  acceptance output, model-facing schemas, or session history.

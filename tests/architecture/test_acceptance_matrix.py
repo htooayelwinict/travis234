@@ -59,6 +59,18 @@ def test_parity_report_has_only_resolved_evidence() -> None:
         for count in report["toolPolicy"]["effectCounts"].values()
     )
     assert report["toolPolicy"]["undeclaredToolCount"] == 0
+    assert set(report["languageServices"]) == {"configured", "active", "limits"}
+    assert report["languageServices"]["active"] == 0
+    assert set(report["languageServices"]["limits"]) == {
+        "maxActiveServers",
+        "startupSeconds",
+        "requestSeconds",
+        "maxRestarts",
+        "restartWindowSeconds",
+        "maxFrameBytes",
+        "maxInlineOutputBytes",
+        "maxApplyOriginalBytes",
+    }
 
 
 def test_current_commit_verifier_rejects_stale_evidence(

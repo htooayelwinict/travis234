@@ -57,6 +57,7 @@ from travis.tui.theme_controller import ThemeController
 
 from travis.tui.interactive_command_dispatcher import *  # noqa: F403
 from travis.tui.interactive_extensions import *  # noqa: F403
+from travis.tui.interactive_lsp import *  # noqa: F403
 from travis.tui.interactive_model_auth import *  # noqa: F403
 from travis.tui.interactive_motion import *  # noqa: F403
 from travis.tui.interactive_params import *  # noqa: F403
@@ -102,6 +103,7 @@ def _terminal_color_mode() -> str:
 class _InteractiveRuntime(
     InteractiveCommandDispatcher,
     InteractiveExtensions,
+    InteractiveLsp,
     InteractiveModelAuth,
     InteractiveMotion,
     InteractiveParams,

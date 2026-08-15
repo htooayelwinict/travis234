@@ -575,12 +575,12 @@ class CodingApp:
         except BaseException as error:  # noqa: BLE001 - complete all lifecycle cleanup before re-raising.
             first_error = error
         try:
-            self.process_service.close()
+            self.session_runtime.dispose()
         except BaseException as error:  # noqa: BLE001
             if first_error is None:
                 first_error = error
         try:
-            self.session_runtime.dispose()
+            self.process_service.close()
         except BaseException as error:  # noqa: BLE001
             if first_error is None:
                 first_error = error

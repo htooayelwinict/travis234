@@ -324,6 +324,24 @@ only after project trust and can tighten, never loosen, the global policy. See
 [settings](docs/settings.md#tool-effect-policy) for the complete merge and
 failure semantics.
 
+### Bounded language services
+
+Travis234 can use user-installed language servers through one optional `lsp`
+tool. Configure an explicit executable plus argument vector in
+`languageServers`; project definitions load only after project trust. Servers
+start lazily on the first semantic action, remain capped at three active
+instances, and close with their owning session. `/lsp status` is a local-only
+snapshot and does not start a server.
+
+Semantic reads include diagnostics, symbols, hover, definition, references,
+and code actions. Rename and editable code actions use a two-step workflow:
+first generate a bounded diff preview without changing files, then apply its
+short-lived token after tool-policy approval. Apply rechecks exact file hashes
+and reports any paths it changed, restored, or could not restore. Large
+completed results use the existing durable artifact boundary. See
+[settings](docs/settings.md#language-servers) for configuration, fixed limits,
+coordinate rules, policy effects, and troubleshooting constraints.
+
 ### Python SDK surfaces
 
 `AgentHarness` is the async composition root for applications that need the same session, resource, tool, and compaction owners without a TUI. `Models.async_api()` provides event-loop-safe model discovery, `stream_proxy()` provides ordered transform/callback forwarding, and the optional image registry remains separate from chat-model selection.

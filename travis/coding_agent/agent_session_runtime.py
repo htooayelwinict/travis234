@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from travis.agent.async_utils import run_sync
 from travis.coding_agent.agent_session import AgentSession
 from travis.coding_agent.extensions import emit_session_shutdown_event
 from travis.coding_agent.object_utils import call_optional as _call_optional
@@ -314,7 +315,7 @@ class AgentSessionRuntime:
         )
         if self._before_session_invalidate:
             self._before_session_invalidate()
-        self._session.dispose()
+        _dispose_session(self._session)
 
     def _emit_before_switch(self, reason: str, target_session_file: str | None = None) -> dict[str, bool]:
         runner = self._session.extension_runner
@@ -353,7 +354,7 @@ class AgentSessionRuntime:
         )
         if self._before_session_invalidate:
             self._before_session_invalidate()
-        self._session.dispose()
+        _dispose_session(self._session)
 
     def _apply(self, raw_result: CreateAgentSessionRuntimeResult | AgentSession | dict[str, Any]) -> None:
         result = _coerce_result(raw_result)
@@ -374,7 +375,7 @@ class AgentSessionRuntime:
         try:
             self._teardown_current(reason, target_session_file)
         except BaseException:
-            result.session.dispose()
+            _dispose_session(result.session)
             raise
         self._apply(result)
         self._finish_session_replacement(with_session)
@@ -420,6 +421,24 @@ def _coerce_result(raw_result: CreateAgentSessionRuntimeResult | AgentSession | 
             model_fallback_message=raw_result.get("model_fallback_message") or raw_result.get("modelFallbackMessage"),
         )
     raise TypeError(f"Unsupported runtime result: {type(raw_result).__name__}")
+
+
+def _dispose_session(session: AgentSession) -> None:
+    first_error: BaseException | None = None
+    language_services = getattr(session, "_language_services", None)
+    close_language_services = getattr(language_services, "close", None)
+    if callable(close_language_services):
+        try:
+            run_sync(close_language_services())
+        except BaseException as error:  # noqa: BLE001 - session cleanup must continue.
+            first_error = error
+    try:
+        session.dispose()
+    except BaseException as error:  # noqa: BLE001 - surface the earliest owner failure.
+        if first_error is None:
+            first_error = error
+    if first_error is not None:
+        raise first_error
 
 
 def create_agent_session_runtime(
