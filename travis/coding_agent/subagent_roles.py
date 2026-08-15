@@ -12,6 +12,14 @@ from travis.coding_agent.policy import TOOL_EFFECT_ORDER, ToolEffect
 
 _CONTEXT_MAX_CHARS = 32_768
 _CONTEXT_FILE_MAX_CHARS = 16_384
+_SUBAGENT_CONTROL_TOOLS = {
+    "spawn_subagent",
+    "wait_subagent",
+    "list_subagents",
+    "get_subagent_result",
+    "expand_subagent_result",
+    "cancel_subagent",
+}
 
 
 class _ToolDefinition(Protocol):
@@ -65,14 +73,9 @@ def resolve_agent_role(
             continue
         if not set(tool.effects).issubset(effect_set):
             continue
-        if not definition.can_spawn and name in {
-            "spawn_subagent",
-            "wait_subagent",
-            "list_subagents",
-            "get_subagent_result",
-            "expand_subagent_result",
-            "cancel_subagent",
-        }:
+        # The runtime's authoritative supervisor ceiling is currently one child
+        # level. Role declarations may narrow that contract, never widen it.
+        if name in _SUBAGENT_CONTROL_TOOLS:
             continue
         final_tools.append(name)
     timeout = min(

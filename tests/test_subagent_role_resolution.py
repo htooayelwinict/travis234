@@ -80,6 +80,28 @@ def test_missing_lists_inherit_but_explicit_empty_lists_grant_none(tmp_path: Pat
     assert empty.timeout_seconds == 1800
 
 
+def test_role_cannot_defeat_current_depth_one_supervisor_ceiling(tmp_path: Path) -> None:
+    definitions = {
+        "read": _tool("read", "read"),
+        "spawn_subagent": _tool("spawn_subagent", "execute"),
+        "wait_subagent": _tool("wait_subagent", "read"),
+    }
+
+    resolved = resolve_agent_role(
+        _role(
+            tmp_path,
+            canSpawn=True,
+            maxDepth=1,
+            allowedTools=["read", "spawn_subagent", "wait_subagent"],
+        ),
+        parent_tools=("read", "spawn_subagent", "wait_subagent"),
+        definitions_by_name=definitions,
+        requested_timeout=None,
+    )
+
+    assert resolved.allowed_tools == ("read",)
+
+
 def test_role_context_is_bounded_and_resolved_beneath_role_source(tmp_path: Path) -> None:
     (tmp_path / "review.md").write_text("review context", encoding="utf-8")
     (tmp_path / "SKILL.md").write_text("skill context", encoding="utf-8")
