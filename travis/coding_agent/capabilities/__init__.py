@@ -9,6 +9,12 @@ from .types import (
     CapabilityRecord,
     CapabilitySource,
 )
+from .registry import (
+    CapabilityRegistry,
+    CapabilityReloadError,
+    CapabilityResolution,
+    CapabilitySnapshot,
+)
 from .workspace import AccessMode, CapabilityViolation, WorkspaceCapability
 
 __all__ = [
@@ -18,8 +24,12 @@ __all__ = [
     "CapabilityLoadContext",
     "CapabilityProvider",
     "CapabilityProviderResult",
+    "CapabilityRegistry",
+    "CapabilityReloadError",
+    "CapabilityResolution",
     "CapabilityRecord",
     "CapabilitySource",
+    "CapabilitySnapshot",
     "CapabilityViolation",
     "WorkspaceCapability",
 ]
