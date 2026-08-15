@@ -239,6 +239,31 @@ Generation changes are local to the active JSONL session, survive resume and bra
 
 Writes are rejected while an Agent turn is active, but read-only `/params` queries remain available. Valid settings that the selected provider cannot use remain saved and are reported as `dropped`; switching to a compatible model can activate them later. Context and output safety remain authoritative, so request-time limits may lower `max_tokens`. These session overrides affect the interactive main Agent turn, including its tool continuations and retries; compaction and auxiliary summarizer calls keep their existing parameter policy.
 
+### Model roles
+
+Travis234 can route focused work to already configured models without changing the active
+conversation model. Add any of the four optional roles to
+`~/.travis234/agent/settings.json`:
+
+```json
+{
+  "modelRoles": {
+    "compression": "provider/summary-model:low",
+    "worker": "provider/fast-model:medium",
+    "reviewer": "provider/review-model:high",
+    "vision": "provider/image-model"
+  }
+}
+```
+
+A trusted project can override the same keys in `.travis234/settings.json`. The suffix
+after the final colon is an optional thinking level. Missing roles fall back to the active
+primary model; `reviewer` first falls back to `worker`. The `vision` route must select a
+model that advertises image input and fails before a provider call when none is available.
+`/model` changes the implicit primary fallback only and never rewrites an explicit role.
+External Codex subagents keep their own explicit model contract and do not consume these
+Travis model-role settings.
+
 ### Terminal history and selection
 
 Travis234 renders complete logical output into the terminal's normal buffer. The terminal—not the agent—owns wheel and touchpad scrolling, drag selection, clickable links, and terminal or tmux history. PageUp, PageDown, Home, and End are passed to the focused TUI component; Shift+PageUp and Shift+PageDown follow the terminal's own configuration.

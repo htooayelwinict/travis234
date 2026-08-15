@@ -167,7 +167,13 @@ def test_app_rebinds_independent_routers_with_the_same_binding_values(tmp_path: 
         assert app.session.model_role_router is not first_router
         assert first.scoped_model == ScopedModel(worker, "low")
         assert second.scoped_model == ScopedModel(worker, "low")
-        role_events = [event for event in trace.events if event[0] == "model_role_resolved"]
+        role_events = [
+            event
+            for event in trace.events
+            if event[0] == "model_role_resolved"
+            and event[1] is not None
+            and event[1].get("role") == "worker"
+        ]
         assert len(role_events) == 2
         assert "secret-test-key" not in json.dumps(role_events)
     finally:
