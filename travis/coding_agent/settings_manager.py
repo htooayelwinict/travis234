@@ -10,11 +10,20 @@ import uuid
 from pathlib import Path
 from typing import Callable, Literal, TypedDict
 
+from travis.coding_agent.artifact_store import ArtifactLimits
 from travis.coding_agent.model_roles import CONFIGURABLE_MODEL_ROLES
 
 CONFIG_DIR_NAME = ".travis234"
 DEFAULT_HTTP_IDLE_TIMEOUT_MS = 300_000
 SettingsScope = Literal["global", "project"]
+_ARTIFACT_LIMIT_FIELDS = {
+    "maxObjectBytes": "max_object_bytes",
+    "maxSessionLogicalBytes": "max_session_logical_bytes",
+    "maxSessionObjects": "max_session_objects",
+    "maxPhysicalBytes": "max_physical_bytes",
+    "maxPhysicalObjects": "max_physical_objects",
+    "minFreeBytes": "min_free_bytes",
+}
 
 
 class SettingsError(TypedDict):
@@ -638,6 +647,25 @@ class SettingsManager:
     def get_warnings(self) -> dict:
         return copy.deepcopy(self.settings.get("warnings", {}))
 
+    def get_artifact_limits(self) -> ArtifactLimits:
+        defaults = ArtifactLimits()
+        global_values = _artifact_limit_scope(self.global_settings)
+        project_values = (
+            _artifact_limit_scope(self.project_settings)
+            if self.project_trusted
+            else {}
+        )
+        effective: dict[str, int] = {}
+        for setting_name, field_name in _ARTIFACT_LIMIT_FIELDS.items():
+            global_value = global_values.get(setting_name, getattr(defaults, field_name))
+            project_value = project_values.get(setting_name)
+            effective[field_name] = (
+                min(global_value, project_value)
+                if project_value is not None
+                else global_value
+            )
+        return ArtifactLimits(**effective)
+
     def set_warnings(self, warnings: dict) -> None:
         self._set_global("warnings", copy.deepcopy(warnings))
 
@@ -715,3 +743,16 @@ class SettingsManager:
 
     def _record_error(self, scope: SettingsScope, error: Exception) -> None:
         self.errors.append({"scope": scope, "error": error})
+
+
+def _artifact_limit_scope(settings: dict) -> dict[str, int]:
+    raw = settings.get("artifacts")
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        name: value
+        for name in _ARTIFACT_LIMIT_FIELDS
+        if isinstance((value := raw.get(name)), int)
+        and not isinstance(value, bool)
+        and value > 0
+    }

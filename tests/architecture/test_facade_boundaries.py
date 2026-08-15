@@ -44,6 +44,11 @@ OWNER_GLOBS = (
     "travis/coding_agent/resource_candidates.py",
     "travis/coding_agent/resource_extensions.py",
     "travis/coding_agent/resource_loader.py",
+    "travis/coding_agent/artifact_store.py",
+    "travis/coding_agent/artifact_manifest.py",
+    "travis/coding_agent/artifacts.py",
+    "travis/coding_agent/resource_refs.py",
+    "travis/coding_agent/artifact_gc.py",
 )
 FORBIDDEN_OWNER_IMPORTS = {
     "travis.coding_agent.agent_session",

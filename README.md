@@ -551,6 +551,12 @@ The model-facing process tool uses one `action` field for polling, waiting, ackn
 
 Use `tmux` for durable development servers, watchers, REPLs, test loops, and long builds. Travis234 namespaces tmux sessions to the current workspace, preserves fast-exiting command output, and requires explicit cleanup with the returned logical or resolved session name.
 
+### Durable output artifacts
+
+When a persistent session truncates command or managed-process output, Travis234 promotes the completed sanitized output into session-authorized content-addressed storage. The model sees only an opaque `artifact-...` ID and reads it in bounded byte pages. The same ID remains readable after `/resume`, and `/fork` or `/clone` copies only references reachable from the selected branch without copying the underlying object. Small output stays in ordinary session history and creates no artifact object; in-memory sessions remain entirely ephemeral.
+
+Artifact objects live below `~/.travis234/agent/artifacts/objects/`, while authorization lives in `<session>.artifacts.jsonl`. Default per-object, per-session, installation, and free-space limits are documented in [settings](docs/settings.md). A storage or quota failure does not change a successful tool effect: the bounded result carries `artifactUnavailable` and no host path. Collection is explicit, conservative, and fails closed if any manifest cannot be validated.
+
 Subagent management tools stay outside ordinary model turns. Explicit delegation, multiple-agent, parallel-worker, split-work, or independent-review requests expose them temporarily; an explicit request not to use subagents always wins. Coding children receive bounded workspace-write access to `read`, `grep`, `find`, `ls`, `bash`, `process`, `tmux`, `edit`, and `write`. Concurrent children must own disjoint files, verify requested changes, and report changed-file evidence. Child-owned managed processes are cleaned up when the child ends, while parent processes and durable tmux sessions remain independently owned.
 
 ## Production sandbox

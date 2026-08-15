@@ -583,15 +583,10 @@ class SessionExtensionController:
 
     def _extension_get_subagent_result(self, task_id: str) -> dict | None:
         result = self.subagents.get_result(task_id)
-        return (
-            _public_subagent_result_details(self._prepare_public_subagent_result(result))
-            if result is not None
-            else None
-        )
+        return _public_subagent_result_details(self._prepare_public_subagent_result(result)) if result is not None else None
 
     def _extension_cancel_subagent(self, task_id: str, reason: str | None = None) -> dict:
-        result = self.subagents.cancel(task_id, reason or "Cancelled by user.")
-        return _public_subagent_result_details(self._prepare_public_subagent_result(result))
+        return _public_subagent_result_details(self._prepare_public_subagent_result(self.subagents.cancel(task_id, reason or "Cancelled by user.")))
 
     def _extension_abort(self) -> None:
         if self._extension_abort_handler is not None:
