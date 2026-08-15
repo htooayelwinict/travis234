@@ -64,6 +64,7 @@ from travis.tui.interactive_params import *  # noqa: F403
 from travis.tui.interactive_process_commands import *  # noqa: F403
 from travis.tui.interactive_session_commands import *  # noqa: F403
 from travis.tui.interactive_shutdown import *  # noqa: F403
+from travis.tui.interactive_subagents import *  # noqa: F403
 from travis.tui.interactive_turn_controller import *  # noqa: F403
 from travis.tui.interactive_view import *  # noqa: F403
 from travis.tui.footer_data import *  # noqa: F403
@@ -108,6 +109,7 @@ class _InteractiveRuntime(
     InteractiveMotion,
     InteractiveParams,
     InteractiveProcessCommands,
+    InteractiveSubagents,
     InteractiveSessionCommands,
     InteractiveShutdown,
     InteractiveTurnController,
@@ -209,6 +211,7 @@ class _InteractiveRuntime(
         self._unsubscribe_tui_scroll_change: Callable[[], None] | None = None
         self._unsubscribe_app_session_rebound: Callable[[], None] | None = None
         self._unsubscribe_process_events: Callable[[], None] | None = None
+        self._unsubscribe_subagents: Callable[[], None] | None = None
         self._extension_host: ExtensionHostAdapter | None = None
         self._notified_processes: set[str] = set()
         self._process_cursors: dict[str, int] = {}
@@ -275,6 +278,8 @@ class _InteractiveRuntime(
         self.tool_approval_broker = InteractiveToolApprovalBroker()
         self.tool_approval_broker.bind(self)
         self.tool_approval_broker.bind_session(app.session)
+        self._subagent_snapshot = app.session.subagents.snapshot()
+        self._bind_subagent_supervisor()
         if callable(getattr(app, "subscribe_session_rebound", None)):
             self._extension_host = ExtensionHostAdapter(
                 app,

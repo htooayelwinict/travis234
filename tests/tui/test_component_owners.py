@@ -7,6 +7,8 @@ def test_component_owners_expose_focused_types() -> None:
     from travis.tui.components.editor import Input
     from travis.tui.components.footer import FooterComponent
     from travis.tui.components.pickers import SelectList, SettingsList
+    from travis.tui.components.subagent_roster import SubagentRoster
+    from travis.coding_agent.subagent_supervision import SupervisorSnapshot
 
     assert Text("hello").render(80) == ["hello"]
     assert isinstance(Box(Text("body")), Component)
@@ -15,3 +17,4 @@ def test_component_owners_expose_focused_types() -> None:
     assert issubclass(SelectList, Component)
     assert issubclass(SettingsList, Component)
     assert FooterComponent(cwd="/tmp", model="m").render(80)
+    assert SubagentRoster(SupervisorSnapshot(0, 0, 3, ())).render(80)

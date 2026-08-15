@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import hashlib
+import re
 from dataclasses import dataclass, replace
 from typing import Callable, Literal, Protocol
 
@@ -252,6 +253,7 @@ class SupervisorSnapshotStore:
 
 def _preview(value: str) -> str:
     text = " ".join(str(value).split())
+    text = re.sub(r"(?<![A-Za-z0-9_.-])(?:/[A-Za-z0-9_.-]+){2,}", "[path]", text)
     return text if len(text) <= 160 else text[:157].rstrip() + "..."
 
 

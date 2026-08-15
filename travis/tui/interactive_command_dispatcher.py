@@ -79,6 +79,19 @@ def _is_lsp_status_command(prompt: str) -> bool:
     return prompt == "/lsp status"
 
 
+def _parse_agents_command(prompt: str) -> tuple[str, tuple[str, ...]] | None:
+    if prompt == "/agents" or prompt == "/agents status":
+        return "status", ()
+    if not prompt.startswith("/agents "):
+        return None
+    parts = prompt.split(maxsplit=3)
+    if len(parts) == 3 and parts[1] in {"inspect", "cancel"}:
+        return parts[1], (parts[2],)
+    if len(parts) == 4 and parts[1] == "steer" and parts[3].strip():
+        return "steer", (parts[2], parts[3].strip())
+    return "invalid", ()
+
+
 def _is_reload_command(prompt: str) -> bool:
     return prompt == "/reload"
 
@@ -299,6 +312,12 @@ class InteractiveCommandDispatcher:
                 if _is_lsp_status_command(prompt):
                     self._run_lsp_status_command()
                     continue
+                agents_command = _parse_agents_command(prompt)
+                if agents_command is not None:
+                    if self._is_turn_active() and self._handle_active_turn_prompt(prompt):
+                        continue
+                    self._run_agents_command(agents_command)
+                    continue
                 if _is_reload_command(prompt):
                     self._run_reload_command()
                     continue
@@ -384,6 +403,7 @@ class InteractiveCommandDispatcher:
             if self._unsubscribe_process_events is not None:
                 self._unsubscribe_process_events()
                 self._unsubscribe_process_events = None
+            self._shutdown_subagent_ui()
             self.footer_data_provider.dispose()
             if self.app.event_trace is not None:
                 self.app.event_trace.write("shutdown", {"status": "ok"})
@@ -414,6 +434,7 @@ __all__ = (
     '_is_openrouter_model',
     '_is_processes_command',
     '_is_lsp_status_command',
+    '_parse_agents_command',
     '_is_reload_command',
     '_is_trust_command',
     '_is_prompt_level_skill_trigger',

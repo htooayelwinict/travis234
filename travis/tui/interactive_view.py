@@ -158,6 +158,7 @@ class InteractiveView:
             {"name": "export", "description": "Export the active session as HTML or JSONL"},
             {"name": "fork", "description": "Fork before a selected user message"},
             {"name": "help", "description": "Show TUI commands"},
+            {"name": "agents", "description": "Inspect and control delegated agents"},
             {"name": "import", "description": "Import a JSONL session"},
             {"name": "login", "description": "Configure provider authentication"},
             {"name": "logout", "description": "Remove provider authentication"},
