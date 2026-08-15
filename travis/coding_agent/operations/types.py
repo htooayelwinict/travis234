@@ -199,7 +199,7 @@ class OperationRegister:
         _require_code(self.key, "register key")
         _require_nonnegative_int(self.program_counter, "program counter")
         _require_timestamp(self.updated_at_ms, "updated_at_ms")
-        sanitized = _sanitize_json(self.value)
+        sanitized = _sanitize_json(self.value, key=self.key)
         try:
             encoded = json.dumps(
                 sanitized,
