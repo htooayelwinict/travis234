@@ -34,6 +34,7 @@ from travis.coding_agent.settings_manager import SettingsManager
 from travis.coding_agent.auth_storage import AuthStorage
 from travis.coding_agent.model_registry import ModelRegistry
 from travis.coding_agent.model_roles import ModelRole
+from travis.coding_agent.operations import OperationRuntime
 from travis.coding_agent.processes.completions import ProcessCompletionStore
 from travis.coding_agent.processes.local import create_local_process_transport
 from travis.coding_agent.processes.service import ProcessSessionService
@@ -214,13 +215,21 @@ class CodingApp:
         self._compression_generation_params = compression_generation_params
         self._active_compression_model: Model | None = None
         self._compression_summarizer = None
-        initial_session = self._create_session(
-            cwd=self.cwd,
-            fallback_model=model,
-            thinking_level=thinking_level,
-            session_path=session_path,
-            session_id=session_id,
+        self.operation_runtime = OperationRuntime.from_settings(
+            self._agent_dir,
+            self._settings_manager.get_operation_settings(),
         )
+        try:
+            initial_session = self._create_session(
+                cwd=self.cwd,
+                fallback_model=model,
+                thinking_level=thinking_level,
+                session_path=session_path,
+                session_id=session_id,
+            )
+        except BaseException:
+            self.operation_runtime.close()
+            raise
         self._bind_session(initial_session)
         services = {
             "cwd": self.cwd,
@@ -338,6 +347,7 @@ class CodingApp:
                 if self.event_trace is not None
                 else None
             ),
+            operation_runtime=self.operation_runtime,
         )
         if fresh_session and session._session_store is not None:
             session._session_store.append_model_change(session.model.provider, session.model.id)
@@ -576,6 +586,11 @@ class CodingApp:
             first_error = error
         try:
             self.session_runtime.dispose()
+        except BaseException as error:  # noqa: BLE001
+            if first_error is None:
+                first_error = error
+        try:
+            self.operation_runtime.close()
         except BaseException as error:  # noqa: BLE001
             if first_error is None:
                 first_error = error

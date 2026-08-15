@@ -56,6 +56,7 @@ from travis.coding_agent.message_utils import (
     user_message_text as _text_from_user_message_content,
 )
 from travis.coding_agent.object_utils import settings_value as _settings_value
+from travis.coding_agent.operations import NullOperationCoordinator
 from travis.coding_agent.process_context import ProcessContextResolver
 from travis.coding_agent.processes.local import create_local_process_transport
 from travis.coding_agent.processes.service import ProcessSessionService
@@ -175,6 +176,8 @@ class _SessionRuntime(
         tool_approval_broker: ToolApprovalBroker | None = None,
         tool_policy_event_sink: Callable[[dict[str, object]], None] | None = None,
         tool_policy_redactor: SecretRedactor | None = None,
+        operation_runtime: object | None = None,
+        owns_operation_runtime: bool = False,
     ) -> None:
         self.cwd = cwd
         self.model_registry = model_registry or ModelRegistry.create(AuthStorage.create())
@@ -304,6 +307,16 @@ class _SessionRuntime(
             )
             if session_path
             else None
+        )
+        self.operation_runtime = operation_runtime
+        self._owns_operation_runtime = bool(owns_operation_runtime)
+        self.operation_coordinator = (
+            operation_runtime.for_session(
+                self.session_id or session_id,
+                diagnostic_sink=self._emit,
+            )
+            if operation_runtime is not None
+            else NullOperationCoordinator()
         )
         from travis.coding_agent.agent_session_services import create_session_artifact_registry
 
@@ -454,6 +467,23 @@ class AgentSession(RuntimeFacade):
         runtime._session_factory = type(self)
         object.__setattr__(self, "_runtime", runtime)
 
+    def dispose(self) -> None:
+        try:
+            self._runtime.dispose()
+        finally:
+            self._close_operation_journal()
+
+    def shutdown(self, *args, **kwargs) -> None:
+        try:
+            self._runtime.shutdown(*args, **kwargs)
+        finally:
+            self._close_operation_journal()
+
+    def _close_operation_journal(self) -> None:
+        self._runtime.operation_coordinator.close()
+        if self._runtime._owns_operation_runtime:
+            self._runtime.operation_runtime.close()
+
 def create_agent_session(
     *,
     cwd: str,
@@ -476,6 +506,8 @@ def create_agent_session(
     tool_approval_broker: ToolApprovalBroker | None = None,
     tool_policy_event_sink: Callable[[dict[str, object]], None] | None = None,
     tool_policy_redactor: SecretRedactor | None = None,
+    operation_runtime: object | None = None,
+    owns_operation_runtime: bool = False,
 ) -> AgentSession:
     return AgentSession(
         cwd=cwd,
@@ -498,4 +530,6 @@ def create_agent_session(
         tool_approval_broker=tool_approval_broker,
         tool_policy_event_sink=tool_policy_event_sink,
         tool_policy_redactor=tool_policy_redactor,
+        operation_runtime=operation_runtime,
+        owns_operation_runtime=owns_operation_runtime,
     )

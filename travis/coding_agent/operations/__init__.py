@@ -23,12 +23,25 @@ from travis.coding_agent.operations.store import (
     OperationStoreError,
     OperationStoreUnavailable,
 )
+from travis.coding_agent.operations.coordinator import (
+    EffectHandle,
+    NullOperationCoordinator,
+    OperationCoordinator,
+    OperationCoordinatorOrderError,
+    OperationJournalDiagnostic,
+    OperationRuntime,
+)
 
 __all__ = [
     "EFFECT_STATES",
+    "EffectHandle",
     "OPERATION_STATES",
     "EffectRecord",
     "EffectState",
+    "NullOperationCoordinator",
+    "OperationCoordinator",
+    "OperationCoordinatorOrderError",
+    "OperationJournalDiagnostic",
     "OperationMode",
     "OperationRecord",
     "OperationRegister",
@@ -39,6 +52,7 @@ __all__ = [
     "OperationStoreConflict",
     "OperationStoreError",
     "OperationStoreUnavailable",
+    "OperationRuntime",
     "ReplayPolicy",
     "RuntimeLease",
     "UsageLedgerEntry",
