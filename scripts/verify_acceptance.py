@@ -6,8 +6,17 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import sys
 from pathlib import Path
 from typing import NamedTuple
+
+_SOURCE_ROOT = str(Path(__file__).resolve().parents[1])
+if _SOURCE_ROOT not in sys.path:
+    sys.path.insert(0, _SOURCE_ROOT)
+
+from travis.coding_agent.policy import TOOL_EFFECT_ORDER
+from travis.coding_agent.settings_manager import SettingsManager
+from travis.coding_agent.tools import create_all_tool_definitions
 
 try:
     from scripts.parity_contracts import build_parity_report
@@ -126,7 +135,8 @@ def verify_current_commit(evidence_path: str | Path, *, root: str | Path) -> dic
 
 
 def verify_parity_contracts(*, root: str | Path) -> dict[str, object]:
-    report = build_parity_report(root=Path(root).resolve())
+    repository = Path(root).resolve()
+    report = build_parity_report(root=repository)
     invalid = {
         source: values["invalid"]
         for source, values in report["summary"].items()
@@ -134,6 +144,16 @@ def verify_parity_contracts(*, root: str | Path) -> dict[str, object]:
     }
     if invalid:
         raise AcceptanceMatrixError(f"parity contract evidence is invalid: {invalid}")
+    definitions = create_all_tool_definitions(str(repository))
+    policy_settings = SettingsManager.in_memory().get_tool_policy_settings()
+    report["toolPolicy"] = {
+        "mode": policy_settings["mode"],
+        "effectCounts": {
+            effect: sum(effect in definition.effects for definition in definitions)
+            for effect in TOOL_EFFECT_ORDER
+        },
+        "undeclaredToolCount": sum(not definition.effects for definition in definitions),
+    }
     return report
 
 

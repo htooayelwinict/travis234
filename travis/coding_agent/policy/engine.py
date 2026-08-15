@@ -7,10 +7,10 @@ import json
 import math
 from collections.abc import Mapping, Sequence
 
-from travis.agent.types import AbortSignal
 from travis.coding_agent.eval_trace import SecretRedactor
 from travis.coding_agent.policy.approval import (
     ApprovalResponse,
+    ApprovalSignal,
     SessionGrantSet,
     ToolApprovalBroker,
     ToolApprovalRequest,
@@ -142,7 +142,7 @@ class ToolPolicyEngine:
         tool: ToolDefinition,
         arguments: dict[str, object],
         *,
-        signal: AbortSignal | None = None,
+        signal: ApprovalSignal | None = None,
     ) -> ToolPolicyDecision:
         decision = self.evaluate(tool, arguments)
         if decision.allow or decision.reason_code != "approval_required":

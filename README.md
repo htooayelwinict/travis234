@@ -307,6 +307,23 @@ flowchart LR
 
 The core iteration loop owns ordering and bounded execution. Provider adapters translate model protocols without owning session policy. Extensions add commands, tools, hooks, providers, and subagents through explicit session-owned registrations. Compaction and persistence remain separate context owners.
 
+### Tool effect policy
+
+Coding tools declare `read`, `write`, `execute`, and/or `network` effects. The
+default `toolPolicy` mode is `audit`, so existing behavior continues while
+Travis234 records sanitized decisions and identifies legacy extension tools
+that have not declared effects. Set `mode` to `enforce` to auto-allow the
+configured effects (read only by default) and require native-TUI approval for
+other declared tools; undeclared tools are denied. Machine modes never prompt
+and deny approval-required work without reading stdin.
+
+TUI approvals can allow one call, grant the tool's exact effect set for the
+current session, or deny it. Grants are never persisted and do not survive
+resume, fork, clone, session replacement, or restart. Project policy applies
+only after project trust and can tighten, never loosen, the global policy. See
+[settings](docs/settings.md#tool-effect-policy) for the complete merge and
+failure semantics.
+
 ### Python SDK surfaces
 
 `AgentHarness` is the async composition root for applications that need the same session, resource, tool, and compaction owners without a TUI. `Models.async_api()` provides event-loop-safe model discovery, `stream_proxy()` provides ordered transform/callback forwarding, and the optional image registry remains separate from chat-model selection.
@@ -498,7 +515,7 @@ The model sees five bounded proxy forms:
 
 Status does not connect. Listing, search, describe, and calls connect only the named server. Calls are never fanned out or automatically retried. `requestTimeoutMs` controls MCP initialization, discovery, and calls only; it does not alter provider, process, or subagent timeouts. Shared `"lifecycle": "lazy"` declarations are accepted as no-ops, while eager and keep-alive modes are rejected.
 
-Configured servers are an operator consent boundary: review third-party packages, pin versions when reproducibility matters, and give filesystem servers only the directories they need. The adapter supports stdio and Streamable HTTP. It does not currently implement legacy SSE, MCP OAuth, prompts, resources, sampling, elicitation, Apps/UI, or direct per-server provider tools.
+Configured servers are an operator consent boundary: review third-party packages, pin versions when reproducibility matters, and give filesystem servers only the directories they need. The proxy declares all four tool effects because remote method semantics are not locally provable; enforce mode may therefore request a normal tool-policy approval showing only server and operation. The adapter supports stdio and Streamable HTTP. It does not currently implement legacy SSE, MCP OAuth, prompts, resources, sampling, elicitation, Apps/UI, or direct per-server provider tools.
 
 See the [complete adapter user guide](packages/travis234-mcp-adapter/README.md) for installation management, public-server examples, security rules, output limits, TUI workflows, and troubleshooting.
 

@@ -5,9 +5,8 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Literal, Mapping, Protocol
+from typing import Callable, Literal, Mapping, Protocol
 
-from travis.agent.types import AbortSignal
 from travis.coding_agent.policy.types import ToolEffect, normalize_effects
 
 ApprovalScope = Literal["once", "session", "deny"]
@@ -41,8 +40,15 @@ class ToolApprovalBroker(Protocol):
     async def request(
         self,
         request: ToolApprovalRequest,
-        signal: AbortSignal | None,
+        signal: ApprovalSignal | None,
     ) -> ApprovalResponse: ...
+
+
+class ApprovalSignal(Protocol):
+    @property
+    def aborted(self) -> bool: ...
+
+    def add_callback(self, callback: Callable[[], None]) -> Callable[[], None]: ...
 
 
 class SessionGrantSet:
@@ -65,6 +71,7 @@ class SessionGrantSet:
 
 __all__ = [
     "ApprovalResponse",
+    "ApprovalSignal",
     "ApprovalScope",
     "SessionGrantSet",
     "ToolApprovalBroker",

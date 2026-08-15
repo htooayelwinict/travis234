@@ -54,6 +54,7 @@ from travis.tui.interactive_custom_dialog import prompt_extension_custom as _pro
 from travis.tui.interactive_extensions import _apply_hidden_thinking_label, _autocomplete_trigger_characters, _coerce_extension_component, _create_extension_widget_component, _dispose_extension_widget, _extension_dialog_aborted, _extension_dialog_label, _extension_dialog_secret, _resolve_extension_select_choice, _set_autocomplete_trigger_characters
 from travis.tui.motion import MotionState
 from travis.tui.interactive_params import _params_argument_completions
+from travis.tui.interactive_prompt_input import prompt_tui_value
 
 def _short_status_text(text: str, *, limit: int) -> str:
     value = str(text or "").replace("\n", " ").strip()
@@ -694,37 +695,13 @@ class InteractiveView:
         cancel_event: threading.Event | None = None,
         cancel_on_escape: bool = False,
     ) -> str | None:
-        submitted_queue: queue.Queue[str | None] = queue.Queue()
-        prompt_component = Input(prompt=prompt, on_submit=lambda value: submitted_queue.put(value), mask=mask)
-        if cancel_on_escape:
-            prompt_component.on_escape = lambda: submitted_queue.put(None)
-        previous_focus = self.tui.focused_component
-        self.active_editor = prompt_component
-        self.editor_container.add(prompt_component)
-        self.tui.set_focus(prompt_component)
-        self.tui.request_render()
-        self._emit_pending_model_picker_trace()
-        try:
-            while not self._shutdown_requested:
-                if cancel_event is not None and cancel_event.is_set():
-                    return None
-                try:
-                    value = submitted_queue.get(timeout=self.tui.time_until_next_work(0.05))
-                    if self.tui.dispatcher.is_owner_thread():
-                        self.tui.drain_dispatcher()
-                    return value
-                except queue.Empty:
-                    if self.tui.dispatcher.is_owner_thread():
-                        self.tui.drain_dispatcher()
-                    continue
-            return None
-        finally:
-            if prompt_component in self.editor_container.children:
-                self.editor_container.remove(prompt_component)
-            if self.active_editor is prompt_component:
-                self.active_editor = None
-            self.tui.set_focus(previous_focus)
-            self.tui.request_render()
+        return prompt_tui_value(
+            self,
+            prompt,
+            mask=mask,
+            cancel_event=cancel_event,
+            cancel_on_escape=cancel_on_escape,
+        )
 
     def prompt_extension_confirm(
         self,

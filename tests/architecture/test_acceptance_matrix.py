@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import importlib.util
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -39,6 +42,23 @@ def test_parity_report_has_only_resolved_evidence() -> None:
     assert report["schema_version"] == 1
     assert report["summary"]["pi"]["invalid"] == 0
     assert report["summary"]["hermes"]["invalid"] == 0
+    assert set(report["toolPolicy"]) == {
+        "mode",
+        "effectCounts",
+        "undeclaredToolCount",
+    }
+    assert report["toolPolicy"]["mode"] == "audit"
+    assert set(report["toolPolicy"]["effectCounts"]) == {
+        "read",
+        "write",
+        "execute",
+        "network",
+    }
+    assert all(
+        isinstance(count, int) and count >= 0
+        for count in report["toolPolicy"]["effectCounts"].values()
+    )
+    assert report["toolPolicy"]["undeclaredToolCount"] == 0
 
 
 def test_current_commit_verifier_rejects_stale_evidence(
@@ -64,3 +84,17 @@ def test_current_commit_verifier_rejects_stale_evidence(
 
     with pytest.raises(verifier.AcceptanceEvidenceError, match="current commit"):
         verifier.verify_current_commit(evidence, root=ROOT)
+
+
+def test_parity_json_cli_runs_directly_without_pythonpath() -> None:
+    result = subprocess.run(
+        [sys.executable, str(VERIFIER_PATH), "--parity-json"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+        env={key: value for key, value in os.environ.items() if key != "PYTHONPATH"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["toolPolicy"]["mode"] == "audit"

@@ -31,6 +31,7 @@ OWNER_GLOBS = (
     "travis/tui/interactive_model_auth.py",
     "travis/tui/interactive_process_commands.py",
     "travis/tui/interactive_view.py",
+    "travis/tui/interactive_prompt_input.py",
     "travis/tui/interactive_extensions.py",
     "travis/tui/footer_data.py",
     "travis/tui/interactive_shutdown.py",
@@ -93,5 +94,17 @@ def test_collaborator_modules_are_bounded_and_do_not_import_facades() -> None:
             imported = node.module if isinstance(node, ast.ImportFrom) else None
             if imported in FORBIDDEN_OWNER_IMPORTS:
                 failures.append(f"{relative}:{node.lineno}: imports {imported}")
+
+    assert failures == []
+
+
+def test_tool_policy_does_not_import_generic_agent_or_tui() -> None:
+    failures: list[str] = []
+    for path in sorted((ROOT / "travis/coding_agent/policy").glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            imported = node.module if isinstance(node, ast.ImportFrom) else None
+            if imported is not None and imported.startswith(("travis.agent", "travis.tui")):
+                failures.append(f"{path.relative_to(ROOT)}:{node.lineno}: imports {imported}")
 
     assert failures == []

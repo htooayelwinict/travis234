@@ -12,6 +12,7 @@ from travis.coding_agent.policy.types import (
 )
 from travis.coding_agent.policy.approval import (
     ApprovalResponse,
+    ApprovalSignal,
     SessionGrantSet,
     ToolApprovalBroker,
     ToolApprovalRequest,
@@ -21,6 +22,7 @@ from travis.coding_agent.policy.engine import ToolPolicyEngine, argument_fingerp
 __all__ = [
     "ALL_TOOL_EFFECTS",
     "ApprovalResponse",
+    "ApprovalSignal",
     "SessionGrantSet",
     "TOOL_EFFECT_ORDER",
     "TOOL_POLICY_MODE_ORDER",

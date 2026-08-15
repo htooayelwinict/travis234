@@ -224,7 +224,7 @@ Secret values stay in the Travis234 process environment. Use `${SERVICE_TOKEN}` 
 
 Literal values are allowed for non-secret settings. Token-, secret-, password-, OAuth-, credential-, and API-key-shaped stdio environment keys require references. `Authorization`, `Cookie`, and `Proxy-Authorization` headers also require references. Resolved values are not written to configuration, status, errors, tool details, or session JSONL.
 
-Installing and activating this trusted extension, listing a server in an authorized configuration file, and leaving the `mcp` tool enabled together authorize calls to that server. The MVP does not add a second per-call confirmation dialog.
+Installing and activating this trusted extension, listing a server in an authorized configuration file, and leaving the `mcp` tool enabled make the proxy available. Travis234 audit mode preserves existing calls. Enforce mode applies the normal tool-policy approval because the proxy declares all four effects; an approval shows only the configured server and normalized operation.
 
 Treat an MCP server like any other executable or network integration:
 
