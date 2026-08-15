@@ -61,6 +61,7 @@ from travis.coding_agent.policy.context import fixed_action_context, subagent_po
 from travis.coding_agent.policy.types import ALL_TOOL_EFFECTS
 from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.subagent_roles import resolve_agent_role
+from travis.coding_agent.subagent_supervision import ControlResult
 from travis.coding_agent.session_index import SessionIndex
 from travis.coding_agent.session_store import (
     BashExecutionMessage,
@@ -98,6 +99,30 @@ from travis.coding_agent.subagent_trace import _coerce_subagent_timeout_seconds,
 def _merge_role_context(role_context: str, task_context: str) -> str:
     parts = [part.strip() for part in (role_context, task_context) if part.strip()]
     return "\n\n".join(parts)[:65_536]
+
+
+class _InternalSubagentControlHandle:
+    def __init__(self, child: object) -> None:
+        self._child = child
+
+    def steer(self, message: str) -> ControlResult:
+        steer = getattr(self._child, "steer", None)
+        if not callable(steer):
+            return ControlResult(False, "steering_unsupported")
+        steer(message)
+        return ControlResult(True, "steering_queued")
+
+    def cancel(self, reason: str) -> ControlResult:
+        del reason
+        agent = getattr(self._child, "agent", None)
+        abort = getattr(agent, "abort", None)
+        if callable(abort):
+            abort()
+        for name in ("abort_bash", "abort_retry"):
+            callback = getattr(self._child, name, None)
+            if callable(callback):
+                callback()
+        return ControlResult(True, "cancellation_requested")
 
 class SessionSubagentController:
     """Owns a focused AgentSession runtime concern."""
@@ -642,6 +667,9 @@ class SessionSubagentController:
             tool_policy_event_sink=self._tool_policy_event_sink,
             tool_policy_redactor=self._tool_policy_engine.redactor,
         )
+        self.subagents.attach_control_handle(
+            task.id, _InternalSubagentControlHandle(child)
+        )
         child.agent.subscribe(self._subagent_tool_trace_listener(task, child, tool_trace, trace_by_call_id))
         child.agent._after_tool_call = self._subagent_after_tool_call_tracer(  # noqa: SLF001 - parent observes delegated child tools.
             task,
@@ -684,6 +712,7 @@ class SessionSubagentController:
                 result = replace(result, raw_log_path=raw_log_path, errors=[*result.errors, *log_errors])
             return result
         finally:
+            self.subagents.detach_control_handle(task.id)
             self._kill_active_subagent_processes(child_owner)
             child.shutdown()
 

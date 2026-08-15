@@ -3,11 +3,122 @@
 from __future__ import annotations
 
 import threading
+import hashlib
 from dataclasses import dataclass, replace
 from typing import Callable, Literal, Protocol
 
 SnapshotStatus = Literal["queued", "running", "completed", "failed", "cancelled", "timeout"]
 
+
+@dataclass(frozen=True)
+class ControlResult:
+    accepted: bool
+    code: str
+
+
+class SubagentControlHandle(Protocol):
+    def steer(self, message: str) -> ControlResult:
+        raise NotImplementedError
+
+    def cancel(self, reason: str) -> ControlResult:
+        raise NotImplementedError
+
+
+class SubagentControlStore:
+    def __init__(self) -> None:
+        self._handles: dict[str, SubagentControlHandle] = {}
+        self._pending: dict[str, list[str]] = {}
+        self._lock = threading.RLock()
+
+    def attach(
+        self,
+        task_id: str,
+        handle: SubagentControlHandle,
+        *,
+        known: bool,
+        settled: bool,
+    ) -> ControlResult:
+        if not callable(getattr(handle, "steer", None)) or not callable(
+            getattr(handle, "cancel", None)
+        ):
+            raise ValueError("subagent control handle must support steer and cancel")
+        if not known:
+            return ControlResult(False, "unknown_task")
+        if settled:
+            return ControlResult(False, "task_settled")
+        with self._lock:
+            self._handles[task_id] = handle
+            pending = self._pending.pop(task_id, [])
+        for message in pending:
+            _invoke_control(handle.steer, message)
+        return ControlResult(True, "control_attached")
+
+    def detach(self, task_id: str) -> None:
+        with self._lock:
+            self._handles.pop(task_id, None)
+
+    def steer(
+        self,
+        task_id: str,
+        backend: str | None,
+        message: str,
+        *,
+        settled: bool,
+    ) -> ControlResult:
+        if not isinstance(message, str) or not message.strip() or len(message) > 8192:
+            raise ValueError("steering message must contain 1..8192 characters")
+        if backend is None:
+            return ControlResult(False, "unknown_task")
+        if settled:
+            return ControlResult(False, "task_settled")
+        text = message.strip()
+        with self._lock:
+            handle = self._handles.get(task_id)
+            if handle is None:
+                if backend != "internal":
+                    return ControlResult(False, "steering_unsupported")
+                self._pending.setdefault(task_id, []).append(text)
+                return ControlResult(True, "steering_queued")
+        return _invoke_control(handle.steer, text)
+
+    def cancel(self, task_id: str, reason: str) -> ControlResult | None:
+        with self._lock:
+            handle = self._handles.pop(task_id, None)
+            self._pending.pop(task_id, None)
+        return _invoke_control(handle.cancel, reason) if handle is not None else None
+
+    def settle(self, task_id: str) -> None:
+        with self._lock:
+            self._handles.pop(task_id, None)
+            self._pending.pop(task_id, None)
+
+
+def control_event(
+    task: SnapshotTask,
+    action: str,
+    value: str,
+    result: ControlResult,
+) -> dict[str, object]:
+    return {
+        "type": "subagent_control",
+        "child_subagent_id": task.id,
+        "child_role": task.role,
+        "action": action,
+        "accepted": result.accepted,
+        "code": result.code,
+        "message_length": len(value),
+        "message_fingerprint": hashlib.sha256(value.encode("utf-8")).hexdigest()[:16],
+    }
+
+
+def _invoke_control(
+    callback: Callable[[str], ControlResult], value: str
+) -> ControlResult:
+    try:
+        result = callback(value)
+        return result if isinstance(result, ControlResult) else ControlResult(False, "control_failed")
+    except Exception:
+        return ControlResult(False, "control_failed")
 
 class SnapshotTask(Protocol):
     id: str
@@ -146,6 +257,10 @@ def _preview(value: str) -> str:
 
 __all__ = [
     "SubagentSnapshot",
+    "ControlResult",
+    "SubagentControlHandle",
+    "SubagentControlStore",
+    "control_event",
     "SupervisorSnapshot",
     "SupervisorSnapshotStore",
 ]

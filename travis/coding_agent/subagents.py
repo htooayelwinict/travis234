@@ -29,8 +29,12 @@ from travis.coding_agent.subagent_results import (
 )
 from travis.coding_agent.subagent_result_types import SubagentResult, SubagentStatus
 from travis.coding_agent.subagent_supervision import (
+    ControlResult,
+    SubagentControlHandle,
+    SubagentControlStore,
     SupervisorSnapshot,
     SupervisorSnapshotStore,
+    control_event,
 )
 
 SubagentSandbox = Literal["read_only", "workspace_write", "full_access"]
@@ -577,6 +581,7 @@ class SubagentSupervisor:
         self._shutdown = False
         self._lock = threading.RLock()
         self._snapshot_store = SupervisorSnapshotStore(max_threads)
+        self._control_store = SubagentControlStore()
 
     def snapshot(self) -> SupervisorSnapshot:
         return self._snapshot_store.snapshot()
@@ -585,6 +590,36 @@ class SubagentSupervisor:
         self, callback: Callable[[SupervisorSnapshot], None]
     ) -> Callable[[], None]:
         return self._snapshot_store.subscribe(callback)
+
+    def attach_control_handle(
+        self, task_id: str, handle: SubagentControlHandle
+    ) -> ControlResult:
+        _validate_task_id_reference(task_id)
+        with self._lock:
+            known = task_id in self._tasks
+            settled = task_id in self._results
+        return self._control_store.attach(
+            task_id, handle, known=known, settled=settled
+        )
+
+    def detach_control_handle(self, task_id: str) -> None:
+        _validate_task_id_reference(task_id)
+        self._control_store.detach(task_id)
+
+    def steer(self, task_id: str, message: str) -> ControlResult:
+        _validate_task_id_reference(task_id)
+        with self._lock:
+            task = self._tasks.get(task_id)
+            settled = task_id in self._results
+        result = self._control_store.steer(
+            task_id,
+            task.backend if task is not None else None,
+            message,
+            settled=settled,
+        )
+        if task is not None:
+            self._emit(control_event(task, "steer", message.strip(), result))
+        return result
 
     def register_backend(self, backend: SubagentBackend) -> None:
         with self._lock:
@@ -691,6 +726,7 @@ class SubagentSupervisor:
                 )
                 self._statuses[task_id] = "timeout"
                 self._results[task_id] = result
+            self._control_store.cancel(task_id, timeout_text)
             self._snapshot_store.publish(
                 task,
                 "timeout",
@@ -731,6 +767,9 @@ class SubagentSupervisor:
             )
             self._statuses[task_id] = "cancelled"
             self._results[task_id] = result
+        control = self._control_store.cancel(task_id, reason)
+        if control is not None:
+            self._emit(control_event(task, "cancel", reason, control))
         self._snapshot_store.publish(
             task,
             "cancelled",
@@ -856,6 +895,7 @@ class SubagentSupervisor:
                 return self._results[task.id]
             self._statuses[task.id] = result.status
             self._results[task.id] = result
+            self._control_store.settle(task.id)
         self._snapshot_store.publish(
             task,
             result.status,
