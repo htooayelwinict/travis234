@@ -590,7 +590,9 @@ class CodingApp:
             if first_error is None:
                 first_error = error
         try:
-            self.operation_runtime.close()
+            operation_runtime = getattr(self, "operation_runtime", None)
+            if operation_runtime is not None:
+                operation_runtime.close()
         except BaseException as error:  # noqa: BLE001
             if first_error is None:
                 first_error = error

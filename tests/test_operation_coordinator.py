@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import gc
 import hashlib
 import sqlite3
 import time
+import weakref
 from pathlib import Path
 
 import pytest
@@ -282,6 +284,20 @@ def test_heartbeat_failure_disables_existing_and_future_sessions(
     assert len(diagnostics) == 1
     assert "PRIVATE" not in repr(diagnostics)
     runtime.close()
+
+
+def test_heartbeat_thread_does_not_retain_an_abandoned_runtime(tmp_path: Path) -> None:
+    runtime, _store = _runtime(tmp_path, heartbeat_interval_seconds=0.01)
+    thread = runtime._heartbeat_thread
+    runtime_ref = weakref.ref(runtime)
+
+    del runtime
+    gc.collect()
+    assert thread is not None
+    thread.join(timeout=0.2)
+
+    assert runtime_ref() is None
+    assert thread.is_alive() is False
 
 
 def test_runtime_close_is_fail_open_when_store_checkpoint_fails(

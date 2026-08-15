@@ -8,6 +8,7 @@ import re
 import threading
 import time
 import uuid
+import weakref
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
@@ -37,6 +38,21 @@ def _settlement_state(outcome_code: str) -> str:
     if outcome_code == "cancelled":
         return "cancelled"
     return "failed"
+
+
+def _heartbeat_loop(
+    runtime_ref: weakref.ReferenceType[OperationRuntime],
+    stop: threading.Event,
+    interval_seconds: float,
+) -> None:
+    while not stop.wait(interval_seconds):
+        runtime = runtime_ref()
+        if runtime is None:
+            return
+        keep_running = runtime._heartbeat_once()
+        del runtime
+        if not keep_running:
+            return
 
 
 @dataclass(frozen=True)
@@ -398,7 +414,8 @@ class OperationRuntime:
         )
         if heartbeat_interval_seconds is not None:
             self._heartbeat_thread = threading.Thread(
-                target=self._heartbeat_loop,
+                target=_heartbeat_loop,
+                args=(weakref.ref(self), self._stop, heartbeat_interval_seconds),
                 name="travis-operation-heartbeat",
                 daemon=True,
             )
@@ -480,19 +497,18 @@ class OperationRuntime:
             self._coordinators.append(coordinator)
             return coordinator
 
-    def _heartbeat_loop(self) -> None:
-        assert self._heartbeat_interval_seconds is not None
-        while not self._stop.wait(self._heartbeat_interval_seconds):
-            try:
-                assert self._store is not None
-                self._store.heartbeat_runtime(self.runtime_id, self._clock_ms())
-            except Exception:
-                with self._lock:
-                    self._unavailable_reason = "journal_unavailable"
-                    coordinators = tuple(self._coordinators)
-                for coordinator in coordinators:
-                    coordinator.disable("journal_unavailable")
-                return
+    def _heartbeat_once(self) -> bool:
+        try:
+            assert self._store is not None
+            self._store.heartbeat_runtime(self.runtime_id, self._clock_ms())
+            return True
+        except Exception:
+            with self._lock:
+                self._unavailable_reason = "journal_unavailable"
+                coordinators = tuple(self._coordinators)
+            for coordinator in coordinators:
+                coordinator.disable("journal_unavailable")
+            return False
 
     def close(self) -> None:
         with self._lock:
