@@ -711,6 +711,67 @@ class SettingsManager:
             ],
         }
 
+    def get_operation_settings(self) -> dict[str, object]:
+        default_max = 1024 * 1024 * 1024
+        global_mode, global_max = self._operation_settings_scope(
+            self.global_settings,
+            scope="global",
+            default_mode="observe",
+            default_max=default_max,
+            allow_mode_change=True,
+        )
+        effective_max = global_max
+        if self.project_trusted and "operations" in self.project_settings:
+            _project_mode, project_max = self._operation_settings_scope(
+                self.project_settings,
+                scope="project",
+                default_mode=global_mode,
+                default_max=global_max,
+                allow_mode_change=False,
+            )
+            effective_max = min(global_max, project_max)
+        return {"mode": global_mode, "maxBytes": effective_max}
+
+    def _operation_settings_scope(
+        self,
+        settings: dict,
+        *,
+        scope: SettingsScope,
+        default_mode: str,
+        default_max: int,
+        allow_mode_change: bool,
+    ) -> tuple[str, int]:
+        raw = settings.get("operations")
+        if raw is None:
+            return default_mode, default_max
+        if not isinstance(raw, dict):
+            self._record_operation_error_once(scope, "operations must be an object")
+            return default_mode, default_max
+        errors: list[str] = []
+        mode = raw.get("mode", default_mode)
+        if mode not in {"disabled", "observe"}:
+            errors.append("mode must be disabled or observe")
+            mode = default_mode
+        elif not allow_mode_change and mode != default_mode:
+            errors.append("project mode cannot change the global operation mode")
+            mode = default_mode
+        max_bytes = raw.get("maxBytes", default_max)
+        if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
+            errors.append("maxBytes must be a positive integer")
+            max_bytes = default_max
+        if errors:
+            self._record_operation_error_once(scope, "; ".join(errors))
+        return str(mode), int(max_bytes)
+
+    def _record_operation_error_once(self, scope: SettingsScope, detail: str) -> None:
+        message = f"Invalid operations setting: {detail}"
+        if any(
+            error["scope"] == scope and str(error["error"]) == message
+            for error in self.errors
+        ):
+            return
+        self._record_error(scope, RuntimeError(message))
+
     def get_language_server_configs(self) -> list[LanguageServerConfig]:
         global_configs = self._language_servers_from(self.global_settings, "global")
         ordered = list(global_configs)
