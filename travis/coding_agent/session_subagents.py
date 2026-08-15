@@ -133,7 +133,7 @@ class SessionSubagentController:
             "backend": str(options.get("backend") or "internal"),
             "sandbox": str(options.get("sandbox") or "workspace_write"),
             "model": options.get("model"),
-            "reasoning": options.get("reasoning", self.thinking_level),
+            "reasoning": options.get("reasoning"),
             "context_pack": str(options.get("contextPack", options.get("context_pack", "")) or ""),
             "timeout_seconds": _coerce_subagent_timeout_seconds(timeout_value, default=1800),
             "allowed_tools": tuple(allowed_tools) if allowed_tools is not None else self._subagent_allowed_tools_for_role(role),
@@ -407,16 +407,37 @@ class SessionSubagentController:
 
     def _run_internal_subagent(self, task: SubagentTask) -> SubagentResult:
         started = int(time.time() * 1000)
+        routed_role = "reviewer" if task.role == "reviewer" else "worker"
+        resolution = self.resolve_model_role(
+            routed_role,
+            selector_override=task.model,
+        )
+        if not resolution.available or resolution.scoped_model is None:
+            ended = int(time.time() * 1000)
+            return SubagentResult(
+                task_id=task.id,
+                backend=task.backend,
+                role=task.role,
+                status="failed",
+                summary=f"No text-capable model is available for the {routed_role} role.",
+                errors=[f"model role unavailable: {routed_role}"],
+                started_at_ms=started,
+                ended_at_ms=ended,
+            )
+        binding = resolution.scoped_model
+        child_thinking = task.reasoning or binding.thinking_level or self.thinking_level
         tool_trace: list[dict[str, object]] = []
         trace_by_call_id: dict[str, dict[str, object]] = {}
         child_owner = self._subagent_process_owner(task)
         child = self._session_factory(
             cwd=task.cwd,
-            model=self.model,
+            model=binding.model,
             active_tool_names=list(task.allowed_tools),
             allowed_tool_names=list(task.allowed_tools),
-            thinking_level=self.thinking_level,
+            thinking_level=child_thinking,
             stream_fn=self._stream_fn,
+            model_registry=self.model_registry,
+            settings_manager=self.settings_manager,
             process_service=self.process_service if child_owner is not None else None,
             process_owner=child_owner,
         )
