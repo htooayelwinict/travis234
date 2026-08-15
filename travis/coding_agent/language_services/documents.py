@@ -85,6 +85,18 @@ def position_from_server(
     return DocumentPosition(position.line, _offset_for_index(line, index, "utf-16"))
 
 
+def text_offset_from_position(text: str, position: DocumentPosition) -> int:
+    lines = text.splitlines(keepends=True)
+    if text == "" or text.endswith("\n"):
+        lines.append("")
+    if position.line < 0 or position.line >= len(lines):
+        raise ValueError("document position line is out of range")
+    raw_line = lines[position.line]
+    content = raw_line.rstrip("\r\n")
+    index = _index_from_units(content, position.character, "utf-16")
+    return sum(len(line) for line in lines[: position.line]) + index
+
+
 class DocumentTracker:
     def __init__(self, workspace: str | Path) -> None:
         self.workspace = Path(workspace).expanduser().resolve()
@@ -154,4 +166,5 @@ __all__ = [
     "PositionEncoding",
     "position_from_server",
     "position_to_server",
+    "text_offset_from_position",
 ]

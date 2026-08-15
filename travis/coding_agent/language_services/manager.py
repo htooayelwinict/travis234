@@ -172,6 +172,7 @@ class LanguageServiceManager:
         snapshot = self.documents.snapshot(path)
         return {
             "generation": state.generation,
+            "configGeneration": self.config_generation,
             "positionEncoding": state.position_encoding,
             "documentHash": snapshot.sha256,
         }

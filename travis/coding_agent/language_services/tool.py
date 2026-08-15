@@ -13,6 +13,12 @@ from travis.coding_agent.artifacts import ArtifactRegistry, artifact_read_instru
 from travis.coding_agent.language_services.documents import position_from_server
 from travis.coding_agent.language_services.manager import LanguageServiceManager
 from travis.coding_agent.language_services.types import DocumentPosition
+from travis.coding_agent.language_services.workspace_edit import (
+    ActionTokenStore,
+    WorkspaceEditError,
+    WorkspaceEditPreview,
+    WorkspaceEditPreviewStore,
+)
 from travis.coding_agent.tools.output_spool import OutputSpool
 from travis.coding_agent.tools.types import ToolDefinition
 
@@ -24,6 +30,8 @@ _READ_ACTIONS = (
     "definition",
     "references",
     "code_actions",
+    "rename_preview",
+    "code_action_preview",
 )
 
 LSP_SCHEMA = {
@@ -52,6 +60,8 @@ LSP_SCHEMA = {
             "required": ["line", "character"],
             "additionalProperties": False,
         },
+        "newName": {"type": "string", "minLength": 1},
+        "actionToken": {"type": "string", "pattern": "^lsp-action-[0-9a-f]{32}$"},
     },
     "required": ["action"],
     "additionalProperties": False,
@@ -85,10 +95,19 @@ def _validate_args(args: object) -> tuple[str, dict[str, object]]:
         if has_path == has_query:
             raise ValueError("lsp symbols requires exactly one of path or query")
         return action, args
+    if action == "code_action_preview":
+        token = args.get("actionToken")
+        if not isinstance(token, str) or not token.startswith("lsp-action-"):
+            raise ValueError("lsp code_action_preview requires an actionToken")
+        return action, args
     path = _path_arg(args)
-    if action in {"hover", "definition", "references"}:
+    if action in {"hover", "definition", "references", "rename_preview"}:
         _nonnegative(args.get("line"), "line")
         _nonnegative(args.get("character"), "character")
+    if action == "rename_preview":
+        new_name = args.get("newName")
+        if not isinstance(new_name, str) or not new_name.strip():
+            raise ValueError("lsp rename_preview requires a non-blank newName")
     if action == "code_actions":
         for name in ("start", "end"):
             position = args.get(name)
@@ -261,6 +280,7 @@ async def _execute_read_action(
     action: str,
     args: dict[str, object],
     signal,
+    action_store: ActionTokenStore,
 ) -> dict[str, object]:
     if action == "status":
         return manager.status()
@@ -275,7 +295,7 @@ async def _execute_read_action(
         raw = await manager.request(path, "textDocument/diagnostic", {"textDocument": {"uri": uri}}, signal=signal)
     elif action == "symbols":
         raw = await manager.request(path, "textDocument/documentSymbol", {"textDocument": {"uri": uri}}, signal=signal)
-    elif action in {"hover", "definition", "references"}:
+    elif action in {"hover", "definition", "references", "rename_preview"}:
         position = await _prepared_position(
             manager,
             path_arg,
@@ -285,10 +305,13 @@ async def _execute_read_action(
             "hover": "textDocument/hover",
             "definition": "textDocument/definition",
             "references": "textDocument/references",
+            "rename_preview": "textDocument/rename",
         }[action]
         params: dict[str, object] = {"textDocument": {"uri": uri}, "position": position}
         if action == "references":
             params["context"] = {"includeDeclaration": True}
+        if action == "rename_preview":
+            params["newName"] = args["newName"]
         raw = await manager.request(path, method, params, signal=signal)
     else:
         start = await _prepared_position(manager, path_arg, args["start"])  # type: ignore[arg-type]
@@ -333,17 +356,113 @@ async def _execute_read_action(
             diagnostics.append(diagnostic)
         diagnostics.sort(key=lambda item: (item["range"]["start"]["line"], item["range"]["start"]["character"], item["message"]))  # type: ignore[index]
         return {**base, "diagnostics": diagnostics}
-    actions = [
-        {
-            "title": item.get("title"),
-            "kind": item.get("kind"),
-            "hasEdit": isinstance(item.get("edit"), dict),
-            "hasCommand": isinstance(item.get("command"), dict),
-        }
-        for item in raw if isinstance(raw, list) and isinstance(item, dict) and isinstance(item.get("title"), str)
-    ]
+    if action == "rename_preview":
+        return {**base, "workspaceEdit": raw}
+    actions = []
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict) or not isinstance(item.get("title"), str):
+            continue
+        token = action_store.create(
+            item,
+            path=path_arg,
+            server_generation=int(context["generation"]),
+            config_generation=int(context.get("configGeneration", 1)),
+        )
+        actions.append(
+            {
+                "title": item["title"],
+                "kind": item.get("kind"),
+                "hasEdit": isinstance(item.get("edit"), dict),
+                "hasCommand": isinstance(item.get("command"), dict),
+                "actionToken": token.token,
+            }
+        )
     actions.sort(key=lambda item: (str(item["title"]).casefold(), str(item.get("kind", ""))))
     return {**base, "actions": actions}
+
+
+def _preview_payload(preview: WorkspaceEditPreview) -> dict[str, object]:
+    return {
+        "previewToken": preview.token,
+        "files": [
+            {
+                "path": file.relative_path,
+                "originalHash": file.original_hash,
+                "targetHash": file.target_hash,
+                "originalBytes": len(file.original_bytes),
+                "targetBytes": len(file.target_bytes),
+            }
+            for file in preview.files
+        ],
+        "diff": preview.diff,
+        "serverGeneration": preview.server_generation,
+        "configGeneration": preview.config_generation,
+    }
+
+
+async def _create_mutation_preview(
+    manager: LanguageServiceManager,
+    preview_store: WorkspaceEditPreviewStore,
+    action_store: ActionTokenStore,
+    workspace: Path,
+    action: str,
+    args: dict[str, object],
+    signal,
+) -> dict[str, object]:
+    if action == "rename_preview":
+        read_payload = await _execute_read_action(
+            manager,
+            workspace,
+            action,
+            args,
+            signal,
+            action_store,
+        )
+        edit = read_payload.get("workspaceEdit")
+        path = _resolve_workspace_path(workspace, _path_arg(args))
+        context = manager.response_context(path)
+    else:
+        token_value = action_store.peek(str(args["actionToken"]))
+        path = _resolve_workspace_path(workspace, token_value.path)
+        context = manager.response_context(path)
+        bound = action_store.resolve(
+            token_value.token,
+            server_generation=int(context["generation"]),
+            config_generation=int(context.get("configGeneration", 1)),
+        )
+        resolved_action = bound.action
+        if not isinstance(resolved_action.get("edit"), dict) and "data" in resolved_action:
+            candidate = await manager.request(
+                path,
+                "codeAction/resolve",
+                resolved_action,
+                signal=signal,
+            )
+            if not isinstance(candidate, dict):
+                raise WorkspaceEditError("selected code action did not resolve to an edit")
+            resolved_action = candidate
+        if isinstance(resolved_action.get("command"), dict):
+            raise WorkspaceEditError("command-only and edit-plus-command code actions are unsupported")
+        edit = resolved_action.get("edit")
+        if not isinstance(edit, dict):
+            raise WorkspaceEditError("selected code action does not contain a workspace edit")
+
+    if not isinstance(edit, dict):
+        raise WorkspaceEditError("language server did not return a workspace edit")
+    preview = preview_store.create(
+        edit,
+        manager.documents,
+        position_encoding=str(context["positionEncoding"]),  # type: ignore[arg-type]
+        server_generation=int(context["generation"]),
+        config_generation=int(context.get("configGeneration", 1)),
+    )
+    if action == "code_action_preview":
+        action_store.consume(
+            str(args["actionToken"]),
+            server_generation=int(context["generation"]),
+            config_generation=int(context.get("configGeneration", 1)),
+        )
+    return _preview_payload(preview)
 
 
 def _bounded_result(
@@ -395,17 +514,40 @@ def create_lsp_tool_definition(
     workspace: str | Path,
 ) -> ToolDefinition:
     root = Path(workspace).expanduser().resolve()
+    action_store = ActionTokenStore(limits=manager.limits)
+    preview_store = WorkspaceEditPreviewStore(root, limits=manager.limits)
 
     async def execute(tool_call_id, args, signal=None, on_update=None, ctx=None):
         del on_update, ctx
         action, validated = _validate_args(args)
-        payload = await _execute_read_action(manager, root, action, validated, signal)
+        if action in {"rename_preview", "code_action_preview"}:
+            payload = await _create_mutation_preview(
+                manager,
+                preview_store,
+                action_store,
+                root,
+                action,
+                validated,
+                signal,
+            )
+        else:
+            payload = await _execute_read_action(
+                manager,
+                root,
+                action,
+                validated,
+                signal,
+                action_store,
+            )
         return _bounded_result(
             payload,
             artifacts=artifacts,
             limits=manager.limits,
             tool_call_id=str(tool_call_id),
         )
+
+    execute.preview_store = preview_store  # type: ignore[attr-defined]
+    execute.action_store = action_store  # type: ignore[attr-defined]
 
     return ToolDefinition(
         name="lsp",
