@@ -17,6 +17,7 @@ _SERVER_FIELDS = {
     "headers",
     "lifecycle",
     "requestTimeoutMs",
+    "reconnect",
 }
 _SENSITIVE_HEADERS = {"authorization", "cookie", "proxy-authorization"}
 _SENSITIVE_ENV_MARKERS = ("API_KEY", "APIKEY", "TOKEN", "SECRET", "PASSWORD", "OAUTH", "CREDENTIAL")
@@ -26,6 +27,13 @@ _EXACT_ENV = re.compile(r"\$env:([A-Za-z_][A-Za-z0-9_]*)\Z")
 
 class ConfigError(ValueError):
     """A source-attributed MCP configuration error."""
+
+
+@dataclass(frozen=True)
+class ReconnectConfig:
+    automatic: bool = False
+    max_attempts: int = 1
+    base_delay_ms: int = 100
 
 
 @dataclass(frozen=True)
@@ -39,6 +47,7 @@ class ServerConfig:
     url: str | None = None
     headers: Mapping[str, str] = field(default_factory=dict)
     request_timeout_ms: int | None = None
+    reconnect: ReconnectConfig = field(default_factory=ReconnectConfig)
 
 
 @dataclass(frozen=True)
@@ -191,6 +200,7 @@ def _parse_server(source_path: Path, name: str, value: object) -> ServerConfig:
         raise _error(source_path, name, "headers", "is only valid for url servers")
     if has_url and (args or cwd is not None or env):
         raise _error(source_path, name, None, "args, cwd, and env are only valid for command servers")
+    reconnect = _parse_reconnect(source_path, name, value.get("reconnect", {}))
 
     return ServerConfig(
         name=name,
@@ -202,6 +212,42 @@ def _parse_server(source_path: Path, name: str, value: object) -> ServerConfig:
         url=url if has_url else None,
         headers=MappingProxyType(headers),
         request_timeout_ms=timeout,
+        reconnect=reconnect,
+    )
+
+
+def _parse_reconnect(
+    source_path: Path,
+    server: str,
+    value: object,
+) -> ReconnectConfig:
+    if not isinstance(value, dict):
+        raise _error(source_path, server, "reconnect", "must be an object")
+    unknown = set(value) - {"automatic", "maxAttempts", "baseDelayMs"}
+    if unknown:
+        field_name = sorted(str(item) for item in unknown)[0]
+        raise _error(source_path, server, f"reconnect.{field_name}", "is an unknown field")
+    automatic = value.get("automatic", False)
+    if not isinstance(automatic, bool):
+        raise _error(source_path, server, "reconnect.automatic", "must be a boolean")
+    max_attempts = value.get("maxAttempts", 1)
+    if (
+        isinstance(max_attempts, bool)
+        or not isinstance(max_attempts, int)
+        or not 1 <= max_attempts <= 3
+    ):
+        raise _error(source_path, server, "reconnect.maxAttempts", "must be an integer from 1 to 3")
+    base_delay_ms = value.get("baseDelayMs", 100)
+    if (
+        isinstance(base_delay_ms, bool)
+        or not isinstance(base_delay_ms, int)
+        or not 100 <= base_delay_ms <= 500
+    ):
+        raise _error(source_path, server, "reconnect.baseDelayMs", "must be an integer from 100 to 500")
+    return ReconnectConfig(
+        automatic=automatic,
+        max_attempts=max_attempts,
+        base_delay_ms=base_delay_ms,
     )
 
 

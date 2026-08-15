@@ -38,6 +38,7 @@ EXPECTED_SCHEMA = {
                 "resources.read",
                 "prompts.list",
                 "prompts.get",
+                "reconnect",
             ],
         },
         "query": {"type": "string"},
@@ -158,7 +159,10 @@ async def test_session_admits_packaged_server_without_mcp_config(
     definition = runner.get_all_registered_tools()[0].definition
     result = await definition.execute("status", {}, None, None, None)
 
-    assert result.content[0].text == "MCP adapter status\n- package-fixture: disconnected"
+    assert result.content[0].text == (
+        "MCP adapter status\n"
+        "- package-fixture: disconnected; automaticReconnect=off"
+    )
     assert not list(home.rglob("mcp.json"))
     await runner.async_emit({"type": "session_shutdown"})
 
@@ -180,16 +184,19 @@ async def test_session_status_lists_disconnected_servers_without_connecting(
     result = await definition.execute("call-1", {}, None, None, None)
 
     assert [block.text for block in result.content] == [
-        "MCP adapter status\n- global: disconnected\n- 1 project configuration file ignored until trust and reload"
+        "MCP adapter status\n"
+        "- global: disconnected; automaticReconnect=off\n"
+        "- 1 project configuration file ignored until trust and reload"
     ]
-    assert result.details == {
-        "travis234Mcp": {
-            "operation": "status",
-            "servers": [{"name": "global", "status": "disconnected"}],
-            "ignoredProjectSources": 1,
-            "isError": False,
-        }
-    }
+    marker = result.details["travis234Mcp"]
+    assert marker["operation"] == "status"
+    assert marker["ignoredProjectSources"] == 1
+    assert marker["isError"] is False
+    assert marker["servers"][0]["name"] == "global"
+    assert marker["servers"][0]["status"] == "disconnected"
+    assert marker["servers"][0]["automaticReconnect"] is False
+    assert marker["servers"][0]["maxReconnectAttempts"] == 1
+    assert marker["servers"][0]["updatedAtMs"] > 0
 
 
 @pytest.mark.anyio

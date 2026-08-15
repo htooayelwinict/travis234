@@ -78,6 +78,62 @@ def test_shared_config_accepts_explicit_lazy_lifecycle(config_tree: ConfigTree) 
     assert loaded.servers["fixture"].command == "project-server"
 
 
+def test_reconnect_defaults_disabled_and_accepts_bounded_settings(
+    config_tree: ConfigTree,
+) -> None:
+    config_tree.write_global_shared("default", {"command": "default-server"})
+    config_tree.write_global_travis(
+        "configured",
+        {
+            "command": "configured-server",
+            "reconnect": {
+                "automatic": True,
+                "maxAttempts": 3,
+                "baseDelayMs": 500,
+            },
+        },
+    )
+
+    loaded = load_config(config_tree.cwd, config_tree.home, False)
+
+    assert loaded.servers["default"].reconnect.automatic is False
+    assert loaded.servers["default"].reconnect.max_attempts == 1
+    assert loaded.servers["default"].reconnect.base_delay_ms == 100
+    assert loaded.servers["configured"].reconnect.automatic is True
+    assert loaded.servers["configured"].reconnect.max_attempts == 3
+    assert loaded.servers["configured"].reconnect.base_delay_ms == 500
+
+
+@pytest.mark.parametrize(
+    ("reconnect", "message"),
+    [
+        (None, "reconnect"),
+        ({"unknown": True}, "unknown"),
+        ({"automatic": 1}, "automatic"),
+        ({"maxAttempts": True}, "maxAttempts"),
+        ({"maxAttempts": 0}, "maxAttempts"),
+        ({"maxAttempts": 4}, "maxAttempts"),
+        ({"baseDelayMs": True}, "baseDelayMs"),
+        ({"baseDelayMs": 99}, "baseDelayMs"),
+        ({"baseDelayMs": 501}, "baseDelayMs"),
+    ],
+)
+def test_reconnect_configuration_is_strict(
+    config_tree: ConfigTree,
+    reconnect: object,
+    message: str,
+) -> None:
+    path = config_tree.write_global_shared(
+        "fixture",
+        {"command": "fixture-server", "reconnect": reconnect},
+    )
+
+    with pytest.raises(ConfigError, match=message) as caught:
+        load_config(config_tree.cwd, config_tree.home, False)
+
+    assert str(path) in str(caught.value)
+
+
 @pytest.mark.parametrize(
     ("payload", "message"),
     [

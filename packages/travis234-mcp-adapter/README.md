@@ -14,8 +14,8 @@ The adapter is designed for controlled coding-agent use:
 The single `mcp` proxy declares `read`, `write`, `execute`, and `network`
 effects because a remote server's operation cannot be proven locally. In
 Travis234's enforcing tool-policy mode, the approval prompt identifies only the
-configured server and normalized proxy operation (`status`, `list`, `search`,
-`describe`, or `call`). Tool arguments, headers, environment references, and
+configured server and normalized proxy operation (`status`, tool/resource/prompt
+operation, or `reconnect`). Tool arguments, headers, environment references, and
 resolved secrets are never approval context. Hosts that predate tool-effect
 metadata fail adapter loading explicitly instead of silently running the proxy
 as an undeclared tool.
@@ -213,8 +213,9 @@ On Windows, stdio servers launched through npm normally use `"command": "cmd"` a
 | `headers` | HTTP | String-to-string request headers with supported variable expansion. |
 | `lifecycle` | both | Optional compatibility declaration. Only `lazy` is accepted, and it is a no-op. |
 | `requestTimeoutMs` | both | Optional integer timeout for initialize, discovery, and tool-call operations. |
+| `reconnect` | both | Optional strict recovery object with `automatic` (default `false`), `maxAttempts` (1–3), and `baseDelayMs` (100–500). |
 
-Each server must specify exactly one non-empty `command` or `url`. The MVP supports stdio and Streamable HTTP only. Legacy SSE, OAuth, prompts, resource discovery, sampling, elicitation, scripting, direct per-server Travis tools, and MCP Apps/UI are not supported.
+Each server must specify exactly one non-empty `command` or `url`. The adapter supports stdio and Streamable HTTP only. Legacy SSE, OAuth, resource subscriptions, sampling, roots mutation, elicitation, scripting, direct per-server Travis tools, and MCP Apps/UI are not supported. OAuth remains out of scope until Travis234 has an approved credential-broker and refresh-token contract.
 
 For compatibility with shared Pi-style files, a server may declare `"lifecycle": "lazy"`; this is a no-op because the adapter is always lazy. Eager, keep-alive, and other lifecycle modes remain unsupported and are rejected.
 
@@ -241,9 +242,15 @@ The proxy connects lazily and always targets one explicit server:
 ```json
 {}
 {"server":"local-tools"}
+{"server":"local-tools","operation":"tools.list"}
 {"server":"local-tools","search":"issue"}
 {"server":"local-tools","describe":"search_issues"}
 {"server":"local-tools","tool":"search_issues","args":{"query":"open"}}
+{"server":"local-tools","operation":"resources.list"}
+{"server":"local-tools","operation":"resources.read","resource":"mcp-resource-0123456789abcdef0123456789abcdef"}
+{"server":"local-tools","operation":"prompts.list"}
+{"server":"local-tools","operation":"prompts.get","prompt":"review","arguments":{"topic":"changes"}}
+{"server":"local-tools","operation":"reconnect"}
 ```
 
 - `{}` reports configured servers without connecting.
@@ -251,6 +258,11 @@ The proxy connects lazily and always targets one explicit server:
 - `search` returns at most 20 deterministic matches.
 - `describe` returns one tool's full input schema.
 - `tool` calls the original MCP tool name once; `args` defaults to `{}`.
+- `resources.list` returns bounded summaries and generation-scoped opaque references; `resources.read` accepts only one of those references.
+- `prompts.list` returns bounded prompt and argument summaries; `prompts.get` validates arguments before requesting messages.
+- `reconnect` closes the current transport, re-resolves environment references, and establishes one fresh connection using the configured bounded attempt policy.
+
+The legacy server/search/describe/tool shapes remain supported. The explicit `operation` form is required for resources, prompts, and reconnect. Resource bodies and prompt messages are wrapped as untrusted MCP data; they never gain system- or user-instruction authority. Raw resource URIs, URI credentials/query values, and host spill paths are not included in model-visible results.
 
 Typical TUI workflow:
 
@@ -271,9 +283,9 @@ Use MCP on filesystem to read README.md inside the allowed workspace.
 
 For direct automation, the same proxy object is supplied by the model as the `mcp` tool arguments. There are no generated `mcp__server__tool` names and no implicit cross-server dispatch.
 
-The adapter does not fan out across servers and does not retry failed calls. `requestTimeoutMs` is optional and applies only to MCP initialize, discovery, and call operations. It does not change model-call, Travis tool, process, or subagent timeouts. Omitted or non-positive values retain official SDK transport defaults.
+The adapter does not fan out across servers. `requestTimeoutMs` is optional and applies only to MCP initialize, discovery, tool, resource, and prompt operations. It does not change model-call, Travis tool, process, or subagent timeouts. Omitted or non-positive values retain official SDK transport defaults.
 
-Catalog discovery rejects repeated cursors, more than 100 pages, or more than 10,000 tools. Aggregate model-visible text is limited to 50 KiB and 2,000 lines. Larger results receive a compact preview and a random mode-`0600` temporary spill path usable with ordinary Travis `read` or `grep`; session shutdown removes adapter-owned spills.
+Tool catalog discovery rejects repeated cursors, more than 100 pages, or more than 10,000 tools. Resource and prompt catalogs reject repeated cursors, more than 100 pages, or more than 5,000 entries; search returns at most 20 matches. A resource or prompt response is limited to 8 MiB, and a prompt response is limited to 100 ordered messages. Aggregate model-visible text is limited to 50 KiB and 2,000 lines. Larger and binary results are retained in random mode-`0600` adapter-owned spills while model-visible text contains only a bounded preview or basename; session shutdown removes every owned spill.
 
 ## Results, errors, and cancellation
 
@@ -281,7 +293,7 @@ Text, images, audio, embedded resources, and structured tool output are converte
 
 Configuration and connection failures identify the server and safe error class without including resolved headers or environment values. One broken server does not prevent another configured server from connecting.
 
-The adapter does not retry calls because it cannot know whether a remote action is safe to repeat. User cancellation, `/reload`, session replacement, and `/exit` cancel adapter-owned work and close connected clients. Stdio children and spill files are owned by the session and cleaned during shutdown.
+The adapter never replays a failed tool, resource, or prompt request because it cannot know whether a remote action already took effect. Automatic recovery is disabled by default. When enabled, a transport failure may trigger only a bounded fresh connection attempt; the original request still returns its original shaped failure, and the caller must issue a new explicit operation. Concurrent explicit reconnect requests coalesce, cancellation interrupts connection/backoff work, and status reports connection state plus bounded error type/timestamps without resolving or exposing credentials. User cancellation, `/reload`, session replacement, and `/exit` cancel adapter-owned work and close connected clients. Stdio children and spill files are owned by the session and cleaned during shutdown.
 
 ## Updating configuration
 
@@ -304,7 +316,7 @@ Project `.mcp.json` and `.travis234/mcp.json` files are ignored until the projec
 
 ### A server remains disconnected
 
-Disconnected is the normal lazy state. Status alone never starts a server. Name the server to list, search, describe, or call its tools. For stdio, verify the command is installed in the same native or container environment that runs Travis234.
+Disconnected is the normal lazy state. Status alone never starts a server or resolves environment references. Name the server to use a tool/resource/prompt operation, or issue an explicit `reconnect`. For stdio, verify the command is installed in the same native or container environment that runs Travis234.
 
 ### Configuration reports a missing environment variable
 
@@ -314,9 +326,9 @@ Every referenced variable must exist and be non-empty when that server connects.
 
 The server command runs inside the sandbox. Ensure its runtime is present there, use container-visible filesystem paths, and use `host.docker.internal` rather than `localhost` for a service running on the Docker host.
 
-### A result points to a spill file
+### A result was retained outside the inline preview
 
-The result exceeded the inline safety limit. Use an enabled Travis `read` or `grep` tool on the reported mode-`0600` path during the same session. The adapter removes its spill files at session shutdown.
+The result exceeded the inline safety limit or contained binary content. The adapter retains it in a session-owned mode-`0600` spill and keeps host paths out of model-visible text. The adapter removes its spill files at session shutdown.
 
 ### A call times out
 

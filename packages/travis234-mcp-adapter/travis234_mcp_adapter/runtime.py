@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import threading
+import time
 from typing import Any, AsyncIterator, Literal, TextIO
 
 import httpx2
@@ -27,6 +28,23 @@ Operation = Literal[
     "list_prompts",
     "get_prompt",
 ]
+RuntimeState = Literal[
+    "disconnected",
+    "connecting",
+    "connected",
+    "reconnecting",
+    "failed",
+    "closing",
+]
+
+
+@dataclass(frozen=True)
+class ConnectionStatus:
+    state: RuntimeState
+    updated_at_ms: int
+    connected_at_ms: int | None = None
+    last_error_type: str | None = None
+    last_error_at_ms: int | None = None
 
 
 class _LoopOwner:
@@ -354,15 +372,24 @@ class McpRuntime:
         self,
         servers: Mapping[str, ServerConfig],
         environ: Mapping[str, str] | Callable[[], Mapping[str, str]],
+        *,
+        sleep: Callable[[float], Awaitable[None]] | None = None,
     ) -> None:
         self._servers = dict(servers)
         self._get_environ = environ if callable(environ) else lambda: environ
+        self._sleep = sleep or asyncio.sleep
         self._actors: dict[str, _ServerActor] = {}
         self._connected: dict[str, ConnectedServer] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self._reconnect_tasks: dict[str, asyncio.Task[ConnectedServer]] = {}
         self._loop_owner = _LoopOwner()
         self._status_lock = threading.Lock()
         self._connected_names: set[str] = set()
+        now = _timestamp_ms()
+        self._statuses = {
+            name: ConnectionStatus(state="disconnected", updated_at_ms=now)
+            for name in self._servers
+        }
         self._close_lock = threading.Lock()
         self._closed = False
 
@@ -371,31 +398,106 @@ class McpRuntime:
             raise RuntimeError("MCP runtime is closed")
         return await self._loop_owner.run(self._connect_on_owner(name, signal))
 
+    async def reconnect(self, name: str, signal: AbortSignal | None) -> ConnectedServer:
+        if self._closed:
+            raise RuntimeError("MCP runtime is closed")
+        return await self._loop_owner.run(self._reconnect_on_owner(name, signal))
+
+    async def _reconnect_on_owner(
+        self,
+        name: str,
+        signal: AbortSignal | None,
+    ) -> ConnectedServer:
+        if name not in self._servers:
+            raise KeyError(f'Unknown MCP server "{name}"')
+        existing = self._reconnect_tasks.get(name)
+        if existing is None:
+            existing = asyncio.create_task(
+                self._perform_reconnect(name, signal),
+                name=f"travis234-mcp-reconnect-{name}",
+            )
+            self._reconnect_tasks[name] = existing
+        try:
+            return await asyncio.shield(existing)
+        except asyncio.CancelledError:
+            if existing.cancelled() and not self._closed:
+                self._set_status(name, "disconnected")
+            raise
+        finally:
+            if existing.done() and self._reconnect_tasks.get(name) is existing:
+                self._reconnect_tasks.pop(name, None)
+
+    async def _perform_reconnect(
+        self,
+        name: str,
+        signal: AbortSignal | None,
+    ) -> ConnectedServer:
+        current = self._actors.get(name)
+        if current is not None:
+            await self._discard_on_owner(current)
+        reconnect = self._servers[name].reconnect
+        last_error: BaseException | None = None
+        for attempt in range(reconnect.max_attempts):
+            self._set_status(name, "reconnecting")
+            try:
+                return await self._connect_on_owner(
+                    name,
+                    signal,
+                    connecting_state="reconnecting",
+                )
+            except asyncio.CancelledError:
+                raise
+            except BaseException as error:
+                last_error = error
+                if attempt + 1 >= reconnect.max_attempts:
+                    raise
+                delay = reconnect.base_delay_ms * (2**attempt) / 1_000
+                self._set_status(name, "reconnecting")
+                await _await_controlled(
+                    self._sleep(delay),
+                    signal,
+                    None,
+                    name,
+                    "reconnect",
+                )
+        assert last_error is not None
+        raise last_error
+
     async def _connect_on_owner(
         self,
         name: str,
         signal: AbortSignal | None,
+        *,
+        connecting_state: RuntimeState = "connecting",
     ) -> ConnectedServer:
         server = self._servers.get(name)
         if server is None:
             raise KeyError(f'Unknown MCP server "{name}"')
         lock = self._locks.setdefault(name, asyncio.Lock())
         async with lock:
+            if self._closed:
+                raise RuntimeError("MCP runtime is closed")
             existing = self._connected.get(name)
             if existing is not None:
                 return existing
-            resolved = resolve_server(server, self._get_environ())
-            actor = _ServerActor(resolved)
-            self._actors[name] = actor
+            self._set_status(name, connecting_state)
             try:
+                resolved = resolve_server(server, self._get_environ())
+                actor = _ServerActor(resolved)
+                self._actors[name] = actor
                 await actor.start(signal)
-            except BaseException:
+            except asyncio.CancelledError:
                 self._actors.pop(name, None)
+                if not self._closed:
+                    self._set_status(name, "disconnected")
+                raise
+            except BaseException as error:
+                self._actors.pop(name, None)
+                self._set_status(name, "failed", error=error)
                 raise
             connected = ConnectedServer(actor, self)
             self._connected[name] = connected
-            with self._status_lock:
-                self._connected_names.add(name)
+            self._set_status(name, "connected")
             return connected
 
     async def _request(
@@ -407,14 +509,32 @@ class McpRuntime:
     ) -> object:
         try:
             return await self._loop_owner.run(actor.request(operation, arguments, signal))
-        except (TimeoutError, asyncio.CancelledError):
+        except asyncio.CancelledError:
             try:
                 await self._loop_owner.run(self._discard_on_owner(actor))
             except (asyncio.CancelledError, RuntimeError):
                 pass
             raise
+        except BaseException as error:
+            name = actor.resolved.name
+            try:
+                await self._loop_owner.run(self._discard_on_owner(actor, error=error))
+            except (asyncio.CancelledError, RuntimeError):
+                pass
+            server = self._servers.get(name)
+            if server is not None and server.reconnect.automatic and not self._closed:
+                try:
+                    await self._loop_owner.run(self._reconnect_on_owner(name, signal))
+                except BaseException:
+                    pass
+            raise
 
-    async def _discard_on_owner(self, actor: _ServerActor) -> None:
+    async def _discard_on_owner(
+        self,
+        actor: _ServerActor,
+        *,
+        error: BaseException | None = None,
+    ) -> None:
         name = actor.resolved.name
         lock = self._locks.setdefault(name, asyncio.Lock())
         async with lock:
@@ -422,8 +542,7 @@ class McpRuntime:
                 return
             self._actors.pop(name, None)
             self._connected.pop(name, None)
-            with self._status_lock:
-                self._connected_names.discard(name)
+            self._set_status(name, "failed" if error is not None else "disconnected", error=error)
             await actor.close()
 
     async def close(self) -> None:
@@ -431,6 +550,8 @@ class McpRuntime:
             if self._closed:
                 return
             self._closed = True
+        for name in self._servers:
+            self._set_status(name, "closing")
         if not self._loop_owner.started:
             return
         await self._loop_owner.run(self._close_on_owner())
@@ -440,14 +561,56 @@ class McpRuntime:
         actors = list(self._actors.values())
         self._actors.clear()
         self._connected.clear()
+        reconnect_tasks = tuple(self._reconnect_tasks.values())
+        self._reconnect_tasks.clear()
+        for task in reconnect_tasks:
+            task.cancel()
         with self._status_lock:
             self._connected_names.clear()
-        if actors:
-            await asyncio.gather(*(actor.close() for actor in actors), return_exceptions=True)
+        pending = [actor.close(force=True) for actor in actors]
+        if reconnect_tasks:
+            pending.extend(reconnect_tasks)
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     def is_connected(self, name: str) -> bool:
         with self._status_lock:
             return name in self._connected_names
+
+    def status(self, name: str) -> ConnectionStatus:
+        with self._status_lock:
+            try:
+                return self._statuses[name]
+            except KeyError as error:
+                raise KeyError(f'Unknown MCP server "{name}"') from error
+
+    def _set_status(
+        self,
+        name: str,
+        state: RuntimeState,
+        *,
+        error: BaseException | None = None,
+    ) -> None:
+        now = _timestamp_ms()
+        with self._status_lock:
+            previous = self._statuses[name]
+            connected_at = now if state == "connected" else previous.connected_at_ms
+            last_error_type = previous.last_error_type
+            last_error_at = previous.last_error_at_ms
+            if error is not None:
+                last_error_type = type(error).__name__[:80]
+                last_error_at = now
+            self._statuses[name] = ConnectionStatus(
+                state=state,
+                updated_at_ms=now,
+                connected_at_ms=connected_at,
+                last_error_type=last_error_type,
+                last_error_at_ms=last_error_at,
+            )
+            if state == "connected":
+                self._connected_names.add(name)
+            else:
+                self._connected_names.discard(name)
 
 
 async def _await_controlled(
@@ -483,6 +646,10 @@ async def _await_controlled(
 
 def _as_text_io(stream: TextIO) -> TextIO:
     return stream
+
+
+def _timestamp_ms() -> int:
+    return time.time_ns() // 1_000_000
 
 
 @asynccontextmanager

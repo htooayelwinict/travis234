@@ -85,7 +85,7 @@ async def test_status_reports_shadowed_external_packaged_server_without_connecti
     assert state.runtime.connects == []
     assert result.content[0].text == (
         "MCP adapter status\n"
-        "- package-fixture: disconnected\n"
+        "- package-fixture: disconnected; automaticReconnect=off\n"
         "- ignored external configuration for packaged server: package-fixture"
     )
     assert result.details["travis234Mcp"]["shadowedConfiguredServers"] == [

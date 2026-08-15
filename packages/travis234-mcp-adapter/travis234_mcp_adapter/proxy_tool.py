@@ -51,6 +51,7 @@ MCP_TOOL_SCHEMA = {
                 "resources.read",
                 "prompts.list",
                 "prompts.get",
+                "reconnect",
             ],
         },
         "query": {"type": "string"},
@@ -81,6 +82,7 @@ class ProxyOperation(StrEnum):
     RESOURCES_READ = "resources.read"
     PROMPTS_LIST = "prompts.list"
     PROMPTS_GET = "prompts.get"
+    RECONNECT = "reconnect"
 
 
 @dataclass(frozen=True)
@@ -180,6 +182,19 @@ async def dispatch_proxy(
     operation = normalized.result_operation
     generation = state.generation
     try:
+        if normalized.operation == ProxyOperation.RECONNECT:
+            await state.runtime.reconnect(server_name, signal)
+            if state.generation != generation:
+                raise StaleMcpGenerationError(
+                    "MCP session generation changed during reconnect"
+                )
+            _clear_server_catalogs(state, server_name)
+            return _adapter_result(
+                f'MCP server "{server_name}" reconnected.',
+                operation=operation,
+                is_error=False,
+                server=server_name,
+            )
         if normalized.operation == ProxyOperation.RESOURCES_READ:
             resource_catalog = _resource_catalogs(state).get(server_name)
             if (
@@ -294,10 +309,12 @@ async def dispatch_proxy(
     except TimeoutError as error:
         if state.generation != generation:
             raise asyncio.CancelledError
+        _clear_server_catalogs(state, server_name)
         return _error_result(str(error), operation=operation, server=server_name)
     except Exception as error:
         if state.generation != generation:
             raise asyncio.CancelledError
+        _clear_server_catalogs(state, server_name)
         return _error_result(
             f'MCP server "{server_name}" {operation} failed ({type(error).__name__}).',
             operation=operation,
@@ -345,6 +362,12 @@ def _prompt_catalogs(state: ProxyState) -> dict[str, PromptCatalog]:
     return catalogs
 
 
+def _clear_server_catalogs(state: ProxyState, server: str) -> None:
+    state.catalogs.pop(server, None)
+    _resource_catalogs(state).pop(server, None)
+    _prompt_catalogs(state).pop(server, None)
+
+
 def _normalize_dispatch(params: dict[str, object]) -> NormalizedDispatch | str:
     unknown = set(params).difference(MCP_TOOL_SCHEMA["properties"])
     if unknown:
@@ -370,6 +393,7 @@ def _normalize_dispatch(params: dict[str, object]) -> NormalizedDispatch | str:
             ProxyOperation.RESOURCES_READ: {"server", "operation", "resource"},
             ProxyOperation.PROMPTS_LIST: {"server", "operation", "query"},
             ProxyOperation.PROMPTS_GET: {"server", "operation", "prompt", "arguments"},
+            ProxyOperation.RECONNECT: {"server", "operation"},
         }[operation]
         if set(params).difference(allowed):
             return 'Request fields do not match the selected operation. Example: {"server":"github","operation":"tools.list"}'
@@ -453,12 +477,35 @@ def _status_result(state: ProxyState) -> AgentToolResult:
             servers=[],
             ignored_project_sources=0,
         )
-    server_details = []
+    server_details: list[dict[str, object]] = []
     for name in sorted(state.config.servers):
-        connected = state.runtime is not None and state.runtime.is_connected(name)
-        server_details.append({"name": name, "status": "connected" if connected else "disconnected"})
+        configured = state.config.servers[name]
+        detail: dict[str, object] = {
+            "name": name,
+            "automaticReconnect": configured.reconnect.automatic,
+            "maxReconnectAttempts": configured.reconnect.max_attempts,
+        }
+        if state.runtime is not None and hasattr(state.runtime, "status"):
+            snapshot = state.runtime.status(name)
+            detail["status"] = snapshot.state
+            detail["updatedAtMs"] = snapshot.updated_at_ms
+            if snapshot.connected_at_ms is not None:
+                detail["connectedAtMs"] = snapshot.connected_at_ms
+            if snapshot.last_error_type is not None:
+                detail["lastErrorType"] = snapshot.last_error_type
+            if snapshot.last_error_at_ms is not None:
+                detail["lastErrorAtMs"] = snapshot.last_error_at_ms
+        else:
+            connected = state.runtime is not None and state.runtime.is_connected(name)
+            detail["status"] = "connected" if connected else "disconnected"
+        server_details.append(detail)
     lines = ["MCP adapter status"]
-    lines.extend(f"- {item['name']}: {item['status']}" for item in server_details)
+    for item in server_details:
+        reconnect = "on" if item["automaticReconnect"] else "off"
+        line = f"- {item['name']}: {item['status']}; automaticReconnect={reconnect}"
+        if "lastErrorType" in item:
+            line += f"; lastError={item['lastErrorType']}"
+        lines.append(line)
     ignored_count = len(state.config.ignored_project_sources)
     if ignored_count:
         noun = "file" if ignored_count == 1 else "files"
@@ -562,7 +609,7 @@ def _adapter_result(
     operation: str,
     is_error: bool,
     server: str | None = None,
-    servers: list[dict[str, str]] | None = None,
+    servers: list[dict[str, object]] | None = None,
     ignored_project_sources: int | None = None,
     shadowed_configured_servers: list[str] | None = None,
     marker_fields: dict[str, object] | None = None,
