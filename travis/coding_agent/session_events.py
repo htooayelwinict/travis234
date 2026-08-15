@@ -57,6 +57,7 @@ from travis.coding_agent.process_context import ProcessContextResolver
 from travis.coding_agent.processes.local import create_local_process_transport
 from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import ProcessOwner
+from travis.coding_agent.policy.types import TOOL_EFFECT_ORDER, ToolPolicyDecision
 from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.session_index import SessionIndex
 from travis.coding_agent.session_store import (
@@ -92,6 +93,16 @@ from travis.coding_agent.session_types import QueueUpdateEvent
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ToolPolicyDecisionEvent:
+    tool: str
+    effects: tuple[str, ...]
+    mode: str
+    allow: bool
+    reason_code: str
+    type: str = "tool_policy_decision"
 
 
 def _canonicalize_process_tool_calls(message: AssistantMessage) -> None:
@@ -261,6 +272,37 @@ class SessionEventController:
                 follow_up=self.get_follow_up_messages(),
             )
         )
+
+    def _emit_tool_policy_decision(self, decision: ToolPolicyDecision) -> None:
+        effects = tuple(effect for effect in TOOL_EFFECT_ORDER if effect in decision.effects)
+        event = ToolPolicyDecisionEvent(
+            tool=decision.tool_name,
+            effects=effects,
+            mode=decision.mode,
+            allow=decision.allow,
+            reason_code=decision.reason_code,
+        )
+        self._emit(event)
+        sink = self._tool_policy_event_sink
+        if sink is None:
+            return
+        try:
+            sink(
+                {
+                    "type": event.type,
+                    "tool": event.tool,
+                    "effects": list(event.effects),
+                    "mode": event.mode,
+                    "allow": event.allow,
+                    "reason_code": event.reason_code,
+                }
+            )
+        except Exception as error:  # noqa: BLE001 - diagnostics never change tool outcomes.
+            logger.warning(
+                "Tool policy decision sink failed for %s (%s)",
+                event.tool,
+                type(error).__name__,
+            )
 
     def _emit(self, event) -> None:
         for listener in list(self._event_listeners):

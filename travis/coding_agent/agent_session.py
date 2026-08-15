@@ -58,6 +58,8 @@ from travis.coding_agent.process_context import ProcessContextResolver
 from travis.coding_agent.processes.local import create_local_process_transport
 from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import ProcessOwner
+from travis.coding_agent.eval_trace import SecretRedactor
+from travis.coding_agent.policy import ToolApprovalBroker, ToolPolicyEngine, ToolPolicySettings
 from travis.coding_agent.auth_storage import AuthStorage
 from travis.coding_agent.model_registry import ModelRegistry
 from travis.coding_agent.model_roles import ModelRole, ModelRoleRouter
@@ -168,6 +170,9 @@ class _SessionRuntime(
         model_change_listener: Callable[[Model, Model], None] | None = None,
         model_role_bindings: Mapping[ModelRole, ScopedModel] | None = None,
         model_role_event_sink: Callable[[dict[str, object]], None] | None = None,
+        tool_approval_broker: ToolApprovalBroker | None = None,
+        tool_policy_event_sink: Callable[[dict[str, object]], None] | None = None,
+        tool_policy_redactor: SecretRedactor | None = None,
     ) -> None:
         self.cwd = cwd
         self.model_registry = model_registry or ModelRegistry.create(AuthStorage.create())
@@ -185,6 +190,22 @@ class _SessionRuntime(
             else None
         )
         self.settings_manager = settings_manager or SettingsManager.in_memory()
+        tool_policy_getter = getattr(self.settings_manager, "get_tool_policy_settings", None)
+        tool_policy_raw = (
+            tool_policy_getter()
+            if callable(tool_policy_getter)
+            else {"mode": "audit", "autoAllowEffects": ["read"]}
+        )
+        self._tool_policy_engine = ToolPolicyEngine(
+            ToolPolicySettings(
+                mode=tool_policy_raw["mode"],
+                auto_allow_effects=frozenset(tool_policy_raw["autoAllowEffects"]),
+            ),
+            broker=tool_approval_broker,
+            redactor=tool_policy_redactor,
+        )
+        self._tool_approval_broker = tool_approval_broker
+        self._tool_policy_event_sink = tool_policy_event_sink
         self._stream_fn = stream_fn or self.model_registry.stream_simple
         self._allowed_tool_names = set(allowed_tool_names) if allowed_tool_names is not None else None
         self._excluded_tool_names = set(excluded_tool_names or [])
@@ -434,6 +455,9 @@ def create_agent_session(
     settings_manager: object | None = None,
     model_role_bindings: Mapping[ModelRole, ScopedModel] | None = None,
     model_role_event_sink: Callable[[dict[str, object]], None] | None = None,
+    tool_approval_broker: ToolApprovalBroker | None = None,
+    tool_policy_event_sink: Callable[[dict[str, object]], None] | None = None,
+    tool_policy_redactor: SecretRedactor | None = None,
 ) -> AgentSession:
     return AgentSession(
         cwd=cwd,
@@ -453,4 +477,7 @@ def create_agent_session(
         settings_manager=settings_manager,
         model_role_bindings=model_role_bindings,
         model_role_event_sink=model_role_event_sink,
+        tool_approval_broker=tool_approval_broker,
+        tool_policy_event_sink=tool_policy_event_sink,
+        tool_policy_redactor=tool_policy_redactor,
     )

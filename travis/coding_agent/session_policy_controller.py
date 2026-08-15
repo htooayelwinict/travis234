@@ -25,25 +25,38 @@ class SessionPolicyController:
     """Apply ``tool_call`` and ``tool_result`` extension hooks."""
 
     async def _before_tool_call(self, context, signal=None) -> BeforeToolCallResult | None:
-        del signal
-        if not self._extension_runner.has_handlers("tool_call"):
+        if self._extension_runner.has_handlers("tool_call"):
+            # Pass the validated object itself. Mutations are visible to later
+            # handlers, policy, and tool execution, and are intentionally not revalidated.
+            result = await self._extension_runner.async_emit_tool_call(
+                {
+                    "type": "tool_call",
+                    "toolName": context.tool_call.name,
+                    "toolCallId": context.tool_call.id,
+                    "input": context.args,
+                }
+            )
+            if result and result.get("block", False):
+                reason = result.get("reason")
+                return BeforeToolCallResult(
+                    block=True,
+                    reason=str(reason) if reason is not None else None,
+                )
+
+        definition = self.get_tool_definition(context.tool_call.name)
+        if definition is None:
             return None
-        # Pass the validated object itself. Mutations are visible to later
-        # handlers and tool execution, and are intentionally not revalidated.
-        result = await self._extension_runner.async_emit_tool_call(
-            {
-                "type": "tool_call",
-                "toolName": context.tool_call.name,
-                "toolCallId": context.tool_call.id,
-                "input": context.args,
-            }
+        decision = await self._tool_policy_engine.authorize(
+            definition,
+            context.args,
+            signal=signal,
         )
-        if not result or not result.get("block", False):
+        self._emit_tool_policy_decision(decision)
+        if decision.allow:
             return None
-        reason = result.get("reason")
         return BeforeToolCallResult(
             block=True,
-            reason=str(reason) if reason is not None else None,
+            reason=f"Tool policy denied {definition.name} ({decision.reason_code})",
         )
 
     async def _after_tool_call(self, context, signal=None) -> AfterToolCallResult | None:
