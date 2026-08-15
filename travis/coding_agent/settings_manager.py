@@ -559,7 +559,17 @@ class SettingsManager:
         self._set_global("enabledModels", list(patterns) if patterns is not None else None)
 
     def get_model_roles(self) -> dict[str, str]:
-        raw = self.settings.get("modelRoles")
+        global_roles = self._model_roles_from(self.global_settings)
+        project_roles = (
+            self._model_roles_from(self.project_settings)
+            if self.project_trusted
+            else {}
+        )
+        return {**global_roles, **project_roles}
+
+    @staticmethod
+    def _model_roles_from(settings: dict) -> dict[str, str]:
+        raw = settings.get("modelRoles")
         if not isinstance(raw, dict):
             return {}
         return {
@@ -574,7 +584,7 @@ class SettingsManager:
         return self.get_model_roles().get(role)
 
     def get_model_role_source(self, role: str) -> SettingsScope | None:
-        if self._scope_has_model_role(self.project_settings, role):
+        if self.project_trusted and self._scope_has_model_role(self.project_settings, role):
             return "project"
         if self._scope_has_model_role(self.global_settings, role):
             return "global"

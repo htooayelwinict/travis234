@@ -106,6 +106,18 @@ def test_project_role_write_requires_trust_before_mutating_memory() -> None:
     assert storage.project_content == "{}"
 
 
+def test_untrusted_project_role_does_not_override_global_role() -> None:
+    settings = SettingsManager(
+        InMemorySettingsStorage(),
+        {"modelRoles": {"worker": "global/worker"}},
+        {"modelRoles": {"worker": "project/worker"}},
+        project_trusted=False,
+    )
+
+    assert settings.get_model_role("worker") == "global/worker"
+    assert settings.get_model_role_source("worker") == "global"
+
+
 def test_malformed_hand_edited_model_roles_are_ignored() -> None:
     settings, _storage = _settings_with_scopes(
         {
@@ -125,6 +137,26 @@ def test_malformed_hand_edited_model_roles_are_ignored() -> None:
     assert settings.get_model_role_source("worker") is None
     assert settings.get_model_role_source("reviewer") is None
     assert settings.get_model_role_source("vision") == "global"
+
+
+def test_malformed_project_role_does_not_hide_valid_global_role() -> None:
+    settings, _storage = _settings_with_scopes(
+        {
+            "modelRoles": {
+                "worker": "global/worker",
+                "reviewer": "global/reviewer",
+            }
+        },
+        {"modelRoles": {"worker": 42, "reviewer": "  "}},
+        trusted=True,
+    )
+
+    assert settings.get_model_roles() == {
+        "worker": "global/worker",
+        "reviewer": "global/reviewer",
+    }
+    assert settings.get_model_role_source("worker") == "global"
+    assert settings.get_model_role_source("reviewer") == "global"
 
 
 def test_file_backed_model_roles_survive_global_and_project_reload(tmp_path: Path) -> None:
