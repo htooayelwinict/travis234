@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import re
+import threading
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -90,12 +91,16 @@ class JsonRpcStdioClient:
         self._stderr_task: asyncio.Task[None] | None = None
         self._pending: dict[int, asyncio.Future[object]] = {}
         self._next_id = 1
-        self._write_lock = asyncio.Lock()
-        self._start_lock = asyncio.Lock()
+        self._write_lock: asyncio.Lock | None = None
+        self._start_lock: asyncio.Lock | None = None
         self._stderr_chunks: deque[bytes] = deque()
         self._stderr_size = 0
         self._closing = False
         self.initialized = False
+        self._runtime_loop: asyncio.AbstractEventLoop | None = None
+        self._runtime_thread: threading.Thread | None = None
+        self._runtime_lock = threading.Lock()
+        self._close_lock = threading.Lock()
 
     @property
     def process_id(self) -> int | None:
@@ -107,6 +112,13 @@ class JsonRpcStdioClient:
         return len(self._pending)
 
     async def start(self) -> None:
+        if self._closing:
+            raise JsonRpcProtocolError("language server client is closed")
+        await self._submit(self._start())
+
+    async def _start(self) -> None:
+        if self._start_lock is None:
+            self._start_lock = asyncio.Lock()
         async with self._start_lock:
             if self._process is not None and self._process.returncode is None:
                 return
@@ -139,7 +151,17 @@ class JsonRpcStdioClient:
         params: object,
         signal: AbortSignal | None = None,
     ) -> object:
-        await self.start()
+        if self._closing:
+            raise JsonRpcProtocolError("language server client is closed")
+        return await self._submit(self._request(method, params, signal))
+
+    async def _request(
+        self,
+        method: str,
+        params: object,
+        signal: AbortSignal | None = None,
+    ) -> object:
+        await self._start()
         if signal is not None and signal.aborted:
             raise asyncio.CancelledError
         loop = asyncio.get_running_loop()
@@ -182,7 +204,12 @@ class JsonRpcStdioClient:
                 aborted.cancel()
 
     async def notify(self, method: str, params: object) -> None:
-        await self.start()
+        if self._closing:
+            raise JsonRpcProtocolError("language server client is closed")
+        await self._submit(self._notify(method, params))
+
+    async def _notify(self, method: str, params: object) -> None:
+        await self._start()
         await self._write_message({"jsonrpc": "2.0", "method": str(method), "params": params})
 
     async def _cancel_request(self, request_id: int) -> None:
@@ -205,6 +232,8 @@ class JsonRpcStdioClient:
         if len(body) > self.limits.max_frame_bytes:
             raise JsonRpcProtocolError("language server outbound frame exceeds limit")
         frame = f"Content-Length: {len(body)}\r\n\r\n".encode("ascii") + body
+        if self._write_lock is None:
+            self._write_lock = asyncio.Lock()
         async with self._write_lock:
             try:
                 writer.write(frame)
@@ -303,6 +332,30 @@ class JsonRpcStdioClient:
                 pending.set_exception(error)
 
     async def close(self) -> None:
+        while not self._close_lock.acquire(blocking=False):
+            await asyncio.sleep(0.01)
+        try:
+            with self._runtime_lock:
+                loop = self._runtime_loop
+                thread = self._runtime_thread
+            if loop is None or thread is None:
+                self._closing = True
+                return
+            try:
+                await self._submit(self._close())
+            finally:
+                loop.call_soon_threadsafe(loop.stop)
+                await asyncio.to_thread(thread.join, 2.0)
+                if thread.is_alive():
+                    raise JsonRpcProtocolError("language server runtime did not stop")
+                with self._runtime_lock:
+                    if self._runtime_loop is loop:
+                        self._runtime_loop = None
+                        self._runtime_thread = None
+        finally:
+            self._close_lock.release()
+
+    async def _close(self) -> None:
         if self._closing:
             return
         process = self._process
@@ -311,7 +364,7 @@ class JsonRpcStdioClient:
             return
         if self.initialized and process.returncode is None:
             try:
-                await self.request("shutdown", None)
+                await self._request("shutdown", None)
             except BaseException:
                 pass
             try:
@@ -342,6 +395,39 @@ class JsonRpcStdioClient:
         self._reader_task = None
         self._stderr_task = None
         self._process = None
+
+    async def _submit(self, coroutine):
+        loop = self._ensure_runtime()
+        submitted = asyncio.run_coroutine_threadsafe(coroutine, loop)
+        try:
+            return await asyncio.wrap_future(submitted)
+        except asyncio.CancelledError:
+            submitted.cancel()
+            raise
+
+    def _ensure_runtime(self) -> asyncio.AbstractEventLoop:
+        with self._runtime_lock:
+            if self._runtime_loop is not None:
+                return self._runtime_loop
+            loop = asyncio.new_event_loop()
+            thread = threading.Thread(
+                target=self._run_runtime,
+                args=(loop,),
+                name="travis-lsp-jsonrpc-runtime",
+                daemon=True,
+            )
+            self._runtime_loop = loop
+            self._runtime_thread = thread
+            thread.start()
+            return loop
+
+    @staticmethod
+    def _run_runtime(loop: asyncio.AbstractEventLoop) -> None:
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_forever()
+        finally:
+            loop.close()
 
 
 __all__ = [

@@ -183,3 +183,23 @@ def test_initialized_close_requests_shutdown_then_exit(tmp_path: Path) -> None:
     recorded = record.read_text(encoding="utf-8")
     assert '"method":"shutdown"' in recorded
     assert recorded.index('"method":"shutdown"') < recorded.index('"method":"exit"')
+
+
+def test_client_survives_separate_sync_turn_event_loops(tmp_path: Path) -> None:
+    client = _client(tmp_path, "echo", timeout=0.2)
+
+    assert _run(client.request("fixture/first-turn", {"turn": 1})) == {"turn": 1}
+    assert _run(client.request("fixture/second-turn", {"turn": 2})) == {"turn": 2}
+    _run(client.close())
+
+    assert client.process_id is None
+
+
+def test_concurrent_close_calls_stop_one_runtime(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        client = _client(tmp_path, "echo")
+        await client.request("fixture/echo", {"ok": True})
+        await asyncio.gather(client.close(), client.close())
+        assert client.process_id is None
+
+    _run(scenario())
