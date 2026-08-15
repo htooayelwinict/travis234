@@ -22,6 +22,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Literal, Protocol, Sequence
 
+from travis.coding_agent.policy import ToolEffect
+from travis.coding_agent.policy.types import normalize_effects
+
 SubagentStatus = Literal["queued", "running", "completed", "failed", "cancelled", "timeout"]
 SubagentSandbox = Literal["read_only", "workspace_write", "full_access"]
 
@@ -87,6 +90,11 @@ class SubagentTask:
     parent_session_id: str | None = None
     parent_turn_id: str | None = None
     depth: int = 1
+    role_definition_name: str | None = None
+    allowed_effects: tuple[ToolEffect, ...] | None = None
+    model_role: Literal["worker", "reviewer"] | None = None
+    result_schema: dict[str, object] | None = None
+    artifact_policy: Literal["none", "declared", "declared_and_trace"] = "none"
 
     def __post_init__(self) -> None:
         if not isinstance(self.role, str) or not self.role.strip():
@@ -137,6 +145,23 @@ class SubagentTask:
             raise ValueError("Subagent parent_session_id must be a string when set")
         if self.parent_turn_id is not None and not isinstance(self.parent_turn_id, str):
             raise ValueError("Subagent parent_turn_id must be a string when set")
+        if self.role_definition_name is not None and (
+            not isinstance(self.role_definition_name, str)
+            or not _TASK_ID_PATTERN.fullmatch(self.role_definition_name)
+        ):
+            raise ValueError("Subagent role_definition_name is invalid")
+        if self.allowed_effects is not None:
+            object.__setattr__(
+                self,
+                "allowed_effects",
+                tuple(effect for effect in ("read", "write", "execute", "network") if effect in normalize_effects(self.allowed_effects)),
+            )
+        if self.model_role not in (None, "worker", "reviewer"):
+            raise ValueError("Subagent model_role must be worker or reviewer")
+        if self.result_schema is not None and not isinstance(self.result_schema, dict):
+            raise ValueError("Subagent result_schema must be an object")
+        if self.artifact_policy not in ("none", "declared", "declared_and_trace"):
+            raise ValueError("Subagent artifact_policy is invalid")
 
     def prompt(self) -> str:
         parts = [

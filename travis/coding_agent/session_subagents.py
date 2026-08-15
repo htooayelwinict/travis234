@@ -60,6 +60,7 @@ from travis.coding_agent.processes.types import ProcessOwner
 from travis.coding_agent.policy.context import fixed_action_context, subagent_policy_context
 from travis.coding_agent.policy.types import ALL_TOOL_EFFECTS
 from travis.coding_agent.resource_loader import DefaultResourceLoader
+from travis.coding_agent.subagent_roles import resolve_agent_role
 from travis.coding_agent.session_index import SessionIndex
 from travis.coding_agent.session_store import (
     BashExecutionMessage,
@@ -92,6 +93,11 @@ from travis.coding_agent.tools.types import (
 
 from travis.coding_agent.session_types import _CANCEL_SUBAGENT_SCHEMA, _DEFAULT_SUBAGENT_ALLOWED_TOOLS, _EXPAND_SUBAGENT_RESULT_SCHEMA, _LIST_SUBAGENTS_SCHEMA, _MODEL_SUBAGENT_SPAWN_LIMIT_PER_TURN, _SKILL_SUBAGENT_ALLOWED_TOOL_NAMES, _SPAWN_SUBAGENT_SCHEMA, _SUBAGENT_RESULT_SUMMARY_LIMIT, _TASK_ID_SCHEMA
 from travis.coding_agent.subagent_trace import _coerce_subagent_timeout_seconds, _expanded_subagent_result_details, _format_subagent_expansion, _model_subagent_timeout_seconds_arg, _optional_timeout_arg, _public_subagent_result_details, _reject_unexpected_args, _replace_artifact_paths, _required_text_arg, _subagent_changed_files, _subagent_expansion_budget_arg, _subagent_expansion_offset_arg, _subagent_expansion_section_arg, _task_id_arg
+
+
+def _merge_role_context(role_context: str, task_context: str) -> str:
+    parts = [part.strip() for part in (role_context, task_context) if part.strip()]
+    return "\n\n".join(parts)[:65_536]
 
 class SessionSubagentController:
     """Owns a focused AgentSession runtime concern."""
@@ -130,6 +136,39 @@ class SessionSubagentController:
             if not allowed_tools or any(tool not in CODING_SUBAGENT_TOOLS for tool in allowed_tools):
                 raise ValueError("Subagent safety overrides are not supported: allowedTools")
         timeout_value = options.get("timeoutSeconds", options.get("timeout_seconds"))
+        requested_timeout = (
+            _coerce_subagent_timeout_seconds(timeout_value, default=1800)
+            if timeout_value is not None
+            else None
+        )
+        definition_name = options.get(
+            "roleDefinitionName", options.get("role_definition_name")
+        )
+        definition = None
+        if self._resource_loader is not None:
+            registry = self._resource_loader.get_agent_roles()
+            if definition_name is not None:
+                if not isinstance(definition_name, str) or not definition_name:
+                    raise ValueError("roleDefinitionName must be a non-empty string")
+                definition = registry.get(definition_name)
+                if definition is None:
+                    raise ValueError(f'Unknown agent role definition: "{definition_name}"')
+            else:
+                definition = registry.get(role)
+        resolved_role = None
+        if definition is not None:
+            parent_tools = tuple(self.get_active_tool_names())
+            if allowed_tools is not None:
+                requested_tool_set = set(allowed_tools)
+                parent_tools = tuple(
+                    name for name in parent_tools if name in requested_tool_set
+                )
+            resolved_role = resolve_agent_role(
+                definition,
+                parent_tools=parent_tools,
+                definitions_by_name=self._tool_definition_by_name,
+                requested_timeout=requested_timeout,
+            )
         task_options = {
             "role": role,
             "goal": goal,
@@ -138,11 +177,33 @@ class SessionSubagentController:
             "sandbox": str(options.get("sandbox") or "workspace_write"),
             "model": options.get("model"),
             "reasoning": options.get("reasoning"),
-            "context_pack": str(options.get("contextPack", options.get("context_pack", "")) or ""),
-            "timeout_seconds": _coerce_subagent_timeout_seconds(timeout_value, default=1800),
-            "allowed_tools": tuple(allowed_tools) if allowed_tools is not None else self._subagent_allowed_tools_for_role(role),
+            "context_pack": _merge_role_context(
+                resolved_role.context_pack if resolved_role is not None else "",
+                str(options.get("contextPack", options.get("context_pack", "")) or ""),
+            ),
+            "timeout_seconds": (
+                resolved_role.timeout_seconds
+                if resolved_role is not None
+                else requested_timeout or 1800
+            ),
+            "allowed_tools": (
+                resolved_role.allowed_tools
+                if resolved_role is not None
+                else tuple(allowed_tools) if allowed_tools is not None else self._subagent_allowed_tools_for_role(role)
+            ),
             "parent_session_id": self.session_id,
             "parent_turn_id": options.get("parentTurnId", options.get("parent_turn_id")),
+            "role_definition_name": (
+                resolved_role.definition_name if resolved_role is not None else None
+            ),
+            "allowed_effects": (
+                resolved_role.allowed_effects if resolved_role is not None else None
+            ),
+            "model_role": resolved_role.model_role if resolved_role is not None else None,
+            "result_schema": resolved_role.result_schema if resolved_role is not None else None,
+            "artifact_policy": (
+                resolved_role.artifact_policy if resolved_role is not None else "none"
+            ),
         }
         return SubagentTask(**task_options)
 
@@ -500,7 +561,7 @@ class SessionSubagentController:
 
     def _run_internal_subagent(self, task: SubagentTask) -> SubagentResult:
         started = int(time.time() * 1000)
-        routed_role = "reviewer" if task.role == "reviewer" else "worker"
+        routed_role = task.model_role or ("reviewer" if task.role == "reviewer" else "worker")
         resolution = self.resolve_model_role(
             routed_role,
             selector_override=task.model,

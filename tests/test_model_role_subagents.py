@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 import pytest
 
@@ -163,6 +164,53 @@ def test_task_builder_preserves_missing_reasoning_for_role_resolution(routed_ses
     task = session._build_subagent_task("reviewer", "inspect")
 
     assert task.reasoning is None
+
+
+def test_typed_role_freezes_reviewer_route_and_capability_ceiling(tmp_path: Path) -> None:
+    primary = _model("roles", "primary")
+    registry = _registry_for(primary)
+    agent_dir = tmp_path / "agent"
+    role_path = agent_dir / "roles" / "security-review.json"
+    role_path.parent.mkdir(parents=True)
+    role_path.write_text(
+        json.dumps(
+            {
+                "name": "security-review",
+                "modelRole": "reviewer",
+                "allowedTools": ["read", "edit"],
+                "allowedEffects": ["read"],
+                "defaultTimeoutSeconds": 120,
+            }
+        ),
+        encoding="utf-8",
+    )
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=primary,
+        model_registry=registry,
+        settings_manager=SettingsManager.in_memory(),
+        stream_fn=_completed_stream,
+        agent_dir=str(agent_dir),
+    )
+    try:
+        task = session._build_subagent_task("security-review", "inspect")
+
+        assert task.role_definition_name == "security-review"
+        assert task.model_role == "reviewer"
+        assert task.allowed_tools == ("read",)
+        assert task.allowed_effects == ("read",)
+        assert task.timeout_seconds == 120
+    finally:
+        session.shutdown()
+
+
+def test_explicit_unknown_role_definition_is_bounded_error(routed_session) -> None:
+    session, _models = routed_session
+
+    with pytest.raises(ValueError, match="Unknown agent role definition"):
+        session._build_subagent_task(
+            "reviewer", "inspect", {"roleDefinitionName": "missing"}
+        )
 
 
 def test_unavailable_internal_route_returns_bounded_failure_without_child(tmp_path: Path) -> None:
