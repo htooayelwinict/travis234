@@ -24,6 +24,7 @@ TRAVIS234 // NEURAL TERMINAL ONLINE
   <a href="#travis234-offsec">OffSec</a> ·
   <a href="#inside-the-runtime">Architecture</a> ·
   <a href="#extensions">Extensions</a> ·
+  <a href="#durable-multi-travis-orchestration">Orchestration</a> ·
   <a href="#context-and-compaction">Compaction</a> ·
   <a href="#production-sandbox">Sandbox</a> ·
   <a href="#verification">Verification</a>
@@ -33,7 +34,7 @@ TRAVIS234 // NEURAL TERMINAL ONLINE
 
 ## Built to keep working
 
-Travis234 is designed for developers who want an agent to carry a task—not one they must constantly babysit. Sessions persist, long-running commands remain controllable, tool execution stays bounded, and context can be compacted without switching the active coding model.
+Travis234 is designed for developers who want an agent to carry a task—not one they must constantly babysit. Sessions persist, long-running commands remain controllable, tool execution stays bounded, context can be compacted without switching the active coding model, and one Travis session can safely hand bounded work to another durable Travis session.
 
 <table>
   <tr>
@@ -479,8 +480,9 @@ See the [complete adapter user guide](packages/travis234-mcp-adapter/README.md) 
 
 ## Skills and state
 
-Every PyPI wheel includes two read-only fallback skills:
+Every PyPI wheel includes three read-only fallback skills:
 
+- `orchestration` for durable Travis-to-Travis worktree handoffs through tmux and structured RPC;
 - `subagent-delegation` for bounded reviewer or worker delegation;
 - `web-search` for source-backed web research.
 
@@ -509,6 +511,52 @@ Useful overrides:
 | `TRAVIS234_IMAGE` | Select the runtime image |
 | `TRAVIS234_SANDBOX_IMAGE` | Select the sandbox image explicitly |
 | `TRAVIS234_SHARE_VIEWER_URL` | Configure the shared-session viewer |
+
+### Durable multi-Travis orchestration
+
+Users can ask in ordinary language for another Travis234 to work in a separate
+checkout and bring evidence back. There is no orchestration syntax to learn:
+
+```text
+Start another Travis in a new worktree, have it inspect parser ownership,
+bring the evidence back for my review, then release it safely.
+```
+
+The lazy `orchestration` skill is selected from that intent. Its full workflow
+is not embedded in the global system prompt, so unrelated turns pay only for
+the skill's compact name and description. This capability is independent of
+the existing subagent tools: Travis B is a complete, resumable Travis234
+session in tmux with its own session history and workspace.
+
+| Mode | What happens |
+|---|---|
+| Supervised | Travis A remains in the user conversation, reviews B's questions and evidence, can send bounded corrections, and explicitly acknowledges each delivery. |
+| Full handoff | B owns the complete bounded scope. A returns the durable worker/session identities with monitoring off and recovers later only when requested. |
+
+The helper creates durable Run, Task, Worker, Dispatch, and Message records
+under `~/.travis234/agent/orchestration`. New-worktree workers keep writes
+separate from A. A one-Dispatch capability authenticates B's reports without
+placing the secret in SQLite, prompts, tool receipts, or logs. Questions,
+replies, terminal packets, corrections, acknowledgements, cancellation,
+abandonment, retention, release, and restart recovery are all explicit and
+bounded.
+
+Important safety boundaries remain visible in every lifecycle receipt:
+
+- B's packet is a report, not proof; A independently checks files, commits,
+  tests, and repository state.
+- No result automatically merges, cherry-picks, pushes, deletes a branch, or
+  removes a worktree.
+- Recovery observes compatible, lost, or uncertain workers and never silently
+  replays a prompt.
+- Unacknowledged packets survive an A restart; acknowledged packets stop being
+  redelivered.
+- The default live-worker limit is two, the hard limit is three, and the
+  default A-to-B prompt budget is four with a hard maximum of twelve.
+
+Advanced users can inspect the version-matched JSON command surface after the
+skill is loaded with `python3 scripts/orchestrate.py guide`. Ordinary users do
+not need to call it directly.
 
 ## Managed processes
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,8 @@ import pytest
 
 ROOT = Path(__file__).parents[1]
 HELPER = ROOT / "travis/resources/skills/orchestration/scripts/orchestrate.py"
+SKILL = ROOT / "travis/resources/skills/orchestration/SKILL.md"
+PROTOCOL = ROOT / "travis/resources/skills/orchestration/references/protocol.md"
 
 
 def load_helper():
@@ -21,7 +24,12 @@ def load_helper():
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous
     return module
 
 
@@ -62,6 +70,71 @@ def parse_failure(completed: subprocess.CompletedProcess[str]) -> dict[str, obje
     payload = json.loads(completed.stderr)
     assert payload["ok"] is False
     return payload
+
+
+def test_skill_instruction_shape_encodes_observed_safety_guards() -> None:
+    source = SKILL.read_text(encoding="utf-8")
+    _, frontmatter_text, body = source.split("---", 2)
+    frontmatter = dict(
+        line.split(": ", 1)
+        for line in frontmatter_text.strip().splitlines()
+    )
+
+    assert frontmatter["name"] == "orchestration"
+    assert frontmatter["description"].startswith("Use when ")
+    assert len(frontmatter["description"]) < 500
+    assert set(frontmatter) == {"name", "description"}
+    assert len(body.split()) <= 500
+    assert "references/protocol.md" in body
+    assert "supervised" in body and "full handoff" in body
+    assert "subagent" in body and "independent" in body
+    assert "Do not" in body and "automatic" in body
+    assert "Travis A owns the user conversation" in body
+    assert "bash" in body and "tmux" in body
+    assert "_relay" not in body
+    assert body.count("For example") == 1
+
+
+def test_protocol_reference_is_the_detailed_single_owner() -> None:
+    source = PROTOCOL.read_text(encoding="utf-8")
+    assert source.startswith("# Travis234 Orchestration Protocol\n\n## Contents")
+    for section in (
+        "Public commands",
+        "Request files and envelopes",
+        "Identities and states",
+        "Supervised recipe",
+        "Full handoff",
+        "Ownership, trust, and Git",
+        "Capability and secret boundary",
+        "Limits",
+        "Lifecycle and recovery",
+        "Failure receipts",
+    ):
+        assert section in source
+    module = load_helper()
+    for command in module.GUIDE_COMMANDS:
+        assert f"`{command}`" in source
+    for status in (
+        module.RUN_STATUSES
+        | module.TASK_STATUSES
+        | module.WORKER_STATUSES
+        | module.DISPATCH_STATUSES
+    ):
+        assert f"`{status}`" in source
+    for packet_field in module.HANDOFF_KEYS:
+        assert f"`{packet_field}`" in source
+    assert "60 seconds" in source
+    assert "two" in source.lower() and "twelve" in source.lower()
+    assert "automatic replay" in source.lower()
+
+
+def test_orchestration_does_not_modify_system_prompt_or_subagent_skill() -> None:
+    protected = {
+        ROOT / "travis/coding_agent/system_prompt.py": "a0dab588bf45707a9eb8307907120753e63750b9fd015ca9508a5ce52d71e505",
+        ROOT / "travis/resources/skills/subagent-delegation/SKILL.md": "2417a6dab69057d16b1f8f687382e887a057788f522aaffe4497c46519d3d838",
+    }
+    for path, expected in protected.items():
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == expected
 
 
 def test_guide_emits_one_stable_versioned_json_envelope() -> None:
