@@ -187,6 +187,21 @@ def test_concurrent_same_digest_retain_is_one_row(tmp_path: Path) -> None:
     store.close()
 
 
+def test_same_digest_retain_does_not_move_updated_timestamp_backward(tmp_path: Path) -> None:
+    path = tmp_path / "memory.sqlite3"
+    first_store = MemoryStore(path)
+    second_store = MemoryStore(path)
+
+    first = _retain(first_store, "shared", now_ms=200, expires_at_ms=500)
+    second = _retain(second_store, "shared", now_ms=100, expires_at_ms=500)
+
+    assert second.memory_id == first.memory_id
+    assert second.created_at_ms == 200
+    assert second.updated_at_ms == 200
+    first_store.close()
+    second_store.close()
+
+
 def test_separate_connections_serialize_same_digest_and_expiry_is_not_pruned(
     tmp_path: Path,
 ) -> None:

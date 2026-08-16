@@ -241,6 +241,7 @@ class MemoryStore:
             ).fetchone()
             if row is not None:
                 existing = self._fact(row)
+                updated_at_ms = max(existing.updated_at_ms, now_ms)
                 connection.execute(
                     """UPDATE memory_facts
                        SET provenance=?, source_session_fingerprint=?, updated_at_ms=?,
@@ -248,7 +249,7 @@ class MemoryStore:
                     (
                         provenance,
                         source_session_fingerprint,
-                        now_ms,
+                        updated_at_ms,
                         expires_at_ms,
                         existing.memory_id,
                     ),
@@ -261,7 +262,7 @@ class MemoryStore:
                     key,
                     provenance,
                     existing.created_at_ms,
-                    now_ms,
+                    updated_at_ms,
                     expires_at_ms,
                     source_session_fingerprint,
                 )
