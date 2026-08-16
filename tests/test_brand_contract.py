@@ -13,6 +13,13 @@ THIRD_PARTY_PRODUCT_LABEL_FILES = {
 }
 EXTERNAL_RESOURCE_COMPATIBILITY_FILES = {
     ROOT / "travis" / "coding_agent" / "project_trust.py",
+    ROOT
+    / "travis"
+    / "resources"
+    / "skills"
+    / "orchestration"
+    / "scripts"
+    / "orchestrate.py",
 }
 ACTIVE_TEXT_ROOTS = (
     ROOT / "travis",

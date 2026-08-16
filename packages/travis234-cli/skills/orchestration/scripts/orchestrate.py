@@ -23,7 +23,6 @@ import threading
 import time
 from typing import Iterator, Sequence
 
-
 SCHEMA_VERSION = 1
 PROTOCOL_VERSION = 1
 ENV_AGENT_DIR = "TRAVIS234_CODING_AGENT_DIR"

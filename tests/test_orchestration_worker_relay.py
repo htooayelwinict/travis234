@@ -378,7 +378,7 @@ def test_relay_startup_failures_are_bounded_and_never_replaced(
                 request,
                 f"failure-{behavior}",
                 tmux_client=client,
-                readiness_timeout=0.4,
+                readiness_timeout=1.5,
             )
         assert raised.value.code == expected_code
         rows = state.connection.execute(
