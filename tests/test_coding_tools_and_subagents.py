@@ -6,6 +6,7 @@ import shutil
 from tests._support_coding_agent import *  # noqa: F403
 from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import ProcessOwner, ProcessState
+from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.session_types import (
     _SUBAGENT_TOOL_NAMES,
     _prompt_rejects_subagent_tools,
@@ -2091,6 +2092,92 @@ def test_spawn_subagent_tool_rejects_model_facing_safety_overrides(tmp_path: Pat
                 pass
             else:  # pragma: no cover - assertion path
                 raise AssertionError(f"Expected spawn_subagent args to fail: {overrides!r}")
+    finally:
+        session.shutdown()
+
+
+def test_spawn_subagent_tool_advertises_trusted_typed_roles(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    agent_dir = tmp_path / "agent"
+    project.mkdir()
+    roles = agent_dir / "roles"
+    roles.mkdir(parents=True)
+    (roles / "security-reviewer.json").write_text(
+        json.dumps(
+            {
+                "name": "security-reviewer",
+                "description": "Review security-sensitive changes\nwithout modifying files.",
+                "modelRole": "reviewer",
+            }
+        ),
+        encoding="utf-8",
+    )
+    loader = DefaultResourceLoader(
+        cwd=str(project),
+        agent_dir=str(agent_dir),
+        project_trusted=False,
+    )
+    loader.reload()
+    session = AgentSession(
+        cwd=str(project),
+        agent_dir=str(agent_dir),
+        model=faux_model(),
+        resource_loader=loader,
+    )
+
+    try:
+        definition = session.get_tool_definition("spawn_subagent")
+        metadata = "\n".join(
+            [definition.prompt_snippet or "", *definition.prompt_guidelines]
+        )
+
+        assert "security-reviewer" in metadata
+        assert "Review security-sensitive changes without modifying files." in metadata
+        assert "tool and effect ceilings" in metadata
+        assert str((roles / "security-reviewer.json").resolve()) not in metadata
+    finally:
+        session.shutdown()
+
+
+def test_spawn_subagent_typed_role_guidance_is_bounded(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    agent_dir = tmp_path / "agent"
+    project.mkdir()
+    roles = agent_dir / "roles"
+    roles.mkdir(parents=True)
+    for index in range(12):
+        (roles / f"role-{index:02d}.json").write_text(
+            json.dumps(
+                {
+                    "name": f"role-{index:02d}",
+                    "description": f"Role {index:02d} " + ("x" * 400),
+                }
+            ),
+            encoding="utf-8",
+        )
+    loader = DefaultResourceLoader(
+        cwd=str(project),
+        agent_dir=str(agent_dir),
+        project_trusted=False,
+    )
+    loader.reload()
+    session = AgentSession(
+        cwd=str(project),
+        agent_dir=str(agent_dir),
+        model=faux_model(),
+        resource_loader=loader,
+    )
+
+    try:
+        definition = session.get_tool_definition("spawn_subagent")
+        metadata = "\n".join(
+            [definition.prompt_snippet or "", *definition.prompt_guidelines]
+        )
+
+        assert len(metadata) <= 1_500
+        assert "role-00" in metadata
+        assert "role-11" not in metadata
+        assert str(agent_dir.resolve()) not in metadata
     finally:
         session.shutdown()
 
