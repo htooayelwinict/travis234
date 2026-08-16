@@ -137,6 +137,38 @@ def test_packaged_builtin_skills_load_as_lazy_defaults(tmp_path: Path) -> None:
     assert "# Web Search" not in skill_prompt
 
 
+def test_packaged_subagent_skill_teaches_combined_coordination_contract(
+    tmp_path: Path,
+) -> None:
+    loader = DefaultResourceLoader(
+        cwd=str(tmp_path),
+        agent_dir=str(tmp_path / "agent"),
+        project_trusted=False,
+    )
+    loader.reload({"projectTrustOverride": False})
+    skill = next(
+        item
+        for item in loader.get_skills()["skills"]
+        if item.name == "subagent-delegation"
+    )
+    source = Path(skill.file_path).read_text(encoding="utf-8")
+    npm_source = (
+        Path(__file__).parents[1]
+        / "packages/travis234-cli/skills/subagent-delegation/SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    assert "in-process" in skill.description
+    assert "typed role" in source
+    assert "tool and effect ceilings" in source
+    assert "structured result" in source
+    assert "declared artifact" in source
+    assert "/agents status" in source
+    assert "independent Travis B" in source
+    assert "orchestration" in source
+    assert len(source.split()) <= 500
+    assert npm_source == source
+
+
 def test_no_skills_omits_packaged_builtin_skills(tmp_path: Path) -> None:
     loader = DefaultResourceLoader(
         cwd=str(tmp_path),

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib.util
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -133,13 +132,39 @@ def test_protocol_reference_is_the_detailed_single_owner() -> None:
     assert "--consume-request-file" in source
 
 
-def test_orchestration_does_not_modify_system_prompt_or_subagent_skill() -> None:
-    protected = {
-        ROOT / "travis/coding_agent/system_prompt.py": "a0dab588bf45707a9eb8307907120753e63750b9fd015ca9508a5ce52d71e505",
-        ROOT / "travis/resources/skills/subagent-delegation/SKILL.md": "2417a6dab69057d16b1f8f687382e887a057788f522aaffe4497c46519d3d838",
-    }
-    for path, expected in protected.items():
-        assert hashlib.sha256(path.read_bytes()).hexdigest() == expected
+def test_combined_prompt_keeps_orchestration_and_subagents_lazy_and_independent(
+    tmp_path: Path,
+) -> None:
+    from travis.ai.providers.faux import faux_model
+    from travis.coding_agent.agent_session import AgentSession
+
+    session = AgentSession(
+        cwd=str(tmp_path),
+        agent_dir=str(tmp_path / "agent"),
+        model=faux_model(),
+    )
+    try:
+        prompt = session.system_prompt
+    finally:
+        session.shutdown()
+
+    assert "orchestration" in prompt
+    assert "subagent-delegation" in prompt
+    assert "# Local Tmux Orchestration" not in prompt
+    assert "# Subagent Delegation" not in prompt
+    assert "python3 scripts/orchestrate.py guide" not in prompt
+    assert "/agents status" not in prompt
+
+    subagent_source = " ".join(
+        (
+            ROOT / "travis/resources/skills/subagent-delegation/SKILL.md"
+        ).read_text(encoding="utf-8").split()
+    )
+    orchestration_source = " ".join(SKILL.read_text(encoding="utf-8").split())
+    assert "Choose the independent `orchestration` skill" in subagent_source
+    assert "another independent Travis B" in subagent_source
+    assert "independent Travis234 session, not a subagent" in orchestration_source
+    assert "subagent substitution" in orchestration_source
 
 
 def test_guide_emits_one_stable_versioned_json_envelope() -> None:

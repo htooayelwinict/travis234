@@ -1,45 +1,65 @@
 ---
 name: subagent-delegation
-description: Use when the user explicitly asks for subagents, child agents, delegation, handoff, parallel agents, reviewer agents, explorer agents, research agents, or agent-to-agent workflows.
+description: Use when the user explicitly requests in-process subagents, child agents, parallel workers or reviewers, bounded delegation, /delegate, or /subagents without a separate durable Travis worktree.
 ---
 
 # Subagent Delegation
 
-Use this skill only for the current request when the user explicitly asks for subagents, delegation, handoff, parallel agents, `/delegate`, or `/subagents`.
+Use this skill for the current request only. Explicit user refusal always wins.
 
-## Delegation contract
+## Choose the mechanism
 
-- Use one wave with at most 3 children. A later wave requires a new explicit user request.
-- Give each child one bounded objective, a clear stop condition, a small output budget, and disjoint file ownership.
-- Children use a workspace-write catalog containing `read`, `grep`, `find`, `ls`, `bash`, `process`, `edit`, `write`, and `tmux`.
-- Use bash for finite commands, bash plus process for interactive PTY work, and tmux for development servers, watchers, REPLs, test loops, long builds, and cross-turn waits.
-- Do not let children spawn more subagents.
-- Avoid duplicate investigation and overlapping mutation ownership among concurrent children.
-- Pass exact user-provided paths or names to the child. Do not pre-read, find, list, grep, or resolve delegated target files in the parent.
-- Never turn a vague request into an unbounded whole-workspace sweep. Ask for a concrete scope when none is available.
+- Choose in-process subagents for bounded work or review inside the current
+  Travis session.
+- Choose the independent `orchestration` skill when the user needs another
+  independent Travis B in tmux, a separate worktree, durable ping-pong,
+  recovery after restart, or full handoff. Do not substitute one mechanism for
+  the other.
 
-## Child prompt
+## Delegate
 
-Every child receives this Subagent system contract:
+1. Use one wave with at most 3 children. A later wave needs a new explicit user
+   request. Give each child one bounded objective, stop condition, output
+   budget, and disjoint file ownership.
+2. Read the `spawn_subagent` metadata. When a configured typed role matches the
+   objective, pass its exact name. Typed roles can only narrow the selected
+   worker or reviewer model, allowed tools, tool and effect ceilings, timeout,
+   structured result schema, and artifact policy. Otherwise use a short
+   descriptive role such as `reviewer` or `researcher`.
+3. Pass exact user-provided targets to the child. Do not pre-read, find, list,
+   grep, or resolve a delegated target in the parent. Never expand a vague
+   request into an unbounded workspace sweep.
+4. Start independent children together with `wait: false`. Continue only
+   useful parent-owned work, then collect every child before finalizing. Do not
+   let a child spawn another subagent.
 
-- Current working directory: the child's selected workspace.
-- Use paths relative to the Current working directory unless the goal supplies an absolute path.
-- Do not drop leading project directories from paths in the Goal.
-- Allowed tools are the child's complete tool catalog. Do not use tools outside it.
-- For file discovery, use `find` or `ls`.
-- You may create or modify only your assigned workspace files with `edit` and `write`.
-- Execute the goal now; make required tool calls and verify the requested outcome before reporting success.
-- Use evidence to separate confirmed findings, hypotheses, unknowns, and failed attempts.
-- After two failed attempts for the same path or unavailable tool, stop repeating it and report the blocker.
-- Report changed files, evidence, failed attempts, artifacts, live tmux sessions, and blockers.
-- Do not include full tool traces in the final response.
+## Child contract
 
-## Parent integration
+Children receive their working directory, bounded goal, complete allowed-tool
+catalog, context pack, and return contract. They must use only those tools,
+respect concurrent file ownership, execute rather than merely plan, verify the
+outcome, and distinguish evidence, uncertainty, failed attempts, and blockers.
 
-Spawn independent children together with `wait: false`, continue useful parent-owned work, then collect every result before finalizing. Review changed files, evidence, failed attempts, artifacts, live tmux sessions, and blockers. Resolve ownership conflicts before accepting overlapping changes.
+A typed role may require a JSON-schema structured result and may allow a
+declared artifact list. Declare only workspace-relative UTF-8 regular files. The runtime
+validates the result and promotes permitted files to durable `artifact-...`
+references; it never trusts arbitrary host paths. Generic children report a
+concise summary, changed files, evidence, failed attempts, artifacts, live tmux
+sessions, and blockers without full tool traces.
 
-A truncated child result is not a failed child result. Use `expand_subagent_result` for bounded child output instead of duplicating the child's investigation. Do not re-read files in the parent merely to reconstruct truncated child output. If expansion remains insufficient, page it with `offset`.
+## Supervise and integrate
 
-Forbidden fallback: do not say "Let me read the key files directly" after a bounded child result. The only allowed recovery paths are to use the available summary, expand the result, page the expansion, report the blocker, or—after explicit user authorization—spawn a narrower follow-up child task.
+The human can use `/agents status`, `/agents inspect <id>`, `/agents steer <id>
+<message>`, and `/agents cancel <id>`. These TUI commands observe or control the
+same session-owned supervisor; they do not create another task engine.
 
-Report each child task id, role, status, concise summary, changed files, and blockers. Cancellation, timeout, duplicate suppression, and the three-child limit remain terminal runtime outcomes; do not conceal them or retry automatically.
+Treat every child result as a report, not proof. Verify material claims and
+resolve ownership conflicts. For truncated output, use
+`expand_subagent_result`, then page with `offset`; do not reconstruct child work
+by re-reading child-owned files. Read returned artifact IDs through the normal
+bounded `read` tool.
+
+Report each task ID, role, status, summary, changed files, artifacts, and
+blockers. Cancellation, timeout, schema failure, duplicate suppression, and
+the three-child limit are terminal outcomes. Do not conceal or automatically
+retry them.
