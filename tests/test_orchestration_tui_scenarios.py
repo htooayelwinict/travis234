@@ -1121,3 +1121,158 @@ def test_tui_two_worker_bound_rejects_third_before_tmux_mutation(
     assert observed["limited"] is True
     assert client.has_session(first_worker.tmux_session)
     assert not (repo / ".worktrees" / "third-bound").exists()
+
+
+GUARDRAIL_PROMPTS = {
+    "worker_declared_failure": "Process B's declared failure as evidence and do not pretend it succeeded.",
+    "wrong_capability": "Reject a terminal report that does not carry B's active dispatch authority.",
+    "dispatch_wait_timeout": "Check once for B's result without blocking or inventing a terminal answer.",
+    "message_check_timeout": "Check the empty durable mailbox once and report that nothing arrived.",
+    "safe_release": "Release the idle worker while preserving its repository and session evidence.",
+    "release_blocked_unacknowledged": "Try to release B before processing its handoff and stop safely.",
+    "abandon_late_stale": "Stop monitoring B, then preserve its late result only as stale evidence.",
+    "recover_lost": "Recover this run after its owned tmux worker disappeared; do not replay.",
+    "recover_outcome_unknown": "Recover this live tmux worker whose private RPC endpoint disappeared.",
+    "prompt_limit_rejected": "Try one more correction after the task's prompt budget is exhausted.",
+}
+
+
+@pytest.mark.parametrize("scenario", tuple(GUARDRAIL_PROMPTS))
+def test_tui_orchestration_guardrail_prompt_matrix(
+    tmp_path: Path,
+    monkeypatch,
+    relay_context,
+    scenario: str,
+) -> None:
+    module, client, state, repo, task_id, worker, agent_dir, _capability_log = relay_context
+    helper = Path(__file__).parents[1] / "travis/resources/skills/orchestration/scripts/orchestrate.py"
+    capability = f"dispatch-capability-{secrets.token_hex(24)}"
+    original = module.secrets.token_urlsafe
+    dispatch = None
+    if scenario not in {"message_check_timeout", "safe_release", "recover_lost", "recover_outcome_unknown", "prompt_limit_rejected"}:
+        module.secrets.token_urlsafe = lambda _size: capability
+        try:
+            dispatch = module.start_dispatch(
+                state,
+                task_id,
+                worker.worker_id,
+                module.DispatchStartRequest(f"Fixture for {scenario}", (), ()),
+                f"{scenario}-dispatch",
+            )
+        finally:
+            module.secrets.token_urlsafe = original
+        time.sleep(0.9)
+    monkeypatch.setenv("TRAVIS234_ORCHESTRATION_CAPABILITY", capability)
+
+    packet_path = tmp_path / f"{scenario}.json"
+    packet = handoff_packet("failed" if scenario == "worker_declared_failure" else "succeeded")
+    if scenario == "worker_declared_failure":
+        packet["blockers"] = ["Worker fixture reported a verified blocker"]
+    packet_path.write_text(json.dumps(packet), encoding="utf-8")
+    packet_path.chmod(0o600)
+    request_path = tmp_path / "over-limit.json"
+    request_path.write_text(
+        json.dumps({"prompt": "One prompt too many", "context": [], "requiredVerification": []}),
+        encoding="utf-8",
+    )
+    request_path.chmod(0o600)
+
+    if scenario == "release_blocked_unacknowledged":
+        assert dispatch is not None
+        state.record_terminal(
+            dispatch.dispatch_id,
+            capability,
+            handoff_packet(),
+            "succeeded",
+            "unacked-terminal",
+        )
+    if scenario == "recover_lost":
+        client.stop_session(worker.tmux_session)
+    if scenario == "recover_outcome_unknown":
+        client.stop_session(worker.tmux_session)
+        subprocess.run(
+            ["tmux", "new-session", "-d", "-s", worker.tmux_session, "sleep 30"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert subprocess.run(
+            ["tmux", "has-session", "-t", worker.tmux_session],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).returncode == 0
+    if scenario == "prompt_limit_rejected":
+        with state.transaction():
+            state.connection.execute(
+                "UPDATE tasks SET prompt_count = max_rounds WHERE task_id = ?", (task_id,)
+            )
+
+    expected = {
+        "worker_declared_failure": "\"kind\":\"failure\"",
+        "wrong_capability": "capability_rejected",
+        "dispatch_wait_timeout": "\"timedOut\":true",
+        "message_check_timeout": "\"timedOut\":true",
+        "safe_release": "\"status\":\"stopped\"",
+        "release_blocked_unacknowledged": "unacknowledged_messages",
+        "abandon_late_stale": "\"stale\":true",
+        "recover_lost": "\"recovery\":\"lost\"",
+        "recover_outcome_unknown": "\"recovery\":\"outcome_unknown\"",
+        "prompt_limit_rejected": "round_limit_reached",
+    }[scenario]
+    calls = {"count": 0}
+    observed = {"pass": False}
+
+    def provider(model, context):
+        calls["count"] += 1
+        if calls["count"] > 1:
+            tool_text = last_tool_text(context).replace(" ", "").replace("\n", "")
+            observed["text"] = tool_text
+            if scenario == "abandon_late_stale" and calls["count"] == 2:
+                assert "\"status\":\"abandoned\"" in tool_text
+            else:
+                observed["pass"] = expected.replace(" ", "") in tool_text
+                return text_response_events(model, f"Guardrail {scenario} produced the expected safe receipt.")
+        if scenario == "worker_declared_failure":
+            command = f"python3 {shlex.quote(str(helper))} worker-fail --dispatch-id {dispatch.dispatch_id} --request-file {shlex.quote(str(packet_path))} --idempotency-key declared-failure"
+        elif scenario == "wrong_capability":
+            monkeypatch.setenv("TRAVIS234_ORCHESTRATION_CAPABILITY", "wrong-capability-value-that-is-long-enough")
+            command = f"python3 {shlex.quote(str(helper))} worker-complete --dispatch-id {dispatch.dispatch_id} --request-file {shlex.quote(str(packet_path))} --idempotency-key wrong-capability"
+        elif scenario == "dispatch_wait_timeout":
+            command = f"python3 {shlex.quote(str(helper))} dispatch-wait --dispatch-id {dispatch.dispatch_id} --wait-seconds 0"
+        elif scenario == "message_check_timeout":
+            command = f"python3 {shlex.quote(str(helper))} message-check --run-id {worker.run_id} --wait-seconds 0 --limit 10"
+        elif scenario in {"safe_release", "release_blocked_unacknowledged"}:
+            command = f"python3 {shlex.quote(str(helper))} worker-release --worker-id {worker.worker_id} --idempotency-key {scenario}"
+        elif scenario == "abandon_late_stale" and calls["count"] == 1:
+            command = f"python3 {shlex.quote(str(helper))} dispatch-abandon --dispatch-id {dispatch.dispatch_id} --idempotency-key abandon-matrix"
+        elif scenario == "abandon_late_stale":
+            command = f"python3 {shlex.quote(str(helper))} worker-complete --dispatch-id {dispatch.dispatch_id} --request-file {shlex.quote(str(packet_path))} --idempotency-key late-stale"
+        elif scenario in {"recover_lost", "recover_outcome_unknown"}:
+            command = f"python3 {shlex.quote(str(helper))} recover --run-id {worker.run_id}"
+        else:
+            command = f"python3 {shlex.quote(str(helper))} dispatch-start --task-id {task_id} --worker-id {worker.worker_id} --request-file {shlex.quote(str(request_path))} --idempotency-key over-limit"
+        return tool_call_response_events(
+            model,
+            "bash",
+            {"command": command, "yield_time_ms": 10_000},
+            call_id=f"guardrail-{scenario}-{calls['count']}",
+        )
+
+    register_api_provider(create_faux_provider(provider))
+    app = CodingApp(
+        cwd=str(repo),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=120, rows=35),
+        agent_dir=str(agent_dir),
+        project_trust_override=False,
+    )
+    try:
+        app.run_turn(GUARDRAIL_PROMPTS[scenario])
+    finally:
+        app.close()
+    assert observed["pass"] is True, observed.get("text")
+    assert Path(str(worker.workspace)).exists()
+    assert not (repo / ".worktrees" / "unexpected").exists()

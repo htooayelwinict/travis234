@@ -74,6 +74,74 @@ the root manifest does not declare npm workspaces. Verification therefore ran
 directory, which exercised the intended package manifest without changing the
 repository's established npm layout.
 
+## Skill-authoring qualification
+
+- [x] RED scenarios were defined before the skill body and run without the skill.
+- [x] The five baseline failures recorded missing structured RPC/stable identity
+  behavior without copying secret-bearing traces.
+- [x] The folder/name is lowercase `orchestration`; frontmatter contains only
+  `name` and a third-person `Use when...` description below 500 characters.
+- [x] Trigger terms cover Travis A/B, another independent Travis, tmux,
+  worktree, ping-pong, recovery, and handoff.
+- [x] The imperative body has one core ownership principle and remains below
+  500 words.
+- [x] Guidance converts baseline gaps into a positive coordinator recipe,
+  structured identity fields, and observable safety guards.
+- [x] One compact natural-language example is present and not duplicated.
+- [x] Deterministic logic remains in `scripts/orchestrate.py`; detailed schemas,
+  states, limits, recovery, and failure behavior live in the single protocol
+  reference.
+- [x] The mode decision is a compact table; no flowchart is needed.
+- [x] Common mistakes cover unsafe tmux, ownership, replay, trust, secrets,
+  integration, cleanup, and subagent substitution.
+- [x] The bundle contains no extra README, quick reference, changelog, asset,
+  or product-specific agent metadata.
+- [x] Both official validators passed via an ephemeral PyYAML environment;
+  instruction tests and Python/npm byte parity passed.
+- [x] The pre-task system prompt and existing `subagent-delegation` skill retain
+  their pinned SHA-256 values.
+- [ ] Five installed-wheel MiniMax M3 repetitions are recorded in the live
+  qualification section below.
+
+No new model rationalization was observed in deterministic GREEN scenarios.
+One test-only bytecode cache appeared during dynamic helper import; the exact
+cache was removed and all three test loaders now suppress bytecode generation,
+so distribution parity remains stable without ignoring arbitrary files.
+
+## Final 21-prompt deterministic TUI matrix
+
+All scenarios use natural-language user prompts, the real `CodingApp`/TUI tool
+continuation path, isolated state/repositories/tmux servers, and fake provider
+and RPC endpoints for deterministic behavior. Each row is one independently
+reported prompt result; no failed attempt is replaced by a retry.
+
+| # | Scenario | Result | Bounded reason |
+|---:|---|---|---|
+| 1 | lazy discovery | **PASS** | Unrelated turn exposed metadata only and created no orchestration state. |
+| 2 | durable Run/Task restart | **PASS** | Fresh A recovered the same IDs without duplicate rows. |
+| 3 | worktree Worker readiness | **PASS** | Receipt followed real tmux/RPC readiness and preserved dirty A state. |
+| 4 | research handoff | **PASS** | B returned bounded evidence; A did not integrate. |
+| 5 | verified code return | **PASS** | B committed in its worktree; A HEAD remained unchanged. |
+| 6 | question and reply | **PASS** | One idle-delivered question, acknowledgement, same-session reply, and final packet. |
+| 7 | bounded correction ping-pong | **PASS** | Acknowledged parent produced one immutable correction Dispatch. |
+| 8 | full handoff | **PASS** | All identities returned with monitoring off and no wait. |
+| 9 | coordinator restart | **PASS** | Unacknowledged packet redelivered, then stopped after acknowledgement. |
+| 10 | failure/cancel/recovery | **PASS** | Exact cancellation preserved Git and recovery performed no replay. |
+| 11 | two-Worker bound | **PASS** | Two Workers started; third was rejected before worktree/tmux mutation. |
+| 12 | Worker-declared failure | **PASS** | Durable failure evidence remained failure, never synthesized success. |
+| 13 | wrong capability | **PASS** | Terminal mutation was rejected without echoing the supplied value. |
+| 14 | Dispatch wait timeout | **PASS** | Zero wait returned nonterminal timeout without invention. |
+| 15 | Message check timeout | **PASS** | Empty mailbox remained empty and nonterminal. |
+| 16 | safe release | **PASS** | Idle Worker stopped while repository/session evidence remained. |
+| 17 | release with unacknowledged packet | **PASS** | Release was blocked before relay/tmux shutdown. |
+| 18 | abandon plus late packet | **PASS** | Monitoring stopped; late result remained stale evidence. |
+| 19 | recover lost Worker | **PASS** | Missing owned tmux became `lost` with no replay. |
+| 20 | recover uncertain Worker | **PASS** | Live tmux with absent RPC became `outcome_unknown`. |
+| 21 | prompt-limit rejection | **PASS** | Extra correction was rejected before RPC mutation. |
+
+Fresh aggregate evidence: **21 passed in 41.31 seconds**. Teardown used each
+fixture's exact isolated tmux server and left no owned test server alive.
+
 ## Distribution and final verification
 
 Not run yet.
