@@ -210,5 +210,23 @@ compatibility, and widens only the synthetic startup-classification test from
 0.4 to 1.5 seconds while its delayed fake remains 5 seconds. Five consecutive
 focused repetitions, the 21-prompt matrix, and the final full suite passed.
 
-The final local container smoke is recorded after its completion; no artifact
-has been published.
+The no-cache release image built from source commit
+`f36bed2a28c2eb5ecb936dc834e0a3308594d345` as local-only
+`travis234:orchestration-local` (image ID
+`sha256:386f0310401aee561832ce77727cb1425d8aa57d59cc864e0f35f58b549f09d7`).
+Its unprivileged smoke passed as user `travis`: tmux and CLI help were
+available; all three packaged orchestration resources existed; `guide`
+returned the Worker signature; private orchestration directory/database modes
+were 0700/0600; and one uniquely named tmux session started, answered
+`has-session`, and stopped. No credential was forwarded and the image was not
+pushed.
+
+Final cleanup found zero `travis234-orch-*` sessions, relay children, or live
+fixture paths. The six ignored nested repositories and six ignored evidence
+directories were listed first, then moved recoverably to
+`~/.Trash/travis234-orchestration-qualification-20260816-1220`; their fixture
+branches/worktrees were never integrated or deleted individually. The precise
+unfinished-marker/credential-shape scan returned zero matches. The real
+`~/.travis234`, generic MCP adapter state, ignored `.env`, and the user's two
+pre-existing working-tree edits were not changed. No artifact has been
+published, pushed, tagged, or promoted.
