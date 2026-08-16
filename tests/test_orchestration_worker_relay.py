@@ -61,8 +61,11 @@ def install_fake_travis(bin_dir: Path) -> Path:
     executable.write_text(
         "#!/usr/bin/env python3\n"
         "import json\n"
+        "import hashlib\n"
         "import os\n"
         "from pathlib import Path\n"
+        "import re\n"
+        "import subprocess\n"
         "import sys\n"
         "import time\n"
         "args = sys.argv[1:]\n"
@@ -70,6 +73,10 @@ def install_fake_travis(bin_dir: Path) -> Path:
         "log = os.environ.get('FAKE_RPC_ARGS_LOG')\n"
         "if log:\n"
         "    Path(log).write_text(json.dumps(args), encoding='utf-8')\n"
+        "capability = os.environ.get('TRAVIS234_ORCHESTRATION_CAPABILITY')\n"
+        "capability_log = os.environ.get('FAKE_RPC_CAPABILITY_HASH_LOG')\n"
+        "if capability and capability_log:\n"
+        "    Path(capability_log).write_text(hashlib.sha256(capability.encode()).hexdigest(), encoding='utf-8')\n"
         "stderr_value = os.environ.get('FAKE_RPC_STDERR')\n"
         "if stderr_value:\n"
         "    print(stderr_value, file=sys.stderr, flush=True)\n"
@@ -88,6 +95,17 @@ def install_fake_travis(bin_dir: Path) -> Path:
         "        reported = str(Path(cwd).parent) if behavior == 'cwd-mismatch' else cwd\n"
         "        result = {'busy': False, 'sessionId': 'fake-session-1', 'cwd': reported, 'model': {'provider': 'fake', 'id': 'fake'}, 'thinkingLevel': 'medium', 'messageCount': 0}\n"
         "    elif method == 'prompt':\n"
+        "        print(json.dumps({'id': request_id, 'event': {'type': 'agent_start'}}, separators=(',', ':')), flush=True)\n"
+        "        handoff_file = os.environ.get('FAKE_RPC_HANDOFF_FILE')\n"
+        "        helper = os.environ.get('FAKE_RPC_HELPER')\n"
+        "        if handoff_file and helper:\n"
+        "            match = re.search(r'dispatch_[0-9a-f]{24}', request.get('params', {}).get('text', ''))\n"
+        "            if match:\n"
+        "                terminal = os.environ.get('FAKE_RPC_TERMINAL', 'worker-complete')\n"
+        "                subprocess.run([sys.executable, helper, terminal, '--dispatch-id', match.group(0), '--request-file', handoff_file, '--idempotency-key', 'fake-rpc-terminal'], check=False, capture_output=True, text=True, env=os.environ.copy())\n"
+        "        delay = float(os.environ.get('FAKE_RPC_PROMPT_DELAY', '0'))\n"
+        "        if delay:\n"
+        "            time.sleep(delay)\n"
         "        result = {'stopReason': 'stop', 'text': 'fake worker result'}\n"
         "    elif method == 'abort':\n"
         "        result = {'aborted': False}\n"
@@ -283,8 +301,7 @@ def test_real_tmux_relay_identity_readiness_and_reconnect(
             timeout=2,
         ) == {"configured": True}
         assert first.request("prompt", {"text": "fake prompt"}, timeout=2) == {
-            "stopReason": "stop",
-            "text": "fake worker result",
+            "accepted": True,
         }
         state_result = second.request("state", timeout=2)
         assert Path(state_result["cwd"]).resolve() == repo.resolve()

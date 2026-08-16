@@ -453,7 +453,13 @@ def test_tui_worker_ready_receipt_follows_worktree_and_relay_readiness(
             assert str(value) in visible
         assert worker_receipt["dirty"] is True
         assert worker_receipt["uncommittedChangesTransferred"] is False
-        forbidden = ("launch.json", "dotenvPath", "capability", "process environment", "raw stderr")
+        forbidden = (
+            "launch.json",
+            "dotenvPath",
+            "TRAVIS234_ORCHESTRATION_CAPABILITY",
+            "dispatch-capability-",
+            "raw stderr",
+        )
         assert not any(value in visible for value in forbidden)
     finally:
         app.close()
@@ -473,3 +479,187 @@ def test_tui_worker_ready_receipt_follows_worktree_and_relay_readiness(
         shutil.rmtree(agent_dir, ignore_errors=True)
 
     assert fake_travis.exists()
+
+
+@pytest.mark.parametrize("scenario", ["research_handoff", "verified_code_return"])
+def test_tui_dispatch_returns_bounded_verified_handoff(
+    tmp_path: Path,
+    monkeypatch,
+    scenario: str,
+) -> None:
+    tmux_executable = shutil.which("tmux")
+    if tmux_executable is None:
+        pytest.skip("tmux is unavailable")
+    server_name = f"travis234-tui-dispatch-{secrets.token_hex(6)}"
+    agent_dir = Path(tempfile.mkdtemp(prefix="t234-tui-dispatch-", dir="/tmp"))
+    repo = initialize_repository(tmp_path / f"{scenario}-repo")
+    (repo / ".gitignore").write_text(".worktrees/\n", encoding="utf-8")
+    git(repo, "add", ".gitignore")
+    git(repo, "commit", "-m", "ignore worktrees")
+    coordinator_head = git(repo, "rev-parse", "HEAD").stdout.strip()
+    helper = Path(__file__).parents[1] / "travis/resources/skills/orchestration/scripts/orchestrate.py"
+    skill = helper.parents[1] / "SKILL.md"
+    bin_dir = tmp_path / "bin"
+    install_fake_travis(bin_dir)
+    tmux_wrapper = bin_dir / "tmux"
+    tmux_wrapper.write_text(
+        "#!/bin/sh\n"
+        f"exec {shlex.quote(tmux_executable)} -L {shlex.quote(server_name)} \"$@\"\n",
+        encoding="utf-8",
+    )
+    tmux_wrapper.chmod(0o755)
+    handoff_file = tmp_path / "worker-handoff.json"
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("TRAVIS234_CODING_AGENT_DIR", str(agent_dir))
+    monkeypatch.setenv("FAKE_RPC_HELPER", str(helper))
+    monkeypatch.setenv("FAKE_RPC_HANDOFF_FILE", str(handoff_file))
+    monkeypatch.setenv("FAKE_RPC_PROMPT_DELAY", "0.2")
+
+    def private_request(name: str, value: dict[str, object]) -> Path:
+        path = tmp_path / name
+        path.write_text(json.dumps(value), encoding="utf-8")
+        path.chmod(0o600)
+        return path
+
+    run_request = private_request("run.json", {"objective": f"TUI {scenario}"})
+    task_request = private_request(
+        "task.json",
+        {
+            "objective": "Return evidence from an isolated worker",
+            "ownership": {
+                "ownedPaths": [] if scenario == "research_handoff" else ["worker-result.txt"],
+                "forbiddenPaths": ["README.md"],
+            },
+            "acceptanceCriteria": ["Return one verified handoff packet"],
+            "mode": "supervised",
+            "maxRounds": 4,
+            "commitPolicy": "no_commit" if scenario == "research_handoff" else "commit",
+        },
+    )
+    worker_request = private_request(
+        "worker.json",
+        {
+            "repository": str(repo),
+            "workspaceMode": "worktree",
+            "worktreeName": f"tui-{scenario}",
+            "branch": f"tui-{scenario}",
+            "base": "main",
+        },
+    )
+    dispatch_request = private_request(
+        "dispatch.json",
+        {
+            "prompt": "Verify the assigned result and return the bounded packet.",
+            "context": ["The coordinator needs evidence, not an automatic merge."],
+            "requiredVerification": ["Inspect the worker workspace before reporting."],
+        },
+    )
+    calls = {"count": 0}
+    identities: dict[str, str] = {}
+    worker_receipt: dict[str, object] = {}
+    terminal_receipt: dict[str, object] = {}
+
+    def provider(model, context):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return tool_call_response_events(
+                model, "read", {"path": str(skill)}, call_id=f"{scenario}_load"
+            )
+        if calls["count"] == 2:
+            command = f"python3 {shlex.quote(str(helper))} run-create --request-file {shlex.quote(str(run_request))} --consume-request-file --idempotency-key {scenario}-run"
+            return tool_call_response_events(model, "bash", {"command": command}, call_id=f"{scenario}_run")
+        if calls["count"] == 3:
+            receipt = json.loads(last_tool_text(context))
+            identities["runId"] = receipt["result"]["run"]["runId"]
+            command = f"python3 {shlex.quote(str(helper))} task-create --run-id {identities['runId']} --request-file {shlex.quote(str(task_request))} --consume-request-file --idempotency-key {scenario}-task"
+            return tool_call_response_events(model, "bash", {"command": command}, call_id=f"{scenario}_task")
+        if calls["count"] == 4:
+            receipt = json.loads(last_tool_text(context))
+            identities["taskId"] = receipt["result"]["task"]["taskId"]
+            command = f"python3 {shlex.quote(str(helper))} worker-start --task-id {identities['taskId']} --request-file {shlex.quote(str(worker_request))} --consume-request-file --idempotency-key {scenario}-worker"
+            return tool_call_response_events(model, "bash", {"command": command, "yield_time_ms": 10_000}, call_id=f"{scenario}_worker")
+        if calls["count"] == 5:
+            receipt = json.loads(last_tool_text(context))
+            worker_receipt.update(receipt["result"]["worker"])
+            identities["workerId"] = str(worker_receipt["workerId"])
+            changed_files: list[str] = []
+            commit: str | None = None
+            if scenario == "verified_code_return":
+                workspace = Path(str(worker_receipt["workspace"]))
+                (workspace / "worker-result.txt").write_text("verified worker result\n", encoding="utf-8")
+                git(workspace, "add", "worker-result.txt")
+                git(workspace, "commit", "-m", "test: return worker result")
+                changed_files = ["worker-result.txt"]
+                commit = git(workspace, "rev-parse", "HEAD").stdout.strip()
+            handoff_file.write_text(
+                json.dumps(
+                    {
+                        "outcome": "succeeded",
+                        "summary": f"{scenario} completed with worker evidence.",
+                        "evidence": ["Worker inspected its isolated workspace"],
+                        "changedFiles": changed_files,
+                        "commit": commit,
+                        "tests": ["focused worker verification passed"],
+                        "artifacts": [],
+                        "failedAttempts": [],
+                        "blockers": [],
+                        "questions": [],
+                        "recommendedNextAction": "Coordinator should inspect; do not auto-integrate.",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            handoff_file.chmod(0o600)
+            command = f"python3 {shlex.quote(str(helper))} dispatch-start --task-id {identities['taskId']} --worker-id {identities['workerId']} --request-file {shlex.quote(str(dispatch_request))} --consume-request-file --idempotency-key {scenario}-dispatch"
+            return tool_call_response_events(model, "bash", {"command": command}, call_id=f"{scenario}_dispatch")
+        if calls["count"] == 6:
+            receipt = json.loads(last_tool_text(context))
+            identities["dispatchId"] = receipt["result"]["dispatch"]["dispatchId"]
+            assert receipt["result"]["dispatch"]["status"] == "accepted"
+            command = f"python3 {shlex.quote(str(helper))} dispatch-wait --dispatch-id {identities['dispatchId']} --wait-seconds 5"
+            return tool_call_response_events(model, "bash", {"command": command, "yield_time_ms": 10_000}, call_id=f"{scenario}_wait")
+        receipt = json.loads(last_tool_text(context))
+        terminal_receipt.update(receipt["result"])
+        return text_response_events(model, f"Received verified {scenario}; no automatic integration performed.")
+
+    register_api_provider(create_faux_provider(provider))
+    app = CodingApp(
+        cwd=str(repo),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=120, rows=35),
+        agent_dir=str(agent_dir),
+        project_trust_override=False,
+    )
+    try:
+        app.run_turn(f"Use orchestration to perform the {scenario} scenario and return its evidence.")
+        assert terminal_receipt["terminal"] is True
+        assert terminal_receipt["packet"]["summary"] == f"{scenario} completed with worker evidence."
+        assert terminal_receipt["automaticIntegration"] is False
+        assert git(repo, "rev-parse", "HEAD").stdout.strip() == coordinator_head
+        visible = "\n".join(
+            block.text
+            for message in app.messages
+            if isinstance(message, ToolResultMessage)
+            for block in message.content
+            if isinstance(block, TextContent)
+        )
+        assert identities["dispatchId"] in visible
+        assert "dispatch-capability-" not in visible
+        assert "TRAVIS234_ORCHESTRATION_CAPABILITY" not in visible
+    finally:
+        app.close()
+        if worker_receipt:
+            try:
+                load_helper().RelayClient(Path(str(worker_receipt["socketPath"]))).request(
+                    "close", timeout=3
+                )
+            except Exception:
+                pass
+        subprocess.run(
+            [tmux_executable, "-L", server_name, "kill-server"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        shutil.rmtree(agent_dir, ignore_errors=True)

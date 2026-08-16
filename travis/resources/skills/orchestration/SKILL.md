@@ -12,3 +12,19 @@ explicit, and use structured handoffs rather than terminal screen scraping.
 Read [the protocol reference](references/protocol.md) before invoking the
 helper. Run `python3 scripts/orchestrate.py guide` for its current command
 surface.
+
+Use this lifecycle:
+
+1. Create a Run and a bounded Task.
+2. Start one Worker only after checking its ownership and worktree receipt.
+3. Start a Dispatch with a private request file; the helper supplies the
+   worker capability without exposing it to the coordinator transcript.
+4. Poll `dispatch-wait` for at most 60 seconds at a time. Continue useful
+   coordinator work between polls.
+5. Treat a terminal handoff as a worker claim. Inspect its evidence and Git
+   state before any later integration or cleanup decision.
+
+Never invoke `_relay`, scrape tmux output as a protocol, paste credentials or
+capabilities into prompts, or merge/cherry-pick/delete a worktree merely
+because a Worker reported success. Nested orchestration requires the user's
+explicit authorization.

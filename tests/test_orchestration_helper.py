@@ -90,9 +90,14 @@ def test_guide_emits_one_stable_versioned_json_envelope() -> None:
             "task-show",
             "task-list",
             "worker-start",
-            "worker-show",
-            "worker-list",
-        ],
+                "worker-show",
+                "worker-list",
+                "dispatch-start",
+                "dispatch-show",
+                "dispatch-wait",
+                "worker-complete",
+                "worker-fail",
+            ],
         "invocation": "python3 scripts/orchestrate.py <command> [arguments]",
     }
     assert payload["nextActions"] == []
