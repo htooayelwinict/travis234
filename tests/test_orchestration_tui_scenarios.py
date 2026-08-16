@@ -9,6 +9,7 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
+import time
 
 import pytest
 
@@ -28,6 +29,7 @@ from tests.test_orchestration_worker_relay import (
     install_fake_travis,
     load_helper,
 )
+from tests.test_orchestration_dispatch import handoff_packet, relay_context
 
 
 def setup_function() -> None:
@@ -892,3 +894,230 @@ def test_tui_question_reply_and_bounded_ping_pong(
             timeout=10,
         )
         shutil.rmtree(agent_dir, ignore_errors=True)
+
+
+def test_tui_full_handoff_acceptance_returns_without_monitoring(
+    tmp_path: Path,
+    relay_context,
+) -> None:
+    module, _client, state, repo, _task_id, worker, agent_dir, _capability_log = relay_context
+    task = state.create_task(
+        worker.run_id,
+        {
+            "objective": "Own the handed-off research scope",
+            "ownership": {"ownedPaths": [], "forbiddenPaths": ["README.md"]},
+            "acceptanceCriteria": ["Preserve a durable report"],
+            "mode": "full_handoff",
+            "maxRounds": 4,
+            "commitPolicy": "no_commit",
+        },
+        "tui-full-handoff-task",
+    )["task"]
+    helper = Path(__file__).parents[1] / "travis/resources/skills/orchestration/scripts/orchestrate.py"
+    skill = helper.parents[1] / "SKILL.md"
+    request = tmp_path / "full-handoff.json"
+    request.write_text(
+        json.dumps(
+            {
+                "prompt": "Take ownership and preserve a report for later recovery.",
+                "context": ["The coordinator will not synchronously monitor."],
+                "requiredVerification": ["Preserve evidence"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    request.chmod(0o600)
+    calls = {"count": 0}
+    final_receipt: dict[str, object] = {}
+
+    def provider(model, context):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return tool_call_response_events(model, "read", {"path": str(skill)}, call_id="full-load")
+        if calls["count"] == 2:
+            command = f"python3 {shlex.quote(str(helper))} dispatch-start --task-id {task['taskId']} --worker-id {worker.worker_id} --request-file {shlex.quote(str(request))} --consume-request-file --idempotency-key tui-full-handoff"
+            return tool_call_response_events(model, "bash", {"command": command}, call_id="full-dispatch")
+        receipt = json.loads(last_tool_text(context))
+        final_receipt.update(receipt["result"])
+        return text_response_events(model, "Full handoff accepted; no coordinator wait was started.")
+
+    register_api_provider(create_faux_provider(provider))
+    app = CodingApp(
+        cwd=str(repo), model=faux_model(), terminal=FakeTerminal(), agent_dir=str(agent_dir), project_trust_override=False
+    )
+    try:
+        app.run_turn("Hand this scope to another durable Travis without waiting for it.")
+    finally:
+        app.close()
+    assert final_receipt["monitoring"] is False
+    assert final_receipt["automaticReplay"] is False
+    assert final_receipt["workerId"] == worker.worker_id
+    assert state.get_worker(worker.worker_id).status == "retained"
+    assert calls["count"] == 3
+
+
+def test_tui_coordinator_restart_redelivers_until_acknowledged(
+    relay_context,
+) -> None:
+    module, _client, state, repo, task_id, worker, agent_dir, _capability_log = relay_context
+    capability = f"dispatch-capability-{secrets.token_hex(24)}"
+    original = module.secrets.token_urlsafe
+    module.secrets.token_urlsafe = lambda _size: capability
+    try:
+        dispatch = module.start_dispatch(
+            state,
+            task_id,
+            worker.worker_id,
+            module.DispatchStartRequest("Return restart evidence", (), ()),
+            "restart-dispatch",
+        )
+    finally:
+        module.secrets.token_urlsafe = original
+    time.sleep(0.9)
+    terminal = state.record_terminal(
+        dispatch.dispatch_id,
+        capability,
+        handoff_packet(),
+        "succeeded",
+        "restart-terminal",
+    )["message"]
+    helper = Path(__file__).parents[1] / "travis/resources/skills/orchestration/scripts/orchestrate.py"
+    deliveries: list[dict[str, object]] = []
+
+    def first_provider(model, context):
+        if not deliveries:
+            command = f"python3 {shlex.quote(str(helper))} message-check --run-id {worker.run_id} --wait-seconds 2 --limit 10"
+            deliveries.append({"requested": True})
+            return tool_call_response_events(model, "bash", {"command": command}, call_id="restart-check-one")
+        receipt = json.loads(last_tool_text(context))
+        deliveries[-1] = receipt["result"]["messages"][0]
+        return text_response_events(model, "Observed the handoff; coordinator will restart before acknowledgement.")
+
+    register_api_provider(create_faux_provider(first_provider))
+    first = CodingApp(cwd=str(repo), model=faux_model(), terminal=FakeTerminal(), agent_dir=str(agent_dir), project_trust_override=False)
+    try:
+        first.run_turn("Check the durable worker mailbox but do not acknowledge yet.")
+    finally:
+        first.close()
+
+    reset_api_providers()
+    calls = {"count": 0}
+
+    def restarted_provider(model, context):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            command = f"python3 {shlex.quote(str(helper))} message-check --run-id {worker.run_id} --wait-seconds 2 --limit 10"
+            return tool_call_response_events(model, "bash", {"command": command}, call_id="restart-check-two")
+        receipt = json.loads(last_tool_text(context))
+        if calls["count"] == 2:
+            deliveries.append(receipt["result"]["messages"][0])
+            command = f"python3 {shlex.quote(str(helper))} message-ack --message-id {terminal['messageId']} --idempotency-key restart-ack"
+            return tool_call_response_events(model, "bash", {"command": command}, call_id="restart-ack")
+        assert receipt["result"]["message"]["acknowledgedAt"] is not None
+        return text_response_events(model, "Recovered and acknowledged the durable handoff.")
+
+    register_api_provider(create_faux_provider(restarted_provider))
+    restarted = CodingApp(cwd=str(repo), model=faux_model(), terminal=FakeTerminal(), agent_dir=str(agent_dir), project_trust_override=False)
+    try:
+        restarted.run_turn("Recover the unprocessed handoff and acknowledge it after reading.")
+    finally:
+        restarted.close()
+    assert deliveries[0]["messageId"] == terminal["messageId"]
+    assert deliveries[1]["messageId"] == terminal["messageId"]
+    assert deliveries[1]["deliveryCount"] == 2
+    assert state.get_message(terminal["messageId"])["acknowledgedAt"] is not None
+
+
+def test_tui_failure_cancel_recovery_is_honest_and_non_destructive(
+    tmp_path: Path,
+    relay_context,
+) -> None:
+    module, _client, state, repo, task_id, worker, agent_dir, _capability_log = relay_context
+    helper = Path(__file__).parents[1] / "travis/resources/skills/orchestration/scripts/orchestrate.py"
+    request = tmp_path / "cancel-dispatch.json"
+    request.write_text(json.dumps({"prompt": "Begin cancellable inspection", "context": [], "requiredVerification": []}), encoding="utf-8")
+    request.chmod(0o600)
+    calls = {"count": 0}
+    receipts: list[dict[str, object]] = []
+
+    def provider(model, context):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            command = f"python3 {shlex.quote(str(helper))} dispatch-start --task-id {task_id} --worker-id {worker.worker_id} --request-file {shlex.quote(str(request))} --consume-request-file --idempotency-key tui-cancel-start"
+            return tool_call_response_events(model, "bash", {"command": command}, call_id="cancel-start")
+        receipt = json.loads(last_tool_text(context))
+        receipts.append(receipt)
+        if calls["count"] == 2:
+            dispatch_id = receipt["result"]["dispatch"]["dispatchId"]
+            command = f"python3 {shlex.quote(str(helper))} dispatch-cancel --dispatch-id {dispatch_id} --idempotency-key tui-cancel"
+            return tool_call_response_events(model, "bash", {"command": command, "yield_time_ms": 10_000}, call_id="cancel-exact")
+        if calls["count"] == 3:
+            command = f"python3 {shlex.quote(str(helper))} recover --run-id {worker.run_id}"
+            return tool_call_response_events(model, "bash", {"command": command}, call_id="cancel-recover")
+        return text_response_events(model, "Cancellation and recovery reported no replay or Git cleanup.")
+
+    register_api_provider(create_faux_provider(provider))
+    app = CodingApp(cwd=str(repo), model=faux_model(), terminal=FakeTerminal(), agent_dir=str(agent_dir), project_trust_override=False)
+    try:
+        app.run_turn("Cancel only the owned supervised worker, then recover honestly without replay.")
+    finally:
+        app.close()
+    assert receipts[1]["result"]["dispatch"]["status"] == "cancelled"
+    assert receipts[1]["result"]["automaticReplay"] is False
+    assert receipts[2]["result"]["automaticReplay"] is False
+    assert Path(str(worker.workspace)).exists()
+
+
+def test_tui_two_worker_bound_rejects_third_before_tmux_mutation(
+    tmp_path: Path,
+    relay_context,
+) -> None:
+    module, client, state, repo, _task_id, first_worker, agent_dir, _capability_log = relay_context
+    second_task = state.create_task(
+        first_worker.run_id,
+        {"objective": "second", "ownership": {"ownedPaths": []}, "acceptanceCriteria": ["ready"], "mode": "supervised", "commitPolicy": "no_commit"},
+        "second-task",
+    )["task"]
+    second = module.start_worker(
+        state,
+        second_task["taskId"],
+        module.WorkerStartRequest(repository=repo, workspace_mode="worktree", worktree_name="second-bound", branch="second-bound", base="main"),
+        "second-worker",
+        tmux_client=client,
+        max_workers=2,
+        readiness_timeout=5,
+    )
+    third_task = state.create_task(
+        first_worker.run_id,
+        {"objective": "third", "ownership": {"ownedPaths": []}, "acceptanceCriteria": ["rejected"], "mode": "supervised", "commitPolicy": "no_commit"},
+        "third-task",
+    )["task"]
+    helper = Path(__file__).parents[1] / "travis/resources/skills/orchestration/scripts/orchestrate.py"
+    third_request = tmp_path / "third-worker.json"
+    third_request.write_text(json.dumps({"repository": str(repo), "workspaceMode": "worktree", "worktreeName": "third-bound", "branch": "third-bound", "base": "main"}), encoding="utf-8")
+    third_request.chmod(0o600)
+    observed = {"limited": False}
+    calls = {"count": 0}
+
+    def provider(model, context):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            command = f"python3 {shlex.quote(str(helper))} worker-start --task-id {third_task['taskId']} --request-file {shlex.quote(str(third_request))} --idempotency-key third-worker"
+            return tool_call_response_events(model, "bash", {"command": command}, call_id="third-worker")
+        text = last_tool_text(context)
+        observed["limited"] = "worker_limit" in text
+        return text_response_events(model, "The third Worker was rejected at the configured bound.")
+
+    register_api_provider(create_faux_provider(provider))
+    app = CodingApp(cwd=str(repo), model=faux_model(), terminal=FakeTerminal(), agent_dir=str(agent_dir), project_trust_override=False)
+    try:
+        app.run_turn("Try a third worker and stop safely if the default bound is reached.")
+    finally:
+        app.close()
+        try:
+            module.RelayClient(Path(second.socket_path)).request("close", timeout=3)
+        except Exception:
+            pass
+    assert observed["limited"] is True
+    assert client.has_session(first_worker.tmux_session)
+    assert not (repo / ".worktrees" / "third-bound").exists()

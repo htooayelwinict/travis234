@@ -31,6 +31,21 @@ use `--consume-request-file` when the helper should unlink the validated file.
 - `message-ack` records that Travis A processed a complete delivery.
 - `message-reply` accepts only an acknowledged active question and resumes the
   same Worker session after prompt-budget and idle checks.
+- `worker-retain` records explicit keep-alive intent. `worker-release` requires
+  an idle RPC turn and acknowledged deliveries, closes only the exact relay and
+  tmux session, and preserves Git/session evidence.
+- `dispatch-cancel` is supervised-only and aborts/stops the exact Worker without
+  deleting its branch or worktree. `dispatch-abandon` stops monitoring without
+  signaling B; a late terminal packet is durable stale evidence and cannot
+  advance the abandoned Task.
+- `recover --run-id ... [--inspect-only]` reconciles SQLite ownership with the
+  exact tmux session, private relay protocol, Travis session ID, and workspace.
+  It marks missing workers `lost`, ambiguous live workers `outcome_unknown`,
+  redelivers unacknowledged packets, and never sends/replays a prompt.
+
+`full_handoff` changes coordinator behavior, not transport safety: B owns the
+handed-off scope, the Worker is retained, `dispatch-start` returns
+`monitoring:false`, and no implicit wait or release follows.
 
 The Task prompt budget counts every Dispatch prompt and every coordinator
 reply. Dispatch `roundNumber` counts immutable Dispatches only. A correction
@@ -46,6 +61,11 @@ Only the SHA-256 digest of a capability is durable. Plaintext exists only in
 relay memory and the selected Worker process environment. A terminal packet
 never causes automatic Git integration; `mayHaveFilesOrCommits` is a mandatory
 inspection warning, not a cleanliness assertion.
+
+Lifecycle receipts explicitly report that replay, integration, push, branch
+deletion, and worktree deletion were not performed. Recovery may remove only
+an exact owner-private stale `launch.json` whose tmux session is absent; it does
+not remove sockets, transcripts, worktrees, branches, or Travis sessions.
 
 The private relay is helper-owned. Do not invoke it directly or use terminal
 screen scraping as a message protocol.

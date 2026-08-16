@@ -101,6 +101,11 @@ def test_guide_emits_one_stable_versioned_json_envelope() -> None:
                 "message-check",
                 "message-ack",
                 "message-reply",
+                "dispatch-cancel",
+                "dispatch-abandon",
+                "worker-retain",
+                "worker-release",
+                "recover",
             ],
         "invocation": "python3 scripts/orchestrate.py <command> [arguments]",
     }

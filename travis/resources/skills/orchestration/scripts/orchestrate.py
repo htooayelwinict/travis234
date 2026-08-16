@@ -149,6 +149,13 @@ TRUST_REQUIRING_PROJECT_RESOURCES = (
     "APPEND_SYSTEM.md",
 )
 MAX_RELAY_FRAME_BYTES = MAX_REQUEST_BYTES
+ACTIONS_NOT_PERFORMED = [
+    "replay",
+    "integration",
+    "push",
+    "branchDeletion",
+    "worktreeDeletion",
+]
 
 GUIDE_COMMANDS = [
     "guide",
@@ -170,6 +177,11 @@ GUIDE_COMMANDS = [
     "message-check",
     "message-ack",
     "message-reply",
+    "dispatch-cancel",
+    "dispatch-abandon",
+    "worker-retain",
+    "worker-release",
+    "recover",
 ]
 
 
@@ -486,6 +498,22 @@ class TmuxClient:
             )
         except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
             raise HelperError("worker_start_failed", "tmux relay could not be started") from exc
+
+    def stop_session(self, name: str) -> None:
+        if any(character in name for character in "\x00\r\n"):
+            raise HelperError("invalid_request", "tmux session identity is invalid")
+        try:
+            completed = subprocess.run(
+                [*self.command, "kill-session", "-t", name],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise HelperError("tmux_unavailable", "Owned tmux session could not be stopped") from exc
+        if completed.returncode != 0 and self.has_session(name):
+            raise HelperError("worker_stop_failed", "Owned tmux session could not be stopped")
 
 
 def git(
@@ -1651,6 +1679,13 @@ def build_worker_prompt(
         acceptance, list
     ):
         raise HelperError("invalid_state", "Stored Task ownership is invalid")
+    mode_guidance = (
+        "Travis B owns the whole handed-off scope. You may preserve a report for later "
+        "recovery and have no obligation to notify a waiting coordinator. Do not "
+        "recursively orchestrate unless the original user authorized it explicitly."
+        if task.get("mode") == "full_handoff"
+        else "Travis A is supervising this bounded assignment and will process your durable Messages."
+    )
     return f"""# Travis234 orchestration assignment
 
 ## Identity and mode
@@ -1663,6 +1698,8 @@ def build_worker_prompt(
 - Mode: {task['mode']}
 - Workspace: {worker_value.get('workspace')}
 - Branch: {worker_value.get('branch')}
+
+{mode_guidance}
 
 ## Objective and bounded context
 Objective: {task['objective']}
@@ -1817,9 +1854,16 @@ class StateStore:
 
     @classmethod
     def open(cls) -> StateStore:
+        return cls.open_at(orchestration_root())
+
+    @classmethod
+    def open_at(cls, root: Path) -> StateStore:
         previous_umask = os.umask(0o077)
         try:
-            root = orchestration_root()
+            root = Path(root).expanduser().resolve()
+            _private_directory(root)
+            _private_directory(root / "sockets")
+            _private_directory(root / "runs")
             path = root / "state.sqlite3"
             if path.is_symlink():
                 raise HelperError("unsafe_state", "Orchestration database cannot use a symlink")
@@ -2128,6 +2172,9 @@ class StateStore:
             raise HelperError("invalid_state", "Stored Message state is invalid") from exc
         if row["kind"] not in MESSAGE_KINDS or not isinstance(payload, dict):
             raise HelperError("invalid_state", "Stored Message state is invalid")
+        dispatch_row = self.connection.execute(
+            "SELECT status FROM dispatches WHERE dispatch_id = ?", (row["dispatch_id"],)
+        ).fetchone()
         return {
             "messageId": row["message_id"],
             "dispatchId": row["dispatch_id"],
@@ -2139,6 +2186,7 @@ class StateStore:
             "lastDeliveredAt": row["last_delivered_at"],
             "deliveryCount": row["delivery_count"],
             "acknowledgedAt": row["acknowledged_at"],
+            "stale": dispatch_row is not None and dispatch_row["status"] == "abandoned",
         }
 
     def get_run(self, run_id: str) -> dict[str, object]:
@@ -2622,6 +2670,7 @@ class StateStore:
             current = self.get_dispatch(dispatch_id)
             if current.settled_at is not None:
                 raise HelperError("terminal_conflict", "Dispatch already has a terminal result")
+            stale = current.status == "abandoned"
             message_id = new_id("message")
             timestamp = utc_now()
             kind = "handoff" if expected_outcome == "succeeded" else "failure"
@@ -2641,22 +2690,28 @@ class StateStore:
                     timestamp,
                 ),
             )
-            self.connection.execute(
-                "UPDATE dispatches SET status = ?, settled_at = ?, updated_at = ? WHERE dispatch_id = ?",
-                (expected_outcome, timestamp, timestamp, dispatch_id),
-            )
-            self.connection.execute(
-                "UPDATE tasks SET status = ?, updated_at = ? WHERE task_id = ?",
-                (expected_outcome, timestamp, current.task_id),
-            )
-            self.connection.execute(
-                "UPDATE workers SET status = 'idle', updated_at = ? WHERE worker_id = ?",
-                (timestamp, current.worker_id),
-            )
+            if not stale:
+                self.connection.execute(
+                    "UPDATE dispatches SET status = ?, settled_at = ?, updated_at = ? WHERE dispatch_id = ?",
+                    (expected_outcome, timestamp, timestamp, dispatch_id),
+                )
+                self.connection.execute(
+                    "UPDATE tasks SET status = ?, updated_at = ? WHERE task_id = ?",
+                    (expected_outcome, timestamp, current.task_id),
+                )
+                worker = self.get_worker(current.worker_id)
+                self.connection.execute(
+                    "UPDATE workers SET status = ?, updated_at = ? WHERE worker_id = ?",
+                    ("retained" if worker.retained else "idle", timestamp, current.worker_id),
+                )
             row = self.connection.execute(
                 "SELECT * FROM messages WHERE message_id = ?", (message_id,)
             ).fetchone()
-            result = {"effect": "created", "message": self._message_from_row(row)}
+            result = {
+                "effect": "created",
+                "message": self._message_from_row(row),
+                "stale": stale,
+            }
             self.connection.execute(
                 "INSERT INTO idempotency(scope, key, response_json, created_at) VALUES(?, ?, ?, ?)",
                 (scope, key, _canonical_json(result), timestamp),
@@ -2860,6 +2915,80 @@ class StateStore:
             )
             return result
 
+    def set_worker_retained(self, worker_id: str, retained: bool = True) -> WorkerRecord:
+        with self.transaction():
+            worker = self.get_worker(worker_id)
+            timestamp = utc_now()
+            status_value = worker.status
+            if retained and worker.status in {"ready", "idle", "busy"}:
+                status_value = "retained"
+            elif not retained and worker.status == "retained":
+                status_value = "idle"
+            self.connection.execute(
+                "UPDATE workers SET retained = ?, status = ?, updated_at = ? WHERE worker_id = ?",
+                (int(retained), status_value, timestamp, worker_id),
+            )
+            return self.get_worker(worker_id)
+
+    def set_worker_stopped(self, worker_id: str) -> WorkerRecord:
+        with self.transaction():
+            self.get_worker(worker_id)
+            timestamp = utc_now()
+            self.connection.execute(
+                "UPDATE workers SET status = 'stopped', retained = 0, updated_at = ? WHERE worker_id = ?",
+                (timestamp, worker_id),
+            )
+            return self.get_worker(worker_id)
+
+    def mark_cancelled(self, dispatch_id: str) -> dict[str, object]:
+        with self.transaction():
+            dispatch = self.get_dispatch(dispatch_id)
+            task = self.get_task(dispatch.task_id)
+            if task["mode"] != "supervised":
+                raise HelperError("cancel_not_allowed", "Only supervised Dispatches can be cancelled")
+            if dispatch.settled_at is not None:
+                raise HelperError("terminal_conflict", "Dispatch is already terminal")
+            timestamp = utc_now()
+            self.connection.execute(
+                "UPDATE dispatches SET status = 'cancelled', settled_at = ?, updated_at = ? WHERE dispatch_id = ?",
+                (timestamp, timestamp, dispatch_id),
+            )
+            self.connection.execute(
+                "UPDATE tasks SET status = 'cancelled', updated_at = ? WHERE task_id = ?",
+                (timestamp, dispatch.task_id),
+            )
+            self.connection.execute(
+                "UPDATE workers SET status = 'stopped', retained = 0, updated_at = ? WHERE worker_id = ?",
+                (timestamp, dispatch.worker_id),
+            )
+            return {
+                "dispatch": self.get_dispatch(dispatch_id).to_dict(),
+                "worker": self.get_worker(dispatch.worker_id).to_dict(),
+            }
+
+    def mark_abandoned(self, dispatch_id: str) -> dict[str, object]:
+        with self.transaction():
+            dispatch = self.get_dispatch(dispatch_id)
+            if dispatch.settled_at is not None:
+                raise HelperError("terminal_conflict", "Dispatch is already terminal")
+            timestamp = utc_now()
+            self.connection.execute(
+                "UPDATE dispatches SET status = 'abandoned', updated_at = ? WHERE dispatch_id = ?",
+                (timestamp, dispatch_id),
+            )
+            self.connection.execute(
+                "UPDATE tasks SET status = 'abandoned', updated_at = ? WHERE task_id = ?",
+                (timestamp, dispatch.task_id),
+            )
+            self.connection.execute(
+                "UPDATE workers SET status = 'retained', retained = 1, updated_at = ? WHERE worker_id = ?",
+                (timestamp, dispatch.worker_id),
+            )
+            return {
+                "dispatch": self.get_dispatch(dispatch_id).to_dict(),
+                "worker": self.get_worker(dispatch.worker_id).to_dict(),
+            }
+
 
 def _current_umask() -> int:
     current = os.umask(0o077)
@@ -3058,6 +3187,8 @@ def start_dispatch(
         state.set_dispatch_status(dispatch.dispatch_id, "outcome_unknown")
         raise
     accepted_dispatch = state.set_dispatch_status(dispatch.dispatch_id, "accepted")
+    if task["mode"] == "full_handoff":
+        state.set_worker_retained(worker_id, True)
     return replace(accepted_dispatch, prompt=prompt)
 
 
@@ -3228,6 +3359,262 @@ def reply_to_message(
     return result
 
 
+def dispatch_receipt(state: StateStore, dispatch: DispatchRecord) -> dict[str, object]:
+    task = state.get_task(dispatch.task_id)
+    worker = state.get_worker(dispatch.worker_id)
+    return {
+        "runId": task["runId"],
+        "taskId": dispatch.task_id,
+        "workerId": dispatch.worker_id,
+        "dispatchId": dispatch.dispatch_id,
+        "branch": worker.branch,
+        "worktree": worker.worktree_path or worker.workspace,
+        "workspace": worker.workspace,
+        "tmuxSession": worker.tmux_session,
+        "travisSessionId": worker.travis_session_id,
+        "status": dispatch.status,
+        "monitoring": task["mode"] == "supervised",
+        "automaticReplay": False,
+        "automaticIntegration": False,
+    }
+
+
+def retain_worker(
+    state: StateStore, worker_id: str, idempotency_key: str
+) -> dict[str, object]:
+    state.require_compatible()
+    validate_idempotency_key(idempotency_key, state)
+    worker = state.get_worker(worker_id)
+    if worker.retained:
+        return {
+            "effect": "reused",
+            "worker": worker.to_dict(),
+            "actionsNotPerformed": list(ACTIONS_NOT_PERFORMED),
+        }
+    if worker.status not in {"ready", "idle", "busy", "retained"}:
+        raise HelperError("worker_not_retainable", "Worker cannot be retained in its current state")
+    retained = state.set_worker_retained(worker_id, True)
+    return {
+        "effect": "created",
+        "worker": retained.to_dict(),
+        "actionsNotPerformed": list(ACTIONS_NOT_PERFORMED),
+    }
+
+
+def release_worker(
+    state: StateStore,
+    worker_id: str,
+    idempotency_key: str,
+    *,
+    tmux_client: TmuxClient | None = None,
+) -> dict[str, object]:
+    state.require_compatible()
+    validate_idempotency_key(idempotency_key, state)
+    worker = state.get_worker(worker_id)
+    if worker.status == "stopped":
+        return {
+            "effect": "reused",
+            "worker": worker.to_dict(),
+            "actionsNotPerformed": list(ACTIONS_NOT_PERFORMED),
+        }
+    if worker.status not in {"ready", "idle", "retained"}:
+        raise HelperError("worker_not_idle", "Worker must be idle or retained before release")
+    pending = state.connection.execute(
+        """
+        SELECT count(*)
+        FROM messages m JOIN dispatches d ON d.dispatch_id = m.dispatch_id
+        WHERE d.worker_id = ? AND m.sender = 'worker' AND m.acknowledged_at IS NULL
+        """,
+        (worker_id,),
+    ).fetchone()[0]
+    if pending:
+        raise HelperError("unacknowledged_messages", "Worker has unacknowledged Messages")
+    client = tmux_client or TmuxClient()
+    if client.has_session(worker.tmux_session):
+        relay = RelayClient(Path(worker.socket_path))
+        relay_state = relay.request("state", timeout=2)
+        if relay_state.get("busy") is not False:
+            raise HelperError("worker_not_idle", "Worker RPC session is not idle for release")
+        try:
+            relay.request("close", timeout=5)
+        except HelperError as error:
+            raise HelperError("worker_stop_failed", "Worker relay did not close safely") from error
+        deadline = time.monotonic() + 2
+        while client.has_session(worker.tmux_session) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        if client.has_session(worker.tmux_session):
+            client.stop_session(worker.tmux_session)
+    stopped = state.set_worker_stopped(worker_id)
+    return {
+        "effect": "created",
+        "worker": stopped.to_dict(),
+        "actionsNotPerformed": list(ACTIONS_NOT_PERFORMED),
+    }
+
+
+def cancel_dispatch(
+    state: StateStore,
+    dispatch_id: str,
+    idempotency_key: str,
+    *,
+    tmux_client: TmuxClient | None = None,
+) -> dict[str, object]:
+    state.require_compatible()
+    validate_idempotency_key(idempotency_key, state)
+    dispatch = state.get_dispatch(dispatch_id)
+    if dispatch.status == "cancelled":
+        worker = state.get_worker(dispatch.worker_id)
+        return {
+            "effect": "reused",
+            "dispatch": dispatch.to_dict(),
+            "worker": worker.to_dict(),
+            "automaticReplay": False,
+            "actionsNotPerformed": list(ACTIONS_NOT_PERFORMED),
+        }
+    task = state.get_task(dispatch.task_id)
+    if task["mode"] != "supervised":
+        raise HelperError("cancel_not_allowed", "Only supervised Dispatches can be cancelled")
+    worker = state.get_worker(dispatch.worker_id)
+    client = tmux_client or TmuxClient()
+    if client.has_session(worker.tmux_session):
+        relay = RelayClient(Path(worker.socket_path))
+        try:
+            relay.request("abort", timeout=5)
+            relay.request("close", timeout=5)
+        except HelperError:
+            if client.has_session(worker.tmux_session):
+                client.stop_session(worker.tmux_session)
+        deadline = time.monotonic() + 2
+        while client.has_session(worker.tmux_session) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        if client.has_session(worker.tmux_session):
+            client.stop_session(worker.tmux_session)
+    result = state.mark_cancelled(dispatch_id)
+    result.update(
+        {
+            "effect": "created",
+            "automaticReplay": False,
+            "actionsNotPerformed": list(ACTIONS_NOT_PERFORMED),
+        }
+    )
+    return result
+
+
+def abandon_dispatch(
+    state: StateStore, dispatch_id: str, idempotency_key: str
+) -> dict[str, object]:
+    state.require_compatible()
+    validate_idempotency_key(idempotency_key, state)
+    current = state.get_dispatch(dispatch_id)
+    if current.status == "abandoned":
+        result = {
+            "dispatch": current.to_dict(),
+            "worker": state.get_worker(current.worker_id).to_dict(),
+        }
+        effect = "reused"
+    else:
+        result = state.mark_abandoned(dispatch_id)
+        effect = "created"
+    result.update(
+        {
+            "effect": effect,
+            "monitoring": False,
+            "automaticReplay": False,
+            "actionsNotPerformed": list(ACTIONS_NOT_PERFORMED),
+        }
+    )
+    return result
+
+
+def recover_run(
+    state: StateStore,
+    run_id: str,
+    *,
+    inspect_only: bool,
+    tmux_client: TmuxClient | None = None,
+    relay_factory=RelayClient,
+) -> dict[str, object]:
+    validate_id("run", run_id)
+    state.get_run(run_id)
+    if not inspect_only:
+        state.require_compatible()
+    client = tmux_client or TmuxClient()
+    observations: list[dict[str, object]] = []
+    for worker in state.list_workers(run_id, MAX_MESSAGE_LIMIT):
+        alive = client.has_session(worker.tmux_session)
+        target_status = worker.status
+        recovery = "preserved"
+        error_code: str | None = None
+        if worker.status in ACTIVE_WORKER_STATUSES:
+            if not alive:
+                target_status = "lost"
+                recovery = "lost"
+            else:
+                try:
+                    relay_state = relay_factory(Path(worker.socket_path)).request(
+                        "state", timeout=2
+                    )
+                    if (
+                        relay_state.get("sessionId") != worker.travis_session_id
+                        or not isinstance(relay_state.get("cwd"), str)
+                        or worker.workspace is None
+                        or Path(str(relay_state["cwd"])).resolve()
+                        != Path(worker.workspace).resolve()
+                    ):
+                        raise HelperError("identity_mismatch", "Worker recovery identity differs")
+                    recovery = "reconnected"
+                except HelperError as error:
+                    target_status = "outcome_unknown"
+                    recovery = "outcome_unknown"
+                    error_code = error.code
+        launch_file = (
+            state.root
+            / "runs"
+            / run_id
+            / "workers"
+            / worker.worker_id
+            / "launch.json"
+        )
+        stale_launch_removed = False
+        if not alive and launch_file.exists() and not launch_file.is_symlink():
+            metadata = launch_file.stat()
+            if stat.S_ISREG(metadata.st_mode) and stat.S_IMODE(metadata.st_mode) == 0o600:
+                if not inspect_only:
+                    launch_file.unlink()
+                stale_launch_removed = not inspect_only
+        if not inspect_only and target_status != worker.status:
+            state.set_worker_status(worker.worker_id, target_status)
+        observation: dict[str, object] = {
+            "workerId": worker.worker_id,
+            "tmuxAlive": alive,
+            "previousStatus": worker.status,
+            "observedStatus": target_status,
+            "recovery": recovery,
+            "staleLaunchRemoved": stale_launch_removed,
+        }
+        if error_code is not None:
+            observation["errorCode"] = error_code
+        observations.append(observation)
+    rows = state.connection.execute(
+        """
+        SELECT m.* FROM messages m
+        JOIN dispatches d ON d.dispatch_id = m.dispatch_id
+        JOIN tasks t ON t.task_id = d.task_id
+        WHERE t.run_id = ? AND m.sender = 'worker' AND m.acknowledged_at IS NULL
+        ORDER BY m.created_at, m.message_id
+        """,
+        (run_id,),
+    ).fetchall()
+    return {
+        "runId": run_id,
+        "inspectOnly": inspect_only,
+        "workers": observations,
+        "pendingMessages": [state._message_from_row(row) for row in rows],
+        "automaticReplay": False,
+        "actionsNotPerformed": ["prompt", "integration", "worktreeOrBranchCleanup"],
+    }
+
+
 def _bounded_limit(value: int) -> int:
     if isinstance(value, bool) or not 1 <= value <= MAX_MESSAGE_LIMIT:
         raise HelperError("invalid_arguments", "List limit must be between 1 and 50")
@@ -3319,6 +3706,20 @@ def build_parser() -> JsonArgumentParser:
     message_reply.add_argument("--request-file", required=True)
     message_reply.add_argument("--consume-request-file", action="store_true")
     message_reply.add_argument("--idempotency-key", required=True)
+
+    for lifecycle_command in ("dispatch-cancel", "dispatch-abandon"):
+        lifecycle = subparsers.add_parser(lifecycle_command, add_help=False)
+        lifecycle.add_argument("--dispatch-id", required=True)
+        lifecycle.add_argument("--idempotency-key", required=True)
+
+    for worker_command in ("worker-retain", "worker-release"):
+        worker_lifecycle = subparsers.add_parser(worker_command, add_help=False)
+        worker_lifecycle.add_argument("--worker-id", required=True)
+        worker_lifecycle.add_argument("--idempotency-key", required=True)
+
+    recover = subparsers.add_parser("recover", add_help=False)
+    recover.add_argument("--run-id", required=True)
+    recover.add_argument("--inspect-only", action="store_true")
 
     relay = subparsers.add_parser("_relay", add_help=False)
     relay.add_argument("--worker-id", required=True)
@@ -3420,11 +3821,20 @@ def execute(arguments: Sequence[str]) -> dict[str, object]:
                 request,
                 parsed.idempotency_key,
             )
+            receipt = dispatch_receipt(state, dispatch)
             return envelope(
                 command,
-                {"effect": dispatch.effect, "dispatch": dispatch.to_dict()},
+                {
+                    "effect": dispatch.effect,
+                    "dispatch": dispatch.to_dict(),
+                    **receipt,
+                },
                 next_actions=(
-                    "Poll dispatch-wait briefly, then continue useful coordinator work.",
+                    (
+                        "Poll dispatch-wait briefly, then continue useful coordinator work."
+                        if receipt["monitoring"]
+                        else "Preserve the handoff identities; recover explicitly later if requested."
+                    ),
                 ),
             )
         if command == "dispatch-show":
@@ -3507,6 +3917,31 @@ def execute(arguments: Sequence[str]) -> dict[str, object]:
                 command,
                 result,
                 next_actions=("Wait for the Worker to produce another durable Message.",),
+            )
+        if command == "dispatch-cancel":
+            return envelope(
+                command,
+                cancel_dispatch(state, parsed.dispatch_id, parsed.idempotency_key),
+            )
+        if command == "dispatch-abandon":
+            return envelope(
+                command,
+                abandon_dispatch(state, parsed.dispatch_id, parsed.idempotency_key),
+            )
+        if command == "worker-retain":
+            return envelope(
+                command,
+                retain_worker(state, parsed.worker_id, parsed.idempotency_key),
+            )
+        if command == "worker-release":
+            return envelope(
+                command,
+                release_worker(state, parsed.worker_id, parsed.idempotency_key),
+            )
+        if command == "recover":
+            return envelope(
+                command,
+                recover_run(state, parsed.run_id, inspect_only=parsed.inspect_only),
             )
     raise HelperError("invalid_arguments", "Command is not implemented")
 

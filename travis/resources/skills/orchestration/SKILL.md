@@ -27,6 +27,12 @@ Use this lifecycle:
    `parentMessageId` is the acknowledged latest terminal Message.
 6. Treat a terminal handoff as a worker claim. Inspect its evidence and Git
    state before any later integration or cleanup decision.
+7. Retain a live Worker when its workspace/session must remain available.
+   Release only an idle Worker with no unacknowledged deliveries. Use
+   supervised cancellation for exact owned work; use abandonment when
+   monitoring should stop without signaling B. Run `recover` after a
+   coordinator restart or uncertain local state; recovery observes and never
+   replays a prompt.
 
 Never invoke `_relay`, scrape tmux output as a protocol, paste credentials or
 capabilities into prompts, or merge/cherry-pick/delete a worktree merely
