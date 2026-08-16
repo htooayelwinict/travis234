@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-16
 
-**Status:** Design approved; written specification awaiting review
+**Status:** Approved; implementation plan complete, execution not started
 
 ## Goal
 
@@ -193,10 +193,13 @@ transactions, foreign keys, a busy timeout, and WAL mode. Requests have stable
 IDs so a repeated coordinator command can return the existing receipt instead
 of creating duplicate workers, tasks, messages, or commits.
 
-Socket names use bounded hashes in a flat private directory so Unix socket path
-limits do not depend on the user's home-directory length. Worker transcripts
-are size-bounded and rotated without deleting the final handoff or the bounded
-tail needed for diagnosis.
+Socket names use bounded hashes in a flat private directory to minimize Unix
+socket path length. If the existing agent-state root still makes the encoded
+path exceed the conservative platform limit, startup fails before tmux
+mutation and directs the operator to the existing agent-directory override;
+the helper does not invent another state or socket root. Worker transcripts are
+size-bounded and rotated without deleting the final handoff or the bounded tail
+needed for diagnosis.
 
 The state store never records API keys, authorization headers, dotenv contents,
 dispatch capabilities, or full process environments. An explicitly selected
