@@ -1856,3 +1856,73 @@ def test_agent_session_shutdown_cancels_subagent_supervisor(tmp_path):
     release.set()
 
     assert session.subagents.get_result(task_id).status == "cancelled"
+
+
+def _coordination_planner_result_plan(*, cyclic: bool) -> dict[str, object]:
+    dependencies = [{"before": "task-a", "after": "task-b"}]
+    if cyclic:
+        dependencies.append({"before": "task-b", "after": "task-a"})
+    return {
+        "route": "subagents",
+        "tasks": [
+            {"id": "task-a", "owner": "subagent"},
+            {"id": "task-b", "owner": "subagent"},
+        ],
+        "dependencies": dependencies,
+        "ownership": [
+            {"taskId": "task-a", "access": "read", "scopes": ["travis"]},
+            {"taskId": "task-b", "access": "read", "scopes": ["tests"]},
+        ],
+        "verification": [
+            {"taskId": "task-a", "checks": ["inspect"]},
+            {"taskId": "task-b", "checks": ["test"]},
+        ],
+    }
+
+
+def _run_coordination_planner_result(tmp_path, *, cyclic: bool):
+    output = _coordination_planner_result_plan(cyclic=cyclic)
+
+    def backend(task):
+        return SubagentResult(
+            task_id=task.id,
+            backend=task.backend,
+            role=task.role,
+            status="completed",
+            summary="planner finished",
+            final_response=json.dumps(
+                {"summary": "bounded plan", "output": output, "artifacts": []}
+            ),
+        )
+
+    supervisor = SubagentSupervisor(max_threads=1)
+    supervisor.register_backend(CallableSubagentBackend("planner-fixture", backend))
+    task_id = supervisor.spawn(
+        SubagentTask(
+            role="coordination-planner",
+            goal="plan two bounded inspections",
+            cwd=str(tmp_path),
+            backend="planner-fixture",
+            role_definition_name="coordination-planner",
+            result_schema={"type": "object"},
+        )
+    )
+    return supervisor.wait(task_id, timeout=2)
+
+
+def test_coordination_planner_typed_result_rejects_dependency_cycle(tmp_path):
+    result = _run_coordination_planner_result(tmp_path, cyclic=True)
+
+    assert result.status == "failed"
+    assert result.structured_output is None
+    assert any("semantic mismatch" in error and "acyclic" in error for error in result.errors)
+
+
+def test_coordination_planner_typed_result_preserves_valid_plan(tmp_path):
+    expected = _coordination_planner_result_plan(cyclic=False)
+
+    result = _run_coordination_planner_result(tmp_path, cyclic=False)
+
+    assert result.status == "completed"
+    assert result.structured_output == expected
+    assert result.validation_errors == []

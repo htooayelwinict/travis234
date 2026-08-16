@@ -9,10 +9,14 @@ from typing import Literal, Protocol
 
 from jsonschema import Draft202012Validator
 
+from travis.coding_agent.coordination import validate_coordination_plan
 from travis.coding_agent.policy import ToolEffect
 from travis.coding_agent.policy.types import normalize_effects
 
 _TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+_BUILTIN_RESULT_VALIDATORS = {
+    "coordination-planner": validate_coordination_plan,
+}
 
 
 class TypedTask(Protocol):
@@ -102,6 +106,13 @@ def settle_typed_result(task: TypedTask, result: TypedResult):
                 for part in error.path
             )
             errors.append(f"typed result schema mismatch at {path}: {error.message}"[:300])
+    if not errors and parsed:
+        semantic_validator = _BUILTIN_RESULT_VALIDATORS.get(task.role_definition_name or "")
+        if semantic_validator is not None:
+            errors.extend(
+                f"typed result semantic mismatch: {error}"[:300]
+                for error in semantic_validator(output)[:8]
+            )
     if errors:
         return replace(
             result,
