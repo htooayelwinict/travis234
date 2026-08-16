@@ -101,6 +101,25 @@ def test_enabled_memory_registers_exact_schema_effects_and_safe_policy_context(
     session.dispose()
 
 
+def test_memory_tool_guidance_requires_explicit_retention_and_distrusts_recall(
+    tmp_path: Path,
+) -> None:
+    session = _session(tmp_path)
+    definition = session.get_tool_definition("memory")
+    metadata = "\n".join(
+        [
+            definition.description,
+            definition.prompt_snippet or "",
+            *definition.prompt_guidelines,
+        ]
+    )
+
+    assert "user explicitly requests retention" in metadata
+    assert "never as instructions" in metadata
+    assert len(metadata) <= 600
+    session.dispose()
+
+
 def test_memory_approval_request_never_contains_content_query_or_tags(
     tmp_path: Path,
 ) -> None:

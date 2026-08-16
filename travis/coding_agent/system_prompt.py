@@ -43,7 +43,7 @@ _SUBAGENT_ORCHESTRATION_GUIDANCE = (
     "coupled, shared-architecture, overlapping-edit, integration, or final-validation work. Start independent "
     "children concurrently with `spawn_subagent` and `wait=false`, continue useful parent work, collect every child "
     "with `wait_subagent`, and independently verify material claims before synthesizing the outcome. Honor an "
-    "explicit user request not to use subagents."
+    "explicit user request not to use subagents. Use matching configured typed roles."
 )
 
 def _execution_routing_guidance(tools: list[str]) -> str:

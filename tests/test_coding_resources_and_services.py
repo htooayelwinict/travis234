@@ -314,6 +314,31 @@ def test_default_system_prompt_identifies_travis_and_prefers_file_tools(tmp_path
     assert "Do not weaken requested tests to match current implementation behavior" not in prompt
     assert "after a failed test, inspect the failure and relevant source or test before editing again" not in prompt
 
+
+def test_system_prompt_explains_typed_roles_only_with_subagent_tools(
+    tmp_path: Path,
+) -> None:
+    with_subagents = build_system_prompt(
+        BuildSystemPromptOptions(
+            cwd=str(tmp_path),
+            selected_tools=["spawn_subagent", "wait_subagent"],
+            tool_snippets={
+                "spawn_subagent": "Delegate a bounded task.",
+                "wait_subagent": "Wait for its result.",
+            },
+        )
+    )
+    without_subagents = build_system_prompt(
+        BuildSystemPromptOptions(
+            cwd=str(tmp_path),
+            selected_tools=["read"],
+            tool_snippets={"read": "Read files."},
+        )
+    )
+
+    assert "configured typed role" in with_subagents
+    assert "configured typed role" not in without_subagents
+
 def test_system_prompt_routes_nested_file_writes_away_from_shell_setup(tmp_path: Path) -> None:
     write_definition = create_tool_definition("write", str(tmp_path))
     bash_definition = create_tool_definition("bash", str(tmp_path))
