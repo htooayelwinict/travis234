@@ -60,6 +60,32 @@ def test_release_versions_are_aligned() -> None:
     assert f"version-{expected}-" in readme
 
 
+def test_readme_explains_durable_orchestration_without_private_grammar() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    section = readme.split("### Durable multi-Travis orchestration", 1)[1].split(
+        "## Managed processes", 1
+    )[0]
+    normalized = " ".join(section.split())
+    for value in (
+        "ordinary language",
+        "Supervised",
+        "Full handoff",
+        "tmux",
+        "RPC",
+        "Git",
+        "SQLite",
+        "n8n",
+        "generic MCP adapter",
+        "subagent",
+        "No result automatically",
+        "explicitly requests a safe cleanup",
+    ):
+        assert value in normalized
+    assert "_relay" not in normalized
+    assert "TRAVIS234_ORCHESTRATION_CAPABILITY" not in normalized
+    assert "global system prompt" in normalized
+
+
 def test_release_locks_match_project_metadata() -> None:
     assert _locked_project_version(
         ROOT / "packages/travis234-mcp-adapter/uv.lock",
@@ -87,7 +113,7 @@ def test_retired_ghost_addon_has_no_active_product_surface() -> None:
         assert not any(value in text for value in forbidden), path
 
 
-def test_root_distribution_excludes_optional_mcp_packages(tmp_path: Path) -> None:
+def test_root_wheel_distribution_excludes_optional_mcp_packages(tmp_path: Path) -> None:
     output = tmp_path / "dist"
     subprocess.run(
         ["uv", "build", "--wheel", "--clear", "-o", str(output), str(ROOT)],
@@ -108,6 +134,11 @@ def test_root_distribution_excludes_optional_mcp_packages(tmp_path: Path) -> Non
     assert not any("travis234-mcp-adapter" in item for item in requirements)
     assert not any("travis234-ghost-mcp" in item for item in requirements)
     assert not any("ghost_mcp" in name or "ghost-os" in name for name in names)
+    assert {
+        "travis/resources/skills/orchestration/SKILL.md",
+        "travis/resources/skills/orchestration/references/protocol.md",
+        "travis/resources/skills/orchestration/scripts/orchestrate.py",
+    } <= set(names)
 
 
 def test_packaged_builtin_skills_match_npm_distribution() -> None:

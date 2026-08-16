@@ -45,8 +45,8 @@ Lifecycle and recovery:
 - `worker-retain`, `worker-release`
 - `recover`
 
-Run `python3 scripts/orchestrate.py guide`; never infer a command absent from
-that result.
+Run `python3 scripts/orchestrate.py guide`, use its returned signatures, and
+never infer a command absent from that result.
 
 ## Request files and envelopes
 
@@ -55,6 +55,21 @@ larger than 256 KiB, with no group/world permissions. Pass `--request-file`
 and normally `--consume-request-file`. Every mutation also requires a bounded
 `--idempotency-key`; reusing it returns the same domain result instead of
 repeating the mutation.
+
+Create request files as regular private files, never with process substitution:
+
+```bash
+umask 077
+request_file="$(mktemp)"
+trap 'rm -f -- "$request_file"' EXIT
+printf '%s\n' "$request_json" > "$request_file"
+python3 scripts/orchestrate.py COMMAND --request-file "$request_file" \
+  --consume-request-file --idempotency-key UNIQUE_KEY
+```
+
+Replace `COMMAND` and its required identity arguments using `guide`. Write the
+JSON without printing it. The consume flag removes a validated request; the
+trap removes the exact temporary path if validation stops first.
 
 Run creation:
 

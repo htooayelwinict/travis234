@@ -32,6 +32,27 @@ test("package exposes travis234 binaries only", () => {
   assert.equal(fs.existsSync(path.join(packageRoot, packageJson.bin.travis234)), true);
 });
 
+test("npm archive contains the complete orchestration skill", () => {
+  const destination = fs.mkdtempSync(path.join(os.tmpdir(), "travis234-orchestration-pack-"));
+  try {
+    const packed = spawnSync("npm", ["pack", "--json", "--pack-destination", destination], {
+      cwd: packageRoot,
+      encoding: "utf8",
+    });
+    assert.equal(packed.status, 0, packed.stderr);
+    const result = JSON.parse(packed.stdout)[0];
+    const archive = path.join(destination, result.filename);
+    const listed = spawnSync("tar", ["-tf", archive], { encoding: "utf8" });
+    assert.equal(listed.status, 0, listed.stderr);
+    const members = new Set(listed.stdout.trim().split("\n"));
+    assert.equal(members.has("package/skills/orchestration/SKILL.md"), true);
+    assert.equal(members.has("package/skills/orchestration/references/protocol.md"), true);
+    assert.equal(members.has("package/skills/orchestration/scripts/orchestrate.py"), true);
+  } finally {
+    fs.rmSync(destination, { recursive: true, force: true });
+  }
+});
+
 test("npm bin symlink invokes the launcher entrypoint", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "travis234-cli-bin-"));
   const launcher = path.join(root, "travis234");

@@ -527,6 +527,10 @@ is not embedded in the global system prompt, so unrelated turns pay only for
 the skill's compact name and description. This capability is independent of
 the existing subagent tools: Travis B is a complete, resumable Travis234
 session in tmux with its own session history and workspace.
+It complements rather than replaces n8n workflows, the generic MCP adapter,
+or bounded subagent delegation; choose each mechanism for its own job.
+tmux keeps B alive across A's turns, structured RPC carries prompts and
+results, Git worktrees isolate code, and SQLite remembers status and mail.
 
 | Mode | What happens |
 |---|---|
@@ -545,8 +549,12 @@ Important safety boundaries remain visible in every lifecycle receipt:
 
 - B's packet is a report, not proof; A independently checks files, commits,
   tests, and repository state.
+- Code Tasks commit by default unless the user explicitly chooses
+  `no_commit`; A still reviews before integration.
 - No result automatically merges, cherry-picks, pushes, deletes a branch, or
   removes a worktree.
+- Worker branches and worktrees remain available until the user explicitly
+  requests a safe cleanup operation.
 - Recovery observes compatible, lost, or uncertain workers and never silently
   replays a prompt.
 - Unacknowledged packets survive an A restart; acknowledged packets stop being

@@ -183,6 +183,32 @@ GUIDE_COMMANDS = [
     "worker-release",
     "recover",
 ]
+GUIDE_SIGNATURES = {
+    "guide": "guide",
+    "run-create": "run-create --request-file FILE [--consume-request-file] --idempotency-key KEY",
+    "run-show": "run-show --run-id RUN_ID",
+    "run-list": "run-list [--limit N]",
+    "task-create": "task-create --run-id RUN_ID --request-file FILE [--consume-request-file] --idempotency-key KEY",
+    "task-show": "task-show --task-id TASK_ID",
+    "task-list": "task-list --run-id RUN_ID [--limit N]",
+    "worker-start": "worker-start --task-id TASK_ID --request-file FILE [--consume-request-file] --idempotency-key KEY [--max-workers N]",
+    "worker-show": "worker-show --worker-id WORKER_ID",
+    "worker-list": "worker-list [--run-id RUN_ID] [--limit N]",
+    "dispatch-start": "dispatch-start --task-id TASK_ID --worker-id WORKER_ID --request-file FILE [--consume-request-file] --idempotency-key KEY",
+    "dispatch-show": "dispatch-show --dispatch-id DISPATCH_ID",
+    "dispatch-wait": "dispatch-wait --dispatch-id DISPATCH_ID [--wait-seconds N]",
+    "worker-complete": "worker-complete --dispatch-id DISPATCH_ID --request-file FILE [--consume-request-file] --idempotency-key KEY",
+    "worker-fail": "worker-fail --dispatch-id DISPATCH_ID --request-file FILE [--consume-request-file] --idempotency-key KEY",
+    "message-send": "message-send --dispatch-id DISPATCH_ID --request-file FILE [--consume-request-file] --idempotency-key KEY",
+    "message-check": "message-check --run-id RUN_ID [--wait-seconds N] [--limit N]",
+    "message-ack": "message-ack --message-id MESSAGE_ID --idempotency-key KEY",
+    "message-reply": "message-reply --message-id MESSAGE_ID --request-file FILE [--consume-request-file] --idempotency-key KEY",
+    "dispatch-cancel": "dispatch-cancel --dispatch-id DISPATCH_ID --idempotency-key KEY",
+    "dispatch-abandon": "dispatch-abandon --dispatch-id DISPATCH_ID --idempotency-key KEY",
+    "worker-retain": "worker-retain --worker-id WORKER_ID --idempotency-key KEY",
+    "worker-release": "worker-release --worker-id WORKER_ID --idempotency-key KEY",
+    "recover": "recover --run-id RUN_ID [--inspect-only]",
+}
 
 
 class HelperError(Exception):
@@ -1390,6 +1416,7 @@ def guide() -> dict[str, object]:
         {
             "commands": GUIDE_COMMANDS,
             "invocation": "python3 scripts/orchestrate.py <command> [arguments]",
+            "signatures": GUIDE_SIGNATURES,
         },
     )
 

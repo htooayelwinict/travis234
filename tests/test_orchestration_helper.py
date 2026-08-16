@@ -91,6 +91,8 @@ def test_skill_instruction_shape_encodes_observed_safety_guards() -> None:
     assert "Do not" in body and "automatic" in body
     assert "Travis A owns the user conversation" in body
     assert "bash" in body and "tmux" in body
+    assert "umask 077" in body and "mktemp" in body
+    assert "command signatures" in body
     assert "_relay" not in body
     assert body.count("For example") == 1
 
@@ -126,6 +128,9 @@ def test_protocol_reference_is_the_detailed_single_owner() -> None:
     assert "60 seconds" in source
     assert "two" in source.lower() and "twelve" in source.lower()
     assert "automatic replay" in source.lower()
+    assert "umask 077" in source
+    assert "mktemp" in source
+    assert "--consume-request-file" in source
 
 
 def test_orchestration_does_not_modify_system_prompt_or_subagent_skill() -> None:
@@ -181,6 +186,32 @@ def test_guide_emits_one_stable_versioned_json_envelope() -> None:
                 "recover",
             ],
         "invocation": "python3 scripts/orchestrate.py <command> [arguments]",
+        "signatures": {
+            "guide": "guide",
+            "run-create": "run-create --request-file FILE [--consume-request-file] --idempotency-key KEY",
+            "run-show": "run-show --run-id RUN_ID",
+            "run-list": "run-list [--limit N]",
+            "task-create": "task-create --run-id RUN_ID --request-file FILE [--consume-request-file] --idempotency-key KEY",
+            "task-show": "task-show --task-id TASK_ID",
+            "task-list": "task-list --run-id RUN_ID [--limit N]",
+            "worker-start": "worker-start --task-id TASK_ID --request-file FILE [--consume-request-file] --idempotency-key KEY [--max-workers N]",
+            "worker-show": "worker-show --worker-id WORKER_ID",
+            "worker-list": "worker-list [--run-id RUN_ID] [--limit N]",
+            "dispatch-start": "dispatch-start --task-id TASK_ID --worker-id WORKER_ID --request-file FILE [--consume-request-file] --idempotency-key KEY",
+            "dispatch-show": "dispatch-show --dispatch-id DISPATCH_ID",
+            "dispatch-wait": "dispatch-wait --dispatch-id DISPATCH_ID [--wait-seconds N]",
+            "worker-complete": "worker-complete --dispatch-id DISPATCH_ID --request-file FILE [--consume-request-file] --idempotency-key KEY",
+            "worker-fail": "worker-fail --dispatch-id DISPATCH_ID --request-file FILE [--consume-request-file] --idempotency-key KEY",
+            "message-send": "message-send --dispatch-id DISPATCH_ID --request-file FILE [--consume-request-file] --idempotency-key KEY",
+            "message-check": "message-check --run-id RUN_ID [--wait-seconds N] [--limit N]",
+            "message-ack": "message-ack --message-id MESSAGE_ID --idempotency-key KEY",
+            "message-reply": "message-reply --message-id MESSAGE_ID --request-file FILE [--consume-request-file] --idempotency-key KEY",
+            "dispatch-cancel": "dispatch-cancel --dispatch-id DISPATCH_ID --idempotency-key KEY",
+            "dispatch-abandon": "dispatch-abandon --dispatch-id DISPATCH_ID --idempotency-key KEY",
+            "worker-retain": "worker-retain --worker-id WORKER_ID --idempotency-key KEY",
+            "worker-release": "worker-release --worker-id WORKER_ID --idempotency-key KEY",
+            "recover": "recover --run-id RUN_ID [--inspect-only]",
+        },
     }
     assert payload["nextActions"] == []
 

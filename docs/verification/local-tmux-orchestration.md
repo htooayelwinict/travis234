@@ -100,13 +100,18 @@ repository's established npm layout.
   instruction tests and Python/npm byte parity passed.
 - [x] The pre-task system prompt and existing `subagent-delegation` skill retain
   their pinned SHA-256 values.
-- [ ] Five installed-wheel MiniMax M3 repetitions are recorded in the live
+- [x] Five installed-wheel MiniMax M3 repetitions are recorded in the live
   qualification section below.
 
-No new model rationalization was observed in deterministic GREEN scenarios.
-One test-only bytecode cache appeared during dynamic helper import; the exact
-cache was removed and all three test loaders now suppress bytecode generation,
-so distribution parity remains stable without ignoring arbitrary files.
+Deterministic GREEN scenarios produced no model rationalization. Live attempts
+did expose two instruction-discovery gaps: process substitution is not a valid
+request file, and the original `guide` listed commands without their argument
+signatures. RED assertions now require the private `umask 077`/`mktemp` recipe
+and a stable signature for every public command. The official skill validators
+and focused helper tests passed after both corrections. One test-only bytecode
+cache appeared during dynamic helper import; the exact cache was removed and
+all three test loaders now suppress bytecode generation, so distribution parity
+remains stable without ignoring arbitrary files.
 
 ## Final 21-prompt deterministic TUI matrix
 
@@ -142,6 +147,49 @@ reported prompt result; no failed attempt is replaced by a retry.
 Fresh aggregate evidence: **21 passed in 41.31 seconds**. Teardown used each
 fixture's exact isolated tmux server and left no owned test server alive.
 
+## Installed-wheel MiniMax M3 live qualification
+
+Each row used an attached TUI, `openrouter/minimax/minimax-m3` with medium
+thinking, the repository's ignored dotenv through the explicit CLI option, an
+isolated agent directory, a fresh nested Git fixture, and an exact locally
+built wheel. A response marker was never sufficient: SQLite lifecycle state,
+Message acknowledgement, fixture HEAD/status, relay sockets, and worker status
+were checked independently. Raw transcripts and credentials remain untracked.
+
+| Attempt | Result | Evidence and observed behavior |
+|---:|---|---|
+| 1 | **PASS** | Full supervised round trip completed and released B. The private-file guard rejected process substitution, and MiniMax recovered with a regular mode-0600 file; a mistaken Worker identity flag also recovered without mutation. This prompted the positive request-file recipe. |
+| 2 | **PASS** | Full round trip completed with one acknowledged handoff and stopped Worker. MiniMax had to inspect helper source because the generic guide omitted command signatures. This prompted the version-matched signature map. |
+| 3 | **PASS** | Current guide and private-file recipe were used directly: no helper-source read, no argument error, one acknowledged handoff, stopped Worker, unchanged clean A checkout, and no live socket. |
+| 4 | **PASS** | Independent clean fixture completed one Dispatch and acknowledged handoff, then safely stopped B with no replay, integration, push, or cleanup of Git evidence. |
+| 5 | **FAIL — timeout** | B stayed busy and the Dispatch stayed accepted beyond five minutes with no Message. The exact Dispatch was cancelled; Task/Dispatch became `cancelled`, Worker became `stopped`, the fixture stayed clean, and no socket remained. No result or marker was invented. |
+| 6 — explicit retry | **PASS** | B's first terminal packet was structurally valid but semantically inadequate (`probe`, no evidence). A acknowledged it, created one parent-linked correction Dispatch, independently verified the corrected three facts, acknowledged both handoffs, and stopped B. |
+
+Live aggregate: **5 PASS / 1 transparent timeout FAIL**. The failed provider
+turn was not reproducible in the explicit retry, which also qualified the
+bounded correction path against a real model. All six coordinator checkouts
+remained at fixture commit `cd2d7d9` and clean; no live owned relay socket
+remained after scoring.
+
 ## Distribution and final verification
 
-Not run yet.
+Fresh candidate artifacts were built under the private temporary directory
+`/tmp/travis234-orchestration-candidate.WwCHhZ` and were not published:
+
+- wheel SHA-256: `b662f2a683ba45368777fc2a2e76c2c00ff1be0dc9f4f96e4ba782d9aeb8fca4`
+- sdist SHA-256: `d7ab34870c24e5795aa64537a9a01c5c668a3781e7640ae8422d2170ed59bc7c`
+- npm tarball SHA-256: `80aec01d8416d5c9463eb3631df204d684a0e51bead25a236ab20b266876472c`
+- canonical skill SHA-256: `df996cb58844c540cc8f7f75d26c28695180187008849be0d840891a66444a5b`
+- canonical protocol SHA-256: `9e3238c241e013e47055bd553547171c376b3b54b9f243865aba374989cffb9a`
+- canonical helper SHA-256: `affb9de92c16a9111177eb47521592687baeecef209824a8605fa00b95cd5108`
+
+The Python/npm mirrors match byte-for-byte.
+
+Twine accepted the wheel and sdist. Archive inspection found 226 wheel, 359
+sdist, and 8 npm members; each archive contains exactly the three orchestration
+resources. An isolated exact-wheel install passed CLI help, returned the new
+Worker signature from `guide`, and passed a real tmux/fake-RPC lifecycle smoke
+with owner-private state and zero surviving test worker.
+
+Repository-level Python, npm, build, and final container results follow after
+their fresh completion gates.

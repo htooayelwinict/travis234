@@ -12,6 +12,8 @@ subagent or an extension of A's turn.
 Before acting, read [the protocol](references/protocol.md). Confirm the `bash`
 and `tmux` tools are available. If tmux is excluded, explain that durable local
 orchestration is unavailable; do not improvise a bash-only background worker.
+For each JSON mutation, run `umask 077`, create a regular file with `mktemp`
+(never process substitution), and pass it with `--consume-request-file`.
 
 | Mode | Choose when | Coordinator behavior |
 |---|---|---|
@@ -42,4 +44,4 @@ unverified worker/worktree deletion, and subagent substitution.
 For example: “Start another Travis in a new worktree, have it inspect parser
 ownership, bring its evidence back for my review, then release it safely.”
 
-Run `python3 scripts/orchestrate.py guide` for the version-matched command list.
+Run `python3 scripts/orchestrate.py guide` for version-matched command signatures.
