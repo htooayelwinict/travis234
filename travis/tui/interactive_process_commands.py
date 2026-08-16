@@ -186,6 +186,8 @@ class InteractiveProcessCommands:
         self.tui.request_render()
 
     def _rebind_session_ui(self) -> None:
+        self.tool_approval_broker.bind_session(self.app.session)
+        self._rebind_subagent_supervisor()
         if self._unsubscribe_session_events is not None:
             self._unsubscribe_session_events()
             self._unsubscribe_session_events = None

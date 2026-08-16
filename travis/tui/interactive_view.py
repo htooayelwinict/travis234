@@ -54,6 +54,7 @@ from travis.tui.interactive_custom_dialog import prompt_extension_custom as _pro
 from travis.tui.interactive_extensions import _apply_hidden_thinking_label, _autocomplete_trigger_characters, _coerce_extension_component, _create_extension_widget_component, _dispose_extension_widget, _extension_dialog_aborted, _extension_dialog_label, _extension_dialog_secret, _resolve_extension_select_choice, _set_autocomplete_trigger_characters
 from travis.tui.motion import MotionState
 from travis.tui.interactive_params import _params_argument_completions
+from travis.tui.interactive_prompt_input import prompt_tui_value
 
 def _short_status_text(text: str, *, limit: int) -> str:
     value = str(text or "").replace("\n", " ").strip()
@@ -111,6 +112,8 @@ class InteractiveView:
             self._extension_host.start()
         else:
             self.app.session.bind_extensions(self._extension_bindings())
+        self._reload_resource_themes()
+        self.theme_controller.sync()
         self.setup_autocomplete_provider()
         if self.app.event_trace is not None:
             self.app.event_trace.write(
@@ -155,12 +158,19 @@ class InteractiveView:
             {"name": "export", "description": "Export the active session as HTML or JSONL"},
             {"name": "fork", "description": "Fork before a selected user message"},
             {"name": "help", "description": "Show TUI commands"},
+            {"name": "agents", "description": "Inspect and control delegated agents"},
             {"name": "import", "description": "Import a JSONL session"},
             {"name": "login", "description": "Configure provider authentication"},
             {"name": "logout", "description": "Remove provider authentication"},
             {"name": "model", "description": "Switch model"},
             {"name": "models", "description": "List available models"},
             {"name": "motion", "description": "Enable, disable, or inspect restrained TUI motion"},
+            {
+                "name": "memory",
+                "description": "Inspect explicit memory status",
+                "getArgumentCompletions": lambda _prefix: ["status"],
+            },
+            {"name": "operations", "description": "Inspect the observe-only operation journal"},
             {"name": "install", "description": "Install a resource package"},
             {"name": "remove", "description": "Remove an installed resource package"},
             {"name": "update", "description": "Update installed resource packages"},
@@ -190,6 +200,16 @@ class InteractiveView:
                 if callable(get_argument_completions):
                     command_info["getArgumentCompletions"] = get_argument_completions
                 commands.append(command_info)
+        command_names = {str(command.get("name", "")) for command in commands}
+        for template in getattr(self.app.session, "prompt_templates", []):
+            name = str(getattr(template, "name", ""))
+            if not name or name in command_names:
+                continue
+            commands.append({
+                "name": name,
+                "description": str(getattr(template, "description", "")),
+            })
+            command_names.add(name)
         return CombinedAutocompleteProvider(commands, str(self.app.cwd))
 
     def setup_autocomplete_provider(self) -> None:
@@ -600,7 +620,11 @@ class InteractiveView:
             except EOFError:
                 return None
         else:
-            value = self._prompt_tui_value(f"{clean_title} [1-{len(normalized_choices)}]: ")
+            value = self._prompt_tui_value(
+                f"{clean_title} [1-{len(normalized_choices)}]: ",
+                cancel_event=options.get("cancelEvent") if isinstance(options, dict) else None,
+                cancel_on_escape=bool(options.get("cancelOnEscape")) if isinstance(options, dict) else False,
+            )
         if value is None:
             return None
         raw_value = str(value)
@@ -670,34 +694,21 @@ class InteractiveView:
             self.theme_controller.restore_preview()
             handle.hide()
 
-    def _prompt_tui_value(self, prompt: str, *, mask: bool = False) -> str | None:
-        submitted_queue: queue.Queue[str] = queue.Queue()
-        prompt_component = Input(prompt=prompt, on_submit=lambda value: submitted_queue.put(value), mask=mask)
-        previous_focus = self.tui.focused_component
-        self.active_editor = prompt_component
-        self.editor_container.add(prompt_component)
-        self.tui.set_focus(prompt_component)
-        self.tui.request_render()
-        self._emit_pending_model_picker_trace()
-        try:
-            while not self._shutdown_requested:
-                try:
-                    value = submitted_queue.get(timeout=self.tui.time_until_next_work(0.05))
-                    if self.tui.dispatcher.is_owner_thread():
-                        self.tui.drain_dispatcher()
-                    return value
-                except queue.Empty:
-                    if self.tui.dispatcher.is_owner_thread():
-                        self.tui.drain_dispatcher()
-                    continue
-            return None
-        finally:
-            if prompt_component in self.editor_container.children:
-                self.editor_container.remove(prompt_component)
-            if self.active_editor is prompt_component:
-                self.active_editor = None
-            self.tui.set_focus(previous_focus)
-            self.tui.request_render()
+    def _prompt_tui_value(
+        self,
+        prompt: str,
+        *,
+        mask: bool = False,
+        cancel_event: threading.Event | None = None,
+        cancel_on_escape: bool = False,
+    ) -> str | None:
+        return prompt_tui_value(
+            self,
+            prompt,
+            mask=mask,
+            cancel_event=cancel_event,
+            cancel_on_escape=cancel_on_escape,
+        )
 
     def prompt_extension_confirm(
         self,

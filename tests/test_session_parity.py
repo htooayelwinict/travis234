@@ -195,6 +195,24 @@ def test_import_validates_before_copy_and_avoids_name_collisions(tmp_path: Path)
     imported = external / "shared-name.jsonl"
     imported_store = SessionStore(str(imported), cwd=str(tmp_path), session_id="imported")
     imported_store.append_message(UserMessage("imported message"))
+    imported_sidecar = Path(f"{imported}.artifacts.jsonl")
+    imported_sidecar.write_text(
+        json.dumps(
+            {
+                "type": "artifact",
+                "id": "artifact-" + "a" * 32,
+                "digest": "b" * 64,
+                "kind": "command-output",
+                "byteSize": 7,
+                "createdAtMs": 1,
+                "producer": {"sessionEntryId": None, "toolCallId": None},
+                "retained": True,
+            },
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     existing = sessions / imported.name
     existing.parent.mkdir(parents=True, exist_ok=True)
     existing.write_bytes(b"existing bytes must survive\n")
@@ -207,3 +225,4 @@ def test_import_validates_before_copy_and_avoids_name_collisions(tmp_path: Path)
     assert destination != existing
     assert destination.name.startswith("shared-name-import-")
     assert destination.read_bytes() == imported.read_bytes()
+    assert Path(f"{destination}.artifacts.jsonl").read_bytes() == imported_sidecar.read_bytes()

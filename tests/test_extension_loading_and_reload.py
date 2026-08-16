@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+import sys
 
+import pytest
+
+import travis.coding_agent.resource_loader as resource_loader_module
 from tests._support_coding_agent import AgentSession, faux_model
 from travis.coding_agent.event_bus import create_event_bus
+from travis.coding_agent.capabilities import CapabilityReloadError
 from travis.coding_agent.agent_session_services import create_agent_session_services
 from travis.coding_agent.project_trust import ProjectTrustContext, ProjectTrustStore
 from travis.coding_agent.resource_loader import DefaultResourceLoader
@@ -175,6 +180,127 @@ def test_resource_loader_reuses_shared_event_bus_for_extension_runtime(tmp_path:
     loader.reload({"projectTrustContext": ProjectTrustContext(False, None)})
 
     assert loader.get_extensions()["runtime"].events is event_bus
+
+
+def test_invalid_extension_override_keeps_active_runtime(tmp_path: Path) -> None:
+    extension = tmp_path / "extensions" / "active.py"
+    _write_extension(extension, "active")
+    loader = DefaultResourceLoader(
+        cwd=str(tmp_path),
+        agent_dir=str(tmp_path / "agent"),
+        additional_extension_paths=[str(extension)],
+        project_trusted=False,
+    )
+    loader.reload()
+    active = loader.get_extensions()["runtime"]
+    loader.extensions_override = lambda _result: {}
+
+    with pytest.raises(CapabilityReloadError, match="extension override"):
+        loader.reload()
+
+    assert loader.get_extensions()["runtime"] is active
+    assert active.get_registered_command("extension-version") is not None
+
+
+def test_failed_trusted_candidate_restores_active_trust_and_runtime(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    agent_dir = tmp_path / "agent"
+    project_extension = project / ".travis234/extensions/project.py"
+    project_extension.parent.mkdir(parents=True)
+    agent_dir.mkdir()
+    project_extension.write_text(
+        "def extension(travis):\n"
+        "    travis.register_flag('project-only', {'type': 'boolean'})\n",
+        encoding="utf-8",
+    )
+    loader = DefaultResourceLoader(
+        cwd=str(project),
+        agent_dir=str(agent_dir),
+        project_trusted=False,
+    )
+    loader.reload()
+    previous_runtime = loader.get_extensions()["runtime"]
+    loader.skills_override = lambda _value: (_ for _ in ()).throw(
+        RuntimeError("reject trusted candidate")
+    )
+
+    with pytest.raises(CapabilityReloadError, match="reject trusted candidate"):
+        loader.complete_reload({"projectTrustOverride": True})
+
+    assert loader.project_trusted is False
+    assert loader.package_manager.project_trusted is False
+    assert loader.get_extensions()["runtime"] is previous_runtime
+    assert previous_runtime.get_flag("project-only") is None
+
+
+def test_pretrust_runtime_transfers_once_then_disposes_on_replacement(
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+    events: list[str] = []
+
+    def factory(travis) -> None:
+        calls.append("factory")
+        owner = f"runtime-{len(calls)}"
+        travis.register_flag("profile", {"type": "string"})
+        travis.events.on("ownership-probe", lambda _value: events.append(owner))
+
+    loader = DefaultResourceLoader(
+        cwd=str(tmp_path),
+        agent_dir=str(tmp_path / "agent"),
+        extension_factories=[factory],
+    )
+    pretrust = loader.load_project_trust_extensions()
+    first_runtime = pretrust["runtime"]
+
+    loader.complete_reload(
+        {"projectTrustOverride": False}, pretrust_extensions=pretrust
+    )
+
+    assert loader.get_extensions()["runtime"] is first_runtime
+    assert calls == ["factory"]
+    loader.event_bus.emit("ownership-probe", None)
+    assert events == ["runtime-1"]
+
+    loader.reload({"projectTrustOverride": False})
+
+    assert loader.get_extensions()["runtime"] is not first_runtime
+    assert calls == ["factory", "factory"]
+    loader.event_bus.emit("ownership-probe", None)
+    assert events == ["runtime-1", "runtime-2"]
+
+
+def test_failed_trust_resolution_releases_pretrust_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    extension = tmp_path / "agent" / "extensions" / "probe.py"
+    _write_extension(extension, "probe")
+    loader = DefaultResourceLoader(
+        cwd=str(tmp_path),
+        agent_dir=str(tmp_path / "agent"),
+    )
+    pretrust = loader.load_project_trust_extensions()
+    lease = loader._pretrust_extension_lease
+    assert lease is not None
+    module_names = lease.module_names
+
+    async def reject_trust(**_kwargs: object) -> bool:
+        raise RuntimeError("trust resolution failed")
+
+    monkeypatch.setattr(
+        resource_loader_module,
+        "resolve_project_trust",
+        reject_trust,
+    )
+
+    with pytest.raises(RuntimeError, match="trust resolution failed"):
+        loader.complete_reload(pretrust_extensions=pretrust)
+
+    assert loader._pretrust_extension_lease is None
+    assert all(name not in sys.modules for name in module_names)
 
 
 def test_extension_context_reads_project_trust_dynamically(tmp_path: Path) -> None:

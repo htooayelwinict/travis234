@@ -9,6 +9,7 @@ from travis.tui.components.loaders import CancellableLoader, Loader
 from travis.tui.components.markdown import Markdown
 from travis.tui.components.multiline_editor import Editor
 from travis.tui.components.pickers import SelectItem, SelectList, SettingsList
+from travis.tui.components.subagent_roster import SubagentRoster
 
 __all__ = [
     "Box",
@@ -29,6 +30,7 @@ __all__ = [
     "SimpleAutocompleteProvider",
     "Spacer",
     "StatusLine",
+    "SubagentRoster",
     "Text",
     "TruncatedText",
     "format_cwd_for_footer",

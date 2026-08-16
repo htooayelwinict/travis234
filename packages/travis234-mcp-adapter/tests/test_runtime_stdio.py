@@ -9,7 +9,7 @@ import sys
 import psutil
 import pytest
 
-from mcp.types import TextContent
+from mcp.types import TextContent, TextResourceContents
 from travis.agent.types import AbortSignal
 from travis234_mcp_adapter.config import ServerConfig
 from travis234_mcp_adapter.runtime import McpRuntime
@@ -83,6 +83,21 @@ async def test_stdio_is_lazy_connects_once_and_closes_child(tmp_path: Path) -> N
     ]
     assert _text(await first.call_tool("echo", {"text": "stdio-sentinel"}, None)) == "stdio-sentinel"
     assert _text(await first.call_tool("configured_secret_name", {}, None)) == "present"
+    resources = await first.list_resources(None)
+    templates = await first.list_resource_templates(None)
+    resource = next(item for item in resources.resources if item.name == "fixture-manual")
+    resource_result = await first.read_resource(str(resource.uri), None)
+    prompts = await first.list_prompts(None)
+    prompt_result = await first.get_prompt(
+        "fixture-review",
+        {"topic": "stdio", "tone": "brief"},
+        None,
+    )
+    assert any(item.name == "fixture-item" for item in templates.resource_templates)
+    assert isinstance(resource_result.contents[0], TextResourceContents)
+    assert resource_result.contents[0].text == "fixture resource text"
+    assert [item.name for item in prompts.prompts] == ["fixture-review"]
+    assert [message.role for message in prompt_result.messages] == ["user", "assistant"]
     pid = int(pid_file.read_text(encoding="ascii"))
     assert psutil.pid_exists(pid)
 

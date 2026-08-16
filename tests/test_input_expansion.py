@@ -174,7 +174,7 @@ def test_session_expands_file_and_image_before_provider_submission(tmp_path: Pat
     assert any(isinstance(block, ImageContent) for block in submitted[0].content)
 
 
-def test_session_rejects_image_when_model_lacks_image_capability_before_provider(
+def test_session_fails_when_no_image_capable_route_exists_before_provider(
     tmp_path: Path,
 ) -> None:
     image = tmp_path / "pixel.png"
@@ -190,7 +190,7 @@ def test_session_rejects_image_when_model_lacks_image_capability_before_provider
     register_api_provider(create_faux_provider(provider))
     session = AgentSession(cwd=str(tmp_path), model=model)
     try:
-        with pytest.raises(InputExpansionError, match="does not support image input"):
+        with pytest.raises(RuntimeError, match="No image-capable model"):
             session.prompt("Inspect @pixel.png")
     finally:
         session.shutdown()

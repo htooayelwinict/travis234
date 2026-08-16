@@ -75,6 +75,40 @@ def _is_processes_command(prompt: str) -> bool:
     return prompt == "/processes"
 
 
+def _parse_operations_command(prompt: str) -> str | None | object:
+    if prompt == "/operations":
+        return None
+    if prompt.startswith("/operations "):
+        operation_id = prompt[len("/operations ") :].strip()
+        return operation_id if operation_id and " " not in operation_id else _INVALID_OPERATIONS_COMMAND
+    return _NOT_OPERATIONS_COMMAND
+
+
+def _parse_memory_command(prompt: str) -> bool | object:
+    if prompt == "/memory status":
+        return True
+    if prompt == "/memory" or prompt.startswith("/memory "):
+        return _INVALID_MEMORY_COMMAND
+    return _NOT_MEMORY_COMMAND
+
+
+def _is_lsp_status_command(prompt: str) -> bool:
+    return prompt == "/lsp status"
+
+
+def _parse_agents_command(prompt: str) -> tuple[str, tuple[str, ...]] | None:
+    if prompt == "/agents" or prompt == "/agents status":
+        return "status", ()
+    if not prompt.startswith("/agents "):
+        return None
+    parts = prompt.split(maxsplit=3)
+    if len(parts) == 3 and parts[1] in {"inspect", "cancel"}:
+        return parts[1], (parts[2],)
+    if len(parts) == 4 and parts[1] == "steer" and parts[3].strip():
+        return "steer", (parts[2], parts[3].strip())
+    return "invalid", ()
+
+
 def _is_reload_command(prompt: str) -> bool:
     return prompt == "/reload"
 
@@ -139,6 +173,10 @@ def _parse_params_command(prompt: str) -> str | None:
 
 _NOT_MOTION_COMMAND = object()
 _INVALID_MOTION_COMMAND = object()
+_NOT_MEMORY_COMMAND = object()
+_INVALID_MEMORY_COMMAND = object()
+_NOT_OPERATIONS_COMMAND = object()
+_INVALID_OPERATIONS_COMMAND = object()
 
 
 def _parse_motion_command(prompt: str) -> bool | None | object:
@@ -289,8 +327,37 @@ class InteractiveCommandDispatcher:
                 if session_command == "theme":
                     self._run_theme_command(prompt)
                     continue
+                memory_command = _parse_memory_command(prompt)
+                if memory_command is not _NOT_MEMORY_COMMAND:
+                    if memory_command is _INVALID_MEMORY_COMMAND:
+                        self.history.add(
+                            StatusLine("Usage: /memory status", kind="error")
+                        )
+                        self.tui.request_render()
+                    else:
+                        self._run_memory_status_command()
+                    continue
+                operations_command = _parse_operations_command(prompt)
+                if operations_command is not _NOT_OPERATIONS_COMMAND:
+                    if operations_command is _INVALID_OPERATIONS_COMMAND:
+                        self.history.add(
+                            StatusLine("Usage: /operations [operation-id]", kind="error")
+                        )
+                        self.tui.request_render()
+                    else:
+                        self._run_operations_command(operations_command)
+                    continue
                 if _is_processes_command(prompt):
                     self._run_processes_command()
+                    continue
+                if _is_lsp_status_command(prompt):
+                    self._run_lsp_status_command()
+                    continue
+                agents_command = _parse_agents_command(prompt)
+                if agents_command is not None:
+                    if self._is_turn_active() and self._handle_active_turn_prompt(prompt):
+                        continue
+                    self._run_agents_command(agents_command)
                     continue
                 if _is_reload_command(prompt):
                     self._run_reload_command()
@@ -327,6 +394,7 @@ class InteractiveCommandDispatcher:
                     _is_command_like_slash_prompt(prompt)
                     and not _is_prompt_level_skill_trigger(prompt)
                     and not self._is_registered_extension_command(prompt)
+                    and not self._is_registered_prompt_template(prompt)
                 ):
                     self._run_unknown_command(prompt)
                     continue
@@ -376,6 +444,7 @@ class InteractiveCommandDispatcher:
             if self._unsubscribe_process_events is not None:
                 self._unsubscribe_process_events()
                 self._unsubscribe_process_events = None
+            self._shutdown_subagent_ui()
             self.footer_data_provider.dispose()
             if self.app.event_trace is not None:
                 self.app.event_trace.write("shutdown", {"status": "ok"})
@@ -405,6 +474,8 @@ __all__ = (
     '_is_manual_compression_command',
     '_is_openrouter_model',
     '_is_processes_command',
+    '_is_lsp_status_command',
+    '_parse_agents_command',
     '_is_reload_command',
     '_is_trust_command',
     '_is_prompt_level_skill_trigger',
@@ -412,6 +483,8 @@ __all__ = (
     '_parse_bash_command',
     '_parse_model_command',
     '_parse_motion_command',
+    '_parse_memory_command',
+    '_parse_operations_command',
     '_parse_params_command',
     '_parse_session_command',
 )

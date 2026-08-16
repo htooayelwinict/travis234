@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Mapping, Optional
 
 from travis.agent.agent import Agent
 from travis.agent.types import AbortSignal
@@ -44,22 +44,38 @@ from travis.coding_agent.compaction_coordinator import (
     CompactionTransactionCoordinator,
 )
 from travis.coding_agent.capabilities import WorkspaceCapability
-from travis.coding_agent.config import get_packaged_context_paths
+from travis.coding_agent.config import get_agent_dir, get_packaged_context_paths
 from travis.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
 from travis.coding_agent.execution_backend import select_execution_backend
 from travis.coding_agent.mailbox import CodingTurnMailbox, MailboxKind
+from travis.coding_agent.language_services.manager import LanguageServiceManager
+from travis.coding_agent.language_services.tool import create_lsp_tool_definition
 from travis.coding_agent.message_utils import (
     bash_execution_text as _bash_execution_to_text,
     last_assistant_message as _last_assistant_message,
     user_message_text as _text_from_user_message_content,
 )
 from travis.coding_agent.object_utils import settings_value as _settings_value
+from travis.coding_agent.operations import NullOperationCoordinator
 from travis.coding_agent.process_context import ProcessContextResolver
 from travis.coding_agent.processes.local import create_local_process_transport
 from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import ProcessOwner
+from travis.coding_agent.eval_trace import SecretRedactor
+from travis.coding_agent.memory import (
+    MemorySettings,
+    MemoryStore,
+    MemoryStoreUnavailable,
+    project_key_for_path,
+)
+from travis.coding_agent.memory.tool import (
+    MemoryToolRuntime,
+    create_memory_tool_definition,
+)
+from travis.coding_agent.policy import ToolApprovalBroker, ToolPolicyEngine, ToolPolicySettings
 from travis.coding_agent.auth_storage import AuthStorage
 from travis.coding_agent.model_registry import ModelRegistry
+from travis.coding_agent.model_roles import ModelRole, ModelRoleRouter
 from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.session_index import SessionIndex
 from travis.coding_agent.session_store import (
@@ -104,6 +120,7 @@ from travis.coding_agent.session_generation_params import SessionGenerationParam
 from travis.coding_agent.session_persistence import SessionPersistence
 from travis.coding_agent.session_bash import SessionBashController
 from travis.coding_agent.session_policy_controller import SessionPolicyController
+from travis.coding_agent.session_operations import SessionOperationController
 
 from travis.coding_agent.session_types import default_convert_to_llm
 
@@ -119,6 +136,7 @@ class _SessionRuntime(
         SessionPersistence,
         SessionBashController,
         SessionPolicyController,
+        SessionOperationController,
 ):
     """Internal runtime assembled from focused behavior owners."""
 
@@ -165,13 +183,21 @@ class _SessionRuntime(
         process_service: ProcessSessionService | None = None,
         process_owner: ProcessOwner | None = None,
         model_change_listener: Callable[[Model, Model], None] | None = None,
+        model_role_bindings: Mapping[ModelRole, ScopedModel] | None = None,
+        model_role_event_sink: Callable[[dict[str, object]], None] | None = None,
+        tool_approval_broker: ToolApprovalBroker | None = None,
+        tool_policy_event_sink: Callable[[dict[str, object]], None] | None = None,
+        tool_policy_redactor: SecretRedactor | None = None,
+        operation_runtime: object | None = None,
+        owns_operation_runtime: bool = False,
+        operation_role: str | None = None,
+        operation_task_id: str | None = None,
     ) -> None:
         self.cwd = cwd
         self.model_registry = model_registry or ModelRegistry.create(AuthStorage.create())
         self.model_registry.ensure_model(model)
         self.auth_storage = self.model_registry.auth_storage
         self._workspace = WorkspaceCapability(Path(cwd))
-        self._artifacts = ArtifactRegistry()
         self.execution_backend = select_execution_backend(cwd)
         if (process_service is None) != (process_owner is None):
             raise ValueError("process_service and process_owner must be provided together")
@@ -183,6 +209,22 @@ class _SessionRuntime(
             else None
         )
         self.settings_manager = settings_manager or SettingsManager.in_memory()
+        tool_policy_getter = getattr(self.settings_manager, "get_tool_policy_settings", None)
+        tool_policy_raw = (
+            tool_policy_getter()
+            if callable(tool_policy_getter)
+            else {"mode": "audit", "autoAllowEffects": ["read"]}
+        )
+        self._tool_policy_engine = ToolPolicyEngine(
+            ToolPolicySettings(
+                mode=tool_policy_raw["mode"],
+                auto_allow_effects=frozenset(tool_policy_raw["autoAllowEffects"]),
+            ),
+            broker=tool_approval_broker,
+            redactor=tool_policy_redactor,
+        )
+        self._tool_approval_broker = tool_approval_broker
+        self._tool_policy_event_sink = tool_policy_event_sink
         self._stream_fn = stream_fn or self.model_registry.stream_simple
         self._allowed_tool_names = set(allowed_tool_names) if allowed_tool_names is not None else None
         self._excluded_tool_names = set(excluded_tool_names or [])
@@ -207,13 +249,20 @@ class _SessionRuntime(
         self._extension_provider_original_models: dict[str, Model] = {}
         self._extension_provider_registrations: dict[str, object] = {}
         self._event_listeners: list[Callable[[object], None]] = []
+        self._operation_tool_effects: dict[str, object] = {}
+        self._operation_tool_effects_lock = threading.RLock()
         self._turn_index = 0
         self._model_change_listener = model_change_listener
         self._subagent_observer_errors: list[str] = []
+        self._subagent_artifact_promotions: dict[
+            str,
+            tuple[tuple[str, ...], list[str], list[str], dict[str, str]],
+        ] = {}
+        self._public_subagent_results: dict[str, SubagentResult] = {}
         self._model_subagents_spawned_this_turn = 0
         self._model_subagent_spawn_signatures_this_turn: set[tuple[str, str, str]] = set()
         self._subagent_log_dir = Path(self._default_subagent_log_dir(session_path=session_path, session_id=session_id))
-        self.subagents = SubagentSupervisor(max_threads=3, max_depth=1, event_sink=self._handle_subagent_event)
+        self.subagents = SubagentSupervisor(event_sink=self._handle_subagent_event)
         self.subagents.register_backend(CallableSubagentBackend("internal", self._run_internal_subagent))
         self.subagents.register_backend(CodexExecBackend(log_dir=self._subagent_log_dir))
         self._turn_mailbox = CodingTurnMailbox()
@@ -275,6 +324,74 @@ class _SessionRuntime(
             if session_path
             else None
         )
+        self.operation_runtime = operation_runtime
+        self._owns_operation_runtime = bool(owns_operation_runtime)
+        self.operation_coordinator = (
+            operation_runtime.for_session(
+                self.session_id or session_id,
+                diagnostic_sink=self._emit,
+            )
+            if operation_runtime is not None
+            else NullOperationCoordinator()
+        )
+        self._initialize_session_operations(
+            role=operation_role,
+            task_id=operation_task_id,
+        )
+        from travis.coding_agent.agent_session_services import create_session_artifact_registry
+
+        self._artifacts = create_session_artifact_registry(
+            session_path=session_path,
+            agent_dir=str(Path(agent_dir or get_agent_dir()).expanduser().resolve()),
+            settings_manager=self.settings_manager,
+        )
+        memory_getter = getattr(self.settings_manager, "get_memory_settings", None)
+        self._memory_settings = (
+            memory_getter() if callable(memory_getter) else MemorySettings()
+        )
+        self._memory_project_key = project_key_for_path(cwd)
+        memory_requested = (
+            tools is None
+            and self._memory_settings.enabled
+            and self._is_allowed_tool("memory")
+            and (active_tool_names is None or "memory" in active_tool_names)
+        )
+        self._memory_store: MemoryStore | None = None
+        if memory_requested:
+            try:
+                self._memory_store = MemoryStore(
+                    Path(agent_dir or get_agent_dir()).expanduser().resolve()
+                    / "memory.sqlite3",
+                    settings=self._memory_settings,
+                )
+            except MemoryStoreUnavailable:
+                self._memory_store = None
+        self._memory_tool_runtime = (
+            MemoryToolRuntime(
+                self._memory_store,
+                settings=self._memory_settings,
+                project_key=self._memory_project_key,
+                session_id=self.session_id or session_id,
+                artifacts=self._artifacts,
+                spill_dir=Path(agent_dir or get_agent_dir()).expanduser().resolve()
+                / "memory-spill",
+                redactor=self._tool_policy_engine.redactor,
+            )
+            if memory_requested
+            else None
+        )
+        self._language_services: LanguageServiceManager | None = None
+        language_server_getter = getattr(self.settings_manager, "get_language_server_configs", None)
+        language_server_configs = (
+            language_server_getter() if callable(language_server_getter) else []
+        )
+        if (
+            tools is None
+            and tool_definitions is None
+            and language_server_configs
+            and self._is_allowed_tool("lsp")
+        ):
+            self._language_services = LanguageServiceManager(cwd, language_server_configs)
         self._session_start_event = session_start_event or {"type": "session_start", "reason": "startup"}
         self._defer_session_start = bool(defer_session_start)
         self._defer_agent_settled = bool(defer_agent_settled)
@@ -283,6 +400,14 @@ class _SessionRuntime(
             thinking_level = restored_context.thinking_level
             self._session_name = restored_context.session_name
             self._generation_param_overrides = restored_context.generation_params
+
+        self.model_role_router = ModelRoleRouter(
+            self.model_registry,
+            self.settings_manager,
+            ScopedModel(model, thinking_level),
+            session_bindings=model_role_bindings,
+            event_sink=model_role_event_sink,
+        )
 
         if tools is not None:
             base_tools = tools
@@ -308,6 +433,10 @@ class _SessionRuntime(
                 *create_all_tool_definitions(cwd, self._builtin_tool_options()),
                 *self._create_subagent_tool_definitions(),
             ]
+            if self._language_services is not None:
+                base_definitions.append(
+                    create_lsp_tool_definition(self._language_services, self._artifacts, cwd)
+                )
             if self.process_service is not None and self.process_owner is not None and self._is_allowed_tool("process"):
                 base_definitions.append(
                     create_process_tool_definition(self.process_service, self.process_owner, self._artifacts)
@@ -320,6 +449,22 @@ class _SessionRuntime(
                 definition.name: create_synthetic_source_info(f"<builtin:{definition.name}>", source="builtin")
                 for definition in base_definitions
             }
+        if (
+            tools is None
+            and self._memory_tool_runtime is not None
+            and not any(definition.name == "memory" for definition in base_definitions)
+        ):
+            memory_definition = create_memory_tool_definition(self._memory_tool_runtime)
+            base_definitions.append(memory_definition)
+            base_tools.append(
+                wrap_tool_definition(
+                    memory_definition,
+                    lambda: ToolContext(cwd=self.cwd, model=self.model),
+                )
+            )
+            base_source_infos["memory"] = create_synthetic_source_info(
+                "<builtin:memory>", source="builtin"
+            )
         self._base_tool_by_name = {tool.name: tool for tool in base_tools}
         self._base_definition_by_name = {definition.name: definition for definition in base_definitions}
         self._base_source_info_by_name = dict(base_source_infos)
@@ -393,6 +538,29 @@ class AgentSession(RuntimeFacade):
         runtime._session_factory = type(self)
         object.__setattr__(self, "_runtime", runtime)
 
+    def dispose(self) -> None:
+        try:
+            self._runtime.dispose()
+        finally:
+            self._close_optional_owners()
+
+    def shutdown(self, *args, **kwargs) -> None:
+        try:
+            self._runtime.shutdown(*args, **kwargs)
+        finally:
+            self._close_optional_owners()
+
+    def _close_optional_owners(self) -> None:
+        memory_store = getattr(self._runtime, "_memory_store", None)
+        if memory_store is not None:
+            memory_store.close()
+        self._close_operation_journal()
+
+    def _close_operation_journal(self) -> None:
+        self._runtime.operation_coordinator.close()
+        if self._runtime._owns_operation_runtime:
+            self._runtime.operation_runtime.close()
+
 def create_agent_session(
     *,
     cwd: str,
@@ -410,6 +578,15 @@ def create_agent_session(
     agent_dir: str | None = None,
     session_index: SessionIndex | None = None,
     settings_manager: object | None = None,
+    model_role_bindings: Mapping[ModelRole, ScopedModel] | None = None,
+    model_role_event_sink: Callable[[dict[str, object]], None] | None = None,
+    tool_approval_broker: ToolApprovalBroker | None = None,
+    tool_policy_event_sink: Callable[[dict[str, object]], None] | None = None,
+    tool_policy_redactor: SecretRedactor | None = None,
+    operation_runtime: object | None = None,
+    owns_operation_runtime: bool = False,
+    operation_role: str | None = None,
+    operation_task_id: str | None = None,
 ) -> AgentSession:
     return AgentSession(
         cwd=cwd,
@@ -427,4 +604,13 @@ def create_agent_session(
         agent_dir=agent_dir,
         session_index=session_index,
         settings_manager=settings_manager,
+        model_role_bindings=model_role_bindings,
+        model_role_event_sink=model_role_event_sink,
+        tool_approval_broker=tool_approval_broker,
+        tool_policy_event_sink=tool_policy_event_sink,
+        tool_policy_redactor=tool_policy_redactor,
+        operation_runtime=operation_runtime,
+        owns_operation_runtime=owns_operation_runtime,
+        operation_role=operation_role,
+        operation_task_id=operation_task_id,
     )

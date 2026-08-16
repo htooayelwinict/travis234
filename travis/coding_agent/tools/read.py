@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import codecs
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,7 @@ from travis.agent.types import AgentTool, AgentToolResult
 from travis.ai.types import ImageContent, TextContent
 from travis.coding_agent.artifacts import ARTIFACT_READ_BYTE_LIMIT, ArtifactRegistry
 from travis.coding_agent.capabilities import CapabilityViolation, WorkspaceCapability
+from travis.coding_agent.policy.context import workspace_path_context
 from travis.coding_agent.tools.common import context_value as _ctx_value
 from travis.coding_agent.tools.path_utils import format_path_relative_to_cwd, resolve_read_path, resolve_to_cwd
 from travis.coding_agent.tools.truncate import (
@@ -122,12 +124,12 @@ def _prepare_read_arguments(
 
     prepared = dict(input_args)
     path = prepared.get("path")
-    artifact_path = (
-        artifacts.resolve_read(path)
+    is_artifact = (
+        artifacts.is_readable_reference(path)
         if artifacts is not None and isinstance(path, str)
-        else None
+        else False
     )
-    if artifact_path is not None:
+    if is_artifact:
         prepared.pop("offset", None)
         prepared.pop("limit", None)
     else:
@@ -157,13 +159,13 @@ def _execute_read(
     line_mode = "offset" in args or "limit" in args
     if byte_mode and line_mode:
         raise ValueError("Cannot combine line pagination (offset/limit) with byte pagination (byte_offset/byte_limit)")
-    artifact_path = artifacts.resolve_read(path) if artifacts is not None else None
-    if artifact_path is not None and line_mode:
+    is_artifact = artifacts.is_readable_reference(path) if artifacts is not None else False
+    if is_artifact and line_mode:
         raise ValueError(
             f"Virtual artifacts require byte pagination. Retry read with path={path}, "
             f"byte_offset=0, byte_limit={ARTIFACT_READ_BYTE_LIMIT}; do not use offset/limit."
         )
-    if artifact_path is not None and not byte_mode:
+    if is_artifact and not byte_mode:
         byte_mode = True
     byte_offset = _number_arg(args.get("byte_offset")) if byte_mode else None
     byte_limit = _number_arg(args.get("byte_limit")) if byte_mode else None
@@ -174,6 +176,24 @@ def _execute_read(
             raise ValueError("byte_offset must be non-negative")
         if byte_limit <= 0 or byte_limit > ARTIFACT_READ_BYTE_LIMIT:
             raise ValueError(f"byte_limit must be between 1 and {ARTIFACT_READ_BYTE_LIMIT}")
+    resource_resolution = (
+        artifacts.resolve_resource_read(
+            path,
+            byte_offset=byte_offset or 0,
+            byte_limit=byte_limit or ARTIFACT_READ_BYTE_LIMIT,
+        )
+        if artifacts is not None and is_artifact and byte_mode
+        else None
+    )
+    if resource_resolution is not None:
+        if not resource_resolution.available:
+            raise ValueError(
+                f"Artifact {path} is unavailable ({resource_resolution.error_code or 'unavailable'})"
+            )
+        assert byte_offset is not None
+        return _render_durable_artifact_page(resource_resolution, byte_offset)
+
+    artifact_path = artifacts.resolve_read(path) if artifacts is not None and is_artifact else None
     if artifact_path is not None:
         absolute_path = str(artifact_path)
     else:
@@ -300,6 +320,41 @@ def _execute_read(
 
     _check_aborted(signal)
     return AgentToolResult(content=[TextContent(text=output)], details=details)
+
+
+def _render_durable_artifact_page(resolution, byte_offset: int) -> AgentToolResult:
+    total_bytes = resolution.total_bytes
+    assert total_bytes is not None
+    data = resolution.content
+    if byte_offset > 0 and data and 0x80 <= data[0] <= 0xBF:
+        raise ValueError("byte_offset must align to a UTF-8 boundary")
+
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    output = decoder.decode(data, final=False)
+    buffered, _ = decoder.getstate()
+    consumed = len(data) - len(buffered)
+    if consumed == 0 and byte_offset < total_bytes:
+        raise ValueError("byte_limit is too small to reach the next UTF-8 boundary")
+    end_offset = byte_offset + consumed
+    if end_offset < total_bytes:
+        output += (
+            f"\n\n[Showing bytes {byte_offset}-{end_offset - 1} of {total_bytes}. "
+            f"Use byte_offset={end_offset} to continue.]"
+        )
+    else:
+        output += (
+            f"\n\n[Showing bytes {byte_offset}-{end_offset - 1} of {total_bytes}. End of file.]"
+        )
+    return AgentToolResult(
+        content=[TextContent(text=output)],
+        details={
+            "byteRange": {
+                "start": byte_offset,
+                "endExclusive": end_offset,
+                "totalBytes": total_bytes,
+            }
+        },
+    )
 
 
 def _format_read_line_range(args) -> str:
@@ -430,6 +485,8 @@ def create_read_tool_definition(
         prepare_arguments=lambda args: _prepare_read_arguments(args, artifacts),
         render_call=_render_read_call,
         render_result=_render_read_result,
+        effects=frozenset({"read"}),
+        policy_context=workspace_path_context(cwd, "read"),
     )
 
 

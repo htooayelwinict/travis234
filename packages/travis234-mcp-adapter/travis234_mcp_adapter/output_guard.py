@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import tempfile
+import threading
 
 
 MAX_INLINE_BYTES = 50 * 1024
@@ -22,6 +23,7 @@ class SpillRegistry:
     def __init__(self, directory: Path | None = None) -> None:
         self.directory = Path(directory) if directory is not None else None
         self._paths: set[Path] = set()
+        self._lock = threading.Lock()
 
     def write(self, text: str) -> Path:
         if self.directory is not None:
@@ -43,12 +45,37 @@ class SpillRegistry:
                 os.close(descriptor)
             path.unlink(missing_ok=True)
             raise
-        self._paths.add(path)
+        with self._lock:
+            self._paths.add(path)
+        return path
+
+    def write_bytes(self, content: bytes, *, suffix: str = ".bin") -> Path:
+        if self.directory is not None:
+            self.directory.mkdir(parents=True, exist_ok=True)
+        descriptor, raw_path = tempfile.mkstemp(
+            prefix="travis234-mcp-",
+            suffix=suffix,
+            dir=str(self.directory) if self.directory is not None else None,
+        )
+        path = Path(raw_path)
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "wb") as stream:
+                descriptor = -1
+                stream.write(content)
+        except BaseException:
+            if descriptor >= 0:
+                os.close(descriptor)
+            path.unlink(missing_ok=True)
+            raise
+        with self._lock:
+            self._paths.add(path)
         return path
 
     def cleanup(self) -> None:
-        paths = tuple(self._paths)
-        self._paths.clear()
+        with self._lock:
+            paths = tuple(self._paths)
+            self._paths.clear()
         for path in paths:
             path.unlink(missing_ok=True)
 
@@ -72,7 +99,7 @@ class OutputGuard:
         preview = _utf8_prefix(text, _PREVIEW_BYTES)
         guarded = (
             f"MCP output exceeded the inline {truncated_by} limit. "
-            f"Full output saved to {spill_path}.\nPreview:\n{preview}"
+            f"Full output retained as {spill_path.name}.\nPreview:\n{preview}"
         )
         return GuardedText(
             text=guarded,

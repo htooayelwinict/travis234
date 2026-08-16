@@ -57,12 +57,16 @@ from travis.tui.theme_controller import ThemeController
 
 from travis.tui.interactive_command_dispatcher import *  # noqa: F403
 from travis.tui.interactive_extensions import *  # noqa: F403
+from travis.tui.interactive_lsp import *  # noqa: F403
+from travis.tui.interactive_memory import *  # noqa: F403
 from travis.tui.interactive_model_auth import *  # noqa: F403
 from travis.tui.interactive_motion import *  # noqa: F403
+from travis.tui.interactive_operations import *  # noqa: F403
 from travis.tui.interactive_params import *  # noqa: F403
 from travis.tui.interactive_process_commands import *  # noqa: F403
 from travis.tui.interactive_session_commands import *  # noqa: F403
 from travis.tui.interactive_shutdown import *  # noqa: F403
+from travis.tui.interactive_subagents import *  # noqa: F403
 from travis.tui.interactive_turn_controller import *  # noqa: F403
 from travis.tui.interactive_view import *  # noqa: F403
 from travis.tui.footer_data import *  # noqa: F403
@@ -70,6 +74,7 @@ from travis.runtime_facade import RuntimeFacade
 
 from travis.tui.footer_data import _ExtensionFooterDataProvider
 from travis.tui.interactive_shutdown import InputFn
+from travis.tui.interactive_tool_approval import InteractiveToolApprovalBroker
 
 
 def _builtin_theme_records() -> list[Theme]:
@@ -101,10 +106,14 @@ def _terminal_color_mode() -> str:
 class _InteractiveRuntime(
     InteractiveCommandDispatcher,
     InteractiveExtensions,
+    InteractiveLsp,
     InteractiveModelAuth,
+    InteractiveMemory,
     InteractiveMotion,
+    InteractiveOperations,
     InteractiveParams,
     InteractiveProcessCommands,
+    InteractiveSubagents,
     InteractiveSessionCommands,
     InteractiveShutdown,
     InteractiveTurnController,
@@ -206,6 +215,7 @@ class _InteractiveRuntime(
         self._unsubscribe_tui_scroll_change: Callable[[], None] | None = None
         self._unsubscribe_app_session_rebound: Callable[[], None] | None = None
         self._unsubscribe_process_events: Callable[[], None] | None = None
+        self._unsubscribe_subagents: Callable[[], None] | None = None
         self._extension_host: ExtensionHostAdapter | None = None
         self._notified_processes: set[str] = set()
         self._process_cursors: dict[str, int] = {}
@@ -269,6 +279,11 @@ class _InteractiveRuntime(
         self._last_idle_ctrl_c_at = 0.0
         self._agent_abort_requested = False
         self._last_compaction_failure_notice_key: tuple[str, str] | None = None
+        self.tool_approval_broker = InteractiveToolApprovalBroker()
+        self.tool_approval_broker.bind(self)
+        self.tool_approval_broker.bind_session(app.session)
+        self._subagent_snapshot = self._current_subagent_snapshot()
+        self._bind_subagent_supervisor()
         if callable(getattr(app, "subscribe_session_rebound", None)):
             self._extension_host = ExtensionHostAdapter(
                 app,
@@ -285,6 +300,26 @@ class _InteractiveRuntime(
         missing = [theme for theme in self._builtin_theme_records if theme.name not in existing]
         if missing:
             self.theme_registry.register_many(missing)
+
+    def _reload_resource_themes(self) -> str | None:
+        resource_loader = getattr(self.app.session, "resource_loader", None)
+        discovered = (
+            resource_loader.get_themes().get("themes", [])
+            if resource_loader is not None
+            else []
+        )
+        resource_themes = [theme for theme in discovered if isinstance(theme, Theme)]
+        resource_names = {theme.name for theme in resource_themes}
+        return self.theme_registry.reload(
+            [
+                *resource_themes,
+                *(
+                    theme
+                    for theme in self._builtin_theme_records
+                    if theme.name not in resource_names
+                ),
+            ]
+        )
 
 
 class InteractiveMode(RuntimeFacade):

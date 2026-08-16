@@ -96,3 +96,30 @@ Do not infer success from the assistant's prose. Treat verifier exit codes and f
 - Do not modify `travis234/travis/compaction/` while repairing issues found by this protocol.
 
 This evaluation never publishes npm packages or images and never performs git operations. Build or release work is a separate explicit task.
+
+## Optional browser/computer conformance
+
+Optional browser and computer-use extensions can be checked without installing
+a browser runtime or granting desktop permissions:
+
+```python
+from evals.optional_tool_conformance import run_optional_tool_conformance
+
+report = run_optional_tool_conformance(
+    "/absolute/path/to/extension.py",
+    ("browser_fixture", "computer_fixture"),
+)
+assert report.passed, report.failure_codes
+```
+
+The gate loads a copied entry point first as an untrusted project resource and
+then through the trusted resource path. It checks explicit effects, enforce-mode
+denial and approval, pre-aborted cancellation, bounded output and artifact IDs,
+sanitized effect records, secret absence, shutdown cleanup, forbidden internal
+imports, and absence of mandatory browser/desktop imports in `travis`.
+
+`evals/optional_integration_fixture.py` is the credential-free reference probe.
+It performs no real UI action. Real packages must provide deterministic probe
+behavior compatible with the standard conformance arguments and pass their
+own platform/permission tests as a separate gate. Passing conformance does not
+auto-install, enable, trust, approve, or recommend an integration.

@@ -70,7 +70,7 @@ def _is_resource_file(path: Path, resource_type: str) -> bool:
         return path.suffix == ".py"
     if resource_type in {"skills", "prompts"}:
         return path.suffix == ".md"
-    if resource_type == "themes":
+    if resource_type in {"themes", "roles"}:
         return path.suffix == ".json"
     return False
 

@@ -33,6 +33,8 @@ from travis.coding_agent.extensions import (
 from travis.coding_agent.settings_manager import SettingsManager
 from travis.coding_agent.auth_storage import AuthStorage
 from travis.coding_agent.model_registry import ModelRegistry
+from travis.coding_agent.model_roles import ModelRole
+from travis.coding_agent.operations import OperationRuntime
 from travis.coding_agent.processes.completions import ProcessCompletionStore
 from travis.coding_agent.processes.local import create_local_process_transport
 from travis.coding_agent.processes.service import ProcessSessionService
@@ -125,6 +127,7 @@ class CodingApp:
         offline: bool = False,
         event_trace=None,
         conversation_log=None,
+        model_role_bindings: Mapping[ModelRole, ScopedModel] | None = None,
     ) -> None:
         self.cwd = str(Path(cwd).expanduser().resolve())
         self.event_trace = event_trace
@@ -138,6 +141,17 @@ class CodingApp:
         self.model_registry.ensure_model(model)
         if compression_model is not None:
             self.model_registry.ensure_model(compression_model)
+        self._model_role_bindings = {
+            role: ScopedModel(binding.model, binding.thinking_level)
+            for role, binding in (model_role_bindings or {}).items()
+        }
+        if compression_model is not None:
+            self._model_role_bindings["compression"] = ScopedModel(
+                compression_model,
+                "off",
+            )
+        for binding in self._model_role_bindings.values():
+            self.model_registry.ensure_model(binding.model)
         self._settings_manager = settings_manager or SettingsManager.in_memory()
         self._project_trust_override = project_trust_override
         self._project_trust_context = project_trust_context or ProjectTrustContext(False, None)
@@ -196,29 +210,26 @@ class CodingApp:
             )
         self._summarizer = summarizer
         self._compression_model = compression_model
-        self._compression_summarizer = (
-            _model_summarizer(
-                compression_model,
-                thinking_level="off",
-                api_key=compression_api_key,
-                timeout_seconds=compression_timeout_seconds,
-                generation_params=compression_generation_params,
-                complete_fn=lambda active_model, context, options: self.model_registry.stream_simple(
-                    active_model,
-                    context,
-                    options,
-                ).result_sync(),
+        self._compression_api_key = compression_api_key
+        self._compression_timeout_seconds = compression_timeout_seconds
+        self._compression_generation_params = compression_generation_params
+        self._active_compression_model: Model | None = None
+        self._compression_summarizer = None
+        self.operation_runtime = OperationRuntime.from_settings(
+            self._agent_dir,
+            self._settings_manager.get_operation_settings(),
+        )
+        try:
+            initial_session = self._create_session(
+                cwd=self.cwd,
+                fallback_model=model,
+                thinking_level=thinking_level,
+                session_path=session_path,
+                session_id=session_id,
             )
-            if compression_model is not None
-            else None
-        )
-        initial_session = self._create_session(
-            cwd=self.cwd,
-            fallback_model=model,
-            thinking_level=thinking_level,
-            session_path=session_path,
-            session_id=session_id,
-        )
+        except BaseException:
+            self.operation_runtime.close()
+            raise
         self._bind_session(initial_session)
         services = {
             "cwd": self.cwd,
@@ -315,6 +326,28 @@ class CodingApp:
             process_service=self.process_service,
             process_owner=self._process_owner_for(resolved_cwd),
             model_change_listener=self._handle_session_model_changed,
+            model_role_bindings=self._model_role_bindings,
+            model_role_event_sink=(
+                (lambda fields: self._trace("model_role_resolved", fields))
+                if self.event_trace is not None
+                else None
+            ),
+            tool_policy_event_sink=(
+                (
+                    lambda event: self._trace(
+                        "tool_policy_decision",
+                        {key: value for key, value in event.items() if key != "type"},
+                    )
+                )
+                if self.event_trace is not None
+                else None
+            ),
+            tool_policy_redactor=(
+                getattr(self.event_trace, "redactor", None)
+                if self.event_trace is not None
+                else None
+            ),
+            operation_runtime=self.operation_runtime,
         )
         if fresh_session and session._session_store is not None:
             session._session_store.append_model_change(session.model.provider, session.model.id)
@@ -337,10 +370,39 @@ class CodingApp:
         return restored or fallback
 
     def _configure_session_components(self) -> None:
+        compression_resolution = self.session.resolve_model_role("compression")
+        compression_binding = (
+            compression_resolution.scoped_model
+            if compression_resolution.source != "active_primary"
+            else None
+        )
+        self._active_compression_model = (
+            compression_binding.model if compression_binding is not None else None
+        )
+        if compression_binding is not None:
+            uses_legacy_options = compression_binding.model is self._compression_model
+            self._compression_summarizer = _model_summarizer(
+                compression_binding.model,
+                thinking_level=compression_binding.thinking_level or "off",
+                api_key=self._compression_api_key if uses_legacy_options else None,
+                timeout_seconds=(
+                    self._compression_timeout_seconds if uses_legacy_options else None
+                ),
+                generation_params=(
+                    self._compression_generation_params if uses_legacy_options else None
+                ),
+                complete_fn=lambda active_model, context, options: self.model_registry.stream_simple(
+                    active_model,
+                    context,
+                    options,
+                ).result_sync(),
+            )
+        else:
+            self._compression_summarizer = None
         compaction_policy = _resolve_compaction_policy(
             self.session.model,
             explicit_context_length=self._context_length,
-            summarizer_model=self._compression_model,
+            summarizer_model=self._active_compression_model,
         )
         self.compressor = ContextCompressor(
             context_length=compaction_policy.context_window,
@@ -352,8 +414,8 @@ class CodingApp:
             summary_summarizer=self._compression_summarizer,
             model=_model_route(self.session.model),
             summary_model_override=(
-                _model_route(self._compression_model)
-                if self._compression_model is not None
+                _model_route(self._active_compression_model)
+                if self._active_compression_model is not None
                 else None
             ),
         )
@@ -383,7 +445,7 @@ class CodingApp:
         compaction_policy = _resolve_compaction_policy(
             model,
             explicit_context_length=self._context_length,
-            summarizer_model=self._compression_model,
+            summarizer_model=self._active_compression_model,
         )
         self.compressor.update_context_window(
             compaction_policy.context_window,
@@ -523,12 +585,19 @@ class CodingApp:
         except BaseException as error:  # noqa: BLE001 - complete all lifecycle cleanup before re-raising.
             first_error = error
         try:
-            self.process_service.close()
+            self.session_runtime.dispose()
         except BaseException as error:  # noqa: BLE001
             if first_error is None:
                 first_error = error
         try:
-            self.session_runtime.dispose()
+            operation_runtime = getattr(self, "operation_runtime", None)
+            if operation_runtime is not None:
+                operation_runtime.close()
+        except BaseException as error:  # noqa: BLE001
+            if first_error is None:
+                first_error = error
+        try:
+            self.process_service.close()
         except BaseException as error:  # noqa: BLE001
             if first_error is None:
                 first_error = error

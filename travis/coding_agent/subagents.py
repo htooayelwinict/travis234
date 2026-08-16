@@ -22,8 +22,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Literal, Protocol, Sequence
 
-SubagentStatus = Literal["queued", "running", "completed", "failed", "cancelled", "timeout"]
+from travis.coding_agent.policy import ToolEffect
+from travis.coding_agent.subagent_results import (
+    settle_typed_result,
+    validate_typed_task_fields,
+)
+from travis.coding_agent.subagent_result_types import SubagentResult, SubagentStatus
+from travis.coding_agent.subagent_supervision import (
+    ControlResult,
+    SubagentControlHandle,
+    SubagentControlStore,
+    SupervisorSnapshot,
+    SupervisorSnapshotStore,
+    control_event,
+)
+
 SubagentSandbox = Literal["read_only", "workspace_write", "full_access"]
+DEFAULT_SUBAGENT_MAX_THREADS = 3
+DEFAULT_SUBAGENT_MAX_DEPTH = 1
 
 CODING_SUBAGENT_TOOLS = (
     "read",
@@ -36,7 +52,6 @@ CODING_SUBAGENT_TOOLS = (
     "write",
     "tmux",
 )
-_SUBAGENT_STATUSES = {"queued", "running", "completed", "failed", "cancelled", "timeout"}
 _SANDBOX_FLAGS: dict[str, str] = {
     "read_only": "read-only",
     "workspace_write": "workspace-write",
@@ -87,6 +102,11 @@ class SubagentTask:
     parent_session_id: str | None = None
     parent_turn_id: str | None = None
     depth: int = 1
+    role_definition_name: str | None = None
+    allowed_effects: tuple[ToolEffect, ...] | None = None
+    model_role: Literal["worker", "reviewer"] | None = None
+    result_schema: dict[str, object] | None = None
+    artifact_policy: Literal["none", "declared", "declared_and_trace"] = "none"
 
     def __post_init__(self) -> None:
         if not isinstance(self.role, str) or not self.role.strip():
@@ -137,6 +157,7 @@ class SubagentTask:
             raise ValueError("Subagent parent_session_id must be a string when set")
         if self.parent_turn_id is not None and not isinstance(self.parent_turn_id, str):
             raise ValueError("Subagent parent_turn_id must be a string when set")
+        object.__setattr__(self, "allowed_effects", validate_typed_task_fields(self))
 
     def prompt(self) -> str:
         parts = [
@@ -170,84 +191,27 @@ class SubagentTask:
         ]
         if self.context_pack.strip():
             parts.append(f"Context pack:\n{self.context_pack.strip()}")
+        if self.result_schema is not None:
+            schema = json.dumps(
+                self.result_schema,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            artifact_instruction = (
+                "Set artifacts to [] because this role does not retain declared files."
+                if self.artifact_policy == "none"
+                else "Artifacts may list only declared workspace-relative UTF-8 regular files."
+            )
+            parts.append(
+                "Typed result contract:\n"
+                "- The final response must be only one JSON object, without Markdown fences.\n"
+                '- Use exactly {"summary": string, "output": value, "artifacts": string[]}.\n'
+                "- output must satisfy the JSON Schema Draft 2020-12 schema below.\n"
+                f"- {artifact_instruction}\n"
+                f"Output schema: {schema}"
+            )
         return "\n\n".join(parts)
-
-
-@dataclass(frozen=True)
-class SubagentResult:
-    task_id: str
-    backend: str
-    role: str
-    status: SubagentStatus
-    summary: str
-    final_response: str = ""
-    files_changed: list[str] = field(default_factory=list)
-    artifacts: list[str] = field(default_factory=list)
-    errors: list[str] = field(default_factory=list)
-    usage: dict[str, object] = field(default_factory=dict)
-    child_session_id: str | None = None
-    raw_log_path: str | None = None
-    started_at_ms: int = 0
-    ended_at_ms: int = 0
-    tool_trace: list[dict[str, object]] = field(default_factory=list)
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.task_id, str) or not self.task_id.strip() or not _TASK_ID_PATTERN.fullmatch(self.task_id):
-            raise ValueError(f"Unsupported subagent task id: {self.task_id}")
-        if not isinstance(self.backend, str) or not self.backend.strip() or not _TASK_ID_PATTERN.fullmatch(self.backend):
-            raise ValueError(f"Unsupported subagent backend: {self.backend}")
-        if not isinstance(self.role, str) or not self.role.strip() or not _TASK_ID_PATTERN.fullmatch(self.role):
-            raise ValueError(f"Unsupported subagent role: {self.role}")
-        if not isinstance(self.status, str) or self.status not in _SUBAGENT_STATUSES:
-            raise ValueError(f"Unsupported subagent status: {self.status}")
-        if not isinstance(self.summary, str) or not self.summary.strip():
-            raise ValueError("Subagent summary is required")
-        if not isinstance(self.final_response, str):
-            raise ValueError("Subagent final_response must be a string")
-        if self.child_session_id is not None and not isinstance(self.child_session_id, str):
-            raise ValueError("Subagent child_session_id must be a string when set")
-        if self.raw_log_path is not None and not isinstance(self.raw_log_path, str):
-            raise ValueError("Subagent raw_log_path must be a string when set")
-        for field_name in ("started_at_ms", "ended_at_ms"):
-            value = getattr(self, field_name)
-            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-                raise ValueError("Subagent timestamps must be non-negative integers")
-        if self.started_at_ms and self.ended_at_ms and self.ended_at_ms < self.started_at_ms:
-            raise ValueError("Subagent ended_at_ms cannot be before started_at_ms")
-        for field_name in ("files_changed", "artifacts", "errors"):
-            value = getattr(self, field_name)
-            if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
-                raise ValueError(f"Subagent {field_name} must be a list of strings")
-        if not isinstance(self.usage, dict):
-            raise ValueError("Subagent usage must be a dict")
-        if not isinstance(self.tool_trace, list) or any(not isinstance(item, dict) for item in self.tool_trace):
-            raise ValueError("Subagent tool_trace must be a list of dicts")
-
-    @property
-    def duration_ms(self) -> int:
-        if not self.started_at_ms or not self.ended_at_ms:
-            return 0
-        return max(0, self.ended_at_ms - self.started_at_ms)
-
-    def as_dict(self) -> dict[str, object]:
-        return {
-            "taskId": self.task_id,
-            "backend": self.backend,
-            "role": self.role,
-            "status": self.status,
-            "summary": self.summary,
-            "finalResponse": self.final_response,
-            "filesChanged": list(self.files_changed),
-            "artifacts": list(self.artifacts),
-            "errors": list(self.errors),
-            "usage": dict(self.usage),
-            "childSessionId": self.child_session_id,
-            "rawLogPath": self.raw_log_path,
-            "startedAtMs": self.started_at_ms,
-            "endedAtMs": self.ended_at_ms,
-            "durationMs": self.duration_ms,
-            "toolTrace": [dict(item) for item in self.tool_trace],
-        }
 
 
 class SubagentBackend(Protocol):
@@ -615,8 +579,8 @@ class SubagentSupervisor:
     def __init__(
         self,
         *,
-        max_threads: int = 3,
-        max_depth: int = 1,
+        max_threads: int = DEFAULT_SUBAGENT_MAX_THREADS,
+        max_depth: int = DEFAULT_SUBAGENT_MAX_DEPTH,
         event_sink: Callable[[dict[str, object]], None] | None = None,
     ) -> None:
         if isinstance(max_threads, bool) or not isinstance(max_threads, int) or max_threads < 1:
@@ -638,6 +602,46 @@ class SubagentSupervisor:
         self._started_at_ms: dict[str, int] = {}
         self._shutdown = False
         self._lock = threading.RLock()
+        self._snapshot_store = SupervisorSnapshotStore(max_threads)
+        self._control_store = SubagentControlStore()
+
+    def snapshot(self) -> SupervisorSnapshot:
+        return self._snapshot_store.snapshot()
+
+    def subscribe(
+        self, callback: Callable[[SupervisorSnapshot], None]
+    ) -> Callable[[], None]:
+        return self._snapshot_store.subscribe(callback)
+
+    def attach_control_handle(
+        self, task_id: str, handle: SubagentControlHandle
+    ) -> ControlResult:
+        _validate_task_id_reference(task_id)
+        with self._lock:
+            known = task_id in self._tasks
+            settled = task_id in self._results
+        return self._control_store.attach(
+            task_id, handle, known=known, settled=settled
+        )
+
+    def detach_control_handle(self, task_id: str) -> None:
+        _validate_task_id_reference(task_id)
+        self._control_store.detach(task_id)
+
+    def steer(self, task_id: str, message: str) -> ControlResult:
+        _validate_task_id_reference(task_id)
+        with self._lock:
+            task = self._tasks.get(task_id)
+            settled = task_id in self._results
+        result = self._control_store.steer(
+            task_id,
+            task.backend if task is not None else None,
+            message,
+            settled=settled,
+        )
+        if task is not None:
+            self._emit(control_event(task, "steer", message.strip(), result))
+        return result
 
     def register_backend(self, backend: SubagentBackend) -> None:
         with self._lock:
@@ -668,6 +672,10 @@ class SubagentSupervisor:
             self._tasks[task.id] = task
             self._statuses[task.id] = "queued"
             self._started_at_ms[task.id] = _now_ms()
+            started_at_ms = self._started_at_ms[task.id]
+        self._snapshot_store.publish(
+            task, "queued", started_at_ms=started_at_ms
+        )
         self._emit_start(task)
         with self._lock:
             if task.id in self._results:
@@ -740,6 +748,13 @@ class SubagentSupervisor:
                 )
                 self._statuses[task_id] = "timeout"
                 self._results[task_id] = result
+            self._control_store.cancel(task_id, timeout_text)
+            self._snapshot_store.publish(
+                task,
+                "timeout",
+                started_at_ms=self._started_at_ms.get(task_id, ended),
+                result=result,
+            )
             self._emit_stop(task, result)
             return result
         with self._lock:
@@ -774,6 +789,15 @@ class SubagentSupervisor:
             )
             self._statuses[task_id] = "cancelled"
             self._results[task_id] = result
+        control = self._control_store.cancel(task_id, reason)
+        if control is not None:
+            self._emit(control_event(task, "cancel", reason, control))
+        self._snapshot_store.publish(
+            task,
+            "cancelled",
+            started_at_ms=self._started_at_ms.get(task_id, ended),
+            result=result,
+        )
         if callable(backend_cancel):
             try:
                 backend_cancel(task_id)
@@ -797,6 +821,7 @@ class SubagentSupervisor:
             if status in {"queued", "running"} and task_id not in self._results:
                 results.append(self.cancel(task_id, reason=reason))
         self._executor.shutdown(wait=wait, cancel_futures=True)
+        self._snapshot_store.publish_shutdown()
         return results
 
     def wait_all(self, task_ids: Sequence[str] | None = None, timeout: float | None = None) -> list[SubagentResult]:
@@ -849,6 +874,11 @@ class SubagentSupervisor:
                 return self._results[task_id]
         return None
 
+    def get_task(self, task_id: str) -> SubagentTask | None:
+        _validate_task_id_reference(task_id)
+        with self._lock:
+            return self._tasks.get(task_id)
+
     def _run_backend(self, task: SubagentTask) -> SubagentResult:
         with self._lock:
             existing = self._results.get(task.id)
@@ -857,6 +887,9 @@ class SubagentSupervisor:
             self._statuses[task.id] = "running"
             backend = self._backends[task.backend]
             started = self._started_at_ms.get(task.id, _now_ms())
+        self._snapshot_store.publish(
+            task, "running", started_at_ms=started
+        )
         try:
             result = backend.run(task)
             if result.task_id != task.id:
@@ -865,6 +898,7 @@ class SubagentSupervisor:
                 raise ValueError(f"Subagent backend returned mismatched backend: {result.backend}")
             if result.role != task.role:
                 raise ValueError(f"Subagent backend returned mismatched role: {result.role}")
+            result = settle_typed_result(task, result)
         except Exception as error:  # noqa: BLE001 - child failures must be data, not parent crashes.
             ended = _now_ms()
             error_text = f"Subagent backend failed: {error}"
@@ -883,6 +917,13 @@ class SubagentSupervisor:
                 return self._results[task.id]
             self._statuses[task.id] = result.status
             self._results[task.id] = result
+            self._control_store.settle(task.id)
+        self._snapshot_store.publish(
+            task,
+            result.status,
+            started_at_ms=started,
+            result=result,
+        )
         self._emit_stop(task, result)
         return result
 
@@ -924,6 +965,8 @@ class SubagentSupervisor:
                 "files_changed": list(result.files_changed),
                 "artifacts": list(result.artifacts),
                 "errors": list(result.errors),
+                "structured_output": result.structured_output,
+                "validation_errors": list(result.validation_errors),
                 "usage": dict(result.usage),
                 "backend": task.backend,
             }

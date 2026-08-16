@@ -15,6 +15,9 @@ SAFE_EVENT_TYPES = {
     "tui_ready", "model_picker_ready", "model_selected", "turn_start", "tool_end",
     "compaction_end", "turn_end", "turn_ready", "capability_granted", "fatal", "shutdown",
     "process_event", "user_command_started", "user_command_interrupt", "extension_command",
+    "model_role_resolved",
+    "artifact_promoted", "artifact_unavailable",
+    "tool_policy_decision",
 }
 SAFE_FIELDS = {
     "run_id", "turn_id", "tool_call_id", "tool", "status", "error_code", "duration_ms",
@@ -24,6 +27,9 @@ SAFE_FIELDS = {
     "context_tokens", "context_window", "context_percent", "context_estimated", "context_confidence",
     "context_system_tokens", "context_tool_tokens", "context_message_tokens",
     "summary_model_requested", "summary_model_used", "summary_model_fallback",
+    "role", "selectedRole", "source", "fallbackTrace",
+    "artifact_id", "kind", "byte_size", "outcome",
+    "effects", "mode", "allow",
 }
 _SECRET_SHAPE = re.compile(r"(?:sk-[A-Za-z0-9_-]{8,}|Bearer\s+\S+)", re.IGNORECASE)
 

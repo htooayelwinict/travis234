@@ -9,6 +9,7 @@ from pathlib import Path
 from travis.agent.types import AgentTool, AgentToolResult
 from travis.ai.types import TextContent
 from travis.coding_agent.capabilities import WorkspaceCapability
+from travis.coding_agent.policy.context import workspace_path_context
 from travis.coding_agent.tools.atomic_file import atomic_replace_text
 from travis.coding_agent.tools.common import context_value as _ctx_value
 from travis.coding_agent.tools.common import file_content_metadata as _file_content_metadata
@@ -181,6 +182,8 @@ def create_edit_tool_definition(
         prepare_arguments=prepare_edit_arguments,
         render_call=_render_edit_call,
         render_result=_render_edit_result,
+        effects=frozenset({"write"}),
+        policy_context=workspace_path_context(cwd, "edit"),
     )
 
 

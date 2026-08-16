@@ -13,6 +13,8 @@ from pathlib import Path
 from travis.agent.types import AgentTool, AgentToolResult
 from travis.ai.types import TextContent
 from travis.coding_agent.capabilities import WorkspaceCapability
+from travis.coding_agent.policy.context import action_policy_context
+from travis.coding_agent.policy.types import ALL_TOOL_EFFECTS
 from travis.coding_agent.tools.bash import get_shell_env
 from travis.coding_agent.tools.truncate import truncate_tail, truncation_to_details
 from travis.coding_agent.tools.types import ToolContext, ToolDefinition, wrap_tool_definition
@@ -380,6 +382,8 @@ def create_tmux_tool_definition(
             args,
         ),
         execution_mode="sequential",
+        effects=ALL_TOOL_EFFECTS,
+        policy_context=action_policy_context,
     )
 
 

@@ -130,7 +130,15 @@ class SessionCatalog:
     def _candidate_paths(self, root: Path) -> list[Path]:
         if not root.exists():
             return []
-        return sorted(path for path in root.rglob("*.jsonl") if path.is_file())
+        return sorted(
+            path
+            for path in root.rglob("*.jsonl")
+            if path.is_file() and not path.name.endswith(".artifacts.jsonl")
+        )
+
+    @property
+    def root(self) -> Path:
+        return self._configured_session_dir or self.agent_dir / "sessions"
 
     def _refresh_index(self) -> None:
         root = self._configured_session_dir or self.agent_dir / "sessions"

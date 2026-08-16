@@ -29,6 +29,14 @@ from travis.coding_agent.agent_session_services import (
     create_agent_session_from_services,
     create_agent_session_services,
 )
+from travis.coding_agent.artifact_store import (
+    ArtifactLimits,
+    ArtifactMaintenanceLock,
+    ArtifactPromotionError,
+    DurableArtifactStore,
+    StoredArtifactObject,
+)
+from travis.coding_agent.agent_roles import AgentRoleDefinition, AgentRoleRegistry
 from travis.coding_agent.auth_storage import AuthStorage, FileAuthStorageBackend, InMemoryAuthStorageBackend
 from travis.coding_agent.subagents import (
     CallableSubagentBackend,
@@ -92,6 +100,14 @@ from travis.coding_agent.extensions import (
     wrap_registered_tools,
 )
 from travis.coding_agent.model_registry import ModelRegistry
+from travis.coding_agent.model_roles import (
+    CONFIGURABLE_MODEL_ROLES,
+    MODEL_ROLES,
+    ModelRole,
+    ModelRoleResolution,
+    ModelRoleRouter,
+    ModelRoleTraceStep,
+)
 from travis.coding_agent.mailbox import CodingTurnMailbox, MailboxKind, QueuedCodingMessage
 from travis.coding_agent.package_manager import (
     DefaultPackageManager,
@@ -175,6 +191,9 @@ __all__ = [
     "APP_NAME",
     "APP_TITLE",
     "AuthStorage",
+    "ArtifactLimits",
+    "ArtifactMaintenanceLock",
+    "ArtifactPromotionError",
     "BashOperations",
     "BashExecutorOptions",
     "BashResult",
@@ -190,6 +209,7 @@ __all__ = [
     "DEFAULT_MAX_LINES",
     "DefaultPackageManager",
     "DefaultResourceLoader",
+    "DurableArtifactStore",
     "ENV_AGENT_DIR",
     "ENV_SESSION_DIR",
     "EventBus",
@@ -210,6 +230,7 @@ __all__ = [
     "CallableSubagentBackend",
     "CodexExecBackend",
     "SubagentResult",
+    "StoredArtifactObject",
     "SubagentStatus",
     "SubagentSupervisor",
     "SubagentTask",
@@ -223,6 +244,12 @@ __all__ = [
     "InvalidSessionImportError",
     "InstalledPackage",
     "ModelRegistry",
+    "CONFIGURABLE_MODEL_ROLES",
+    "MODEL_ROLES",
+    "ModelRole",
+    "ModelRoleResolution",
+    "ModelRoleRouter",
+    "ModelRoleTraceStep",
     "CodingTurnMailbox",
     "MailboxKind",
     "QueuedCodingMessage",

@@ -104,6 +104,43 @@ def test_read_tool_defaults_public_artifacts_to_byte_pagination(tmp_path: Path) 
     }
 
 
+def test_durable_read_tool_keeps_utf8_pages_on_codepoint_boundaries(tmp_path: Path) -> None:
+    from travis.coding_agent.artifact_manifest import ArtifactManifest
+    from travis.coding_agent.artifact_store import ArtifactLimits, DurableArtifactStore
+    from travis.coding_agent.artifacts import ArtifactRegistry
+    from travis.coding_agent.tools.read import create_read_tool
+
+    source = tmp_path / "utf8.log"
+    source.write_text("A€B", encoding="utf-8")
+    artifacts = ArtifactRegistry(
+        durable_store=DurableArtifactStore(tmp_path / "agent"),
+        manifest=ArtifactManifest.for_session(
+            tmp_path / "session.jsonl",
+            limits=ArtifactLimits(min_free_bytes=0),
+        ),
+    )
+    artifact = artifacts.promote(source, "command-output")
+    tool = create_read_tool(str(tmp_path), artifacts=artifacts)
+
+    first = tool.execute(
+        "read-first",
+        {"path": artifact.id, "byte_offset": 0, "byte_limit": 2},
+    )
+    second = tool.execute(
+        "read-second",
+        {"path": artifact.id, "byte_offset": 1, "byte_limit": 4},
+    )
+
+    assert first.content[0].text.startswith("A\n\n[Showing bytes 0-0")
+    assert "Use byte_offset=1 to continue" in first.content[0].text
+    assert second.content[0].text.startswith("€B")
+    with pytest.raises(ValueError, match="UTF-8 boundary"):
+        tool.execute(
+            "read-inside-codepoint",
+            {"path": artifact.id, "byte_offset": 2, "byte_limit": 2},
+        )
+
+
 def test_read_tool_rejects_line_pagination_for_public_artifact_with_byte_retry(tmp_path: Path) -> None:
     from travis.coding_agent.artifacts import ArtifactRegistry
     from travis.coding_agent.tools.read import create_read_tool
@@ -1018,6 +1055,32 @@ def test_file_mutation_queue_serializes_same_path(tmp_path: Path) -> None:
 
     assert max_active == 1
 
+
+def test_multi_file_mutation_queues_use_canonical_order_without_deadlock(tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from travis.coding_agent.tools.file_mutation_queue import with_file_mutation_queues
+
+    first = str(tmp_path / "a.txt")
+    second = str(tmp_path / "b.txt")
+    completed: list[str] = []
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        one = pool.submit(
+            with_file_mutation_queues,
+            [first, second],
+            lambda: completed.append("one"),
+        )
+        two = pool.submit(
+            with_file_mutation_queues,
+            [second, first],
+            lambda: completed.append("two"),
+        )
+        one.result(timeout=2)
+        two.result(timeout=2)
+
+    assert sorted(completed) == ["one", "two"]
+
 def test_bash_tool_runs_command(tmp_path: Path) -> None:
     tool = create_tool("bash", str(tmp_path))
     result = tool.execute("c1", {"command": "echo hi"})
@@ -1072,6 +1135,47 @@ def test_synchronous_bash_exposes_truncated_artifact_id_to_the_model(tmp_path: P
     assert result.details["artifactId"] in result.content[0].text
     assert "byte_offset=0" in result.content[0].text
     assert artifacts.resolve_read(result.details["artifactId"]) is not None
+
+
+def test_successful_bash_keeps_success_when_artifact_promotion_fails(tmp_path: Path) -> None:
+    from travis.coding_agent.artifact_manifest import ArtifactManifest
+    from travis.coding_agent.artifact_store import (
+        ArtifactLimits,
+        ArtifactPromotionError,
+        DurableArtifactStore,
+    )
+    from travis.coding_agent.artifacts import ArtifactRegistry
+
+    class FailingStore(DurableArtifactStore):
+        def promote(self, source, limits=None):
+            raise ArtifactPromotionError("physical_limit", "Artifact storage limit reached")
+
+    def exec_command(command: str, cwd: str, options) -> dict[str, int | None]:
+        options.on_data(b"x" * 80_000)
+        return {"exit_code": 0}
+
+    artifacts = ArtifactRegistry(
+        durable_store=FailingStore(tmp_path / "agent"),
+        manifest=ArtifactManifest.for_session(
+            tmp_path / "session.jsonl",
+            limits=ArtifactLimits(min_free_bytes=0),
+        ),
+    )
+    tool = create_bash_tool(
+        str(tmp_path),
+        operations=BashOperations(exec=exec_command),
+        artifacts=artifacts,
+    )
+
+    result = tool.execute("call-1", {"command": "emit-large-output"})
+
+    assert result.details["artifactId"] is None
+    assert result.details["fullOutputPath"] is None
+    assert result.details["artifactUnavailable"] == {
+        "code": "physical_limit",
+        "message": "Artifact storage limit reached",
+    }
+    assert len(result.content[0].text) > 0
 
 def test_bash_tool_replaces_invalid_utf8_without_dropping_output(tmp_path: Path) -> None:
     def exec_command(command: str, cwd: str, options) -> dict[str, int | None]:

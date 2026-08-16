@@ -10,9 +10,29 @@ import uuid
 from pathlib import Path
 from typing import Callable, Literal, TypedDict
 
+from travis.coding_agent.artifact_store import ArtifactLimits
+from travis.coding_agent.language_services.config import parse_language_server_entries
+from travis.coding_agent.language_services.types import LanguageServerConfig
+from travis.coding_agent.model_roles import CONFIGURABLE_MODEL_ROLES
+from travis.coding_agent.memory import MemorySettings
+from travis.coding_agent.policy.types import (
+    TOOL_EFFECT_ORDER,
+    TOOL_POLICY_MODE_ORDER,
+    ToolEffect,
+    ToolPolicyMode,
+)
+
 CONFIG_DIR_NAME = ".travis234"
 DEFAULT_HTTP_IDLE_TIMEOUT_MS = 300_000
 SettingsScope = Literal["global", "project"]
+_ARTIFACT_LIMIT_FIELDS = {
+    "maxObjectBytes": "max_object_bytes",
+    "maxSessionLogicalBytes": "max_session_logical_bytes",
+    "maxSessionObjects": "max_session_objects",
+    "maxPhysicalBytes": "max_physical_bytes",
+    "maxPhysicalObjects": "max_physical_objects",
+    "minFreeBytes": "min_free_bytes",
+}
 
 
 class SettingsError(TypedDict):
@@ -496,6 +516,15 @@ class SettingsManager:
     def set_project_theme_paths(self, paths: list[str]) -> None:
         self._set_project("themes", list(paths))
 
+    def get_agent_role_paths(self) -> list[str]:
+        return list(self.settings.get("roles", []))
+
+    def set_agent_role_paths(self, paths: list[str]) -> None:
+        self._set_global("roles", list(paths))
+
+    def set_project_agent_role_paths(self, paths: list[str]) -> None:
+        self._set_project("roles", list(paths))
+
     def get_enable_skill_commands(self) -> bool:
         return self.settings.get("enableSkillCommands", True)
 
@@ -556,6 +585,49 @@ class SettingsManager:
     def set_enabled_models(self, patterns: list[str] | None) -> None:
         self._set_global("enabledModels", list(patterns) if patterns is not None else None)
 
+    def get_model_roles(self) -> dict[str, str]:
+        global_roles = self._model_roles_from(self.global_settings)
+        project_roles = (
+            self._model_roles_from(self.project_settings)
+            if self.project_trusted
+            else {}
+        )
+        return {**global_roles, **project_roles}
+
+    @staticmethod
+    def _model_roles_from(settings: dict) -> dict[str, str]:
+        raw = settings.get("modelRoles")
+        if not isinstance(raw, dict):
+            return {}
+        return {
+            role: value.strip()
+            for role, value in raw.items()
+            if role in CONFIGURABLE_MODEL_ROLES
+            and isinstance(value, str)
+            and value.strip()
+        }
+
+    def get_model_role(self, role: str) -> str | None:
+        return self.get_model_roles().get(role)
+
+    def get_model_role_source(self, role: str) -> SettingsScope | None:
+        if self.project_trusted and self._scope_has_model_role(self.project_settings, role):
+            return "project"
+        if self._scope_has_model_role(self.global_settings, role):
+            return "global"
+        return None
+
+    def set_model_role(self, role: str, selector: str | None) -> None:
+        normalized = self._validated_model_role_write(role, selector)
+        self._set_model_role_in(self.global_settings, role, normalized)
+        self._save_global()
+
+    def set_project_model_role(self, role: str, selector: str | None) -> None:
+        normalized = self._validated_model_role_write(role, selector)
+        self._assert_project_trusted_for_write()
+        self._set_model_role_in(self.project_settings, role, normalized)
+        self._save_project()
+
     def get_double_escape_action(self) -> str:
         return self.settings.get("doubleEscapeAction") or "tree"
 
@@ -593,6 +665,283 @@ class SettingsManager:
     def get_warnings(self) -> dict:
         return copy.deepcopy(self.settings.get("warnings", {}))
 
+    def get_artifact_limits(self) -> ArtifactLimits:
+        defaults = ArtifactLimits()
+        global_values = _artifact_limit_scope(self.global_settings)
+        project_values = (
+            _artifact_limit_scope(self.project_settings)
+            if self.project_trusted
+            else {}
+        )
+        effective: dict[str, int] = {}
+        for setting_name, field_name in _ARTIFACT_LIMIT_FIELDS.items():
+            global_value = global_values.get(setting_name, getattr(defaults, field_name))
+            project_value = project_values.get(setting_name)
+            effective[field_name] = (
+                min(global_value, project_value)
+                if project_value is not None
+                else global_value
+            )
+        return ArtifactLimits(**effective)
+
+    def get_tool_policy_settings(self) -> dict[str, object]:
+        global_mode, global_effects = self._tool_policy_scope(
+            self.global_settings,
+            scope="global",
+            default_mode="audit",
+            default_effects=frozenset({"read"}),
+        )
+        effective_mode = global_mode
+        effective_effects = global_effects
+        if self.project_trusted and "toolPolicy" in self.project_settings:
+            project_mode, project_effects = self._tool_policy_scope(
+                self.project_settings,
+                scope="project",
+                default_mode=global_mode,
+                default_effects=global_effects,
+            )
+            effective_mode = max(
+                (global_mode, project_mode),
+                key=TOOL_POLICY_MODE_ORDER.index,
+            )
+            effective_effects = global_effects.intersection(project_effects)
+        return {
+            "mode": effective_mode,
+            "autoAllowEffects": [
+                effect for effect in TOOL_EFFECT_ORDER if effect in effective_effects
+            ],
+        }
+
+    def get_operation_settings(self) -> dict[str, object]:
+        default_max = 1024 * 1024 * 1024
+        global_mode, global_max = self._operation_settings_scope(
+            self.global_settings,
+            scope="global",
+            default_mode="observe",
+            default_max=default_max,
+            allow_mode_change=True,
+        )
+        effective_max = global_max
+        if self.project_trusted and "operations" in self.project_settings:
+            _project_mode, project_max = self._operation_settings_scope(
+                self.project_settings,
+                scope="project",
+                default_mode=global_mode,
+                default_max=global_max,
+                allow_mode_change=False,
+            )
+            effective_max = min(global_max, project_max)
+        return {"mode": global_mode, "maxBytes": effective_max}
+
+    def get_memory_settings(self) -> MemorySettings:
+        defaults = MemorySettings()
+        global_value = self._memory_settings_scope(
+            self.global_settings,
+            scope="global",
+            base=defaults,
+            allow_controls=True,
+        )
+        if not self.project_trusted or "memory" not in self.project_settings:
+            return global_value
+        project_value = self._memory_settings_scope(
+            self.project_settings,
+            scope="project",
+            base=global_value,
+            allow_controls=False,
+        )
+        return MemorySettings(
+            enabled=global_value.enabled,
+            allowed_scopes=global_value.allowed_scopes,
+            max_fact_bytes=min(global_value.max_fact_bytes, project_value.max_fact_bytes),
+            max_facts_per_scope=min(
+                global_value.max_facts_per_scope, project_value.max_facts_per_scope
+            ),
+            max_total_bytes=min(global_value.max_total_bytes, project_value.max_total_bytes),
+            recall_limit=min(global_value.recall_limit, project_value.recall_limit),
+            recall_bytes=min(global_value.recall_bytes, project_value.recall_bytes),
+        )
+
+    def _memory_settings_scope(
+        self,
+        settings: dict,
+        *,
+        scope: SettingsScope,
+        base: MemorySettings,
+        allow_controls: bool,
+    ) -> MemorySettings:
+        raw = settings.get("memory")
+        if raw is None:
+            return base
+        if not isinstance(raw, dict):
+            self._record_memory_error_once(scope, "memory must be an object")
+            return base
+        errors: list[str] = []
+        enabled = raw.get("enabled", base.enabled)
+        if not isinstance(enabled, bool):
+            errors.append("enabled must be a boolean")
+            enabled = base.enabled
+        elif not allow_controls and enabled != base.enabled:
+            errors.append("project enabled cannot change the global value")
+            enabled = base.enabled
+        scopes = raw.get("allowedScopes", list(base.allowed_scopes))
+        if (
+            not isinstance(scopes, list)
+            or not scopes
+            or any(item not in {"project", "global"} for item in scopes)
+            or len(scopes) != len(set(scopes))
+        ):
+            errors.append("allowedScopes must contain unique project/global values")
+            scopes = list(base.allowed_scopes)
+        elif not allow_controls and tuple(scopes) != base.allowed_scopes:
+            errors.append("project allowedScopes cannot change global scopes")
+            scopes = list(base.allowed_scopes)
+        values: dict[str, int] = {}
+        for camel, snake in (
+            ("maxFactBytes", "max_fact_bytes"),
+            ("maxFactsPerScope", "max_facts_per_scope"),
+            ("maxTotalBytes", "max_total_bytes"),
+            ("recallLimit", "recall_limit"),
+            ("recallBytes", "recall_bytes"),
+        ):
+            candidate = raw.get(camel, getattr(base, snake))
+            if isinstance(candidate, bool) or not isinstance(candidate, int) or candidate < 1:
+                errors.append(f"{camel} must be a positive integer")
+                candidate = getattr(base, snake)
+            values[snake] = candidate
+        if errors:
+            self._record_memory_error_once(scope, "; ".join(errors))
+        return MemorySettings(
+            enabled=enabled,
+            allowed_scopes=tuple(scopes),
+            **values,
+        )
+
+    def _record_memory_error_once(self, scope: SettingsScope, detail: str) -> None:
+        message = f"Invalid memory setting: {detail}"
+        if any(
+            error["scope"] == scope and str(error["error"]) == message
+            for error in self.errors
+        ):
+            return
+        self._record_error(scope, RuntimeError(message))
+
+    def _operation_settings_scope(
+        self,
+        settings: dict,
+        *,
+        scope: SettingsScope,
+        default_mode: str,
+        default_max: int,
+        allow_mode_change: bool,
+    ) -> tuple[str, int]:
+        raw = settings.get("operations")
+        if raw is None:
+            return default_mode, default_max
+        if not isinstance(raw, dict):
+            self._record_operation_error_once(scope, "operations must be an object")
+            return default_mode, default_max
+        errors: list[str] = []
+        mode = raw.get("mode", default_mode)
+        if mode not in {"disabled", "observe"}:
+            errors.append("mode must be disabled or observe")
+            mode = default_mode
+        elif not allow_mode_change and mode != default_mode:
+            errors.append("project mode cannot change the global operation mode")
+            mode = default_mode
+        max_bytes = raw.get("maxBytes", default_max)
+        if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
+            errors.append("maxBytes must be a positive integer")
+            max_bytes = default_max
+        if errors:
+            self._record_operation_error_once(scope, "; ".join(errors))
+        return str(mode), int(max_bytes)
+
+    def _record_operation_error_once(self, scope: SettingsScope, detail: str) -> None:
+        message = f"Invalid operations setting: {detail}"
+        if any(
+            error["scope"] == scope and str(error["error"]) == message
+            for error in self.errors
+        ):
+            return
+        self._record_error(scope, RuntimeError(message))
+
+    def get_language_server_configs(self) -> list[LanguageServerConfig]:
+        global_configs = self._language_servers_from(self.global_settings, "global")
+        ordered = list(global_configs)
+        positions = {config.name: index for index, config in enumerate(ordered)}
+        if self.project_trusted:
+            project_configs = self._language_servers_from(self.project_settings, "project")
+            for config in project_configs:
+                position = positions.get(config.name)
+                if position is None:
+                    positions[config.name] = len(ordered)
+                    ordered.append(config)
+                else:
+                    ordered[position] = config
+        return ordered
+
+    def _language_servers_from(
+        self,
+        settings: dict,
+        scope: SettingsScope,
+    ) -> list[LanguageServerConfig]:
+        configs, errors = parse_language_server_entries(settings.get("languageServers"))
+        for error in errors:
+            if not any(
+                existing["scope"] == scope and str(existing["error"]) == str(error)
+                for existing in self.errors
+            ):
+                self._record_error(scope, error)
+        return configs
+
+    def _tool_policy_scope(
+        self,
+        settings: dict,
+        *,
+        scope: SettingsScope,
+        default_mode: ToolPolicyMode,
+        default_effects: frozenset[ToolEffect],
+    ) -> tuple[ToolPolicyMode, frozenset[ToolEffect]]:
+        if "toolPolicy" not in settings:
+            return default_mode, default_effects
+        raw = settings.get("toolPolicy")
+        if not isinstance(raw, dict):
+            self._record_policy_error_once(scope, "toolPolicy must be an object")
+            return default_mode, frozenset()
+
+        errors: list[str] = []
+        mode = raw.get("mode", default_mode)
+        if mode not in TOOL_POLICY_MODE_ORDER:
+            errors.append("mode must be disabled, audit, or enforce")
+            mode = default_mode
+
+        raw_effects = raw.get("autoAllowEffects", list(default_effects))
+        effects: frozenset[ToolEffect]
+        if not isinstance(raw_effects, list):
+            errors.append("autoAllowEffects must be a list")
+            effects = frozenset()
+        elif any(
+            not isinstance(effect, str) or effect not in TOOL_EFFECT_ORDER
+            for effect in raw_effects
+        ):
+            errors.append("autoAllowEffects contains an unknown effect")
+            effects = frozenset()
+        else:
+            effects = frozenset(raw_effects)
+
+        if errors:
+            self._record_policy_error_once(scope, "; ".join(errors))
+        return mode, effects  # type: ignore[return-value]
+
+    def _record_policy_error_once(self, scope: SettingsScope, detail: str) -> None:
+        message = f"Invalid toolPolicy setting: {detail}"
+        if any(
+            error["scope"] == scope and str(error["error"]) == message
+            for error in self.errors
+        ):
+            return
+        self._record_error(scope, RuntimeError(message))
+
     def set_warnings(self, warnings: dict) -> None:
         self._set_global("warnings", copy.deepcopy(warnings))
 
@@ -612,6 +961,39 @@ class SettingsManager:
         self._assert_project_trusted_for_write()
         self.project_settings[key] = value
         self._save_project()
+
+    @staticmethod
+    def _scope_has_model_role(settings: dict, role: str) -> bool:
+        raw = settings.get("modelRoles")
+        value = raw.get(role) if isinstance(raw, dict) else None
+        return (
+            role in CONFIGURABLE_MODEL_ROLES
+            and isinstance(value, str)
+            and bool(value.strip())
+        )
+
+    @staticmethod
+    def _validated_model_role_write(role: str, selector: str | None) -> str | None:
+        if role not in CONFIGURABLE_MODEL_ROLES:
+            raise ValueError(f"Unsupported model role: {role!r}")
+        if selector is None:
+            return None
+        if not isinstance(selector, str) or not selector.strip():
+            raise ValueError("Model role selector must be a non-blank string.")
+        return selector.strip()
+
+    @staticmethod
+    def _set_model_role_in(settings: dict, role: str, selector: str | None) -> None:
+        raw = settings.get("modelRoles")
+        roles = dict(raw) if isinstance(raw, dict) else {}
+        if selector is None:
+            roles.pop(role, None)
+        else:
+            roles[role] = selector
+        if roles:
+            settings["modelRoles"] = roles
+        else:
+            settings.pop("modelRoles", None)
 
     def _save_global(self) -> None:
         self._refresh_merged()
@@ -637,3 +1019,16 @@ class SettingsManager:
 
     def _record_error(self, scope: SettingsScope, error: Exception) -> None:
         self.errors.append({"scope": scope, "error": error})
+
+
+def _artifact_limit_scope(settings: dict) -> dict[str, int]:
+    raw = settings.get("artifacts")
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        name: value
+        for name in _ARTIFACT_LIMIT_FIELDS
+        if isinstance((value := raw.get(name)), int)
+        and not isinstance(value, bool)
+        and value > 0
+    }

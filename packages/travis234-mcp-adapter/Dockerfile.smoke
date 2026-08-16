@@ -1,0 +1,13 @@
+# syntax=docker/dockerfile:1.7
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+USER root
+COPY --from=adapter_dist /*.whl /tmp/adapter-dist/
+RUN python -m pip install --no-cache-dir /tmp/adapter-dist/*.whl \
+    && rm -rf /tmp/adapter-dist
+COPY --chown=travis:travis evals/mcp_container_smoke.py /opt/travis234-mcp-smoke.py
+
+USER travis
+ENTRYPOINT ["python", "/opt/travis234-mcp-smoke.py"]
+CMD ["--inside-container"]

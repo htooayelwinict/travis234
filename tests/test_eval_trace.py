@@ -47,6 +47,79 @@ def test_eval_trace_accepts_capability_grant_synchronization_event(tmp_path: Pat
     assert json.loads(path.read_text(encoding="utf-8"))["event"] == "capability_granted"
 
 
+def test_eval_trace_accepts_sanitized_model_role_resolution(tmp_path: Path) -> None:
+    path = tmp_path / "trace.jsonl"
+    writer = EvalTraceWriter(path)
+
+    writer.write(
+        "model_role_resolved",
+        {
+            "role": "reviewer",
+            "selectedRole": "worker",
+            "source": "project",
+            "model": "provider/worker",
+            "fallbackTrace": [
+                {
+                    "role": "reviewer",
+                    "source": "settings",
+                    "selector": None,
+                    "outcome": "missing",
+                    "model_ref": None,
+                    "detail": None,
+                },
+                {
+                    "role": "worker",
+                    "source": "project",
+                    "selector": "provider/worker:low",
+                    "outcome": "selected",
+                    "model_ref": "provider/worker",
+                    "detail": None,
+                },
+            ],
+        },
+    )
+
+    event = json.loads(path.read_text(encoding="utf-8"))
+    assert event["event"] == "model_role_resolved"
+    assert event["selectedRole"] == "worker"
+    assert event["fallbackTrace"][-1]["outcome"] == "selected"
+
+
+def test_artifact_trace_accepts_only_sanitized_lifecycle_metadata(tmp_path: Path) -> None:
+    path = tmp_path / "trace.jsonl"
+    writer = EvalTraceWriter(path, redactor=SecretRedactor(["secret-sentinel"]))
+
+    writer.write(
+        "artifact_promoted",
+        {
+            "artifact_id": "artifact-" + "a" * 32,
+            "kind": "command-output",
+            "byte_size": 128,
+            "source": "durable",
+            "outcome": "promoted",
+        },
+    )
+    writer.write(
+        "artifact_unavailable",
+        {
+            "artifact_id": "artifact-" + "b" * 32,
+            "kind": "subagent-output",
+            "byte_size": 0,
+            "source": "durable",
+            "outcome": "unavailable",
+            "error_code": "physical_limit",
+        },
+    )
+
+    serialized = path.read_text(encoding="utf-8")
+    assert "artifact_promoted" in serialized
+    assert "artifact_unavailable" in serialized
+    assert "secret-sentinel" not in serialized
+    assert str(tmp_path) not in serialized
+    with pytest.raises(ValueError, match="unsafe trace field"):
+        writer.write("artifact_promoted", {"path": str(tmp_path), "content": "secret-sentinel"})
+
+
 def test_eval_trace_accepts_sanitized_feature_audit_metadata(tmp_path: Path) -> None:
     path = tmp_path / "trace.jsonl"
     writer = EvalTraceWriter(path)
@@ -134,6 +207,43 @@ def test_interactive_trace_emits_ordered_safe_lifecycle(tmp_path: Path) -> None:
     encoded = json.dumps(events)
     assert "private prompt text" not in encoded
     assert "private response text" not in encoded
+
+
+def test_coding_app_wires_sanitized_tool_policy_decisions_to_trace(tmp_path: Path) -> None:
+    path = tmp_path / "trace.jsonl"
+    writer = EvalTraceWriter(path)
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(),
+        enable_tui=False,
+        event_trace=writer,
+    )
+
+    assert app.session._tool_policy_event_sink is not None
+    assert app.session._tool_policy_engine.redactor is writer.redactor
+    app.session._tool_policy_event_sink(
+        {
+            "type": "tool_policy_decision",
+            "tool": "write",
+            "effects": ["write"],
+            "mode": "audit",
+            "allow": True,
+            "reason_code": "audit_only",
+        }
+    )
+
+    event = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
+    assert event == {
+        "event": "tool_policy_decision",
+        "timestamp_ms": event["timestamp_ms"],
+        "run_id": writer.run_id,
+        "tool": "write",
+        "effects": ["write"],
+        "mode": "audit",
+        "allow": True,
+        "reason_code": "audit_only",
+    }
 
 
 def test_conversation_log_records_semantic_turn_and_redacts_secret_shapes(tmp_path: Path) -> None:

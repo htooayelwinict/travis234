@@ -215,10 +215,53 @@ The npm package exposes only the `travis234` command and launches the release co
 | `/packages` | List installed resource packages (`--local` selects project scope) |
 | `/install`, `/remove`, `/update` | Confirm and manage local, Git, or Python resource packages |
 | `/processes` | Inspect managed and user-command processes |
+| `/memory status` | Inspect opt-in explicit-memory settings, availability, limits, and counts without displaying facts |
+| `/operations [operation-id]` | Inspect bounded operation-journal metadata for the active session |
+| `/agents [status\|inspect\|steer\|cancel]` | Inspect or control session-owned delegated agents |
 | `/help` | Show available commands and shortcuts |
 | `/exit` | Shut down cleanly and terminate owned work |
 
 User `!command` and `!!command` run asynchronously. Output from `!command` is added to context; `!!command` output remains outside model context.
+
+### Explicit opt-in memory
+
+Travis234 includes a disabled-by-default private fact store under its existing
+`~/.travis234` state root. When the global user enables it, one
+policy-controlled `memory` tool can explicitly retain, recall, inspect, or
+delete project-scoped facts; global scope requires a separate explicit
+allowance. Facts are never retained automatically and recalled facts are never
+injected automatically.
+
+Recall labels every fact as untrusted data, rejects credential-shaped
+retention, bounds results, and promotes larger complete output to a session
+artifact. The tool conservatively declares both read and write effects, so an
+enforced policy may require approval even for recall. `/memory status` displays
+configuration and counts only—never facts, queries, paths, session identity, or
+credentials. See [settings](docs/settings.md#explicit-memory) for the exact
+limits and tradeoffs.
+
+### Observe-only operation journal
+
+Travis234 keeps a separate SQLite intent/effect/settlement journal at
+`~/.travis234/agent/operations.sqlite3`. It complements the existing JSONL
+conversation history; it does not replace it. JSONL remains authoritative for
+resuming conversation, while the journal makes an interrupted provider or tool
+boundary visible after a process crash.
+
+The journal defaults to `observe` mode with a 1 GiB cap. It records bounded
+identifiers, state, timestamps, counters, sanitized effect names, and usage
+totals. It never records prompts, completions, tool arguments or results,
+environment values, credentials, steering text, or subagent goals. An intent
+owned by a provably dead runtime becomes `uncertain` on startup and always has
+`replay=never`; Travis does not infer success and does not automatically retry
+it. This exposes the unavoidable uncertainty window rather than claiming
+exactly-once execution.
+
+Use `/operations` or `/operations <operation-id>` to inspect only the active
+session's hashed identity. Other sessions appear unknown even when an opaque ID
+is supplied. Inspection is read-only and never prunes data. Journal corruption
+or capacity failure disables observation without preventing JSONL conversation
+recovery or the coding turn.
 
 ### Session generation parameters
 
@@ -239,6 +282,53 @@ The editable generation fields are `temperature`, `top_p`, `max_tokens`, `timeou
 Generation changes are local to the active JSONL session, survive resume and branch operations, and apply on the next Agent turn. A resumed session wins only for fields explicitly changed there; untouched fields continue to inherit the current provider, dotenv, and startup CLI configuration. `/params reset <name>` removes one session override and reveals the inherited value, while `/params reset` removes every generation override without changing thinking. Use explicit `reset` syntax—`none`, `null`, and empty values are rejected.
 
 Writes are rejected while an Agent turn is active, but read-only `/params` queries remain available. Valid settings that the selected provider cannot use remain saved and are reported as `dropped`; switching to a compatible model can activate them later. Context and output safety remain authoritative, so request-time limits may lower `max_tokens`. These session overrides affect the interactive main Agent turn, including its tool continuations and retries; compaction and auxiliary summarizer calls keep their existing parameter policy.
+
+### Model roles
+
+Travis234 can route focused work to already configured models without changing the active
+conversation model. Add any of the four optional roles to
+`~/.travis234/agent/settings.json`:
+
+```json
+{
+  "modelRoles": {
+    "compression": "provider/summary-model:low",
+    "worker": "provider/fast-model:medium",
+    "reviewer": "provider/review-model:high",
+    "vision": "provider/image-model"
+  }
+}
+```
+
+A trusted project can override the same keys in `.travis234/settings.json`. The suffix
+after the final colon is an optional thinking level. Missing roles fall back to the active
+primary model; `reviewer` first falls back to `worker`. The `vision` route must select a
+model that advertises image input and fails before a provider call when none is available.
+`/model` changes the implicit primary fallback only and never rewrites an explicit role.
+External Codex subagents keep their own explicit model contract and do not consume these
+Travis model-role settings.
+
+### Typed subagent roles
+
+Optional role resources let a delegation inherit a named, reviewable contract.
+Global JSON roles live in `~/.travis234/agent/roles/`; trusted projects may
+override them from `.travis234/roles/`, and packages may contribute roles through
+the shared capability registry. A role can narrow tools and effects, choose the
+existing `worker` or `reviewer` model route, add bounded relative context, lower
+the timeout, require a JSON-schema result, and allow declared artifacts.
+
+Role permissions are intersections, never grants: the child receives only tools
+already active for its parent, with declared effects inside the role ceiling.
+Explicit empty tool or effect lists grant none. The existing scheduler remains
+capped at three concurrent children and one child level, so a role cannot enable
+recursive delegation. Missing role definitions preserve the established
+untyped behavior. See [settings](docs/settings.md#typed-agent-roles) for the JSON
+fields and failure semantics.
+
+The native TUI exposes `/agents status`, `/agents inspect <id>`, `/agents steer
+<id> <message>`, and `/agents cancel <id>`. Immutable roster snapshots show
+bounded status and summary previews without goals, role context, raw traces, or
+host paths. `/subagents` still selects the delegation skill for the next prompt.
 
 ### Terminal history and selection
 
@@ -282,6 +372,41 @@ flowchart LR
 ```
 
 The core iteration loop owns ordering and bounded execution. Provider adapters translate model protocols without owning session policy. Extensions add commands, tools, hooks, providers, and subagents through explicit session-owned registrations. Compaction and persistence remain separate context owners.
+
+### Tool effect policy
+
+Coding tools declare `read`, `write`, `execute`, and/or `network` effects. The
+default `toolPolicy` mode is `audit`, so existing behavior continues while
+Travis234 records sanitized decisions and identifies legacy extension tools
+that have not declared effects. Set `mode` to `enforce` to auto-allow the
+configured effects (read only by default) and require native-TUI approval for
+other declared tools; undeclared tools are denied. Machine modes never prompt
+and deny approval-required work without reading stdin.
+
+TUI approvals can allow one call, grant the tool's exact effect set for the
+current session, or deny it. Grants are never persisted and do not survive
+resume, fork, clone, session replacement, or restart. Project policy applies
+only after project trust and can tighten, never loosen, the global policy. See
+[settings](docs/settings.md#tool-effect-policy) for the complete merge and
+failure semantics.
+
+### Bounded language services
+
+Travis234 can use user-installed language servers through one optional `lsp`
+tool. Configure an explicit executable plus argument vector in
+`languageServers`; project definitions load only after project trust. Servers
+start lazily on the first semantic action, remain capped at three active
+instances, and close with their owning session. `/lsp status` is a local-only
+snapshot and does not start a server.
+
+Semantic reads include diagnostics, symbols, hover, definition, references,
+and code actions. Rename and editable code actions use a two-step workflow:
+first generate a bounded diff preview without changing files, then apply its
+short-lived token after tool-policy approval. Apply rechecks exact file hashes
+and reports any paths it changed, restored, or could not restore. Large
+completed results use the existing durable artifact boundary. See
+[settings](docs/settings.md#language-servers) for configuration, fixed limits,
+coordinate rules, policy effects, and troubleshooting constraints.
 
 ### Python SDK surfaces
 
@@ -474,7 +599,7 @@ The model sees five bounded proxy forms:
 
 Status does not connect. Listing, search, describe, and calls connect only the named server. Calls are never fanned out or automatically retried. `requestTimeoutMs` controls MCP initialization, discovery, and calls only; it does not alter provider, process, or subagent timeouts. Shared `"lifecycle": "lazy"` declarations are accepted as no-ops, while eager and keep-alive modes are rejected.
 
-Configured servers are an operator consent boundary: review third-party packages, pin versions when reproducibility matters, and give filesystem servers only the directories they need. The adapter supports stdio and Streamable HTTP. It does not currently implement legacy SSE, MCP OAuth, prompts, resources, sampling, elicitation, Apps/UI, or direct per-server provider tools.
+Configured servers are an operator consent boundary: review third-party packages, pin versions when reproducibility matters, and give filesystem servers only the directories they need. The proxy declares all four tool effects because remote method semantics are not locally provable; enforce mode may therefore request a normal tool-policy approval showing only server and operation. The adapter supports stdio and Streamable HTTP. It does not currently implement legacy SSE, MCP OAuth, prompts, resources, sampling, elicitation, Apps/UI, or direct per-server provider tools.
 
 See the [complete adapter user guide](packages/travis234-mcp-adapter/README.md) for installation management, public-server examples, security rules, output limits, TUI workflows, and troubleshooting.
 
@@ -582,7 +707,13 @@ The model-facing process tool uses one `action` field for polling, waiting, ackn
 
 Use `tmux` for durable development servers, watchers, REPLs, test loops, and long builds. Travis234 namespaces tmux sessions to the current workspace, preserves fast-exiting command output, and requires explicit cleanup with the returned logical or resolved session name.
 
-Subagent management tools stay outside ordinary model turns. Explicit delegation, multiple-agent, parallel-worker, split-work, or independent-review requests expose them temporarily; an explicit request not to use subagents always wins. Coding children receive bounded workspace-write access to `read`, `grep`, `find`, `ls`, `bash`, `process`, `tmux`, `edit`, and `write`. Concurrent children must own disjoint files, verify requested changes, and report changed-file evidence. Child-owned managed processes are cleaned up when the child ends, while parent processes and durable tmux sessions remain independently owned.
+### Durable output artifacts
+
+When a persistent session truncates command or managed-process output, Travis234 promotes the completed sanitized output into session-authorized content-addressed storage. The model sees only an opaque `artifact-...` ID and reads it in bounded byte pages. The same ID remains readable after `/resume`, and `/fork` or `/clone` copies only references reachable from the selected branch without copying the underlying object. Small output stays in ordinary session history and creates no artifact object; in-memory sessions remain entirely ephemeral.
+
+Artifact objects live below `~/.travis234/agent/artifacts/objects/`, while authorization lives in `<session>.artifacts.jsonl`. Default per-object, per-session, installation, and free-space limits are documented in [settings](docs/settings.md). A storage or quota failure does not change a successful tool effect: the bounded result carries `artifactUnavailable` and no host path. Collection is explicit, conservative, and fails closed if any manifest cannot be validated.
+
+Subagent management tools stay outside ordinary model turns. Explicit delegation, multiple-agent, parallel-worker, split-work, or independent-review requests expose them temporarily; an explicit request not to use subagents always wins. Coding children receive bounded workspace-write access to `read`, `grep`, `find`, `ls`, `bash`, `process`, `tmux`, `edit`, and `write`, further narrowed by a matching typed role. Concurrent children must own disjoint files, verify requested changes, and report changed-file evidence. Typed results may return schema-validated structured output and explicitly declared durable artifacts; legacy expanded result access remains available. Child-owned managed processes are cleaned up when the child ends, while parent processes and durable tmux sessions remain independently owned.
 
 ## Production sandbox
 

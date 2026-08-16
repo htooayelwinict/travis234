@@ -6,8 +6,26 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import sys
 from pathlib import Path
 from typing import NamedTuple
+
+_SOURCE_ROOT = str(Path(__file__).resolve().parents[1])
+if _SOURCE_ROOT not in sys.path:
+    sys.path.insert(0, _SOURCE_ROOT)
+
+from travis.coding_agent.config import get_agent_dir
+from travis.coding_agent.policy import TOOL_EFFECT_ORDER
+from travis.coding_agent.operations.schema import SCHEMA_VERSION
+from travis.coding_agent.operations.types import EFFECT_STATES, OPERATION_STATES
+from travis.coding_agent.language_services.types import LanguageServiceLimits
+from travis.coding_agent.resource_loader import DefaultResourceLoader
+from travis.coding_agent.settings_manager import SettingsManager
+from travis.coding_agent.subagents import (
+    DEFAULT_SUBAGENT_MAX_DEPTH,
+    DEFAULT_SUBAGENT_MAX_THREADS,
+)
+from travis.coding_agent.tools import create_all_tool_definitions
 
 try:
     from scripts.parity_contracts import build_parity_report
@@ -126,7 +144,8 @@ def verify_current_commit(evidence_path: str | Path, *, root: str | Path) -> dic
 
 
 def verify_parity_contracts(*, root: str | Path) -> dict[str, object]:
-    report = build_parity_report(root=Path(root).resolve())
+    repository = Path(root).resolve()
+    report = build_parity_report(root=repository)
     invalid = {
         source: values["invalid"]
         for source, values in report["summary"].items()
@@ -134,6 +153,109 @@ def verify_parity_contracts(*, root: str | Path) -> dict[str, object]:
     }
     if invalid:
         raise AcceptanceMatrixError(f"parity contract evidence is invalid: {invalid}")
+    definitions = create_all_tool_definitions(str(repository))
+    policy_settings = SettingsManager.in_memory().get_tool_policy_settings()
+    report["toolPolicy"] = {
+        "mode": policy_settings["mode"],
+        "effectCounts": {
+            effect: sum(effect in definition.effects for definition in definitions)
+            for effect in TOOL_EFFECT_ORDER
+        },
+        "undeclaredToolCount": sum(not definition.effects for definition in definitions),
+    }
+    language_configs = SettingsManager.in_memory().get_language_server_configs()
+    language_limits = LanguageServiceLimits()
+    report["languageServices"] = {
+        "configured": len(language_configs),
+        "active": 0,
+        "limits": {
+            "maxActiveServers": language_limits.max_active_servers,
+            "startupSeconds": language_limits.startup_timeout_seconds,
+            "requestSeconds": language_limits.request_timeout_seconds,
+            "maxRestarts": language_limits.max_restarts,
+            "restartWindowSeconds": language_limits.restart_window_seconds,
+            "maxFrameBytes": language_limits.max_frame_bytes,
+            "maxInlineOutputBytes": language_limits.max_inline_output_bytes,
+            "maxApplyOriginalBytes": language_limits.max_apply_original_bytes,
+        },
+    }
+    agent_dir = get_agent_dir()
+    role_settings = SettingsManager.create(
+        str(repository),
+        agent_dir,
+        {"projectTrusted": False},
+    )
+    role_loader = DefaultResourceLoader(
+        cwd=str(repository),
+        agent_dir=agent_dir,
+        project_trusted=False,
+        settings_manager=role_settings,
+        no_context_files=True,
+        no_extensions=True,
+        no_skills=True,
+        no_prompt_templates=True,
+        no_themes=True,
+        offline=True,
+    )
+    role_loader.reload()
+    report["agentRoles"] = {
+        "roles": [
+            {
+                "name": role.name,
+                "provenance": {
+                    "provider": role.source.provider,
+                    "source": role.source.source,
+                    "scope": role.source.scope,
+                    "origin": role.source.origin,
+                },
+            }
+            for role in role_loader.get_agent_roles().list()
+        ]
+    }
+    report["subagentSupervisor"] = {
+        "maxThreads": DEFAULT_SUBAGENT_MAX_THREADS,
+        "maxDepth": DEFAULT_SUBAGENT_MAX_DEPTH,
+        "activeCount": 0,
+    }
+    operation_settings = SettingsManager.in_memory().get_operation_settings()
+    report["operationJournal"] = {
+        "mode": operation_settings["mode"],
+        "schemaVersion": SCHEMA_VERSION,
+        "counts": {
+            "operationStates": len(OPERATION_STATES),
+            "effectStates": len(EFFECT_STATES),
+            "replayPolicies": 1,
+        },
+    }
+    memory_settings = SettingsManager.in_memory().get_memory_settings()
+    report["memory"] = {
+        "enabled": memory_settings.enabled,
+        "storeAvailable": False,
+        "allowedScopes": list(memory_settings.allowed_scopes),
+        "limits": {
+            "maxFactBytes": memory_settings.max_fact_bytes,
+            "maxFactsPerScope": memory_settings.max_facts_per_scope,
+            "maxTotalBytes": memory_settings.max_total_bytes,
+            "recallLimit": memory_settings.recall_limit,
+            "recallBytes": memory_settings.recall_bytes,
+        },
+        "counts": {"project": None, "global": None},
+        "automaticRetention": False,
+        "automaticInjection": False,
+    }
+    report["nativeAcceleration"] = {
+        "baseline": "python",
+        "benchmarkAvailable": (
+            repository / "benchmarks" / "contract_parity_hotpaths.py"
+        ).is_file(),
+        "candidatePresent": False,
+        "decision": "retain_python",
+        "thresholds": {
+            "minimumSpeedup": 2.0,
+            "minimumWallShare": 0.05,
+            "maximumCoefficientOfVariation": 0.15,
+        },
+    }
     return report
 
 

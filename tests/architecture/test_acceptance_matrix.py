@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import importlib.util
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -39,6 +42,101 @@ def test_parity_report_has_only_resolved_evidence() -> None:
     assert report["schema_version"] == 1
     assert report["summary"]["pi"]["invalid"] == 0
     assert report["summary"]["hermes"]["invalid"] == 0
+    assert set(report["toolPolicy"]) == {
+        "mode",
+        "effectCounts",
+        "undeclaredToolCount",
+    }
+    assert report["toolPolicy"]["mode"] == "audit"
+    assert set(report["toolPolicy"]["effectCounts"]) == {
+        "read",
+        "write",
+        "execute",
+        "network",
+    }
+    assert all(
+        isinstance(count, int) and count >= 0
+        for count in report["toolPolicy"]["effectCounts"].values()
+    )
+    assert report["toolPolicy"]["undeclaredToolCount"] == 0
+    assert set(report["languageServices"]) == {"configured", "active", "limits"}
+    assert report["languageServices"]["active"] == 0
+    assert set(report["languageServices"]["limits"]) == {
+        "maxActiveServers",
+        "startupSeconds",
+        "requestSeconds",
+        "maxRestarts",
+        "restartWindowSeconds",
+        "maxFrameBytes",
+        "maxInlineOutputBytes",
+        "maxApplyOriginalBytes",
+    }
+    assert set(report["agentRoles"]) == {"roles"}
+    assert all(
+        set(role) == {"name", "provenance"}
+        and set(role["provenance"]) == {"provider", "source", "scope", "origin"}
+        for role in report["agentRoles"]["roles"]
+    )
+    assert set(report["subagentSupervisor"]) == {
+        "maxThreads",
+        "maxDepth",
+        "activeCount",
+    }
+    assert report["subagentSupervisor"] == {
+        "maxThreads": 3,
+        "maxDepth": 1,
+        "activeCount": 0,
+    }
+    assert report["operationJournal"] == {
+        "mode": "observe",
+        "schemaVersion": 1,
+        "counts": {
+            "operationStates": 5,
+            "effectStates": 5,
+            "replayPolicies": 1,
+        },
+    }
+    assert report["memory"] == {
+        "enabled": False,
+        "storeAvailable": False,
+        "allowedScopes": ["project"],
+        "limits": {
+            "maxFactBytes": 65536,
+            "maxFactsPerScope": 5000,
+            "maxTotalBytes": 1073741824,
+            "recallLimit": 20,
+            "recallBytes": 32768,
+        },
+        "counts": {"project": None, "global": None},
+        "automaticRetention": False,
+        "automaticInjection": False,
+    }
+    assert report["nativeAcceleration"] == {
+        "baseline": "python",
+        "benchmarkAvailable": True,
+        "candidatePresent": False,
+        "decision": "retain_python",
+        "thresholds": {
+            "minimumSpeedup": 2.0,
+            "minimumWallShare": 0.05,
+            "maximumCoefficientOfVariation": 0.15,
+        },
+    }
+
+    encoded = json.dumps(
+        {
+            "agentRoles": report["agentRoles"],
+            "subagentSupervisor": report["subagentSupervisor"],
+            "operationJournal": report["operationJournal"],
+            "memory": report["memory"],
+            "nativeAcceleration": report["nativeAcceleration"],
+        },
+        sort_keys=True,
+    )
+    assert all(
+        forbidden not in encoded
+        for forbidden in ("description", "context", "goal", "result", "credential")
+    )
 
 
 def test_current_commit_verifier_rejects_stale_evidence(
@@ -64,3 +162,17 @@ def test_current_commit_verifier_rejects_stale_evidence(
 
     with pytest.raises(verifier.AcceptanceEvidenceError, match="current commit"):
         verifier.verify_current_commit(evidence, root=ROOT)
+
+
+def test_parity_json_cli_runs_directly_without_pythonpath() -> None:
+    result = subprocess.run(
+        [sys.executable, str(VERIFIER_PATH), "--parity-json"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+        env={key: value for key, value in os.environ.items() if key != "PYTHONPATH"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["toolPolicy"]["mode"] == "audit"

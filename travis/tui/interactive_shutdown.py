@@ -60,12 +60,15 @@ _SIGINT_HANDLER_UNCHANGED = object()
 class InteractiveShutdown:
     """Owns a focused interactive runtime concern."""
 
+    def _defer_sigint(self, signum, frame) -> None:
+        self.tui.dispatcher.post(lambda: self._handle_sigint(signum, frame))
+
     def _install_sigint_handler(self):
         if threading.current_thread() is not threading.main_thread():
             return _SIGINT_HANDLER_UNCHANGED
         try:
             previous = signal_module.getsignal(signal_module.SIGINT)
-            signal_module.signal(signal_module.SIGINT, self._handle_sigint)
+            signal_module.signal(signal_module.SIGINT, self._defer_sigint)
             return previous
         except (AttributeError, OSError, ValueError):
             return _SIGINT_HANDLER_UNCHANGED
@@ -85,6 +88,8 @@ class InteractiveShutdown:
         *,
         timeout_seconds: float = ACTIVE_TURN_SHUTDOWN_TIMEOUT_SECONDS,
     ) -> bool:
+        if self._shutdown_requested:
+            self._shutdown_tool_approvals()
         if timeout_seconds < 0:
             raise ValueError("timeout_seconds must be nonnegative")
         deadline = time.monotonic() + timeout_seconds
@@ -132,6 +137,13 @@ class InteractiveShutdown:
 
     def _request_shutdown(self) -> None:
         self._shutdown_requested = True
+        self._shutdown_tool_approvals()
+
+    def _shutdown_tool_approvals(self) -> None:
+        broker = getattr(self, "tool_approval_broker", None)
+        shutdown = getattr(broker, "shutdown", None)
+        if callable(shutdown):
+            shutdown()
 
 __all__ = (
     'ACTIVE_TURN_SHUTDOWN_TIMEOUT_SECONDS',

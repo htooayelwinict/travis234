@@ -57,6 +57,59 @@ def _write_extension_flags(path: Path) -> None:
     )
 
 
+def test_cli_no_approve_uses_global_bootstrap_without_project_execution(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    agent_dir = tmp_path / "agent"
+    project.mkdir()
+    bootstrap_counter = tmp_path / "bootstrap-count.txt"
+    global_extension = agent_dir / "extensions" / "flags.py"
+    global_extension.parent.mkdir(parents=True)
+    global_extension.write_text(
+        "from pathlib import Path\n"
+        f"counter = Path({str(bootstrap_counter)!r})\n"
+        "counter.write_text(str(int(counter.read_text()) + 1) if counter.exists() else '1', encoding='utf-8')\n"
+        "def extension(travis):\n"
+        "    travis.register_flag('bootstrap-safe', {'type': 'boolean'})\n",
+        encoding="utf-8",
+    )
+    project_marker = tmp_path / "project-extension-ran.txt"
+    project_extension = project / ".travis234/extensions/project.py"
+    project_extension.parent.mkdir(parents=True)
+    project_extension.write_text(
+        "from pathlib import Path\n"
+        f"Path({str(project_marker)!r}).write_text('ran', encoding='utf-8')\n"
+        "def extension(travis):\n"
+        "    return None\n",
+        encoding="utf-8",
+    )
+    captured = _capture_cli_tool_options(monkeypatch, known_tools=[])
+    monkeypatch.setenv(ENV_AGENT_DIR, str(agent_dir))
+
+    exit_code = cli.main(
+        [
+            "--cwd",
+            str(project),
+            "--no-session",
+            "--mode",
+            "print",
+            "--no-approve",
+            "--bootstrap-safe",
+            "inspect",
+        ]
+    )
+
+    assert exit_code == 0
+    assert bootstrap_counter.read_text(encoding="utf-8") == "1"
+    assert not project_marker.exists()
+    runtime = captured["initial_resource_loader"].get_extensions()["runtime"]
+    assert "bootstrap-safe" in runtime.get_flags()
+    assert captured["extension_flag_values"] == {"bootstrap-safe": True}
+    runtime.dispose()
+
+
 def _write_skill(path: Path, name: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(

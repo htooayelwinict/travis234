@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import asyncio
+import importlib
 import json
 import os
 import sys
@@ -16,6 +17,9 @@ from travis234_mcp_adapter.output_guard import MAX_INLINE_BYTES
 from travis234_mcp_adapter.packaged_servers import PackagedServer, register_packaged_server
 
 
+extension_module = importlib.import_module("travis234_mcp_adapter.extension")
+
+
 FIXTURE = Path(__file__).parent / "fixtures" / "server.py"
 
 
@@ -23,6 +27,28 @@ EXPECTED_SCHEMA = {
     "type": "object",
     "properties": {
         "server": {"type": "string"},
+        "operation": {
+            "type": "string",
+            "enum": [
+                "tools.list",
+                "tools.search",
+                "tools.describe",
+                "tools.call",
+                "resources.list",
+                "resources.read",
+                "prompts.list",
+                "prompts.get",
+                "reconnect",
+            ],
+        },
+        "query": {"type": "string"},
+        "name": {"type": "string"},
+        "resource": {
+            "type": "string",
+            "pattern": "^mcp-resource-[0-9a-f]{32}$",
+        },
+        "prompt": {"type": "string"},
+        "arguments": {"type": "object", "additionalProperties": True},
         "search": {"type": "string"},
         "describe": {"type": "string"},
         "tool": {"type": "string"},
@@ -48,6 +74,24 @@ def test_factory_registers_one_proxy_without_io(
     assert len(registered) == 1
     assert registered[0].definition.name == "mcp"
     assert registered[0].definition.parameters == EXPECTED_SCHEMA
+    assert registered[0].definition.effects == frozenset(
+        {"read", "write", "execute", "network"}
+    )
+    assert registered[0].definition.policy_context(
+        {
+            "server": "github",
+            "tool": "create_issue",
+            "args": {"token": "secret-never-approved", "title": "private"},
+        }
+    ) == {"server": "github", "operation": "call"}
+    assert registered[0].definition.policy_context(
+        {
+            "server": "github",
+            "operation": "prompts.get",
+            "prompt": "private-review",
+            "arguments": {"secret": "never-approved"},
+        }
+    ) == {"server": "github", "operation": "prompts.get"}
     assert runner.get_registered_command("mcp-package-probe") is None
 
 
@@ -65,6 +109,23 @@ def test_adapter_extension_is_idempotent_across_duplicate_distribution_paths(
     assert len(runner._handlers["session_start"]) == 1
     assert len(runner._handlers["session_shutdown"]) == 1
     assert len(runner._handlers["tool_result"]) == 1
+
+
+def test_adapter_fails_clearly_when_host_lacks_effect_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = ExtensionRunner(cwd=str(tmp_path))
+
+    def unsupported(_state):
+        raise TypeError("ToolDefinition got an unexpected keyword argument 'effects'")
+
+    monkeypatch.setattr(extension_module, "create_proxy_definition", unsupported)
+
+    with pytest.raises(RuntimeError, match="tool effect metadata support"):
+        extension(runner)
+
+    assert runner.get_all_registered_tools() == []
 
 
 @pytest.mark.anyio
@@ -98,7 +159,10 @@ async def test_session_admits_packaged_server_without_mcp_config(
     definition = runner.get_all_registered_tools()[0].definition
     result = await definition.execute("status", {}, None, None, None)
 
-    assert result.content[0].text == "MCP adapter status\n- package-fixture: disconnected"
+    assert result.content[0].text == (
+        "MCP adapter status\n"
+        "- package-fixture: disconnected; automaticReconnect=off"
+    )
     assert not list(home.rglob("mcp.json"))
     await runner.async_emit({"type": "session_shutdown"})
 
@@ -120,16 +184,19 @@ async def test_session_status_lists_disconnected_servers_without_connecting(
     result = await definition.execute("call-1", {}, None, None, None)
 
     assert [block.text for block in result.content] == [
-        "MCP adapter status\n- global: disconnected\n- 1 project configuration file ignored until trust and reload"
+        "MCP adapter status\n"
+        "- global: disconnected; automaticReconnect=off\n"
+        "- 1 project configuration file ignored until trust and reload"
     ]
-    assert result.details == {
-        "travis234Mcp": {
-            "operation": "status",
-            "servers": [{"name": "global", "status": "disconnected"}],
-            "ignoredProjectSources": 1,
-            "isError": False,
-        }
-    }
+    marker = result.details["travis234Mcp"]
+    assert marker["operation"] == "status"
+    assert marker["ignoredProjectSources"] == 1
+    assert marker["isError"] is False
+    assert marker["servers"][0]["name"] == "global"
+    assert marker["servers"][0]["status"] == "disconnected"
+    assert marker["servers"][0]["automaticReconnect"] is False
+    assert marker["servers"][0]["maxReconnectAttempts"] == 1
+    assert marker["servers"][0]["updatedAtMs"] > 0
 
 
 @pytest.mark.anyio

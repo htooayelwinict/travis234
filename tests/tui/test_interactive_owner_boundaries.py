@@ -8,10 +8,14 @@ def test_interactive_mode_composes_bounded_runtime_owners(tmp_path) -> None:
     from travis.tui.interactive_command_dispatcher import InteractiveCommandDispatcher
     from travis.tui.interactive_extensions import InteractiveExtensions
     from travis.tui.interactive_model_auth import InteractiveModelAuth
+    from travis.tui.interactive_memory import InteractiveMemory
+    from travis.tui.interactive_operations import InteractiveOperations
     from travis.tui.interactive_process_commands import InteractiveProcessCommands
+    from travis.tui.interactive_subagents import InteractiveSubagents
     from travis.tui.interactive_session_commands import InteractiveSessionCommands
     from travis.tui.interactive_shutdown import InteractiveShutdown
     from travis.tui.interactive_turn_controller import InteractiveTurnController
+    from travis.tui.interactive_tool_approval import InteractiveToolApprovalBroker
     from travis.tui.interactive_view import InteractiveView
 
     app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=FakeTerminal(), enable_tui=True)
@@ -21,11 +25,15 @@ def test_interactive_mode_composes_bounded_runtime_owners(tmp_path) -> None:
     assert isinstance(runtime, InteractiveCommandDispatcher)
     assert isinstance(runtime, InteractiveExtensions)
     assert isinstance(runtime, InteractiveModelAuth)
+    assert isinstance(runtime, InteractiveMemory)
+    assert isinstance(runtime, InteractiveOperations)
     assert isinstance(runtime, InteractiveProcessCommands)
+    assert isinstance(runtime, InteractiveSubagents)
     assert isinstance(runtime, InteractiveSessionCommands)
     assert isinstance(runtime, InteractiveShutdown)
     assert isinstance(runtime, InteractiveTurnController)
     assert isinstance(runtime, InteractiveView)
+    assert isinstance(runtime.tool_approval_broker, InteractiveToolApprovalBroker)
 
 
 def test_interactive_mode_forwards_runtime_overrides(tmp_path) -> None:

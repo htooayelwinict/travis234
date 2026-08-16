@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 
 from travis.agent.types import AgentTool, AgentToolResult
+from travis.coding_agent.policy.types import ToolEffect, normalize_effects
 from travis.coding_agent.source_info import SourceInfo
 
 if TYPE_CHECKING:
@@ -39,6 +40,11 @@ class ToolDefinition:
     execution_mode: str | None = None
     prepare_arguments: Optional[Callable[[Any], Any]] = None
     source_info: SourceInfo | None = None
+    effects: frozenset[ToolEffect] = frozenset()
+    policy_context: Optional[Callable[[dict[str, Any]], object]] = None
+
+    def __post_init__(self) -> None:
+        self.effects = normalize_effects(self.effects)
 
 
 def wrap_tool_definition(

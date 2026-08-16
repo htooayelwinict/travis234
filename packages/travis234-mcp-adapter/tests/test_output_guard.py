@@ -35,7 +35,8 @@ def test_guard_spills_one_byte_over_with_secure_random_file(tmp_path: Path) -> N
     assert first.spill_path.read_text(encoding="utf-8") == original
     assert stat.S_IMODE(first.spill_path.stat().st_mode) == 0o600
     assert first.spill_path != second.spill_path
-    assert str(first.spill_path) in first.text
+    assert str(first.spill_path) not in first.text
+    assert first.spill_path.name in first.text
     assert len(first.text.encode("utf-8")) <= MAX_INLINE_BYTES
 
     spills.cleanup()

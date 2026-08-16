@@ -360,9 +360,7 @@ class InteractiveExtensions:
             self.tui.request_render()
             return
         loader = self.app.session.resource_loader
-        theme_fallback = self.theme_registry.reload(
-            [theme for theme in loader.get_themes()["themes"] if hasattr(theme, "name")]
-        )
+        theme_fallback = self._reload_resource_themes()
         if theme_fallback:
             self.history.add(StatusLine(theme_fallback, kind="warning"))
 
@@ -586,6 +584,15 @@ class InteractiveExtensions:
         if not callable(parse_command):
             return False
         return parse_command(prompt) is not None
+
+    def _is_registered_prompt_template(self, prompt: str) -> bool:
+        if not prompt.startswith("/"):
+            return False
+        command_name = prompt[1:].partition(" ")[0]
+        return any(
+            getattr(template, "name", None) == command_name
+            for template in getattr(self.app.session, "prompt_templates", [])
+        )
 
     def _extension_shortcut_context(self) -> dict[str, object]:
         return {

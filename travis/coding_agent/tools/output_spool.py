@@ -9,6 +9,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
+from travis.coding_agent.artifact_store import ArtifactPromotionError
 from travis.coding_agent.artifacts import ArtifactRef, ArtifactRegistry
 from travis.coding_agent.tools.truncate import (
     DEFAULT_MAX_BYTES,
@@ -24,6 +25,7 @@ class OutputSnapshot:
     truncation: TruncationResult
     full_output_path: str | None = None
     artifact_id: str | None = None
+    artifact_unavailable: dict[str, str] | None = None
 
 
 class OutputSpool:
@@ -35,13 +37,16 @@ class OutputSpool:
         directory: str | os.PathLike[str] | None = None,
         artifact_registry: ArtifactRegistry | None = None,
         artifact_kind: str = "command-output",
+        tool_call_id: str | None = None,
     ) -> None:
         self.max_lines = max_lines
         self.max_bytes = max_bytes
         self.temp_file_prefix = temp_file_prefix
         self._artifact_registry = artifact_registry
         self._artifact_kind = artifact_kind
+        self._tool_call_id = tool_call_id
         self._artifact_ref: ArtifactRef | None = None
+        self._artifact_unavailable: dict[str, str] | None = None
         if directory is not None:
             Path(directory).mkdir(parents=True, exist_ok=True)
         fd, path = tempfile.mkstemp(prefix=f"{temp_file_prefix}-", suffix=".log", dir=directory)
@@ -99,12 +104,7 @@ class OutputSpool:
             if persist_if_truncated and truncated:
                 self._preserve_artifact = True
                 self._file.flush()
-                if self._artifact_registry is not None and self._artifact_ref is None:
-                    self._artifact_ref = self._artifact_registry.register(
-                        Path(self._path),
-                        kind=self._artifact_kind,
-                        access="read",
-                    )
+                self._persist_completed_artifact()
             truncation = TruncationResult(
                 content=tail.content,
                 truncated=truncated,
@@ -121,8 +121,14 @@ class OutputSpool:
             return OutputSnapshot(
                 content=tail.content,
                 truncation=truncation,
-                full_output_path=self._path if self._preserve_artifact else None,
+                full_output_path=(
+                    self._path
+                    if self._preserve_artifact
+                    and not (self._artifact_registry is not None and self._artifact_registry.is_durable)
+                    else None
+                ),
                 artifact_id=self._artifact_ref.id if self._artifact_ref is not None else None,
+                artifact_unavailable=self._artifact_unavailable,
             )
 
     def close(self) -> None:
@@ -130,13 +136,48 @@ class OutputSpool:
             if self._closed:
                 return
             self.finish()
+            self._persist_completed_artifact()
             self._file.close()
             self._closed = True
-            if not self._preserve_artifact:
+            remove_spool = not self._preserve_artifact or (
+                self._artifact_registry is not None and self._artifact_registry.is_durable
+            )
+            if remove_spool:
                 try:
                     os.unlink(self._path)
                 except FileNotFoundError:
                     pass
+
+    def _persist_completed_artifact(self) -> None:
+        if (
+            not self._finished
+            or not self._preserve_artifact
+            or self._artifact_registry is None
+            or self._artifact_ref is not None
+            or self._artifact_unavailable is not None
+        ):
+            return
+        try:
+            if self._artifact_registry.is_durable:
+                self._artifact_ref = self._artifact_registry.promote(
+                    Path(self._path),
+                    kind=self._artifact_kind,
+                    tool_call_id=self._tool_call_id,
+                )
+            else:
+                self._artifact_ref = self._artifact_registry.register(
+                    Path(self._path),
+                    kind=self._artifact_kind,
+                    access="read",
+                )
+        except ArtifactPromotionError as error:
+            message = " ".join(str(error).split())[:240] or "Artifact storage is unavailable"
+            self._artifact_unavailable = {"code": error.code, "message": message}
+        except OSError:
+            self._artifact_unavailable = {
+                "code": "unavailable",
+                "message": "Artifact storage is unavailable",
+            }
 
     def get_last_line_bytes(self) -> int:
         with self._lock:

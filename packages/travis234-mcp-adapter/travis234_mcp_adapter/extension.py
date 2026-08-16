@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 from weakref import WeakKeyDictionary
 
+from travis234_mcp_adapter.catalogs import PromptCatalog, ResourceCatalog
 from travis234_mcp_adapter.config import ConfigError, LoadedConfig, load_config
 from travis234_mcp_adapter.output_guard import SpillRegistry
 from travis234_mcp_adapter.packaged_servers import merge_packaged_servers
@@ -25,6 +26,8 @@ class ExtensionState:
     session_started: bool = False
     runtime: McpRuntime | None = None
     catalogs: dict[str, tuple[Any, ...]] = field(default_factory=dict)
+    resource_catalogs: dict[str, ResourceCatalog] = field(default_factory=dict)
+    prompt_catalogs: dict[str, PromptCatalog] = field(default_factory=dict)
     spills: SpillRegistry = field(default_factory=SpillRegistry)
     shadowed_configured_names: tuple[str, ...] = ()
 
@@ -38,6 +41,8 @@ class ExtensionState:
         self.runtime = None
         self.shadowed_configured_names = ()
         self.catalogs.clear()
+        self.resource_catalogs.clear()
+        self.prompt_catalogs.clear()
         self.spills.cleanup()
         self.spills = SpillRegistry()
         try:
@@ -64,6 +69,8 @@ class ExtensionState:
         self.runtime = None
         self.shadowed_configured_names = ()
         self.catalogs.clear()
+        self.resource_catalogs.clear()
+        self.prompt_catalogs.clear()
         self.spills.cleanup()
 
     def on_tool_result(self, event, _ctx):
@@ -84,8 +91,16 @@ def extension(travis) -> None:
     if runner in _STATES:
         return
     state = ExtensionState()
+    try:
+        definition = create_proxy_definition(state)
+    except TypeError as error:
+        if not any(field in str(error) for field in ("effects", "policy_context")):
+            raise
+        raise RuntimeError(
+            "travis234-mcp-adapter requires a Travis234 host with tool effect metadata support"
+        ) from error
+    travis.register_tool(definition)
     _STATES[runner] = state
-    travis.register_tool(create_proxy_definition(state))
     travis.on("session_start", state.on_session_start)
     travis.on("session_shutdown", state.on_session_shutdown)
     travis.on("tool_result", state.on_tool_result)

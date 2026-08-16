@@ -12,11 +12,15 @@ from travis.agent.types import AgentMessage
 from travis.ai.model_resolver import find_initial_model
 from travis.ai.types import Context, ImageContent, Message, Model, SimpleStreamOptions, TextContent
 from travis.coding_agent.agent_session import AgentSession, default_convert_to_llm
+from travis.coding_agent.artifact_manifest import ArtifactManifest
+from travis.coding_agent.artifact_store import ArtifactLimits, DurableArtifactStore
+from travis.coding_agent.artifacts import ArtifactRegistry
 from travis.coding_agent.auth_storage import AuthStorage
 from travis.coding_agent.extensions import ExtensionRunner, apply_extension_flag_values
 from travis.coding_agent.model_registry import ModelRegistry
 from travis.coding_agent.object_utils import call_optional as _call_or_none
 from travis.coding_agent.object_utils import first_defined as _first_defined
+from travis.coding_agent.operations import OperationRuntime
 from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.session_catalog import SessionCatalog
 from travis.coding_agent.session_store import SessionContextSnapshot, SessionStore
@@ -29,6 +33,24 @@ class CreateAgentSessionResult:
     session: AgentSession
     extensions_result: dict[str, object]
     model_fallback_message: str | None = None
+
+
+def create_session_artifact_registry(
+    *,
+    session_path: str | None,
+    agent_dir: str,
+    settings_manager: SettingsManager,
+) -> ArtifactRegistry:
+    if session_path is None:
+        return ArtifactRegistry()
+    getter = getattr(settings_manager, "get_artifact_limits", None)
+    limits = getter() if callable(getter) else ArtifactLimits()
+    if not isinstance(limits, ArtifactLimits):
+        limits = ArtifactLimits()
+    return ArtifactRegistry(
+        durable_store=DurableArtifactStore(agent_dir),
+        manifest=ArtifactManifest.for_session(session_path, limits=limits),
+    )
 
 
 
@@ -116,6 +138,9 @@ def create_agent_session_services(options: dict[str, Any]) -> dict[str, Any]:
         "sessionCatalog": session_catalog,
         "sessionPath": session_path,
         "sessionId": session_id,
+        "operationRuntime": options.get(
+            "operationRuntime", options.get("operation_runtime")
+        ),
         "diagnostics": diagnostics,
     }
 
@@ -142,6 +167,11 @@ def create_agent_session(options: Mapping[str, Any] | None = None, **kwargs: Any
 
 def create_agent_session_from_services(options: dict[str, Any]) -> CreateAgentSessionResult:
     services = options["services"]
+    operation_runtime = options.get(
+        "operationRuntime",
+        options.get("operation_runtime", services.get("operationRuntime")),
+    )
+    owns_operation_runtime = False
     model: Model | None = options.get("model")
     model_fallback_message: str | None = None
     thinking_level = options.get("thinkingLevel", options.get("thinking_level"))
@@ -194,43 +224,89 @@ def create_agent_session_from_services(options: dict[str, Any]) -> CreateAgentSe
         thinking_level = existing_session.thinking_level if has_thinking_entry else None
     extensions_result = services["resourceLoader"].get_extensions()
     runtime = extensions_result.get("runtime")
-    active_tool_names, allowed_tool_names = _resolve_tool_options(options)
-    provider_retry_settings = _provider_retry_settings(services["settingsManager"])
-    session = AgentSession(
-        cwd=services["cwd"],
-        agent_dir=services.get("agentDir"),
-        model=model,
-        thinking_level=thinking_level or "off",
-        scoped_models=options.get("scopedModels", options.get("scoped_models")),
-        active_tool_names=active_tool_names,
-        allowed_tool_names=allowed_tool_names,
-        excluded_tool_names=options.get("excludeTools", options.get("exclude_tools")),
-        transport=_call_or_none(services["settingsManager"], "getTransport", "get_transport"),
-        thinking_budgets=_call_or_none(services["settingsManager"], "getThinkingBudgets", "get_thinking_budgets"),
-        max_retry_delay_ms=_first_defined(
-            provider_retry_settings.get("maxRetryDelayMs"),
-            provider_retry_settings.get("max_retry_delay_ms"),
-        ),
-        tool_definitions=_tool_definitions_for_sdk(services, options),
-        convert_to_llm=_convert_to_llm_for_sdk(
-            services["settingsManager"],
-            options.get("convertToLlm", options.get("convert_to_llm")),
-        ),
-        resource_loader=services["resourceLoader"],
-        settings_manager=services["settingsManager"],
-        extension_runner=runtime if isinstance(runtime, ExtensionRunner) else None,
-        stream_fn=_stream_fn_for_sdk(
-            services["modelRegistry"],
-            services["settingsManager"],
-        ),
-        model_registry=services["modelRegistry"],
-        session_index=services["sessionCatalog"].index,
-        session_path=session_path,
-        parent_session_path=options.get("parentSession", options.get("parent_session_path")),
-        session_id=str(session_id) if session_id else None,
-        session_start_event=options.get("sessionStartEvent", options.get("session_start_event")),
-        defer_session_start=bool(options.get("deferSessionStart", options.get("defer_session_start", False))),
+    memory_settings = services["settingsManager"].get_memory_settings()
+    active_tool_names, allowed_tool_names = _resolve_tool_options(
+        options,
+        memory_enabled=memory_settings.enabled,
     )
+    provider_retry_settings = _provider_retry_settings(services["settingsManager"])
+    if operation_runtime is None:
+        operation_runtime = OperationRuntime.from_settings(
+            services["agentDir"],
+            services["settingsManager"].get_operation_settings(),
+            heartbeat_interval_seconds=None,
+        )
+        services["operationRuntime"] = operation_runtime
+        owns_operation_runtime = True
+        recovery_report = getattr(operation_runtime, "recovery_report", None)
+        if recovery_report is not None and recovery_report.has_diagnostic:
+            services["diagnostics"].append(recovery_report.as_dict())
+    try:
+        session = AgentSession(
+            cwd=services["cwd"],
+            agent_dir=services.get("agentDir"),
+            model=model,
+            thinking_level=thinking_level or "off",
+            scoped_models=options.get("scopedModels", options.get("scoped_models")),
+            active_tool_names=active_tool_names,
+            allowed_tool_names=allowed_tool_names,
+            excluded_tool_names=options.get(
+                "excludeTools", options.get("exclude_tools")
+            ),
+            transport=_call_or_none(
+                services["settingsManager"], "getTransport", "get_transport"
+            ),
+            thinking_budgets=_call_or_none(
+                services["settingsManager"],
+                "getThinkingBudgets",
+                "get_thinking_budgets",
+            ),
+            max_retry_delay_ms=_first_defined(
+                provider_retry_settings.get("maxRetryDelayMs"),
+                provider_retry_settings.get("max_retry_delay_ms"),
+            ),
+            tool_definitions=_tool_definitions_for_sdk(services, options),
+            convert_to_llm=_convert_to_llm_for_sdk(
+                services["settingsManager"],
+                options.get("convertToLlm", options.get("convert_to_llm")),
+            ),
+            resource_loader=services["resourceLoader"],
+            settings_manager=services["settingsManager"],
+            extension_runner=runtime if isinstance(runtime, ExtensionRunner) else None,
+            stream_fn=_stream_fn_for_sdk(
+                services["modelRegistry"],
+                services["settingsManager"],
+            ),
+            model_registry=services["modelRegistry"],
+            session_index=services["sessionCatalog"].index,
+            session_path=session_path,
+            parent_session_path=options.get(
+                "parentSession", options.get("parent_session_path")
+            ),
+            session_id=str(session_id) if session_id else None,
+            session_start_event=options.get(
+                "sessionStartEvent", options.get("session_start_event")
+            ),
+            defer_session_start=bool(
+                options.get(
+                    "deferSessionStart", options.get("defer_session_start", False)
+                )
+            ),
+            model_role_bindings=options.get(
+                "modelRoleBindings",
+                options.get("model_role_bindings"),
+            ),
+            model_role_event_sink=options.get(
+                "modelRoleEventSink",
+                options.get("model_role_event_sink"),
+            ),
+            operation_runtime=operation_runtime,
+            owns_operation_runtime=owns_operation_runtime,
+        )
+    except BaseException:
+        if owns_operation_runtime:
+            operation_runtime.close()
+        raise
     _record_initial_session_state(session, model, thinking_level or "off", fresh_session)
     return CreateAgentSessionResult(
         session=session,
@@ -471,7 +547,11 @@ def _builtin_tool_options(settings_manager: object) -> dict[str, dict[str, objec
     }
 
 
-def _resolve_tool_options(options: Mapping[str, Any]) -> tuple[list[str] | None, list[str] | None]:
+def _resolve_tool_options(
+    options: Mapping[str, Any],
+    *,
+    memory_enabled: bool = False,
+) -> tuple[list[str] | None, list[str] | None]:
     tools = options.get("tools")
     if tools is not None:
         selected = [str(name) for name in tools]
@@ -479,7 +559,10 @@ def _resolve_tool_options(options: Mapping[str, Any]) -> tuple[list[str] | None,
     no_tools = options.get("noTools", options.get("no_tools"))
     if no_tools:
         return [], [] if no_tools == "all" else None
-    return ["read", "bash", "edit", "write"], None
+    active = ["read", "bash", "edit", "write"]
+    if memory_enabled:
+        active.append("memory")
+    return active, None
 
 
 _IMAGE_READING_DISABLED_TEXT = "Image reading is disabled."

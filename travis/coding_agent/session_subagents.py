@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import subprocess
 import time
 from dataclasses import dataclass
@@ -33,6 +34,7 @@ from travis.compaction.compressor import LEGACY_SUMMARY_PREFIX, SUMMARY_END_MARK
 from travis.compaction.timing import CompactionManager
 from travis.coding_agent.branch_summarization import generate_branch_summary
 from travis.coding_agent.artifacts import ArtifactRegistry
+from travis.coding_agent.artifact_store import ArtifactPromotionError
 from travis.coding_agent.compaction_adapter import (
     SessionCompactionAdapter,
     compaction_summary_with_details,
@@ -55,7 +57,11 @@ from travis.coding_agent.process_context import ProcessContextResolver
 from travis.coding_agent.processes.local import create_local_process_transport
 from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import ProcessOwner
+from travis.coding_agent.policy.context import fixed_action_context, subagent_policy_context
+from travis.coding_agent.policy.types import ALL_TOOL_EFFECTS
 from travis.coding_agent.resource_loader import DefaultResourceLoader
+from travis.coding_agent.subagent_roles import resolve_agent_role
+from travis.coding_agent.subagent_supervision import ControlResult
 from travis.coding_agent.session_index import SessionIndex
 from travis.coding_agent.session_store import (
     BashExecutionMessage,
@@ -87,7 +93,36 @@ from travis.coding_agent.tools.types import (
 )
 
 from travis.coding_agent.session_types import _CANCEL_SUBAGENT_SCHEMA, _DEFAULT_SUBAGENT_ALLOWED_TOOLS, _EXPAND_SUBAGENT_RESULT_SCHEMA, _LIST_SUBAGENTS_SCHEMA, _MODEL_SUBAGENT_SPAWN_LIMIT_PER_TURN, _SKILL_SUBAGENT_ALLOWED_TOOL_NAMES, _SPAWN_SUBAGENT_SCHEMA, _SUBAGENT_RESULT_SUMMARY_LIMIT, _TASK_ID_SCHEMA
-from travis.coding_agent.subagent_trace import _coerce_subagent_timeout_seconds, _expanded_subagent_result_details, _format_subagent_expansion, _model_subagent_timeout_seconds_arg, _optional_timeout_arg, _public_subagent_result_details, _reject_unexpected_args, _required_text_arg, _subagent_changed_files, _subagent_expansion_budget_arg, _subagent_expansion_offset_arg, _subagent_expansion_section_arg, _task_id_arg
+from travis.coding_agent.subagent_trace import _coerce_subagent_timeout_seconds, _expanded_subagent_result_details, _format_subagent_expansion, _model_subagent_timeout_seconds_arg, _optional_timeout_arg, _public_subagent_result_details, _public_subagent_tool_trace, _reject_unexpected_args, _replace_artifact_paths, _required_text_arg, _subagent_changed_files, _subagent_expansion_budget_arg, _subagent_expansion_offset_arg, _subagent_expansion_section_arg, _task_id_arg
+
+
+def _merge_role_context(role_context: str, task_context: str) -> str:
+    parts = [part.strip() for part in (role_context, task_context) if part.strip()]
+    return "\n\n".join(parts)[:65_536]
+
+
+class _InternalSubagentControlHandle:
+    def __init__(self, child: object) -> None:
+        self._child = child
+
+    def steer(self, message: str) -> ControlResult:
+        steer = getattr(self._child, "steer", None)
+        if not callable(steer):
+            return ControlResult(False, "steering_unsupported")
+        steer(message)
+        return ControlResult(True, "steering_queued")
+
+    def cancel(self, reason: str) -> ControlResult:
+        del reason
+        agent = getattr(self._child, "agent", None)
+        abort = getattr(agent, "abort", None)
+        if callable(abort):
+            abort()
+        for name in ("abort_bash", "abort_retry"):
+            callback = getattr(self._child, name, None)
+            if callable(callback):
+                callback()
+        return ControlResult(True, "cancellation_requested")
 
 class SessionSubagentController:
     """Owns a focused AgentSession runtime concern."""
@@ -126,6 +161,39 @@ class SessionSubagentController:
             if not allowed_tools or any(tool not in CODING_SUBAGENT_TOOLS for tool in allowed_tools):
                 raise ValueError("Subagent safety overrides are not supported: allowedTools")
         timeout_value = options.get("timeoutSeconds", options.get("timeout_seconds"))
+        requested_timeout = (
+            _coerce_subagent_timeout_seconds(timeout_value, default=1800)
+            if timeout_value is not None
+            else None
+        )
+        definition_name = options.get(
+            "roleDefinitionName", options.get("role_definition_name")
+        )
+        definition = None
+        if self._resource_loader is not None:
+            registry = self._resource_loader.get_agent_roles()
+            if definition_name is not None:
+                if not isinstance(definition_name, str) or not definition_name:
+                    raise ValueError("roleDefinitionName must be a non-empty string")
+                definition = registry.get(definition_name)
+                if definition is None:
+                    raise ValueError(f'Unknown agent role definition: "{definition_name}"')
+            else:
+                definition = registry.get(role)
+        resolved_role = None
+        if definition is not None:
+            parent_tools = tuple(self.get_active_tool_names())
+            if allowed_tools is not None:
+                requested_tool_set = set(allowed_tools)
+                parent_tools = tuple(
+                    name for name in parent_tools if name in requested_tool_set
+                )
+            resolved_role = resolve_agent_role(
+                definition,
+                parent_tools=parent_tools,
+                definitions_by_name=self._tool_definition_by_name,
+                requested_timeout=requested_timeout,
+            )
         task_options = {
             "role": role,
             "goal": goal,
@@ -133,12 +201,34 @@ class SessionSubagentController:
             "backend": str(options.get("backend") or "internal"),
             "sandbox": str(options.get("sandbox") or "workspace_write"),
             "model": options.get("model"),
-            "reasoning": options.get("reasoning", self.thinking_level),
-            "context_pack": str(options.get("contextPack", options.get("context_pack", "")) or ""),
-            "timeout_seconds": _coerce_subagent_timeout_seconds(timeout_value, default=1800),
-            "allowed_tools": tuple(allowed_tools) if allowed_tools is not None else self._subagent_allowed_tools_for_role(role),
+            "reasoning": options.get("reasoning"),
+            "context_pack": _merge_role_context(
+                resolved_role.context_pack if resolved_role is not None else "",
+                str(options.get("contextPack", options.get("context_pack", "")) or ""),
+            ),
+            "timeout_seconds": (
+                resolved_role.timeout_seconds
+                if resolved_role is not None
+                else requested_timeout or 1800
+            ),
+            "allowed_tools": (
+                resolved_role.allowed_tools
+                if resolved_role is not None
+                else tuple(allowed_tools) if allowed_tools is not None else self._subagent_allowed_tools_for_role(role)
+            ),
             "parent_session_id": self.session_id,
             "parent_turn_id": options.get("parentTurnId", options.get("parent_turn_id")),
+            "role_definition_name": (
+                resolved_role.definition_name if resolved_role is not None else None
+            ),
+            "allowed_effects": (
+                resolved_role.allowed_effects if resolved_role is not None else None
+            ),
+            "model_role": resolved_role.model_role if resolved_role is not None else None,
+            "result_schema": resolved_role.result_schema if resolved_role is not None else None,
+            "artifact_policy": (
+                resolved_role.artifact_policy if resolved_role is not None else "none"
+            ),
         }
         return SubagentTask(**task_options)
 
@@ -156,11 +246,13 @@ class SessionSubagentController:
         signal: AbortSignal | None = None,
     ) -> SubagentResult:
         task_id, task = self._spawn_subagent_task(role, goal, options)
-        return self.subagents.wait(
-            task_id,
-            timeout=task.timeout_seconds + 1,
-            signal=signal,
-            cancel_reason="Cancelled by parent abort.",
+        return self._prepare_public_subagent_result(
+            self.subagents.wait(
+                task_id,
+                timeout=task.timeout_seconds + 1,
+                signal=signal,
+                cancel_reason="Cancelled by parent abort.",
+            )
         )
 
     def _create_subagent_tool_definitions(self) -> list[ToolDefinition]:
@@ -181,6 +273,8 @@ class SessionSubagentController:
                     "Spawn independent children together with wait=false; collect every result and verify child evidence before finalizing.",
                 ],
                 execute=self._execute_spawn_subagent_tool,
+                effects=ALL_TOOL_EFFECTS,
+                policy_context=subagent_policy_context,
             ),
             ToolDefinition(
                 name="wait_subagent",
@@ -189,6 +283,8 @@ class SessionSubagentController:
                 parameters=_TASK_ID_SCHEMA,
                 prompt_snippet="Wait for a delegated child task by task id.",
                 execute=self._execute_wait_subagent_tool,
+                effects=frozenset({"read"}),
+                policy_context=fixed_action_context("wait"),
             ),
             ToolDefinition(
                 name="list_subagents",
@@ -197,6 +293,8 @@ class SessionSubagentController:
                 parameters=_LIST_SUBAGENTS_SCHEMA,
                 prompt_snippet="Inspect active and completed child subagents.",
                 execute=self._execute_list_subagents_tool,
+                effects=frozenset({"read"}),
+                policy_context=fixed_action_context("list"),
             ),
             ToolDefinition(
                 name="get_subagent_result",
@@ -205,6 +303,8 @@ class SessionSubagentController:
                 parameters=_TASK_ID_SCHEMA,
                 prompt_snippet="Fetch a child subagent result by task id without blocking indefinitely.",
                 execute=self._execute_get_subagent_result_tool,
+                effects=frozenset({"read"}),
+                policy_context=fixed_action_context("result"),
             ),
             ToolDefinition(
                 name="expand_subagent_result",
@@ -221,6 +321,8 @@ class SessionSubagentController:
                     "Use the smallest useful section and budget; page with offset when the expansion is still truncated.",
                 ],
                 execute=self._execute_expand_subagent_result_tool,
+                effects=frozenset({"read"}),
+                policy_context=fixed_action_context("expand"),
             ),
             ToolDefinition(
                 name="cancel_subagent",
@@ -229,6 +331,8 @@ class SessionSubagentController:
                 parameters=_CANCEL_SUBAGENT_SCHEMA,
                 prompt_snippet="Cancel a child subagent that is no longer needed.",
                 execute=self._execute_cancel_subagent_tool,
+                effects=frozenset({"execute"}),
+                policy_context=fixed_action_context("cancel"),
             ),
         ]
 
@@ -298,6 +402,7 @@ class SessionSubagentController:
                 signal=signal,
                 cancel_reason="Cancelled by parent abort.",
             )
+            result = self._prepare_public_subagent_result(result)
             return self._subagent_tool_result(self._format_subagent_result(result), _public_subagent_result_details(result))
         details = {
             "taskId": task_id,
@@ -320,6 +425,7 @@ class SessionSubagentController:
             signal=signal,
             cancel_reason="Cancelled by parent abort.",
         )
+        result = self._prepare_public_subagent_result(result)
         return self._subagent_tool_result(self._format_subagent_result(result), _public_subagent_result_details(result))
 
     def _execute_list_subagents_tool(self, _tool_call_id, args, signal=None, on_update=None, ctx=None) -> AgentToolResult:
@@ -336,6 +442,7 @@ class SessionSubagentController:
         result = self.subagents.get_result(task_id)
         if result is None:
             return self._subagent_tool_result(f"No result is available for subagent {task_id}.", {"taskId": task_id})
+        result = self._prepare_public_subagent_result(result)
         return self._subagent_tool_result(self._format_subagent_result(result), _public_subagent_result_details(result))
 
     def _execute_expand_subagent_result_tool(self, _tool_call_id, args, signal=None, on_update=None, ctx=None) -> AgentToolResult:
@@ -347,6 +454,7 @@ class SessionSubagentController:
                 f"No result is available for subagent {task_id}.",
                 {"taskId": task_id, "status": "unavailable"},
             )
+        result = self._prepare_public_subagent_result(result)
         section = _subagent_expansion_section_arg(args)
         budget = _subagent_expansion_budget_arg(args)
         offset = _subagent_expansion_offset_arg(args)
@@ -360,6 +468,7 @@ class SessionSubagentController:
             raise ValueError("reason must be a string")
         existing = self.subagents.get_result(task_id)
         if existing is not None:
+            existing = self._prepare_public_subagent_result(existing)
             details = {
                 "taskId": existing.task_id,
                 "role": existing.role,
@@ -376,7 +485,117 @@ class SessionSubagentController:
                 details,
             )
         result = self.subagents.cancel(task_id, reason or "Cancelled by user.")
+        result = self._prepare_public_subagent_result(result)
         return self._subagent_tool_result(self._format_subagent_result(result), _public_subagent_result_details(result))
+
+    def _prepare_public_subagent_result(self, result: SubagentResult) -> SubagentResult:
+        cached = self._public_subagent_results.get(result.task_id)
+        if cached is not None:
+            return cached
+        task = self.subagents.get_task(result.task_id)
+        typed = task is not None and task.role_definition_name is not None
+        policy = task.artifact_policy if typed and task is not None else "declared"
+        declared = result.artifacts if policy != "none" else []
+        artifact_ids, errors, replacements = self._promote_declared_subagent_artifacts(
+            result.task_id,
+            declared,
+            require_utf8=typed,
+        )
+        if policy == "declared_and_trace" and result.tool_trace:
+            trace_id, trace_error = self._promote_subagent_trace(result)
+            if trace_id is not None:
+                artifact_ids.append(trace_id)
+            if trace_error is not None:
+                errors.append(trace_error)
+        summary = _replace_artifact_paths(result.summary, replacements)
+        final_response = _replace_artifact_paths(result.final_response, replacements)
+        prepared = replace(
+            result,
+            summary=summary,
+            final_response=final_response,
+            artifacts=artifact_ids,
+            errors=[*result.errors, *errors],
+        )
+        self._public_subagent_results[result.task_id] = prepared
+        return prepared
+
+    def _promote_declared_subagent_artifacts(
+        self,
+        task_id: str,
+        declared: list[str],
+        *,
+        require_utf8: bool = False,
+    ) -> tuple[list[str], list[str], dict[str, str]]:
+        raw_paths = tuple(declared)
+        cached = self._subagent_artifact_promotions.get(task_id)
+        if cached is not None and cached[0] == raw_paths:
+            return list(cached[1]), list(cached[2]), dict(cached[3])
+
+        artifact_ids: list[str] = []
+        errors: list[str] = []
+        replacements: dict[str, str] = {}
+        for raw_path in raw_paths:
+            if self._artifacts.is_readable_reference(raw_path):
+                artifact_ids.append(raw_path)
+                continue
+            try:
+                requested = Path(raw_path).expanduser()
+                lexical = requested if requested.is_absolute() else self._workspace.root / requested
+                metadata = lexical.lstat()
+                resolved = lexical.resolve(strict=True)
+                if not resolved.is_relative_to(self._workspace.root):
+                    raise ArtifactPromotionError("outside_workspace", "Declared artifact is outside workspace")
+                if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+                    raise ArtifactPromotionError("invalid_source", "Declared artifact must be a regular file")
+                if require_utf8:
+                    try:
+                        resolved.read_text(encoding="utf-8")
+                    except UnicodeDecodeError as error:
+                        raise ArtifactPromotionError(
+                            "invalid_utf8", "Declared artifact must be valid UTF-8"
+                        ) from error
+                ref = self._artifacts.promote(
+                    resolved,
+                    "subagent-output",
+                    retained=True,
+                )
+                artifact_ids.append(ref.id)
+                replacements[raw_path] = ref.id
+                replacements[str(resolved)] = ref.id
+            except ArtifactPromotionError as error:
+                errors.append(f"artifact_unavailable:{error.code}")
+                replacements[raw_path] = "[artifact unavailable]"
+            except (OSError, RuntimeError, ValueError):
+                errors.append("artifact_unavailable:invalid_source")
+                replacements[raw_path] = "[artifact unavailable]"
+
+        self._subagent_artifact_promotions[task_id] = (
+            raw_paths,
+            list(artifact_ids),
+            list(errors),
+            dict(replacements),
+        )
+        return artifact_ids, errors, replacements
+
+    def _promote_subagent_trace(
+        self, result: SubagentResult
+    ) -> tuple[str | None, str | None]:
+        try:
+            self._subagent_log_dir.mkdir(parents=True, exist_ok=True)
+            path = self._subagent_log_dir / f"{result.task_id}.sanitized-trace.json"
+            path.write_text(
+                json.dumps(
+                    _public_subagent_tool_trace(result.tool_trace),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            ref = self._artifacts.promote(path, "subagent-trace", retained=True)
+            return ref.id, None
+        except (ArtifactPromotionError, OSError, RuntimeError, ValueError) as error:
+            code = error.code if isinstance(error, ArtifactPromotionError) else "invalid_trace"
+            return None, f"artifact_unavailable:{code}"
 
     def _subagent_tool_result(self, content: str, details: dict[str, object]) -> AgentToolResult:
         return AgentToolResult(content=[TextContent(text=content)], details=details)
@@ -407,18 +626,52 @@ class SessionSubagentController:
 
     def _run_internal_subagent(self, task: SubagentTask) -> SubagentResult:
         started = int(time.time() * 1000)
+        routed_role = task.model_role or ("reviewer" if task.role == "reviewer" else "worker")
+        resolution = self.resolve_model_role(
+            routed_role,
+            selector_override=task.model,
+        )
+        if not resolution.available or resolution.scoped_model is None:
+            ended = int(time.time() * 1000)
+            return SubagentResult(
+                task_id=task.id,
+                backend=task.backend,
+                role=task.role,
+                status="failed",
+                summary=f"No text-capable model is available for the {routed_role} role.",
+                errors=[f"model role unavailable: {routed_role}"],
+                started_at_ms=started,
+                ended_at_ms=ended,
+            )
+        binding = resolution.scoped_model
+        child_thinking = task.reasoning or binding.thinking_level or self.thinking_level
         tool_trace: list[dict[str, object]] = []
         trace_by_call_id: dict[str, dict[str, object]] = {}
         child_owner = self._subagent_process_owner(task)
+        child_broker = self._tool_approval_broker
+        contextualize = getattr(child_broker, "for_child", None)
+        if callable(contextualize):
+            child_broker = contextualize(task.role, task.id)
         child = self._session_factory(
             cwd=task.cwd,
-            model=self.model,
+            model=binding.model,
             active_tool_names=list(task.allowed_tools),
             allowed_tool_names=list(task.allowed_tools),
-            thinking_level=self.thinking_level,
+            thinking_level=child_thinking,
             stream_fn=self._stream_fn,
+            model_registry=self.model_registry,
+            settings_manager=self.settings_manager,
             process_service=self.process_service if child_owner is not None else None,
             process_owner=child_owner,
+            tool_approval_broker=child_broker,
+            tool_policy_event_sink=self._tool_policy_event_sink,
+            tool_policy_redactor=self._tool_policy_engine.redactor,
+            operation_runtime=self.operation_runtime,
+            operation_role=task.role,
+            operation_task_id=task.id,
+        )
+        self.subagents.attach_control_handle(
+            task.id, _InternalSubagentControlHandle(child)
         )
         child.agent.subscribe(self._subagent_tool_trace_listener(task, child, tool_trace, trace_by_call_id))
         child.agent._after_tool_call = self._subagent_after_tool_call_tracer(  # noqa: SLF001 - parent observes delegated child tools.
@@ -462,6 +715,7 @@ class SessionSubagentController:
                 result = replace(result, raw_log_path=raw_log_path, errors=[*result.errors, *log_errors])
             return result
         finally:
+            self.subagents.detach_control_handle(task.id)
             self._kill_active_subagent_processes(child_owner)
             child.shutdown()
 

@@ -42,6 +42,18 @@ async def test_http_is_lazy_sends_referenced_header_and_closes(
         "controlled_error",
     ]
     assert _text(await connected.call_tool("echo", {"text": "http-sentinel"}, None)) == "http-sentinel"
+    resources = await connected.list_resources(None)
+    resource = next(item for item in resources.resources if item.name == "fixture-manual")
+    read = await connected.read_resource(str(resource.uri), None)
+    prompts = await connected.list_prompts(None)
+    prompt = await connected.get_prompt(
+        "fixture-review",
+        {"topic": "http", "tone": "brief"},
+        None,
+    )
+    assert read.contents[0].text == "fixture resource text"
+    assert [item.name for item in prompts.prompts] == ["fixture-review"]
+    assert [message.role for message in prompt.messages] == ["user", "assistant"]
     assert mcp_http_server.probe["requests"] > 0
     assert mcp_http_server.probe["authorized"] is True
 
