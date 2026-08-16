@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Protocol
@@ -12,6 +13,9 @@ from travis.coding_agent.policy import TOOL_EFFECT_ORDER, ToolEffect
 
 _CONTEXT_MAX_CHARS = 32_768
 _CONTEXT_FILE_MAX_CHARS = 16_384
+_GUIDANCE_MAX_ROLES = 8
+_GUIDANCE_MAX_CHARS = 1_024
+_DESCRIPTION_MAX_CHARS = 160
 _SUBAGENT_CONTROL_TOOLS = {
     "spawn_subagent",
     "wait_subagent",
@@ -26,6 +30,14 @@ class _ToolDefinition(Protocol):
     effects: frozenset[ToolEffect]
 
 
+class _AgentRoleRegistry(Protocol):
+    def list(self) -> tuple[AgentRoleDefinition, ...]: ...
+
+
+class _ResourceLoader(Protocol):
+    def get_agent_roles(self) -> _AgentRoleRegistry: ...
+
+
 @dataclass(frozen=True)
 class ResolvedAgentRole:
     definition_name: str
@@ -36,6 +48,31 @@ class ResolvedAgentRole:
     timeout_seconds: int
     result_schema: dict[str, object] | None
     artifact_policy: ArtifactPolicy
+
+
+def typed_role_prompt_guidelines(resource_loader: _ResourceLoader | None) -> tuple[str, ...]:
+    """Render bounded trusted role metadata, failing open to generic guidance."""
+
+    if resource_loader is None:
+        return ()
+    try:
+        roles = resource_loader.get_agent_roles().list()
+    except Exception:
+        return ()
+    prefix = (
+        "Configured typed roles enforce tool and effect ceilings; use an exact "
+        "role name when its description matches the bounded goal: "
+    )
+    rendered: list[str] = []
+    for role in roles[:_GUIDANCE_MAX_ROLES]:
+        description = re.sub(r"\s+", " ", role.description).strip()
+        if len(description) > _DESCRIPTION_MAX_CHARS:
+            description = description[: _DESCRIPTION_MAX_CHARS - 3].rstrip() + "..."
+        item = f"{role.name} — {description}" if description else role.name
+        if len(prefix + "; ".join([*rendered, item])) > _GUIDANCE_MAX_CHARS:
+            break
+        rendered.append(item)
+    return (prefix + "; ".join(rendered),) if rendered else ()
 
 
 def resolve_agent_role(
@@ -121,4 +158,4 @@ def _load_context_pack(definition: AgentRoleDefinition) -> str:
     return "\n\n".join(sections)
 
 
-__all__ = ["ResolvedAgentRole", "resolve_agent_role"]
+__all__ = ["ResolvedAgentRole", "resolve_agent_role", "typed_role_prompt_guidelines"]

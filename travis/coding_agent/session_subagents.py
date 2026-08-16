@@ -60,7 +60,7 @@ from travis.coding_agent.processes.types import ProcessOwner
 from travis.coding_agent.policy.context import fixed_action_context, subagent_policy_context
 from travis.coding_agent.policy.types import ALL_TOOL_EFFECTS
 from travis.coding_agent.resource_loader import DefaultResourceLoader
-from travis.coding_agent.subagent_roles import resolve_agent_role
+from travis.coding_agent.subagent_roles import resolve_agent_role, typed_role_prompt_guidelines
 from travis.coding_agent.subagent_supervision import ControlResult
 from travis.coding_agent.session_index import SessionIndex
 from travis.coding_agent.session_store import (
@@ -101,11 +101,6 @@ def _merge_role_context(role_context: str, task_context: str) -> str:
     return "\n\n".join(parts)[:65_536]
 
 
-_TYPED_ROLE_GUIDANCE_MAX_ROLES = 8
-_TYPED_ROLE_GUIDANCE_MAX_CHARS = 1_024
-_TYPED_ROLE_DESCRIPTION_MAX_CHARS = 160
-
-
 class _InternalSubagentControlHandle:
     def __init__(self, child: object) -> None:
         self._child = child
@@ -131,35 +126,6 @@ class _InternalSubagentControlHandle:
 
 class SessionSubagentController:
     """Owns a focused AgentSession runtime concern."""
-
-    def _typed_role_prompt_guidance(self) -> str | None:
-        if self._resource_loader is None:
-            return None
-        try:
-            roles = self._resource_loader.get_agent_roles().list()
-        except Exception:
-            return None
-        if not roles:
-            return None
-
-        prefix = (
-            "Configured typed roles enforce tool and effect ceilings; use an exact "
-            "role name when its description matches the bounded goal: "
-        )
-        rendered: list[str] = []
-        for role in roles[:_TYPED_ROLE_GUIDANCE_MAX_ROLES]:
-            description = re.sub(r"\s+", " ", role.description).strip()
-            if len(description) > _TYPED_ROLE_DESCRIPTION_MAX_CHARS:
-                description = (
-                    description[: _TYPED_ROLE_DESCRIPTION_MAX_CHARS - 3].rstrip()
-                    + "..."
-                )
-            item = f"{role.name} — {description}" if description else role.name
-            candidate = prefix + "; ".join([*rendered, item])
-            if len(candidate) > _TYPED_ROLE_GUIDANCE_MAX_CHARS:
-                break
-            rendered.append(item)
-        return prefix + "; ".join(rendered) if rendered else None
 
     def _subagent_allowed_tools_for_role(self, role: str) -> tuple[str, ...]:
         if self._resource_loader is None:
@@ -290,13 +256,6 @@ class SessionSubagentController:
         )
 
     def _create_subagent_tool_definitions(self) -> list[ToolDefinition]:
-        spawn_guidelines = [
-            "Pass the user's exact delegated path or name directly to the child; do not inspect or resolve that target first with parent tools.",
-            "Spawn independent children together with wait=false; collect every result and verify child evidence before finalizing.",
-        ]
-        typed_role_guidance = self._typed_role_prompt_guidance()
-        if typed_role_guidance is not None:
-            spawn_guidelines.append(typed_role_guidance)
         return [
             ToolDefinition(
                 name="spawn_subagent",
@@ -309,7 +268,11 @@ class SessionSubagentController:
                 ),
                 parameters=_SPAWN_SUBAGENT_SCHEMA,
                 prompt_snippet="Delegate bounded review, research, or implementation tasks to child subagents.",
-                prompt_guidelines=spawn_guidelines,
+                prompt_guidelines=[
+                    "Pass the user's exact delegated path or name directly to the child; do not inspect or resolve that target first with parent tools.",
+                    "Spawn independent children together with wait=false; collect every result and verify child evidence before finalizing.",
+                    *typed_role_prompt_guidelines(self._resource_loader),
+                ],
                 execute=self._execute_spawn_subagent_tool,
                 effects=ALL_TOOL_EFFECTS,
                 policy_context=subagent_policy_context,
