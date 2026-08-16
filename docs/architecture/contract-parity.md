@@ -126,6 +126,28 @@ tool/status diagnostics without changing conversation history. Memory is not
 part of the internal subagent coding allowlist, so enabling it does not widen
 child capabilities or alter expanded result packs.
 
+## Optional integration conformance ownership
+
+- `evals/optional_tool_conformance.py` exercises optional extension entry
+  points through the normal trust-aware resource loader and existing tool
+  policy engine. It does not import or adapt a browser/desktop runtime.
+- `evals/optional_integration_fixture.py` registers synthetic browser and
+  computer tools for trust, effects, approval, cancellation, bounded-output,
+  artifact, sanitized-audit, and shutdown checks. It performs no real browser,
+  accessibility, or desktop action.
+- Project integration code must remain absent before trust. Trusted tools must
+  declare effects, propagate cancellation, bound model-visible output, keep
+  arguments and credentials out of policy records, and clean owned resources
+  during session shutdown.
+- Optional packages and MCP servers remain outside the root dependency graph.
+  Direct imports of the generic agent loop or TUI from an integration are a
+  conformance failure because those layers are not extension APIs.
+
+The conformance gate proves Travis contract compatibility, not the correctness
+of a third-party browser driver, OS accessibility behavior, or a vendor's
+security model. A real integration still requires separate platform tests and
+permission review; passing this gate grants no trust or policy bypass.
+
 ## Observe-only operation-journal ownership
 
 - `coding_agent/operations/store.py` owns the versioned SQLite schema,
