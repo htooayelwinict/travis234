@@ -37,6 +37,7 @@ include = ["travis*"]
 "travis.ai" = ["builtin_models.json"]
 "travis" = [
   "resources/**/*.md",
+  "resources/skills/**/*.py",
 ]
 
 [tool.pytest.ini_options]

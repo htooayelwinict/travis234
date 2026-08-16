@@ -10,6 +10,7 @@
   "files": [
     "bin/travis234.js",
     "skills/**/*.md",
+    "skills/**/*.py",
     "README.md",
     "package.json"
   ],

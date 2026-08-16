@@ -59,7 +59,15 @@ the bounded, redacted observations above were preserved.
 
 ## Implementation phase gates
 
-No phase results yet.
+| Phase | Result | Prompt scenario | Focused evidence |
+|---|---|---|---|
+| 1 — package and lazy discovery | **PASS** | A faux-provider TUI turn answered an unrelated prompt while exposing the `orchestration` name and description only. The heading, body, and private-relay recipe were absent; no orchestration state or worktree appeared. | 14 focused Python tests and the broader 77-test phase suite passed; all 23 npm launcher tests passed; the package-directory npm dry-run contained exactly the three orchestration resources plus existing declared files, with no dotenv, state, or transcript entry. |
+
+The plan's root-level `npm pack --workspace` spelling was not applicable because
+the root manifest does not declare npm workspaces. Verification therefore ran
+`npm pack --dry-run --json` with `packages/travis234-cli` as the working
+directory, which exercised the intended package manifest without changing the
+repository's established npm layout.
 
 ## Distribution and final verification
 

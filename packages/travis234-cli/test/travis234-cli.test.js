@@ -22,6 +22,13 @@ import {
 test("package exposes travis234 binaries only", () => {
   assert.equal(packageJson.name, "@htooayelwinict/travis234");
   assert.deepEqual(packageJson.bin, { travis234: "bin/travis234.js" });
+  assert.deepEqual(packageJson.files, [
+    "bin/travis234.js",
+    "skills/**/*.md",
+    "skills/**/*.py",
+    "README.md",
+    "package.json",
+  ]);
   assert.equal(fs.existsSync(path.join(packageRoot, packageJson.bin.travis234)), true);
 });
 

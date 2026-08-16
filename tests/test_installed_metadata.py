@@ -36,9 +36,12 @@ def test_packaged_builtin_skills_exist() -> None:
 
     assert skills_root.is_dir()
     assert {path.parent.name for path in skills_root.glob("*/SKILL.md")} == {
+        "orchestration",
         "subagent-delegation",
         "web-search",
     }
+    assert (skills_root / "orchestration" / "references" / "protocol.md").is_file()
+    assert (skills_root / "orchestration" / "scripts" / "orchestrate.py").is_file()
 
 
 def test_session_directory_has_an_independent_hard_cutover_override(

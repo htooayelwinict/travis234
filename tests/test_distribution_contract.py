@@ -20,7 +20,10 @@ def test_python_distribution_names_only_travis234() -> None:
     project = metadata["project"]
     assert project["name"] == "travis234"
     assert project["scripts"] == {"travis234": "travis.cli:main"}
-    assert metadata["tool"]["setuptools"]["package-data"]["travis"] == ["resources/**/*.md"]
+    assert metadata["tool"]["setuptools"]["package-data"]["travis"] == [
+        "resources/**/*.md",
+        "resources/skills/**/*.py",
+    ]
 
 
 def test_npm_distribution_names_only_travis234() -> None:
@@ -111,10 +114,22 @@ def test_packaged_builtin_skills_match_npm_distribution() -> None:
     python_skills = ROOT / "travis" / "resources" / "skills"
     npm_skills = ROOT / "packages" / "travis234-cli" / "skills"
 
-    for name in ("subagent-delegation", "web-search"):
-        assert (python_skills / name / "SKILL.md").read_bytes() == (
-            npm_skills / name / "SKILL.md"
-        ).read_bytes()
+    python_files = {
+        path.relative_to(python_skills).as_posix(): path.read_bytes()
+        for path in python_skills.rglob("*")
+        if path.is_file()
+    }
+    npm_files = {
+        path.relative_to(npm_skills).as_posix(): path.read_bytes()
+        for path in npm_skills.rglob("*")
+        if path.is_file()
+    }
+    assert npm_files == python_files
+    assert {
+        "orchestration/SKILL.md",
+        "orchestration/references/protocol.md",
+        "orchestration/scripts/orchestrate.py",
+    } <= python_files.keys()
 
 
 def test_repository_has_one_sandbox_launcher_implementation() -> None:
