@@ -12,6 +12,14 @@ from travis.coding_agent.settings_manager import SettingsManager
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_readme_supported_surface_includes_resources_prompts_and_reconnect() -> None:
+    readme = (PACKAGE_ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "| MCP resources and prompts | Supported with bounds and untrusted-data labeling |" in readme
+    assert "| Bounded explicit and automatic reconnect | Supported without request replay |" in readme
+    assert "| MCP prompts and resource discovery | Not supported |" not in readme
+
+
 def _build_adapter_wheel(output_dir: Path) -> Path:
     output_dir.mkdir(parents=True)
     subprocess.run(

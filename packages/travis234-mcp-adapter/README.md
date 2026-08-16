@@ -342,10 +342,11 @@ Set `requestTimeoutMs` on that server if its MCP operations legitimately need lo
 | Streamable HTTP client transport | Supported |
 | Lazy per-server connection | Supported |
 | Tool listing, search, schema description, and calls | Supported |
+| MCP resources and prompts | Supported with bounds and untrusted-data labeling |
+| Bounded explicit and automatic reconnect | Supported without request replay |
 | Text, media, embedded-resource, and structured results | Supported with Travis conversion and bounds |
 | Legacy SSE | Not supported |
 | MCP OAuth | Not supported |
-| MCP prompts and resource discovery | Not supported |
 | Sampling and elicitation | Not supported |
 | MCP Apps/UI | Not supported |
 | Eager or keep-alive lifecycle | Not supported |
