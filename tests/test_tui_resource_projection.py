@@ -12,6 +12,7 @@ from tests._support_tui import (
     register_api_provider,
     text_response_events,
 )
+from travis.coding_agent.resource_loader import DefaultResourceLoader
 
 
 def test_interactive_startup_projects_extension_discovered_resources(
@@ -121,3 +122,50 @@ def test_interactive_routes_extension_discovered_prompt_template_to_model(
     InteractiveMode(app, input_fn=lambda _prompt: next(inputs)).run()
 
     assert prompts == ["Expanded smoke"]
+
+
+def test_coordination_alias_and_canonical_command_are_autocomplete_candidates(
+    tmp_path: Path,
+) -> None:
+    skill_dir = tmp_path / "skills" / "coordination"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: coordination\n"
+        "description: Use when the user explicitly selects the coordination skill.\n"
+        "---\n"
+        "# Coordination fixture\n",
+        encoding="utf-8",
+    )
+    loader = DefaultResourceLoader(
+        cwd=str(tmp_path),
+        agent_dir=str(tmp_path / "agent"),
+        project_trusted=True,
+        additional_skill_paths=[str(skill_dir)],
+    )
+    loader.reload()
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=100, rows=30),
+        enable_tui=True,
+        agent_dir=str(tmp_path / "agent"),
+        project_trust_override=True,
+        initial_resource_loader=loader,
+    )
+    mode = InteractiveMode(app, input_fn=lambda _prompt: "/exit")
+
+    try:
+        mode.init()
+        suggestions = mode.create_base_autocomplete_provider().get_suggestions(
+            ["/coord"],
+            0,
+            len("/coord"),
+            {"signal": None, "force": False},
+        )
+        labels = {item["label"] for item in suggestions["items"]}
+
+        assert {"coordination", "skill:coordination"} <= labels
+    finally:
+        mode.footer_data_provider.dispose()
+        app.close()

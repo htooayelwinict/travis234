@@ -538,3 +538,215 @@ def test_skill_command_injects_selected_skill_only_when_enabled(
     assert submitted == [
         expected.format(skill_file=skill_file, skill_dir=skill_dir)
     ]
+
+
+def _write_coordination_skill(
+    root: Path,
+    *,
+    disable_model_invocation: bool = False,
+) -> Path:
+    skill_dir = root / "skills" / "coordination"
+    skill_dir.mkdir(parents=True)
+    disabled = "disable-model-invocation: true\n" if disable_model_invocation else ""
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: coordination\n"
+        "description: Use when the user explicitly selects the coordination skill.\n"
+        f"{disabled}"
+        "---\n"
+        "# Coordination fixture\n\nCOORDINATION_BODY_SENTINEL\n",
+        encoding="utf-8",
+    )
+    return skill_dir
+
+
+def test_coordination_commands_inject_one_skill_and_runtime_parsed_request(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    agent_dir = tmp_path / "agent"
+    skill_dir = _write_coordination_skill(project)
+    loader = DefaultResourceLoader(
+        cwd=str(project),
+        agent_dir=str(agent_dir),
+        project_trusted=True,
+        additional_skill_paths=[str(skill_dir)],
+    )
+    loader.reload()
+    submitted: list[str] = []
+
+    def provider(model, context):
+        submitted.append(
+            _user_text(
+                next(
+                    message
+                    for message in reversed(context.messages)
+                    if isinstance(message, UserMessage)
+                )
+            )
+        )
+        return text_response_events(model, "ok")
+
+    register_api_provider(create_faux_provider(provider))
+    session = AgentSession(
+        cwd=str(project),
+        model=faux_model(),
+        resource_loader=loader,
+    )
+    try:
+        session.prompt('/coordination --deep inspect "src/app.py"')
+        session.prompt("/skill:coordination --plan inspect tests")
+        session.prompt("/coordination -- --deep literal λ")
+
+        calls_before_invalid = len(submitted)
+        for prompt in (
+            "/coordination",
+            "/coordination --deep",
+            "/coordination --unknown goal",
+        ):
+            with pytest.raises(ValueError, match="coordination"):
+                session.prompt(prompt)
+        assert len(submitted) == calls_before_invalid
+    finally:
+        session.shutdown()
+
+    assert len(submitted) == 3
+    for text in submitted:
+        assert text.count('<skill name="coordination"') == 1
+        assert text.count("COORDINATION_BODY_SENTINEL") == 1
+    assert '{"mode":"deep","goal":"inspect \\"src/app.py\\""}' in submitted[0]
+    assert '{"mode":"plan","goal":"inspect tests"}' in submitted[1]
+    assert '{"mode":"auto","goal":"--deep literal λ"}' in submitted[2]
+
+
+def test_coordination_alias_obeys_skill_command_and_model_invocation_controls(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    disabled_commands = SettingsManager.in_memory({"enableSkillCommands": False})
+    enabled_skill = _write_coordination_skill(project / "enabled")
+    disabled_skill = _write_coordination_skill(
+        project / "disabled",
+        disable_model_invocation=True,
+    )
+
+    command_disabled_loader = DefaultResourceLoader(
+        cwd=str(project),
+        agent_dir=str(tmp_path / "agent-command-disabled"),
+        project_trusted=True,
+        settings_manager=disabled_commands,
+        additional_skill_paths=[str(enabled_skill)],
+    )
+    command_disabled_loader.reload()
+    command_disabled_session = AgentSession(
+        cwd=str(project),
+        model=faux_model(),
+        resource_loader=command_disabled_loader,
+        settings_manager=disabled_commands,
+    )
+    model_disabled_loader = DefaultResourceLoader(
+        cwd=str(project),
+        agent_dir=str(tmp_path / "agent-model-disabled"),
+        project_trusted=True,
+        additional_skill_paths=[str(disabled_skill)],
+    )
+    model_disabled_loader.reload()
+    model_disabled_session = AgentSession(
+        cwd=str(project),
+        model=faux_model(),
+        resource_loader=model_disabled_loader,
+    )
+    no_skills_loader = DefaultResourceLoader(
+        cwd=str(project),
+        agent_dir=str(tmp_path / "agent-no-skills"),
+        project_trusted=False,
+        no_skills=True,
+    )
+    no_skills_loader.reload()
+    no_skills_session = AgentSession(
+        cwd=str(project),
+        model=faux_model(),
+        resource_loader=no_skills_loader,
+    )
+    try:
+        for session in (
+            command_disabled_session,
+            model_disabled_session,
+            no_skills_session,
+        ):
+            assert session.extension_runner.get_registered_command("coordination") is None
+            assert session.extension_runner.get_registered_command("skill:coordination") is None
+    finally:
+        command_disabled_session.shutdown()
+        model_disabled_session.shutdown()
+        no_skills_session.shutdown()
+
+
+def test_coordination_alias_never_shadows_extension_command(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    skill_dir = _write_coordination_skill(project)
+
+    def extension(runner):
+        runner.register_command(
+            "coordination",
+            {"description": "Extension coordination", "handler": lambda *_args: []},
+        )
+
+    loader = DefaultResourceLoader(
+        cwd=str(project),
+        agent_dir=str(tmp_path / "agent"),
+        project_trusted=True,
+        additional_skill_paths=[str(skill_dir)],
+        extension_factories=[extension],
+    )
+    loader.reload()
+    session = AgentSession(
+        cwd=str(project),
+        model=faux_model(),
+        resource_loader=loader,
+    )
+    try:
+        alias = session.extension_runner.get_registered_command("coordination")
+        canonical = session.extension_runner.get_registered_command("skill:coordination")
+        assert alias is not None
+        assert alias.source_info.source == "extension"
+        assert canonical is not None
+        assert canonical.source_info.source == "skill"
+        assert session.extension_runner.get_registered_command("coordination:1") is None
+    finally:
+        session.shutdown()
+
+
+def test_coordination_skill_removal_reconciles_only_skill_owned_commands(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    skill_dir = _write_coordination_skill(project)
+    skill_file = skill_dir / "SKILL.md"
+    loader = DefaultResourceLoader(
+        cwd=str(project),
+        agent_dir=str(tmp_path / "agent"),
+        project_trusted=True,
+        additional_skill_paths=[str(skill_dir)],
+    )
+    loader.reload()
+    session = AgentSession(
+        cwd=str(project),
+        model=faux_model(),
+        resource_loader=loader,
+    )
+    try:
+        assert session.extension_runner.get_registered_command("coordination") is not None
+        assert session.extension_runner.get_registered_command("skill:coordination") is not None
+
+        skill_file.unlink()
+        session.reload()
+
+        assert session.extension_runner.get_registered_command("coordination") is None
+        assert session.extension_runner.get_registered_command("skill:coordination") is None
+    finally:
+        session.shutdown()

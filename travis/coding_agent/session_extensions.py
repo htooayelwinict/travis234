@@ -418,6 +418,14 @@ class SessionExtensionController:
         self._register_skill_commands()
 
     def _register_skill_commands(self) -> None:
+        for command_name in ("coordination", "skill:coordination"):
+            existing = self._extension_runner.get_registered_command(command_name)
+            if (
+                existing is not None
+                and getattr(existing.source_info, "source", None) == "skill"
+            ):
+                self._extension_runner.unregister_command(command_name)
+
         enable_skill_commands = _settings_value(
             self.settings_manager, "getEnableSkillCommands", "get_enable_skill_commands", "enableSkillCommands", "enable_skill_commands")
         if enable_skill_commands is False:
@@ -425,16 +433,24 @@ class SessionExtensionController:
         for skill in self._resource_loader.get_skills()["skills"]:
             if not isinstance(skill, Skill):
                 continue
+            if skill.name == "coordination" and skill.disable_model_invocation:
+                continue
             command_name = f"skill:{skill.name}"
             if self._extension_runner.get_registered_command(command_name) is not None:
                 continue
             handler = lambda args, _ctx=None, selected=skill: self.prompt(
                 format_skill_invocation(selected, args), expand_prompt_templates=False)
-            self._extension_runner.register_command(command_name, {
+            registration = {
                 "description": skill.description,
                 "sourceInfo": replace(skill.source_info, source="skill"),
                 "handler": handler,
-            })
+            }
+            self._extension_runner.register_command(command_name, registration)
+            if (
+                skill.name == "coordination"
+                and self._extension_runner.get_registered_command("coordination") is None
+            ):
+                self._extension_runner.register_command("coordination", registration)
 
     def _agents_command(self, args: str = "", _ctx: object | None = None) -> list[AgentMessage]:
         tasks = self.subagents.list_tasks()

@@ -9,6 +9,7 @@ from typing import Sequence
 
 import yaml
 
+from travis.coding_agent.coordination import format_coordination_request
 from travis.coding_agent.resource_discovery import collect_resource_files
 from travis.coding_agent.source_info import SourceInfo, create_synthetic_source_info
 
@@ -173,7 +174,11 @@ def format_skill_invocation(skill: Skill, additional_instructions: str = "") -> 
         f"{body.strip()}\n"
         "</skill>"
     )
-    instructions = additional_instructions.strip()
+    instructions = (
+        format_coordination_request(additional_instructions)
+        if skill.name == "coordination"
+        else additional_instructions.strip()
+    )
     return f"{skill_block}\n\n{instructions}" if instructions else skill_block
 
 
