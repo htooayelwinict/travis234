@@ -105,3 +105,83 @@ def test_container_qualification_exercises_compaction_and_process_cleanup(tmp_pa
     assert result.automatic_compaction is True
     assert result.managed_process_reaped is True
     assert result.credential_env_absent is True
+    assert result.artifact_restart is True
+    assert result.policy_audit is True
+    assert result.policy_enforce_denial is True
+    assert result.lsp_fixture_clean_shutdown is True
+    assert result.typed_supervision_cancel is True
+    assert result.operation_uncertain_no_replay is True
+    assert result.memory_disabled is True
+    assert result.memory_project_isolation is True
+    assert result.passed is True
+
+
+def test_mcp_container_command_is_derived_bounded_and_credential_free() -> None:
+    from evals.mcp_container_smoke import build_docker_command
+
+    command = build_docker_command("travis234-mcp-adapter:contract-parity")
+
+    assert command[:3] == ("docker", "run", "--rm")
+    assert "--network" in command
+    assert command[command.index("--network") + 1] == "none"
+    assert "--read-only" in command
+    assert "--tmpfs" in command
+    assert command[command.index("--tmpfs") + 1].startswith("/tmp:")
+    assert command[-2:] == (
+        "travis234-mcp-adapter:contract-parity",
+        "--inside-container",
+    )
+    assert all("env" not in item.casefold() for item in command)
+    assert all("volume" not in item.casefold() for item in command)
+
+
+def test_mcp_container_smoke_requires_every_contract() -> None:
+    from evals.mcp_container_smoke import run_mcp_container_smoke
+
+    payload = {
+        "proxy_fixture": True,
+        "resource_read": True,
+        "prompt_get": True,
+        "side_effect_invocation_once": True,
+        "reconnect": True,
+        "child_reaped": True,
+        "spill_cleaned": True,
+        "credential_env_absent": True,
+        "passed": True,
+    }
+    calls: list[tuple[str, ...]] = []
+
+    def runner(command, **kwargs):
+        calls.append(tuple(command))
+        return type(
+            "Completed",
+            (),
+            {"returncode": 0, "stdout": __import__("json").dumps(payload), "stderr": ""},
+        )()
+
+    result = run_mcp_container_smoke(
+        "travis234-mcp-adapter:contract-parity", runner=runner
+    )
+
+    assert result.passed is True
+    assert result.side_effect_invocation_once is True
+    assert len(calls) == 1
+
+
+def test_mcp_smoke_dockerfile_uses_named_wheel_context() -> None:
+    dockerfile = (
+        Path(__file__).parents[1]
+        / "packages"
+        / "travis234-mcp-adapter"
+        / "Dockerfile.smoke"
+    ).read_text(encoding="utf-8")
+
+    assert "ARG BASE_IMAGE" in dockerfile
+    assert "FROM ${BASE_IMAGE}" in dockerfile
+    assert "COPY --from=adapter_dist" in dockerfile
+    assert "*.whl" in dockerfile
+    assert "mcp_container_smoke.py" in dockerfile
+    assert all(
+        forbidden not in dockerfile.casefold()
+        for forbidden in ("dotenv", "api_key", "token=", "secret=")
+    )
