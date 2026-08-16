@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -11,6 +12,7 @@ import re
 import secrets
 import sqlite3
 import stat
+import subprocess
 import sys
 from typing import Iterator, Sequence
 
@@ -94,6 +96,7 @@ SECRET_VALUE_PATTERNS = (
     re.compile(r"\bAIza[0-9A-Za-z_-]{20,}\b"),
 )
 IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+WORKTREE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 GUIDE_COMMANDS = [
     "guide",
@@ -128,6 +131,292 @@ class JsonArgumentParser(argparse.ArgumentParser):
             "Arguments are invalid; run guide for the supported command surface",
             next_actions=("Run python3 scripts/orchestrate.py guide.",),
         )
+
+
+@dataclass(frozen=True)
+class WorktreeRequest:
+    repository: Path | str
+    workspace_mode: str
+    worktree_name: str | None = None
+    branch: str | None = None
+    base: str | None = None
+
+
+@dataclass(frozen=True)
+class RepositoryInspection:
+    repository: Path
+    common_dir: Path
+    base_commit: str
+    head_commit: str
+    branch: str | None
+    dirty: bool
+
+
+def git(
+    repo: Path,
+    *args: str,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=check,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+def _git_probe(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    try:
+        return git(repo, *args, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise HelperError("git_unavailable", "Git repository inspection could not run") from exc
+
+
+def _validated_revision(base: str) -> str:
+    if (
+        not isinstance(base, str)
+        or not base
+        or len(base) > 512
+        or base.startswith("-")
+        or any(character in base for character in "\x00\r\n")
+    ):
+        raise HelperError("invalid_base", "Git base is invalid or unavailable")
+    return base
+
+
+def inspect_repository(repository: Path | str, base: str = "HEAD") -> RepositoryInspection:
+    requested = Path(repository).expanduser()
+    if not requested.is_dir():
+        raise HelperError("not_repository", "Workspace is not a Git repository")
+    top_level = _git_probe(requested, "rev-parse", "--show-toplevel")
+    if top_level.returncode != 0 or not top_level.stdout.strip():
+        raise HelperError("not_repository", "Workspace is not a Git repository")
+    repo = Path(top_level.stdout.strip()).resolve()
+    common = _git_probe(repo, "rev-parse", "--git-common-dir")
+    if common.returncode != 0 or not common.stdout.strip():
+        raise HelperError("not_repository", "Git common directory is unavailable")
+    common_value = Path(common.stdout.strip())
+    common_dir = (
+        common_value.resolve()
+        if common_value.is_absolute()
+        else (repo / common_value).resolve()
+    )
+    revision = _validated_revision(base)
+    resolved_base = _git_probe(repo, "rev-parse", "--verify", f"{revision}^{{commit}}")
+    if resolved_base.returncode != 0 or not resolved_base.stdout.strip():
+        raise HelperError("invalid_base", "Git base is invalid or unavailable")
+    head = _git_probe(repo, "rev-parse", "--verify", "HEAD^{commit}")
+    if head.returncode != 0 or not head.stdout.strip():
+        raise HelperError("invalid_base", "Repository HEAD is unavailable")
+    branch_result = _git_probe(repo, "symbolic-ref", "--quiet", "--short", "HEAD")
+    branch = branch_result.stdout.strip() if branch_result.returncode == 0 else None
+    status = _git_probe(repo, "status", "--porcelain=v1", "--untracked-files=normal")
+    if status.returncode != 0:
+        raise HelperError("git_inspection_failed", "Git status inspection failed")
+    return RepositoryInspection(
+        repository=repo,
+        common_dir=common_dir,
+        base_commit=resolved_base.stdout.strip(),
+        head_commit=head.stdout.strip(),
+        branch=branch,
+        dirty=bool(status.stdout),
+    )
+
+
+def _ignore_source_is_repository_owned(inspection: RepositoryInspection) -> bool:
+    probe = ".worktrees/.travis234-orchestration-probe"
+    ignored = _git_probe(
+        inspection.repository,
+        "check-ignore",
+        "-v",
+        "--no-index",
+        probe,
+    )
+    if ignored.returncode != 0 or not ignored.stdout.strip():
+        return False
+    first_line = ignored.stdout.splitlines()[0]
+    annotation = first_line.split("\t", 1)[0]
+    parts = annotation.rsplit(":", 2)
+    if len(parts) != 3 or not parts[0]:
+        return False
+    source_value = Path(parts[0])
+    source = (
+        source_value.resolve()
+        if source_value.is_absolute()
+        else (inspection.repository / source_value).resolve()
+    )
+    if source == (inspection.common_dir / "info" / "exclude").resolve():
+        return True
+    try:
+        relative = source.relative_to(inspection.repository)
+    except ValueError:
+        return False
+    tracked = _git_probe(
+        inspection.repository,
+        "ls-files",
+        "--error-unmatch",
+        "--",
+        relative.as_posix(),
+    )
+    return tracked.returncode == 0
+
+
+def _registered_worktree_paths(repo: Path) -> set[Path]:
+    listed = _git_probe(repo, "worktree", "list", "--porcelain")
+    if listed.returncode != 0:
+        raise HelperError("git_inspection_failed", "Git worktree inspection failed")
+    paths: set[Path] = set()
+    for line in listed.stdout.splitlines():
+        if line.startswith("worktree "):
+            paths.add(Path(line.removeprefix("worktree ")).resolve())
+    return paths
+
+
+def _worktree_target(inspection: RepositoryInspection, name: str) -> tuple[Path, bool]:
+    if _ignore_source_is_repository_owned(inspection):
+        return inspection.repository / ".worktrees" / name, True
+    repository_key = hashlib.sha256(
+        str(inspection.repository).encode("utf-8")
+    ).hexdigest()[:16]
+    return agent_dir() / "orchestration" / "worktrees" / repository_key / name, False
+
+
+def _prepare_target_parent(target: Path, *, repository_local: bool) -> None:
+    parent = target.parent
+    if parent.is_symlink():
+        raise HelperError("unsafe_workspace", "Worktree parent cannot be a symlink")
+    if parent.exists() and not parent.is_dir():
+        raise HelperError("workspace_conflict", "Worktree path has a parent conflict")
+    if repository_local:
+        parent.mkdir(parents=True, exist_ok=True)
+        return
+    root = orchestration_root()
+    worktrees = root / "worktrees"
+    _private_directory(worktrees)
+    repository_root = worktrees / target.parent.name
+    _private_directory(repository_root)
+
+
+def _workspace_receipt(
+    inspection: RepositoryInspection,
+    *,
+    mode: str,
+    workspace: Path,
+    worktree: Path | None,
+    branch: str | None,
+) -> dict[str, object]:
+    return {
+        "workspaceMode": mode,
+        "repository": str(inspection.repository),
+        "workspace": str(workspace.resolve()),
+        "worktree": str(worktree.resolve()) if worktree is not None else None,
+        "branch": branch,
+        "baseCommit": inspection.base_commit,
+        "dirty": inspection.dirty,
+        "uncommittedChangesTransferred": mode == "current",
+        "automaticIntegration": False,
+    }
+
+
+def prepare_workspace(request: WorktreeRequest) -> dict[str, object]:
+    if request.workspace_mode not in {"current", "worktree"}:
+        raise HelperError("invalid_workspace", "Workspace mode is invalid")
+    if request.workspace_mode == "current":
+        if request.worktree_name is not None or request.branch is not None:
+            raise HelperError("invalid_workspace", "Current workspace cannot create a branch or path")
+        inspection = inspect_repository(request.repository, request.base or "HEAD")
+        if request.base is not None and inspection.base_commit != inspection.head_commit:
+            raise HelperError("workspace_conflict", "Current workspace base has a conflict")
+        return _workspace_receipt(
+            inspection,
+            mode="current",
+            workspace=inspection.repository,
+            worktree=None,
+            branch=inspection.branch,
+        )
+
+    if (
+        not isinstance(request.worktree_name, str)
+        or WORKTREE_NAME_PATTERN.fullmatch(request.worktree_name) is None
+        or not isinstance(request.branch, str)
+        or not request.branch
+        or not isinstance(request.base, str)
+    ):
+        raise HelperError("invalid_workspace", "Worktree name, branch, or base is invalid")
+    inspection = inspect_repository(request.repository, request.base)
+    branch_check = _git_probe(
+        inspection.repository,
+        "check-ref-format",
+        "--branch",
+        request.branch,
+    )
+    if branch_check.returncode != 0:
+        raise HelperError("invalid_workspace", "Git branch name is invalid")
+    existing_branch = _git_probe(
+        inspection.repository,
+        "show-ref",
+        "--verify",
+        "--quiet",
+        f"refs/heads/{request.branch}",
+    )
+    if existing_branch.returncode == 0:
+        raise HelperError("workspace_conflict", "Requested branch has a conflict")
+    if existing_branch.returncode not in {0, 1}:
+        raise HelperError("git_inspection_failed", "Git branch inspection failed")
+    target, repository_local = _worktree_target(inspection, request.worktree_name)
+    target = Path(os.path.abspath(target))
+    if target.exists() or target.is_symlink():
+        raise HelperError("workspace_conflict", "Requested worktree path has a conflict")
+    if target.parent.is_symlink():
+        raise HelperError("unsafe_workspace", "Worktree parent cannot be a symlink")
+    if target.resolve() in _registered_worktree_paths(inspection.repository):
+        raise HelperError("workspace_conflict", "Requested worktree registration has a conflict")
+
+    _prepare_target_parent(target, repository_local=repository_local)
+    try:
+        git(
+            inspection.repository,
+            "worktree",
+            "add",
+            "-b",
+            request.branch,
+            str(target),
+            inspection.base_commit,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+        raise HelperError(
+            "outcome_unknown",
+            "Git worktree creation may have partially completed",
+            next_actions=(
+                "Run git worktree list --porcelain in the source repository.",
+                "Run git show-ref --verify for the requested branch.",
+                "Inspect the exact requested path; do not prune or delete automatically.",
+            ),
+        ) from exc
+
+    registered = _registered_worktree_paths(inspection.repository)
+    created_head = _git_probe(target, "rev-parse", "--verify", "HEAD^{commit}")
+    if (
+        target not in registered
+        or created_head.returncode != 0
+        or created_head.stdout.strip() != inspection.base_commit
+    ):
+        raise HelperError(
+            "outcome_unknown",
+            "Git worktree creation could not be verified",
+            next_actions=(
+                "Run git worktree list --porcelain in the source repository.",
+                "Inspect the requested branch and worktree without automatic cleanup.",
+            ),
+        )
+    return _workspace_receipt(
+        inspection,
+        mode="worktree",
+        workspace=target,
+        worktree=target,
+        branch=request.branch,
+    )
 
 
 def envelope(
