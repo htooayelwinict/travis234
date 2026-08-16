@@ -101,6 +101,29 @@ def test_enabled_memory_registers_exact_schema_effects_and_safe_policy_context(
     session.dispose()
 
 
+def test_memory_provider_schema_is_flat_and_minimax_friendly() -> None:
+    assert MEMORY_TOOL_SCHEMA["type"] == "object"
+    assert "oneOf" not in MEMORY_TOOL_SCHEMA
+    assert "anyOf" not in MEMORY_TOOL_SCHEMA
+    assert MEMORY_TOOL_SCHEMA["required"] == ["action"]
+    assert MEMORY_TOOL_SCHEMA["additionalProperties"] is False
+    assert MEMORY_TOOL_SCHEMA["properties"]["action"]["enum"] == [
+        "status",
+        "recall",
+        "retain",
+        "delete",
+    ]
+    assert MEMORY_TOOL_SCHEMA["properties"]["tags"] == {
+        "type": "array",
+        "items": {"type": "string", "minLength": 1},
+        "maxItems": 16,
+        "uniqueItems": True,
+        "description": "Required JSON string array for retain; use [] when no tags are needed",
+    }
+    compact = json.dumps(MEMORY_TOOL_SCHEMA, separators=(",", ":"), sort_keys=True)
+    assert len(compact) <= 1_900
+
+
 def test_memory_tool_guidance_requires_explicit_retention_and_distrusts_recall(
     tmp_path: Path,
 ) -> None:
@@ -230,6 +253,12 @@ def test_sensitive_retain_is_shaped_and_stores_nothing(tmp_path: Path) -> None:
     [
         {},
         {"action": "unknown"},
+        {"action": "status", "scope": "project"},
+        {
+            "action": "retain",
+            "content": "missing-tags",
+            "provenance": "user_requested",
+        },
         {"action": "delete", "scope": "project", "query": "wrong"},
         {"action": "recall", "scope": "project", "query": "x", "content": "mixed"},
     ],

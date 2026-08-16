@@ -155,3 +155,24 @@ def test_server_selection_uses_configuration_order_before_name(tmp_path: Path) -
 
     assert selected.name == "z-first"
     assert root == tmp_path
+
+
+def test_server_selection_resolves_relative_source_against_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "main.py").write_text("pass\n", encoding="utf-8")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    selected, root = select_server_config(
+        parse_language_servers([_server("python")]),
+        "main.py",
+        workspace,
+    )
+
+    assert selected.name == "python"
+    assert root == workspace

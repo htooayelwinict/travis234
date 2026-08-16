@@ -49,36 +49,70 @@ payload, SHA-256
 
 ## Live native-TUI acceptance
 
-The final wheel was installed into a fresh Python 3.13 environment and started
-through its real `travis234` console entry point in an attached PTY. It loaded
-the ignored repository `.env` only through `--dotenv`; no credential value was
-printed or copied. The active model was
-`openrouter/minimax/minimax-m3` with medium thinking.
+A wheel containing the live-qualification corrections was installed into a
+fresh Python 3.13 environment and started through its real `travis234` console
+entry point in an attached PTY. It loaded the ignored repository `.env` only
+through `--dotenv`; no credential value was printed or copied. The active model
+for every model-backed prompt was `openrouter/minimax/minimax-m3` with medium
+thinking. Durable evidence is under `/tmp/t234-full-bg-tui.GxrfC6/evidence`.
 
-Prompt scenario: load the packaged subagent skill, select the configured
-`evidence-reviewer` typed role, delegate a read-only sentinel check of
-`README.md`, return the role-required structured result, avoid orchestration,
-and expose the result through `/agents status`.
+All 21 scenarios reached their acceptance condition:
 
-Result: **PASS**.
+| # | Prompt scenario | Result | Observable acceptance evidence |
+| --- | --- | --- | --- |
+| 1 | Capability trust, reload, and projection | **PASS** | The reloaded `/cap-probe after-reload` command returned `CAPABILITY-REGISTRY-PASS after-reload`. |
+| 2 | Typed role/model/schema/artifact/result expansion | **PASS** | `evidence-reviewer` task `subagent-6a2dbab6c053` returned structured evidence and expanded artifact `artifact-5e6925a63cb84e01bbcbf977c05978e4`. |
+| 3 | Asynchronous typed child | **PASS** | The parent returned while supervised task `subagent-0a327afcc58d` remained active. |
+| 4 | `/agents status` and inspect | **PASS** | The active supervised worker appeared in the roster and its bounded inspection exposed its role and state. |
+| 5 | Steering an active child | **PASS** | A follow-up instruction was accepted by the existing child without replacing its task identity. |
+| 6 | Cancelling an active child | **PASS** | The cancellation request settled the long-running task instead of allowing its natural completion marker. |
+| 7 | Large-output spill and bounded artifact read | **PASS** | Fresh artifact `artifact-71c67631acb54d6c873d12ccfb8cf993` contained `LARGE_OUTPUT_BEGIN` in bytes 0–127. |
+| 8 | Artifact resume after process restart | **PASS** | A new Travis process resumed the exact session and read the pre-restart artifact without regenerating it. |
+| 9 | Native policy deny | **PASS** | One denied write produced `S09-PASS-DENIED` and no target file. |
+| 10 | Native policy allow-once | **PASS** | One approved write succeeded and an exact read verified `POLICY_ALLOW_ONCE_SENTINEL`. |
+| 11 | Lazy LSP diagnostics and hover | **PASS** | Diagnostics returned `acceptance fixture diagnostic`; hover returned `fixture-symbol: integer`. |
+| 12 | LSP rename preview without mutation | **PASS** | Preview token `lsp-preview-4aee2fc5fd6c869059164bca0d36aa7f` described exactly two edits while the file stayed unchanged. |
+| 13 | Applying a reviewed LSP action | **PASS** | The preview token applied once, changed only `main.py`, and reported no restored or unresolved paths. |
+| 14 | Crash uncertainty and never-replay behavior | **PASS** | The interrupted action remained explicitly uncertain and was not automatically replayed. |
+| 15 | Explicit durable memory retention | **PASS** | Exact consented content was retained as `mem_65872afa2c5348e88484914a272e2e32` through the provider-compatible schema. |
+| 16 | Untrusted memory recall | **PASS** | Recall returned `S16-PASS MEMORY_DATA_ONLY`; instruction-shaped stored text remained bounded as untrusted data. |
+| 17 | Exact memory deletion and absence | **PASS** | Delete reported true and the following recall returned zero matches with no untrusted block. |
+| 18 | Generic MCP tools and resources | **PASS** | Tool listing/call and resource listing/read succeeded; resource text remained inside untrusted MCP boundaries. |
+| 19 | Generic MCP prompt data | **PASS** | Ordered prompt roles and topic were returned inside explicit untrusted boundaries and were not executed. |
+| 20 | MCP reconnect and stale-reference rejection | **PASS** | Reconnect invalidated the old opaque reference; relisting produced a different usable reference. |
+| 21 | tmux/worktree ping-pong, recovery, correction, and release | **PASS** | Travis A recovered the same Travis B, completed two handoff rounds, verified `ORCH_FINAL\n`, released B, and observed its tmux session disappear. |
 
-- Task: `subagent-7a9cabb2bc3c`.
-- Backend/role/status: `internal` / `evidence-reviewer` / `completed`.
-- Reviewer model role resolved; effective child tool trace contained only
-  `read`.
-- Structured output contained `found: true` and bounded evidence for
-  `FINAL_TYPED_ROLE_SENTINEL`.
-- Validation errors, changed files, and artifacts were all empty.
-- `/agents status` reported zero active children and the completed task.
-- The TUI exited with status 0, no Travis process survived, and the disposable
-  workspace still contained one unchanged file with one sentinel occurrence.
+Scenario 21 used run `run_3fa34eb8279e95d9c81a1bd4`, task
+`task_053a96f4861d3fe0d9600b3a`, worker
+`worker_f8c6819f8274dc0d408a4ee2`, tmux session
+`travis234-orch-90b71a20ff50ad35`, and Travis session
+`c4031036dd1a42ceac4958049430d8cd`. Round 1 asked a blocking
+question and wrote exact bytes for `ORCH_BETA\n`. After a fresh coordinator
+process performed inspect-only recovery, round 2 overwrote the file with exact
+bytes `4f5243485f46494e414c0a` (`ORCH_FINAL\n`), SHA-256
+`94005ce382e9c4430aa59e0a02335ff4f6dd62fa338e743ce35b03a88ae5a48d`.
+Both terminal handoffs were acknowledged. No replay, integration, commit, push,
+branch deletion, or worktree deletion occurred inside the protocol.
 
-MiniMax performed `pwd && ls -la` in the parent before spawning the child,
-despite the explicit prompt and loaded skill prohibiting parent target
-resolution. It later incorrectly claimed no listing occurred. The command did
-not read or mutate the target, and the durable session trace exposes it. This is
-classified as a model instruction-following/prose issue, not a runtime policy,
-schema, or TUI failure.
+The first scenario-21 driver attempt submitted only the first line because the
+PTY harness sent ordinary newline bytes, which the native TUI correctly treats
+as Enter. The failed worker was protocol-cancelled and released cleanly. The
+harness was corrected to emit the terminal bracketed-paste protocol around the
+multiline prompt. The rerun visibly submitted all six lines as one message and
+passed. Focused terminal/editor tests also proved that Travis already preserves
+newlines in real paste events, so no product change was made for this
+harness-only defect.
+
+Other expected exercise-and-retry evidence is retained rather than hidden:
+
+- Scenario 7 first exposed a mismatched fixture sentinel; the corrected fixture
+  produced a new artifact and passed without a product change.
+- Scenario 11 exposed a real relative-path LSP bug; its regression and fix are
+  recorded below.
+- Scenario 13 first used the wrong model-selected token property; the exact
+  retry passed without a product change.
+- Scenario 15 exposed a real provider-schema compatibility bug; its regression
+  and fix are recorded below.
 
 ## Regression-first corrections found during qualification
 
@@ -95,6 +129,19 @@ schema, or TUI failure.
    recovery wording. The npm contract failed first. Both mirrors now retain the
    legacy workspace/process/truncation safeguards plus typed roles, artifacts,
    `/agents`, and independent orchestration within the 500-word ceiling.
+4. Relative LSP paths were resolved against the Travis process current
+   directory before the workspace containment check. A failing regression
+   changed the process current directory and selected `main.py` relative to a
+   separate workspace. Relative sources now resolve against that workspace;
+   absolute-path and escape checks are unchanged. The focused LSP suite and the
+   live diagnostics/hover retry passed.
+5. The memory provider schema used a root `oneOf` that MiniMax transformed
+   incorrectly, turning the requested JSON tags array into an object before the
+   tool boundary. A failing contract test now requires a bounded flat provider
+   schema. Travis advertises that compatible schema while retaining the strict
+   per-action `oneOf` as its private runtime validator, so malformed action
+   combinations remain rejected. Focused schema/memory suites and the live
+   retain/recall/delete sequence passed.
 
 ## Deferred boundary
 

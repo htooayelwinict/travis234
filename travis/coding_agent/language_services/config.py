@@ -196,7 +196,8 @@ def select_server_config(
     workspace: str | Path,
 ) -> tuple[LanguageServerConfig, Path]:
     workspace_path = Path(workspace).expanduser().resolve()
-    source = Path(path).expanduser().resolve()
+    raw_source = Path(path).expanduser()
+    source = (raw_source if raw_source.is_absolute() else workspace_path / raw_source).resolve()
     if source != workspace_path and workspace_path not in source.parents:
         raise ValueError("language-service path escapes the workspace")
     suffix = source.suffix.lower()
