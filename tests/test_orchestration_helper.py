@@ -97,6 +97,10 @@ def test_guide_emits_one_stable_versioned_json_envelope() -> None:
                 "dispatch-wait",
                 "worker-complete",
                 "worker-fail",
+                "message-send",
+                "message-check",
+                "message-ack",
+                "message-reply",
             ],
         "invocation": "python3 scripts/orchestrate.py <command> [arguments]",
     }

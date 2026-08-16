@@ -365,3 +365,254 @@ def test_worker_fail_creates_one_failure_message(
     assert state.connection.execute(
         "SELECT count(*) FROM messages WHERE dispatch_id = ?", (dispatch.dispatch_id,)
     ).fetchone()[0] == 1
+
+
+def test_question_delivery_acknowledgement_and_reply_are_ordered(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    relay_context,
+) -> None:
+    module, _client, state, _repo, task_id, worker, agent_dir, _capability_log = relay_context
+    capability = f"dispatch-capability-{secrets.token_hex(24)}"
+    monkeypatch.setattr(module.secrets, "token_urlsafe", lambda _size: capability)
+    dispatch = module.start_dispatch(
+        state,
+        task_id,
+        worker.worker_id,
+        module.DispatchStartRequest(
+            prompt="Inspect ownership and ask if the fixture choice is ambiguous.",
+            context=(),
+            required_verification=("Inspect both candidate files",),
+        ),
+        "question-dispatch",
+    )
+    time.sleep(0.9)
+    environment = os.environ.copy()
+    environment["TRAVIS234_ORCHESTRATION_CAPABILITY"] = capability
+    question_file = write_private_json(
+        tmp_path / "question.json",
+        {
+            "kind": "question",
+            "payload": {
+                "text": "Which parser fixture should I treat as authoritative?",
+                "choices": ["stable", "experimental"],
+            },
+            "parentMessageId": None,
+        },
+    )
+    sent = run_cli(
+        agent_dir,
+        environment,
+        "message-send",
+        "--dispatch-id",
+        dispatch.dispatch_id,
+        "--request-file",
+        str(question_file),
+        "--idempotency-key",
+        "question-one",
+    )
+    assert sent.returncode == 0, sent.stderr
+    sent_receipt = json.loads(sent.stdout)
+    question = sent_receipt["result"]["message"]
+    assert question["kind"] == "question"
+    assert state.get_dispatch(dispatch.dispatch_id).status == "awaiting_coordinator"
+    assert state.get_task(task_id)["status"] == "awaiting_coordinator"
+
+    duplicate = run_cli(
+        agent_dir,
+        environment,
+        "message-send",
+        "--dispatch-id",
+        dispatch.dispatch_id,
+        "--request-file",
+        str(question_file),
+        "--idempotency-key",
+        "question-one",
+    )
+    assert duplicate.returncode == 0, duplicate.stderr
+    assert json.loads(duplicate.stdout)["result"]["effect"] == "reused"
+    assert state.connection.execute(
+        "SELECT count(*) FROM messages WHERE dispatch_id = ? AND kind = 'question'",
+        (dispatch.dispatch_id,),
+    ).fetchone()[0] == 1
+
+    checked = run_cli(
+        agent_dir,
+        os.environ.copy(),
+        "message-check",
+        "--run-id",
+        worker.run_id,
+        "--wait-seconds",
+        "0",
+        "--limit",
+        "10",
+    )
+    assert checked.returncode == 0, checked.stderr
+    delivery = json.loads(checked.stdout)["result"]["messages"][0]
+    assert delivery["messageId"] == question["messageId"]
+    assert delivery["deliveryCount"] == 1
+    assert delivery["acknowledgedAt"] is None
+
+    premature_reply_file = write_private_json(
+        tmp_path / "premature-reply.json",
+        {
+            "prompt": "Use stable.",
+            "context": [],
+            "requiredVerification": ["Verify stable fixture"],
+        },
+    )
+    premature = run_cli(
+        agent_dir,
+        os.environ.copy(),
+        "message-reply",
+        "--message-id",
+        question["messageId"],
+        "--request-file",
+        str(premature_reply_file),
+        "--idempotency-key",
+        "reply-premature",
+    )
+    assert premature.returncode != 0
+    assert json.loads(premature.stderr)["error"]["code"] == "message_not_acknowledged"
+
+    acknowledged = run_cli(
+        agent_dir,
+        os.environ.copy(),
+        "message-ack",
+        "--message-id",
+        question["messageId"],
+        "--idempotency-key",
+        "ack-question",
+    )
+    assert acknowledged.returncode == 0, acknowledged.stderr
+    ack_receipt = json.loads(acknowledged.stdout)
+    assert ack_receipt["result"]["message"]["acknowledgedAt"] is not None
+    repeated_ack = run_cli(
+        agent_dir,
+        os.environ.copy(),
+        "message-ack",
+        "--message-id",
+        question["messageId"],
+        "--idempotency-key",
+        "ack-question",
+    )
+    assert json.loads(repeated_ack.stdout)["result"]["effect"] == "reused"
+    empty = run_cli(
+        agent_dir,
+        os.environ.copy(),
+        "message-check",
+        "--run-id",
+        worker.run_id,
+        "--wait-seconds",
+        "0",
+        "--limit",
+        "10",
+    )
+    assert json.loads(empty.stdout)["result"] == {
+        "messages": [],
+        "timedOut": True,
+    }
+
+    reply_file = write_private_json(
+        tmp_path / "reply.json",
+        {
+            "prompt": "Use the stable fixture and cite why.",
+            "context": ["The coordinator selected stable."],
+            "requiredVerification": ["Verify stable fixture"],
+        },
+    )
+    replied = run_cli(
+        agent_dir,
+        os.environ.copy(),
+        "message-reply",
+        "--message-id",
+        question["messageId"],
+        "--request-file",
+        str(reply_file),
+        "--idempotency-key",
+        "reply-one",
+    )
+    assert replied.returncode == 0, replied.stderr
+    reply_receipt = json.loads(replied.stdout)
+    assert reply_receipt["result"]["message"]["kind"] == "reply"
+    assert reply_receipt["result"]["message"]["parentMessageId"] == question["messageId"]
+    assert reply_receipt["result"]["dispatch"]["status"] == "running"
+    assert state.get_task(task_id)["promptCount"] == 2
+    assert state.get_worker(worker.worker_id).travis_session_id == worker.travis_session_id
+
+
+def test_correction_round_requires_ack_and_enforces_total_prompt_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    relay_context,
+) -> None:
+    module, _client, state, _repo, task_id, worker, agent_dir, _capability_log = relay_context
+    capabilities = [f"dispatch-capability-{secrets.token_hex(24)}" for _ in range(4)]
+    capability_iterator = iter(capabilities)
+    monkeypatch.setattr(module.secrets, "token_urlsafe", lambda _size: next(capability_iterator))
+
+    def start(key: str, parent: str | None = None):
+        dispatch = module.start_dispatch(
+            state,
+            task_id,
+            worker.worker_id,
+            module.DispatchStartRequest(
+                prompt=f"Run bounded round {key}.",
+                context=(),
+                required_verification=("Return bounded evidence",),
+                parent_message_id=parent,
+            ),
+            key,
+        )
+        time.sleep(0.9)
+        return dispatch
+
+    def complete_and_ack(dispatch, capability: str, key: str) -> str:
+        packet_file = write_private_json(tmp_path / f"{key}.json", handoff_packet())
+        environment = os.environ.copy()
+        environment["TRAVIS234_ORCHESTRATION_CAPABILITY"] = capability
+        completed = run_cli(
+            agent_dir,
+            environment,
+            "worker-complete",
+            "--dispatch-id",
+            dispatch.dispatch_id,
+            "--request-file",
+            str(packet_file),
+            "--idempotency-key",
+            f"terminal-{key}",
+        )
+        assert completed.returncode == 0, completed.stderr
+        message_id = json.loads(completed.stdout)["result"]["message"]["messageId"]
+        acked = run_cli(
+            agent_dir,
+            os.environ.copy(),
+            "message-ack",
+            "--message-id",
+            message_id,
+            "--idempotency-key",
+            f"ack-{key}",
+        )
+        assert acked.returncode == 0, acked.stderr
+        return message_id
+
+    first = start("initial")
+    first_message = complete_and_ack(first, capabilities[0], "initial")
+    with state.transaction():
+        state.connection.execute(
+            "UPDATE tasks SET prompt_count = 2 WHERE task_id = ?", (task_id,)
+        )
+    second = start("correction-one", first_message)
+    assert second.round_number == 2
+    second_message = complete_and_ack(second, capabilities[1], "correction-one")
+    third = start("correction-two", second_message)
+    assert third.round_number == 3
+    third_message = complete_and_ack(third, capabilities[2], "correction-two")
+
+    with pytest.raises(module.HelperError) as raised:
+        start("over-limit", third_message)
+    assert raised.value.code == "round_limit_reached"
+    assert state.get_task(task_id)["promptCount"] == 4
+    assert state.connection.execute(
+        "SELECT count(*) FROM dispatches WHERE task_id = ?", (task_id,)
+    ).fetchone()[0] == 3

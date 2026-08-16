@@ -22,6 +22,21 @@ use `--consume-request-file` when the helper should unlink the validated file.
 - `worker-complete|worker-fail` are Worker-only terminal operations. They
   authenticate the process capability, accept one exact packet, and create one
   durable handoff/failure Message transactionally.
+- `message-send` lets the active Worker deposit one authenticated question,
+  status, or heartbeat. A question becomes deliverable only after the RPC turn
+  is idle.
+- `message-check --run-id ... --wait-seconds N` returns unacknowledged Worker
+  Messages in stable creation/ID order and records delivery without implying
+  acknowledgement.
+- `message-ack` records that Travis A processed a complete delivery.
+- `message-reply` accepts only an acknowledged active question and resumes the
+  same Worker session after prompt-budget and idle checks.
+
+The Task prompt budget counts every Dispatch prompt and every coordinator
+reply. Dispatch `roundNumber` counts immutable Dispatches only. A correction
+requires `parentMessageId` to identify the acknowledged latest terminal
+handoff; it never mutates the earlier Dispatch. The default budget is four and
+the hard maximum is twelve.
 
 The terminal packet has exactly these fields: `outcome`, `summary`, `evidence`,
 `changedFiles`, `commit`, `tests`, `artifacts`, `failedAttempts`, `blockers`,

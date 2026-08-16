@@ -21,7 +21,11 @@ Use this lifecycle:
    worker capability without exposing it to the coordinator transcript.
 4. Poll `dispatch-wait` for at most 60 seconds at a time. Continue useful
    coordinator work between polls.
-5. Treat a terminal handoff as a worker claim. Inspect its evidence and Git
+5. Use `message-check` for durable Worker questions or terminal packets.
+   Process the complete delivery, then call `message-ack`. Reply only to an
+   acknowledged question. A focused correction is a new Dispatch whose
+   `parentMessageId` is the acknowledged latest terminal Message.
+6. Treat a terminal handoff as a worker claim. Inspect its evidence and Git
    state before any later integration or cleanup decision.
 
 Never invoke `_relay`, scrape tmux output as a protocol, paste credentials or

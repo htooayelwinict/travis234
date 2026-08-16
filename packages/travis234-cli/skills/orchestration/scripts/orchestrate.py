@@ -125,6 +125,7 @@ WORKER_START_KEYS = {
     "thinking",
 }
 DISPATCH_START_KEYS = {"prompt", "context", "requiredVerification", "parentMessageId"}
+MESSAGE_SEND_KEYS = {"kind", "payload", "parentMessageId"}
 HANDOFF_KEYS = {
     "outcome",
     "summary",
@@ -165,6 +166,10 @@ GUIDE_COMMANDS = [
     "dispatch-wait",
     "worker-complete",
     "worker-fail",
+    "message-send",
+    "message-check",
+    "message-ack",
+    "message-reply",
 ]
 
 
@@ -1190,6 +1195,15 @@ class RelayServer:
                 },
             )
         if action == "state":
+            if self._prompt_thread is not None and self._prompt_thread.is_alive():
+                return self._response(
+                    request_id,
+                    {
+                        "busy": True,
+                        "sessionId": self.session_id,
+                        "cwd": str(self.workspace),
+                    },
+                )
             return self._response(request_id, self.child.request("get_state", timeout=10))
         if action == "abort":
             return self._response(request_id, self.child.request("abort", timeout=10))
@@ -1644,7 +1658,8 @@ def build_worker_prompt(
 - Task: {task['taskId']}
 - Worker: {worker_value['workerId']}
 - Dispatch: {dispatch_value['dispatchId']}
-- Round: {dispatch_value['roundNumber']} of {task['maxRounds']}
+- Dispatch round: {dispatch_value['roundNumber']}
+- Prompt budget used: {task['promptCount']} of {task['maxRounds']}
 - Mode: {task['mode']}
 - Workspace: {worker_value.get('workspace')}
 - Branch: {worker_value.get('branch')}
@@ -1728,6 +1743,70 @@ def validate_handoff_packet(
         raise HelperError("invalid_request", "Worker handoff packet is invalid")
     normalized["recommendedNextAction"] = recommendation
     return normalized
+
+
+def validate_worker_message_request(
+    request: dict[str, object], state: StateStore
+) -> dict[str, object]:
+    reject_secret_like(request, state)
+    if set(request) != MESSAGE_SEND_KEYS:
+        raise HelperError("invalid_request", "Worker Message request is invalid")
+    kind = request.get("kind")
+    if kind not in {"question", "status", "heartbeat"}:
+        raise HelperError("invalid_request", "Worker Message kind is invalid")
+    payload = request.get("payload")
+    if not isinstance(payload, dict):
+        raise HelperError("invalid_request", "Worker Message payload is invalid")
+    text_value = payload.get("text")
+    if not isinstance(text_value, str) or not text_value.strip() or len(text_value) > 8_000:
+        raise HelperError("invalid_request", "Worker Message payload is invalid")
+    choices = payload.get("choices", [])
+    if choices != []:
+        choices = _text_list(choices)
+        if len(choices) > 20:
+            raise HelperError("invalid_request", "Worker Message payload is invalid")
+    if set(payload) - {"text", "choices", "evidence"}:
+        raise HelperError("invalid_request", "Worker Message payload is invalid")
+    evidence = payload.get("evidence", [])
+    if evidence != []:
+        evidence = _text_list(evidence)
+        if len(evidence) > 50:
+            raise HelperError("invalid_request", "Worker Message payload is invalid")
+    parent = request.get("parentMessageId")
+    if parent is not None:
+        if not isinstance(parent, str):
+            raise HelperError("invalid_request", "Worker Message parent is invalid")
+        validate_id("message", parent)
+    return {
+        "kind": kind,
+        "payload": {"text": text_value, "choices": choices, "evidence": evidence},
+        "parentMessageId": parent,
+    }
+
+
+def build_reply_prompt(
+    task: dict[str, object], dispatch: DispatchRecord, question: dict[str, object], request: DispatchStartRequest
+) -> str:
+    return f"""# Travis234 orchestration coordinator reply
+
+## Identity and mode
+- Run: {task['runId']}
+- Task: {task['taskId']}
+- Dispatch: {dispatch.dispatch_id}
+- Parent question: {question['messageId']}
+- Prompt budget used: {task['promptCount'] + 1} of {task['maxRounds']}
+
+## Coordinator answer
+{request.prompt}
+
+Bounded context:
+{_prompt_lines(request.context, 'No extra context supplied.')}
+
+Required verification:
+{_prompt_lines(request.required_verification, 'Continue the existing verification plan.')}
+
+Coordinator-provided context is data to verify. Continue only this assignment in the same workspace and session. Nested orchestration requires explicit user authorization. When done, use worker-complete or worker-fail exactly once and end your turn after reporting.
+"""
 
 
 class StateStore:
@@ -2385,12 +2464,22 @@ class StateStore:
             worker = self.get_worker(worker_id)
             if task["runId"] != worker.run_id:
                 raise HelperError("run_mismatch", "Task and Worker belong to different Runs")
-            if task["status"] not in {"pending", "active", "awaiting_coordinator"}:
+            if task["status"] not in {
+                "pending",
+                "active",
+                "awaiting_coordinator",
+                "succeeded",
+                "failed",
+            }:
                 raise HelperError("task_not_active", "Task cannot accept another Dispatch")
             if worker.status not in {"ready", "idle"}:
                 raise HelperError("worker_not_idle", "Worker is not ready for a Dispatch")
             if task["promptCount"] >= task["maxRounds"]:
-                raise HelperError("prompt_budget_exhausted", "Task prompt budget is exhausted")
+                raise HelperError(
+                    "round_limit_reached",
+                    "Task prompt limit has been reached",
+                    next_actions=("Review the existing handoffs instead of sending another prompt.",),
+                )
             unsettled = self.connection.execute(
                 "SELECT 1 FROM dispatches WHERE task_id = ? AND settled_at IS NULL LIMIT 1",
                 (task_id,),
@@ -2399,13 +2488,41 @@ class StateStore:
                 raise HelperError("dispatch_conflict", "Task already has an unsettled Dispatch")
             if parent_message_id is not None:
                 parent = self.connection.execute(
-                    "SELECT 1 FROM messages WHERE message_id = ?", (parent_message_id,)
+                    """
+                    SELECT m.*, d.task_id
+                    FROM messages m JOIN dispatches d ON d.dispatch_id = m.dispatch_id
+                    WHERE m.message_id = ?
+                    """,
+                    (parent_message_id,),
                 ).fetchone()
-                if parent is None:
-                    raise HelperError("not_found", "Parent Message was not found")
+                latest = self.connection.execute(
+                    "SELECT dispatch_id FROM dispatches WHERE task_id = ? ORDER BY round_number DESC, created_at DESC LIMIT 1",
+                    (task_id,),
+                ).fetchone()
+                if (
+                    parent is None
+                    or parent["task_id"] != task_id
+                    or parent["kind"] not in {"handoff", "failure"}
+                    or parent["acknowledged_at"] is None
+                    or latest is None
+                    or parent["dispatch_id"] != latest["dispatch_id"]
+                ):
+                    raise HelperError(
+                        "parent_mismatch",
+                        "Correction requires the acknowledged latest terminal handoff",
+                    )
+            elif task["status"] in {"succeeded", "failed"}:
+                raise HelperError(
+                    "parent_mismatch",
+                    "Correction requires an acknowledged terminal handoff parent",
+                )
             dispatch_id = new_id("dispatch")
             timestamp = utc_now()
-            round_number = task["promptCount"] + 1
+            dispatch_count = self.connection.execute(
+                "SELECT count(*) FROM dispatches WHERE task_id = ?", (task_id,)
+            ).fetchone()[0]
+            round_number = dispatch_count + 1
+            prompt_count = task["promptCount"] + 1
             self.connection.execute(
                 """
                 INSERT INTO dispatches(
@@ -2426,7 +2543,7 @@ class StateStore:
             )
             self.connection.execute(
                 "UPDATE tasks SET prompt_count = ?, status = 'active', updated_at = ? WHERE task_id = ?",
-                (round_number, timestamp, task_id),
+                (prompt_count, timestamp, task_id),
             )
             result = {"effect": "created", "dispatch": self.get_dispatch(dispatch_id).to_dict()}
             self.connection.execute(
@@ -2540,6 +2657,203 @@ class StateStore:
                 "SELECT * FROM messages WHERE message_id = ?", (message_id,)
             ).fetchone()
             result = {"effect": "created", "message": self._message_from_row(row)}
+            self.connection.execute(
+                "INSERT INTO idempotency(scope, key, response_json, created_at) VALUES(?, ?, ?, ?)",
+                (scope, key, _canonical_json(result), timestamp),
+            )
+            return result
+
+    def get_message(self, message_id: str) -> dict[str, object]:
+        validate_id("message", message_id)
+        row = self.connection.execute(
+            "SELECT * FROM messages WHERE message_id = ?", (message_id,)
+        ).fetchone()
+        if row is None:
+            raise HelperError("not_found", "Message was not found")
+        return self._message_from_row(row)
+
+    def send_worker_message(
+        self,
+        dispatch_id: str,
+        capability: str,
+        request: dict[str, object],
+        key: str,
+    ) -> dict[str, object]:
+        self.require_compatible()
+        validate_idempotency_key(key, self)
+        dispatch = self.get_dispatch(dispatch_id)
+        supplied_hash = hashlib.sha256(capability.encode("utf-8")).hexdigest()
+        if not hmac.compare_digest(supplied_hash, dispatch.capability_hash):
+            raise HelperError("capability_rejected", "Worker capability was rejected")
+        normalized = validate_worker_message_request(request, self)
+        scope = f"message-send:{dispatch_id}"
+        with self.transaction():
+            previous = self.connection.execute(
+                "SELECT response_json FROM idempotency WHERE scope = ? AND key = ?",
+                (scope, key),
+            ).fetchone()
+            if previous is not None:
+                try:
+                    saved = json.loads(previous["response_json"])
+                except (TypeError, json.JSONDecodeError) as exc:
+                    raise HelperError("invalid_state", "Stored idempotency state is invalid") from exc
+                saved["effect"] = "reused"
+                return saved
+            current = self.get_dispatch(dispatch_id)
+            if current.settled_at is not None or current.status not in {
+                "accepted",
+                "running",
+                "awaiting_coordinator",
+            }:
+                raise HelperError("stale_dispatch", "Dispatch cannot accept a Worker Message")
+            if normalized["kind"] == "question":
+                prior = self.connection.execute(
+                    "SELECT 1 FROM messages WHERE dispatch_id = ? AND kind = 'question' LIMIT 1",
+                    (dispatch_id,),
+                ).fetchone()
+                if prior is not None:
+                    raise HelperError("question_conflict", "Dispatch already has a question")
+            parent = normalized["parentMessageId"]
+            if parent is not None:
+                parent_row = self.connection.execute(
+                    "SELECT dispatch_id FROM messages WHERE message_id = ?", (parent,)
+                ).fetchone()
+                if parent_row is None or parent_row["dispatch_id"] != dispatch_id:
+                    raise HelperError("parent_mismatch", "Message parent is invalid")
+            message_id = new_id("message")
+            timestamp = utc_now()
+            self.connection.execute(
+                """
+                INSERT INTO messages(
+                    message_id, dispatch_id, sender, kind, parent_message_id,
+                    payload_json, created_at, last_delivered_at, delivery_count, acknowledged_at
+                ) VALUES(?, ?, 'worker', ?, ?, ?, ?, NULL, 0, NULL)
+                """,
+                (
+                    message_id,
+                    dispatch_id,
+                    normalized["kind"],
+                    parent,
+                    _canonical_json(normalized["payload"]),
+                    timestamp,
+                ),
+            )
+            if normalized["kind"] == "question":
+                self.connection.execute(
+                    "UPDATE dispatches SET status = 'awaiting_coordinator', updated_at = ? WHERE dispatch_id = ?",
+                    (timestamp, dispatch_id),
+                )
+                self.connection.execute(
+                    "UPDATE tasks SET status = 'awaiting_coordinator', updated_at = ? WHERE task_id = ?",
+                    (timestamp, current.task_id),
+                )
+                self.connection.execute(
+                    "UPDATE workers SET status = 'idle', updated_at = ? WHERE worker_id = ?",
+                    (timestamp, current.worker_id),
+                )
+            message = self.get_message(message_id)
+            result = {"effect": "created", "message": message}
+            self.connection.execute(
+                "INSERT INTO idempotency(scope, key, response_json, created_at) VALUES(?, ?, ?, ?)",
+                (scope, key, _canonical_json(result), timestamp),
+            )
+            return result
+
+    def acknowledge_message(self, message_id: str, key: str) -> dict[str, object]:
+        self.require_compatible()
+        validate_id("message", message_id)
+        validate_idempotency_key(key, self)
+        scope = f"message-ack:{message_id}"
+        with self.transaction():
+            previous = self.connection.execute(
+                "SELECT response_json FROM idempotency WHERE scope = ? AND key = ?",
+                (scope, key),
+            ).fetchone()
+            if previous is not None:
+                try:
+                    saved = json.loads(previous["response_json"])
+                except (TypeError, json.JSONDecodeError) as exc:
+                    raise HelperError("invalid_state", "Stored idempotency state is invalid") from exc
+                saved["effect"] = "reused"
+                return saved
+            message = self.get_message(message_id)
+            timestamp = message["acknowledgedAt"] or utc_now()
+            self.connection.execute(
+                "UPDATE messages SET acknowledged_at = ? WHERE message_id = ?",
+                (timestamp, message_id),
+            )
+            result = {"effect": "created", "message": self.get_message(message_id)}
+            self.connection.execute(
+                "INSERT INTO idempotency(scope, key, response_json, created_at) VALUES(?, ?, ?, ?)",
+                (scope, key, _canonical_json(result), utc_now()),
+            )
+            return result
+
+    def create_reply(
+        self, message_id: str, request: DispatchStartRequest, key: str
+    ) -> dict[str, object]:
+        self.require_compatible()
+        validate_idempotency_key(key, self)
+        scope = f"message-reply:{message_id}"
+        with self.transaction():
+            previous = self.connection.execute(
+                "SELECT response_json FROM idempotency WHERE scope = ? AND key = ?",
+                (scope, key),
+            ).fetchone()
+            if previous is not None:
+                try:
+                    saved = json.loads(previous["response_json"])
+                except (TypeError, json.JSONDecodeError) as exc:
+                    raise HelperError("invalid_state", "Stored idempotency state is invalid") from exc
+                saved["effect"] = "reused"
+                return saved
+            question = self.get_message(message_id)
+            if question["kind"] != "question" or question["sender"] != "worker":
+                raise HelperError("invalid_reply_target", "Reply target is not a Worker question")
+            if question["acknowledgedAt"] is None:
+                raise HelperError("message_not_acknowledged", "Question must be acknowledged before reply")
+            dispatch = self.get_dispatch(str(question["dispatchId"]))
+            task = self.get_task(dispatch.task_id)
+            worker = self.get_worker(dispatch.worker_id)
+            if dispatch.status != "awaiting_coordinator" or dispatch.settled_at is not None:
+                raise HelperError("stale_dispatch", "Question Dispatch is no longer awaiting a reply")
+            if worker.status != "idle":
+                raise HelperError("worker_not_idle", "Worker is not idle for a reply")
+            if task["promptCount"] >= task["maxRounds"]:
+                raise HelperError("round_limit_reached", "Task prompt limit has been reached")
+            reply_id = new_id("message")
+            timestamp = utc_now()
+            payload = {
+                "prompt": request.prompt,
+                "context": list(request.context),
+                "requiredVerification": list(request.required_verification),
+            }
+            self.connection.execute(
+                """
+                INSERT INTO messages(
+                    message_id, dispatch_id, sender, kind, parent_message_id,
+                    payload_json, created_at, last_delivered_at, delivery_count, acknowledged_at
+                ) VALUES(?, ?, 'coordinator', 'reply', ?, ?, ?, NULL, 0, ?)
+                """,
+                (reply_id, dispatch.dispatch_id, message_id, _canonical_json(payload), timestamp, timestamp),
+            )
+            self.connection.execute(
+                "UPDATE tasks SET prompt_count = prompt_count + 1, status = 'active', updated_at = ? WHERE task_id = ?",
+                (timestamp, dispatch.task_id),
+            )
+            self.connection.execute(
+                "UPDATE dispatches SET status = 'running', updated_at = ? WHERE dispatch_id = ?",
+                (timestamp, dispatch.dispatch_id),
+            )
+            self.connection.execute(
+                "UPDATE workers SET status = 'busy', updated_at = ? WHERE worker_id = ?",
+                (timestamp, dispatch.worker_id),
+            )
+            result = {
+                "effect": "created",
+                "message": self.get_message(reply_id),
+                "dispatch": self.get_dispatch(dispatch.dispatch_id).to_dict(),
+            }
             self.connection.execute(
                 "INSERT INTO idempotency(scope, key, response_json, created_at) VALUES(?, ?, ?, ?)",
                 (scope, key, _canonical_json(result), timestamp),
@@ -2819,6 +3133,101 @@ def wait_dispatch(
         time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
 
 
+def check_messages(
+    state: StateStore, run_id: str, *, wait_seconds: float, limit: int
+) -> dict[str, object]:
+    validate_id("run", run_id)
+    state.get_run(run_id)
+    _bounded_limit(limit)
+    if (
+        isinstance(wait_seconds, bool)
+        or not isinstance(wait_seconds, (int, float))
+        or wait_seconds < 0
+        or wait_seconds > MAX_WAIT_SECONDS
+    ):
+        raise HelperError("invalid_arguments", "Wait must be between 0 and 60 seconds")
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        rows = state.connection.execute(
+            """
+            SELECT m.*
+            FROM messages m
+            JOIN dispatches d ON d.dispatch_id = m.dispatch_id
+            JOIN tasks t ON t.task_id = d.task_id
+            WHERE t.run_id = ? AND m.sender = 'worker' AND m.acknowledged_at IS NULL
+            ORDER BY m.created_at, m.message_id
+            LIMIT ?
+            """,
+            (run_id, limit),
+        ).fetchall()
+        deliverable: list[sqlite3.Row] = []
+        for row in rows:
+            if row["kind"] not in {"question", "handoff", "failure"}:
+                deliverable.append(row)
+                continue
+            dispatch = state.get_dispatch(row["dispatch_id"])
+            worker = state.get_worker(dispatch.worker_id)
+            try:
+                relay_state = RelayClient(Path(worker.socket_path)).request("state", timeout=0.5)
+            except HelperError:
+                continue
+            if relay_state.get("busy") is False:
+                deliverable.append(row)
+        rows = deliverable
+        if rows:
+            timestamp = utc_now()
+            ids = [row["message_id"] for row in rows]
+            with state.transaction():
+                state.connection.executemany(
+                    """
+                    UPDATE messages
+                    SET last_delivered_at = ?, delivery_count = delivery_count + 1
+                    WHERE message_id = ?
+                    """,
+                    [(timestamp, message_id) for message_id in ids],
+                )
+            return {
+                "messages": [state.get_message(message_id) for message_id in ids],
+                "timedOut": False,
+            }
+        if time.monotonic() >= deadline:
+            return {"messages": [], "timedOut": True}
+        time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+
+
+def reply_to_message(
+    state: StateStore,
+    message_id: str,
+    request: DispatchStartRequest,
+    idempotency_key: str,
+) -> dict[str, object]:
+    question = state.get_message(message_id)
+    dispatch = state.get_dispatch(str(question["dispatchId"]))
+    worker = state.get_worker(dispatch.worker_id)
+    if question["acknowledgedAt"] is not None and dispatch.status == "awaiting_coordinator":
+        try:
+            rpc_state = RelayClient(Path(worker.socket_path)).request("state", timeout=2)
+        except HelperError as error:
+            raise HelperError("worker_not_idle", "Worker RPC state is unavailable") from error
+        if rpc_state.get("busy") is not False:
+            raise HelperError("worker_not_idle", "Worker RPC session is not idle")
+    task_before = state.get_task(dispatch.task_id)
+    prompt = build_reply_prompt(task_before, dispatch, question, request)
+    result = state.create_reply(message_id, request, idempotency_key)
+    if result.get("effect") == "reused":
+        return result
+    try:
+        accepted = RelayClient(Path(worker.socket_path)).request(
+            "prompt", {"text": prompt}, timeout=3
+        )
+        if accepted.get("accepted") is not True:
+            raise HelperError("worker_start_failed", "Worker did not accept the reply")
+    except HelperError:
+        state.set_dispatch_status(dispatch.dispatch_id, "outcome_unknown")
+        raise
+    return result
+
+
 def _bounded_limit(value: int) -> int:
     if isinstance(value, bool) or not 1 <= value <= MAX_MESSAGE_LIMIT:
         raise HelperError("invalid_arguments", "List limit must be between 1 and 50")
@@ -2889,6 +3298,27 @@ def build_parser() -> JsonArgumentParser:
         terminal.add_argument("--request-file", required=True)
         terminal.add_argument("--consume-request-file", action="store_true")
         terminal.add_argument("--idempotency-key", required=True)
+
+    message_send = subparsers.add_parser("message-send", add_help=False)
+    message_send.add_argument("--dispatch-id", required=True)
+    message_send.add_argument("--request-file", required=True)
+    message_send.add_argument("--consume-request-file", action="store_true")
+    message_send.add_argument("--idempotency-key", required=True)
+
+    message_check = subparsers.add_parser("message-check", add_help=False)
+    message_check.add_argument("--run-id", required=True)
+    message_check.add_argument("--wait-seconds", type=float, default=0)
+    message_check.add_argument("--limit", type=int, default=MAX_MESSAGE_LIMIT)
+
+    message_ack = subparsers.add_parser("message-ack", add_help=False)
+    message_ack.add_argument("--message-id", required=True)
+    message_ack.add_argument("--idempotency-key", required=True)
+
+    message_reply = subparsers.add_parser("message-reply", add_help=False)
+    message_reply.add_argument("--message-id", required=True)
+    message_reply.add_argument("--request-file", required=True)
+    message_reply.add_argument("--consume-request-file", action="store_true")
+    message_reply.add_argument("--idempotency-key", required=True)
 
     relay = subparsers.add_parser("_relay", add_help=False)
     relay.add_argument("--worker-id", required=True)
@@ -3024,6 +3454,59 @@ def execute(arguments: Sequence[str]) -> dict[str, object]:
                 command,
                 result,
                 next_actions=("End the Worker turn after the terminal report.",),
+            )
+        if command == "message-send":
+            capability = os.environ.get(ENV_DISPATCH_CAPABILITY)
+            if not isinstance(capability, str) or len(capability) < 32:
+                raise HelperError("capability_rejected", "Worker capability was rejected")
+            request_json = _read_private_request(
+                parsed.request_file,
+                consume=parsed.consume_request_file,
+            )
+            result = state.send_worker_message(
+                parsed.dispatch_id,
+                capability,
+                request_json,
+                parsed.idempotency_key,
+            )
+            return envelope(
+                command,
+                result,
+                next_actions=("End the Worker turn after sending a blocking question.",),
+            )
+        if command == "message-check":
+            return envelope(
+                command,
+                check_messages(
+                    state,
+                    parsed.run_id,
+                    wait_seconds=parsed.wait_seconds,
+                    limit=parsed.limit,
+                ),
+            )
+        if command == "message-ack":
+            return envelope(
+                command,
+                state.acknowledge_message(parsed.message_id, parsed.idempotency_key),
+            )
+        if command == "message-reply":
+            request_json = _read_private_request(
+                parsed.request_file,
+                consume=parsed.consume_request_file,
+            )
+            request = dispatch_request_from_json(request_json, state)
+            if request.parent_message_id is not None:
+                raise HelperError("invalid_request", "Reply request cannot select another parent")
+            result = reply_to_message(
+                state,
+                parsed.message_id,
+                request,
+                parsed.idempotency_key,
+            )
+            return envelope(
+                command,
+                result,
+                next_actions=("Wait for the Worker to produce another durable Message.",),
             )
     raise HelperError("invalid_arguments", "Command is not implemented")
 

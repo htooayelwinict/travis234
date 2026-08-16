@@ -663,3 +663,232 @@ def test_tui_dispatch_returns_bounded_verified_handoff(
             timeout=10,
         )
         shutil.rmtree(agent_dir, ignore_errors=True)
+
+
+@pytest.mark.parametrize("scenario", ["question_reply", "bounded_ping_pong"])
+def test_tui_question_reply_and_bounded_ping_pong(
+    tmp_path: Path,
+    monkeypatch,
+    scenario: str,
+) -> None:
+    tmux_executable = shutil.which("tmux")
+    if tmux_executable is None:
+        pytest.skip("tmux is unavailable")
+    server_name = f"travis234-tui-dialogue-{secrets.token_hex(6)}"
+    agent_dir = Path(tempfile.mkdtemp(prefix="t234-tui-dialogue-", dir="/tmp"))
+    repo = initialize_repository(tmp_path / f"{scenario}-repo")
+    (repo / ".gitignore").write_text(".worktrees/\n", encoding="utf-8")
+    git(repo, "add", ".gitignore")
+    git(repo, "commit", "-m", "ignore worktrees")
+    coordinator_head = git(repo, "rev-parse", "HEAD").stdout.strip()
+    helper = Path(__file__).parents[1] / "travis/resources/skills/orchestration/scripts/orchestrate.py"
+    skill = helper.parents[1] / "SKILL.md"
+    bin_dir = tmp_path / "bin"
+    install_fake_travis(bin_dir)
+    tmux_wrapper = bin_dir / "tmux"
+    tmux_wrapper.write_text(
+        "#!/bin/sh\n"
+        f"exec {shlex.quote(tmux_executable)} -L {shlex.quote(server_name)} \"$@\"\n",
+        encoding="utf-8",
+    )
+    tmux_wrapper.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("TRAVIS234_CODING_AGENT_DIR", str(agent_dir))
+    monkeypatch.setenv("FAKE_RPC_HELPER", str(helper))
+    handoff_file = tmp_path / "dialogue-handoff.json"
+    monkeypatch.setenv("FAKE_RPC_HANDOFF_FILE", str(handoff_file))
+    question_file = tmp_path / "dialogue-question.json"
+    if scenario == "question_reply":
+        monkeypatch.setenv("FAKE_RPC_QUESTION_FILE", str(question_file))
+
+    def private_request(name: str, value: dict[str, object]) -> Path:
+        path = tmp_path / name
+        path.write_text(json.dumps(value), encoding="utf-8")
+        path.chmod(0o600)
+        return path
+
+    run_request = private_request("dialogue-run.json", {"objective": scenario})
+    task_request = private_request(
+        "dialogue-task.json",
+        {
+            "objective": "Resolve parser evidence through bounded dialogue",
+            "ownership": {"ownedPaths": [], "forbiddenPaths": ["README.md"]},
+            "acceptanceCriteria": ["Return acknowledged evidence"],
+            "mode": "supervised",
+            "maxRounds": 4,
+            "commitPolicy": "no_commit",
+        },
+    )
+    worker_request = private_request(
+        "dialogue-worker.json",
+        {
+            "repository": str(repo),
+            "workspaceMode": "worktree",
+            "worktreeName": f"tui-{scenario}",
+            "branch": f"tui-{scenario}",
+            "base": "main",
+        },
+    )
+    first_dispatch_request = private_request(
+        "dialogue-dispatch-one.json",
+        {
+            "prompt": "Inspect the selected parser evidence.",
+            "context": ["Use only the isolated worker workspace."],
+            "requiredVerification": ["Cite inspected evidence"],
+        },
+    )
+    reply_request = private_request(
+        "dialogue-reply.json",
+        {
+            "prompt": "Use the stable parser fixture.",
+            "context": ["The coordinator selected stable."],
+            "requiredVerification": ["Verify the stable fixture"],
+        },
+    )
+    question_file.write_text(
+        json.dumps(
+            {
+                "kind": "question",
+                "payload": {"text": "Stable or experimental fixture?", "choices": ["stable", "experimental"]},
+                "parentMessageId": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    question_file.chmod(0o600)
+
+    def write_handoff(summary: str) -> None:
+        handoff_file.write_text(
+            json.dumps(
+                {
+                    "outcome": "succeeded",
+                    "summary": summary,
+                    "evidence": ["Worker verified the isolated parser fixture"],
+                    "changedFiles": [],
+                    "commit": None,
+                    "tests": ["focused evidence check passed"],
+                    "artifacts": [],
+                    "failedAttempts": [],
+                    "blockers": [],
+                    "questions": [],
+                    "recommendedNextAction": "Acknowledge and summarize the evidence.",
+                }
+            ),
+            encoding="utf-8",
+        )
+        handoff_file.chmod(0o600)
+
+    write_handoff("final answer after coordinator reply" if scenario == "question_reply" else "first answer needs correction")
+    calls = {"count": 0}
+    ids: dict[str, str] = {}
+    worker_receipt: dict[str, object] = {}
+
+    def bash(model, command: str, call_id: str):
+        return tool_call_response_events(
+            model,
+            "bash",
+            {"command": command, "yield_time_ms": 10_000},
+            call_id=call_id,
+        )
+
+    def provider(model, context):
+        calls["count"] += 1
+        count = calls["count"]
+        if count == 1:
+            return tool_call_response_events(model, "read", {"path": str(skill)}, call_id="dialogue-load")
+        if count == 2:
+            return bash(model, f"python3 {shlex.quote(str(helper))} run-create --request-file {shlex.quote(str(run_request))} --consume-request-file --idempotency-key {scenario}-run", "dialogue-run")
+        receipt = json.loads(last_tool_text(context))
+        if count == 3:
+            ids["runId"] = receipt["result"]["run"]["runId"]
+            return bash(model, f"python3 {shlex.quote(str(helper))} task-create --run-id {ids['runId']} --request-file {shlex.quote(str(task_request))} --consume-request-file --idempotency-key {scenario}-task", "dialogue-task")
+        if count == 4:
+            ids["taskId"] = receipt["result"]["task"]["taskId"]
+            return bash(model, f"python3 {shlex.quote(str(helper))} worker-start --task-id {ids['taskId']} --request-file {shlex.quote(str(worker_request))} --consume-request-file --idempotency-key {scenario}-worker", "dialogue-worker")
+        if count == 5:
+            worker_receipt.update(receipt["result"]["worker"])
+            ids["workerId"] = str(worker_receipt["workerId"])
+            return bash(model, f"python3 {shlex.quote(str(helper))} dispatch-start --task-id {ids['taskId']} --worker-id {ids['workerId']} --request-file {shlex.quote(str(first_dispatch_request))} --consume-request-file --idempotency-key {scenario}-dispatch-one", "dialogue-dispatch-one")
+        if count == 6:
+            ids["dispatchOne"] = receipt["result"]["dispatch"]["dispatchId"]
+            return bash(model, f"python3 {shlex.quote(str(helper))} message-check --run-id {ids['runId']} --wait-seconds 5 --limit 10", "dialogue-check-one")
+        if count == 7:
+            first_message = receipt["result"]["messages"][0]
+            ids["firstMessage"] = first_message["messageId"]
+            expected_kind = "question" if scenario == "question_reply" else "handoff"
+            assert first_message["kind"] == expected_kind
+            return bash(model, f"python3 {shlex.quote(str(helper))} message-ack --message-id {ids['firstMessage']} --idempotency-key {scenario}-ack-one", "dialogue-ack-one")
+        if count == 8:
+            assert receipt["result"]["message"]["acknowledgedAt"] is not None
+            if scenario == "question_reply":
+                return bash(model, f"python3 {shlex.quote(str(helper))} message-reply --message-id {ids['firstMessage']} --request-file {shlex.quote(str(reply_request))} --consume-request-file --idempotency-key question-reply", "dialogue-reply")
+            write_handoff("corrected answer after coordinator review")
+            correction_request = private_request(
+                "dialogue-correction.json",
+                {
+                    "prompt": "Correct the first answer with the missing evidence.",
+                    "context": ["The first packet was reviewed and acknowledged."],
+                    "requiredVerification": ["Return corrected evidence"],
+                    "parentMessageId": ids["firstMessage"],
+                },
+            )
+            return bash(model, f"python3 {shlex.quote(str(helper))} dispatch-start --task-id {ids['taskId']} --worker-id {ids['workerId']} --request-file {shlex.quote(str(correction_request))} --consume-request-file --idempotency-key correction-two", "dialogue-correction")
+        if count == 9:
+            if scenario == "question_reply":
+                assert receipt["result"]["message"]["kind"] == "reply"
+            else:
+                ids["dispatchTwo"] = receipt["result"]["dispatch"]["dispatchId"]
+                assert receipt["result"]["dispatch"]["parentMessageId"] == ids["firstMessage"]
+            return bash(model, f"python3 {shlex.quote(str(helper))} message-check --run-id {ids['runId']} --wait-seconds 5 --limit 10", "dialogue-check-final")
+        if count == 10:
+            final_message = receipt["result"]["messages"][0]
+            ids["finalMessage"] = final_message["messageId"]
+            assert final_message["kind"] == "handoff"
+            expected_summary = "final answer after coordinator reply" if scenario == "question_reply" else "corrected answer after coordinator review"
+            assert final_message["payload"]["summary"] == expected_summary
+            return bash(model, f"python3 {shlex.quote(str(helper))} message-ack --message-id {ids['finalMessage']} --idempotency-key {scenario}-ack-final", "dialogue-ack-final")
+        assert receipt["result"]["message"]["acknowledgedAt"] is not None
+        return text_response_events(model, f"Completed and acknowledged {scenario} in the same Travis worker session.")
+
+    register_api_provider(create_faux_provider(provider))
+    app = CodingApp(
+        cwd=str(repo),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=120, rows=35),
+        agent_dir=str(agent_dir),
+        project_trust_override=False,
+    )
+    try:
+        app.run_turn(f"Use orchestration for the {scenario} flow and acknowledge the final evidence.")
+        database = sqlite3.connect(agent_dir / "orchestration" / "state.sqlite3")
+        try:
+            kinds = tuple(
+                row[0]
+                for row in database.execute(
+                    "SELECT kind FROM messages ORDER BY created_at, message_id"
+                )
+            )
+            expected = ("question", "reply", "handoff") if scenario == "question_reply" else ("handoff", "handoff")
+            assert kinds == expected
+            assert database.execute("SELECT count(*) FROM messages WHERE sender = 'worker' AND acknowledged_at IS NULL").fetchone()[0] == 0
+            assert database.execute("SELECT prompt_count FROM tasks").fetchone()[0] == 2
+            assert database.execute("SELECT count(*) FROM workers").fetchone()[0] == 1
+        finally:
+            database.close()
+        assert git(repo, "rev-parse", "HEAD").stdout.strip() == coordinator_head
+        assert ids["workerId"] in "\n".join(app.tui.render(120)) or ids["workerId"] in str(app.messages)
+    finally:
+        app.close()
+        if worker_receipt:
+            try:
+                load_helper().RelayClient(Path(str(worker_receipt["socketPath"]))).request("close", timeout=3)
+            except Exception:
+                pass
+        subprocess.run(
+            [tmux_executable, "-L", server_name, "kill-server"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        shutil.rmtree(agent_dir, ignore_errors=True)
