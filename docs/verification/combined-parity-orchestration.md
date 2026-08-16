@@ -22,30 +22,39 @@ container build.
 ## Automated qualification
 
 - Final repository Python suite, with unhandled thread exceptions promoted to
-  errors: **2540 passed in 237.38 seconds**.
+  errors: **2544 passed in 237.07 seconds**.
 - npm launcher suite: **24 passed**; `npm run pack:dry-run` passed.
-- Generic MCP adapter suite: **125 passed in 14.10 seconds**.
+- Generic MCP adapter suite: **125 passed in 12.86 seconds**.
+- Final focused LSP, memory, terminal-input, and editor group:
+  **323 passed in 13.84 seconds**.
 - Combined resource/orchestration contract group after the final skill edit:
   **89 passed in 7.75 seconds**.
 - Earlier combined focused TUI group: **48 passed in 44.31 seconds**, including
   the deterministic 21-scenario orchestration coverage.
 - Twine accepted both root Python artifacts and both adapter Python artifacts.
+- A clean Python 3.13 environment installed the exact root and adapter wheels,
+  imported both packages as versions 2.4.6 and 0.1.3, and rendered
+  `travis234 --help`.
+- A clean npm prefix installed the exact npm tarball and rendered the packaged
+  launcher help without starting Docker.
 
 The final artifacts were built from clean source commit
-`79782bec3b4a90c74261279f8f2189d4605faa6c` into
-`/tmp/travis234-combined-final.JK5UC0`:
+`a90810894a151b19d60c3e0d549b5be95914e5d3` into
+`/tmp/travis234-combined-final.w9Yk6r`:
 
 | Artifact | SHA-256 |
 | --- | --- |
-| `travis234-2.4.6-py3-none-any.whl` | `6f7bc34f539e0864a318fb0e25e8e7d59d4aee6a24404a2404b0a76466e1f38f` |
-| `travis234-2.4.6.tar.gz` | `0d0b3d67f6667edaed745898ad09af0abe2e32596ddb0328da465276876a2856` |
-| `travis234_mcp_adapter-0.1.3-py3-none-any.whl` | `b105da4fc8027fd1f94fdf55404beaadf0e2e023ec32c56ccaffd7b2764d40d5` |
-| `travis234_mcp_adapter-0.1.3.tar.gz` | `75f7fbaafa87e016e2b6e3bee7c60e36c54493ab7bbbc4d498875f99609750df` |
+| `travis234-2.4.6-py3-none-any.whl` | `25fec2580fde3fc9208734b8057116d4944f3ab392f35e269c2e3f2ec190da26` |
+| `travis234-2.4.6.tar.gz` | `84c4a1cff8ebcc8840e8bcb2cf07c2d9db0c50fc4ac03a10fc397c45fcbe7480` |
+| `travis234_mcp_adapter-0.1.3-py3-none-any.whl` | `b6da816331fd7aa102826ce9419e3574b853ad814da7e0ac3c23f5e2e0fc0d71` |
+| `travis234_mcp_adapter-0.1.3.tar.gz` | `9361623c8d25d41b6b13a860ee86a7764e6ee996b10ff10a09c3fe9a051ac102` |
 | `htooayelwinict-travis234-2.4.6.tgz` | `36048aa0080d49d56ee8262bc79c4071f6446f0b8afe6b99baf710eb5e8176b6` |
 
 The installed Python wheel and npm tarball contain the same subagent skill
 payload, SHA-256
 `b3c609d543838f897ea4fb8462c677035e6407d6da13ecc6ea04a376d70acc04`.
+Their orchestration skill payloads also match, SHA-256
+`df996cb58844c540cc8f7f75d26c28695180187008849be0d840891a66444a5b`.
 
 ## Live native-TUI acceptance
 
