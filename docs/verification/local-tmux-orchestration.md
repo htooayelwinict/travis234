@@ -174,14 +174,14 @@ remained after scoring.
 ## Distribution and final verification
 
 Fresh candidate artifacts were built under the private temporary directory
-`/tmp/travis234-orchestration-candidate.WwCHhZ` and were not published:
+`/tmp/travis234-orchestration-qualified.G6ukNY` and were not published:
 
-- wheel SHA-256: `b662f2a683ba45368777fc2a2e76c2c00ff1be0dc9f4f96e4ba782d9aeb8fca4`
-- sdist SHA-256: `d7ab34870c24e5795aa64537a9a01c5c668a3781e7640ae8422d2170ed59bc7c`
-- npm tarball SHA-256: `80aec01d8416d5c9463eb3631df204d684a0e51bead25a236ab20b266876472c`
+- wheel SHA-256: `d8b24a4f29a58e24529129a17ec17a85294e1735f6a0fdb62c4c8e00cb43f505`
+- sdist SHA-256: `c27cceddcd4daa1f71e914eb566dfc5a4cc1201fffaa9442c84ab7ac0bef2e1c`
+- npm tarball SHA-256: `d3d78aa89aae1caff02ef448989fff44666908fe7bbb79d122eea71edd00a51a`
 - canonical skill SHA-256: `df996cb58844c540cc8f7f75d26c28695180187008849be0d840891a66444a5b`
 - canonical protocol SHA-256: `9e3238c241e013e47055bd553547171c376b3b54b9f243865aba374989cffb9a`
-- canonical helper SHA-256: `affb9de92c16a9111177eb47521592687baeecef209824a8605fa00b95cd5108`
+- canonical helper SHA-256: `a49f73f95d08a52c66a3b5458835aa34b0b60d05677cda8c6932f9b2d8e5e749`
 
 The Python/npm mirrors match byte-for-byte.
 
@@ -191,5 +191,24 @@ resources. An isolated exact-wheel install passed CLI help, returned the new
 Worker signature from `guide`, and passed a real tmux/fake-RPC lifecycle smoke
 with owner-private state and zero surviving test worker.
 
-Repository-level Python, npm, build, and final container results follow after
-their fresh completion gates.
+Fresh final non-container gates passed:
+
+- complete Python repository: **2019 passed in 206.90 seconds**;
+- focused orchestration suite: **67 passed**, including the 21-prompt matrix;
+- distribution contract: **11 passed**;
+- npm launcher/archive suite: **24 passed**;
+- both official skill validators: **PASS**;
+- wheel/sdist metadata, exact-wheel help/guide, and installed tmux/RPC smoke:
+  **PASS**.
+
+The first broad run found two stale contracts (brand compatibility and bundled
+skill inventory). A canonical trust import fixed the former but violated the
+standalone helper boundary in fixture directories; PDB evidence showed the
+resulting safe `internal_error`. The final implementation keeps the small
+mirrored trust check, explicitly classifies it as external-resource
+compatibility, and widens only the synthetic startup-classification test from
+0.4 to 1.5 seconds while its delayed fake remains 5 seconds. Five consecutive
+focused repetitions, the 21-prompt matrix, and the final full suite passed.
+
+The final local container smoke is recorded after its completion; no artifact
+has been published.
