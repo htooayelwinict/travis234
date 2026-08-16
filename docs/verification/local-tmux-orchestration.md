@@ -62,6 +62,7 @@ the bounded, redacted observations above were preserved.
 | Phase | Result | Prompt scenario | Focused evidence |
 |---|---|---|---|
 | 1 — package and lazy discovery | **PASS** | A faux-provider TUI turn answered an unrelated prompt while exposing the `orchestration` name and description only. The heading, body, and private-relay recipe were absent; no orchestration state or worktree appeared. | 14 focused Python tests and the broader 77-test phase suite passed; all 23 npm launcher tests passed; the package-directory npm dry-run contained exactly the three orchestration resources plus existing declared files, with no dotenv, state, or transcript entry. |
+| 2 — private durable state | **PASS** | A faux-provider Travis A explicitly loaded the skill and created visible Run/Task receipts, then a fresh coordinator recovered the same IDs. Receipts included supervised mode, ownership, acceptance criteria, four-round budget, and a safe next action. No Worker, worktree, tmux socket, or duplicate row appeared. | 13 helper tests passed, including permissions, SQLite pragmas, schema mismatch, strict request files, idempotency, status validation, and secret-safe single-frame failures. The combined helper/TUI suite passed 15 tests, and the Python/npm helper bytes matched. |
 
 The plan's root-level `npm pack --workspace` spelling was not applicable because
 the root manifest does not declare npm workspaces. Verification therefore ran
