@@ -243,6 +243,19 @@ def verify_parity_contracts(*, root: str | Path) -> dict[str, object]:
         "automaticRetention": False,
         "automaticInjection": False,
     }
+    report["nativeAcceleration"] = {
+        "baseline": "python",
+        "benchmarkAvailable": (
+            repository / "benchmarks" / "contract_parity_hotpaths.py"
+        ).is_file(),
+        "candidatePresent": False,
+        "decision": "retain_python",
+        "thresholds": {
+            "minimumSpeedup": 2.0,
+            "minimumWallShare": 0.05,
+            "maximumCoefficientOfVariation": 0.15,
+        },
+    }
     return report
 
 

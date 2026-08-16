@@ -148,6 +148,30 @@ of a third-party browser driver, OS accessibility behavior, or a vendor's
 security model. A real integration still requires separate platform tests and
 permission review; passing this gate grants no trust or policy bypass.
 
+## Native-acceleration evidence ownership
+
+- `benchmarks/contract_parity_hotpaths.py` measures the existing Python owners
+  for artifact verification, policy decisions, LSP framing, supervisor
+  snapshots, operation-journal writes, memory recall, and MCP result
+  conversion. It changes none of those owners.
+- Inputs and work-unit counts are deterministic. Warmups are excluded from
+  samples, correctness assertions run inside each case, and wall share uses a
+  measured mixed-contract workflow rather than an estimated production share.
+- `decide_native_gate()` is a pure decision edge. A candidate proceeds only
+  when its target has at least five percent measured wall share, both baseline
+  and candidate timing have coefficient of variation at most 0.15, median
+  speedup is at least 2.0x, and correctness plus conformance remain green.
+- Missing candidates retain Python. Invalid, unstable, slower, low-share, or
+  behaviorally regressed candidates are rejected. Passing is only a request
+  for packaging review, not permission to add a dependency or select a new
+  runtime path.
+
+The benchmark is evidence for where native code might earn its maintenance,
+build, supply-chain, and platform cost. It is not telemetry and does not claim
+the synthetic work-unit mix represents production frequency. Candidate timing
+must use the same inputs and units, and platform packaging remains a separate
+review even after the performance gate passes.
+
 ## Observe-only operation-journal ownership
 
 - `coding_agent/operations/store.py` owns the versioned SQLite schema,
@@ -202,3 +226,6 @@ be triggered by TUI inspection.
   null counts for unopened storage, and explicit false automatic-retention and
   automatic-injection flags only. It excludes facts, queries, tags, project
   identity, session identity, and credentials.
+- Native-acceleration acceptance output declares only the Python baseline,
+  benchmark availability, absent-candidate decision, and fixed thresholds. It
+  imports no optional native module and changes no dependency or runtime path.

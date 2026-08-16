@@ -111,6 +111,17 @@ def test_parity_report_has_only_resolved_evidence() -> None:
         "automaticRetention": False,
         "automaticInjection": False,
     }
+    assert report["nativeAcceleration"] == {
+        "baseline": "python",
+        "benchmarkAvailable": True,
+        "candidatePresent": False,
+        "decision": "retain_python",
+        "thresholds": {
+            "minimumSpeedup": 2.0,
+            "minimumWallShare": 0.05,
+            "maximumCoefficientOfVariation": 0.15,
+        },
+    }
 
     encoded = json.dumps(
         {
@@ -118,6 +129,7 @@ def test_parity_report_has_only_resolved_evidence() -> None:
             "subagentSupervisor": report["subagentSupervisor"],
             "operationJournal": report["operationJournal"],
             "memory": report["memory"],
+            "nativeAcceleration": report["nativeAcceleration"],
         },
         sort_keys=True,
     )
