@@ -104,3 +104,67 @@ def test_role_reload_replaces_snapshot_atomically(tmp_path: Path) -> None:
 
     assert second.generation == first.generation + 1
     assert loader.get_agent_roles().get("worker").description == "two"
+
+
+def test_loader_discovers_bounded_builtin_coordination_planner(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    loader = DefaultResourceLoader(
+        cwd=str(project),
+        agent_dir=str(tmp_path / "agent"),
+        project_trusted=False,
+    )
+
+    loader.reload()
+
+    planner = loader.get_agent_roles().get("coordination-planner")
+    assert planner is not None
+    assert planner.source.source == "builtin"
+    assert planner.source.scope == "builtin"
+    assert planner.source.origin == "package"
+    assert planner.model_role == "reviewer"
+    assert planner.allowed_tools == ("read", "grep", "find", "ls")
+    assert planner.allowed_effects == ("read",)
+    assert planner.can_spawn is False
+    assert planner.default_timeout_seconds == 120
+    assert planner.artifact_policy == "none"
+
+
+def test_trusted_project_coordination_planner_overrides_builtin_candidate(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    project_role = project / ".travis234" / "roles" / "coordination-planner.json"
+    _write_role(project_role, "coordination-planner", "trusted project planner")
+    loader = DefaultResourceLoader(
+        cwd=str(project),
+        agent_dir=str(tmp_path / "agent"),
+        project_trusted=True,
+    )
+
+    loader.reload()
+
+    planner = loader.get_agent_roles().get("coordination-planner")
+    assert planner is not None
+    assert planner.description == "trusted project planner"
+    resolution = loader.get_capability_snapshot().resolve(
+        CapabilityKind.AGENT_ROLE, "coordination-planner"
+    )
+    assert [candidate.source.scope for candidate in resolution.candidates] == [
+        "project",
+        "builtin",
+    ]
+
+
+def test_no_agent_roles_omits_builtin_coordination_planner(tmp_path: Path) -> None:
+    loader = DefaultResourceLoader(
+        cwd=str(tmp_path),
+        agent_dir=str(tmp_path / "agent"),
+        project_trusted=False,
+        no_agent_roles=True,
+    )
+
+    loader.reload()
+
+    assert loader.get_agent_roles().get("coordination-planner") is None

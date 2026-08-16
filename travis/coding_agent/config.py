@@ -47,6 +47,12 @@ def get_packaged_skills_path() -> str:
     return _packaged_resource_path("skills")
 
 
+def get_packaged_roles_path() -> str:
+    """Return the installed read-only built-in role directory."""
+
+    return _packaged_resource_path("roles")
+
+
 def get_share_viewer_url(gist_id: str) -> str:
     base_url = os.environ.get("TRAVIS234_SHARE_VIEWER_URL") or DEFAULT_SHARE_VIEWER_URL
     return f"{base_url}#{gist_id}"

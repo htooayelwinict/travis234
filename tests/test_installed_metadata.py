@@ -44,6 +44,15 @@ def test_packaged_builtin_skills_exist() -> None:
     assert (skills_root / "orchestration" / "scripts" / "orchestrate.py").is_file()
 
 
+def test_packaged_coordination_planner_role_exists() -> None:
+    from travis.coding_agent.config import get_packaged_roles_path
+
+    roles_root = Path(get_packaged_roles_path())
+
+    assert roles_root.is_dir()
+    assert (roles_root / "coordination-planner.json").is_file()
+
+
 def test_session_directory_has_an_independent_hard_cutover_override(
     tmp_path: Path,
     monkeypatch,

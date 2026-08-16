@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import tarfile
 import tomllib
 import zipfile
 from email.parser import Parser
@@ -23,6 +24,7 @@ def test_python_distribution_names_only_travis234() -> None:
     assert metadata["tool"]["setuptools"]["package-data"]["travis"] == [
         "resources/**/*.md",
         "resources/skills/**/*.py",
+        "resources/roles/*.json",
     ]
 
 
@@ -32,6 +34,7 @@ def test_npm_distribution_names_only_travis234() -> None:
     package = json.loads((ROOT / "packages/travis234-cli/package.json").read_text(encoding="utf-8"))
     assert package["name"] == "@htooayelwinict/travis234"
     assert package["bin"] == {"travis234": "bin/travis234.js"}
+    assert "roles/**/*.json" in package["files"]
 
 
 def test_release_versions_are_aligned() -> None:
@@ -116,7 +119,7 @@ def test_retired_ghost_addon_has_no_active_product_surface() -> None:
 def test_root_wheel_distribution_excludes_optional_mcp_packages(tmp_path: Path) -> None:
     output = tmp_path / "dist"
     subprocess.run(
-        ["uv", "build", "--wheel", "--clear", "-o", str(output), str(ROOT)],
+        ["uv", "build", "--wheel", "--sdist", "--clear", "-o", str(output), str(ROOT)],
         check=True,
         capture_output=True,
         text=True,
@@ -135,10 +138,19 @@ def test_root_wheel_distribution_excludes_optional_mcp_packages(tmp_path: Path) 
     assert not any("travis234-ghost-mcp" in item for item in requirements)
     assert not any("ghost_mcp" in name or "ghost-os" in name for name in names)
     assert {
+        "travis/resources/roles/coordination-planner.json",
         "travis/resources/skills/orchestration/SKILL.md",
         "travis/resources/skills/orchestration/references/protocol.md",
         "travis/resources/skills/orchestration/scripts/orchestrate.py",
     } <= set(names)
+
+    sdist = next(output.glob("*.tar.gz"))
+    with tarfile.open(sdist, "r:gz") as archive:
+        sdist_names = archive.getnames()
+    assert any(
+        name.endswith("/travis/resources/roles/coordination-planner.json")
+        for name in sdist_names
+    )
 
 
 def test_packaged_builtin_skills_match_npm_distribution() -> None:
@@ -161,6 +173,23 @@ def test_packaged_builtin_skills_match_npm_distribution() -> None:
         "orchestration/references/protocol.md",
         "orchestration/scripts/orchestrate.py",
     } <= python_files.keys()
+
+
+def test_packaged_builtin_roles_match_npm_distribution() -> None:
+    python_roles = ROOT / "travis" / "resources" / "roles"
+    npm_roles = ROOT / "packages" / "travis234-cli" / "roles"
+
+    python_files = {
+        path.relative_to(python_roles).as_posix(): path.read_bytes()
+        for path in python_roles.rglob("*.json")
+    }
+    npm_files = {
+        path.relative_to(npm_roles).as_posix(): path.read_bytes()
+        for path in npm_roles.rglob("*.json")
+    }
+
+    assert npm_files == python_files
+    assert "coordination-planner.json" in python_files
 
 
 def test_repository_has_one_sandbox_launcher_implementation() -> None:

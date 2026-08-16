@@ -67,3 +67,26 @@ coordination skill without revealing the desired implementation.
 The command controls and natural-language pressure controls provide the RED
 evidence required before authoring the coordination skill. No skill prose or
 coordination production code existed during these runs.
+
+## Phase 1: parser, semantic validator, and planner role
+
+The pure coordination parser/semantic validator and typed-result settlement
+hook passed **124** parser/subagent-neighborhood tests. The packaged planner
+resource then passed **10** focused discovery/distribution/TUI tests, **39**
+complete role/distribution-neighborhood tests, **2** focused typed-role tool
+tests, and all **24** npm launcher tests. Python and npm planner JSON are
+byte-identical.
+
+The deterministic fake-terminal gate proved that the ordinary system/tool
+prompt exposes only `coordination-planner` and its bounded description. It does
+not expose the result schema, approval/stop fields, or coordination workflow,
+and an unrelated turn creates no subagent task.
+
+The real native-TUI gate used session
+`dfb1e93a5ef5474a9c71db9d1687728e`, MiniMax M3 with medium thinking, and
+sanitized evidence `evidence-09`. The prompt asked for a three-line README
+explanation with no subagents or edits. **PASS:** it used two reads and one
+finite shell inspection, returned the requested three lines, emitted the normal
+`tui_ready` → `turn_start` → `turn_end` → `turn_ready` lifecycle, spawned no
+child, and changed no file. The role therefore remains passive until explicitly
+selected by the future coordination skill.

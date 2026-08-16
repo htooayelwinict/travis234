@@ -38,6 +38,7 @@ include = ["travis*"]
 "travis" = [
   "resources/**/*.md",
   "resources/skills/**/*.py",
+  "resources/roles/*.json",
 ]
 
 [tool.pytest.ini_options]

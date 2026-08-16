@@ -12,7 +12,7 @@ from travis.coding_agent.capabilities import (
     CapabilityProviderResult,
     CapabilityRecord,
 )
-from travis.coding_agent.config import get_packaged_skills_path
+from travis.coding_agent.config import get_packaged_roles_path, get_packaged_skills_path
 from travis.coding_agent.agent_roles import load_agent_roles
 from travis.coding_agent.package_manager import ResolvedPaths
 from travis.coding_agent.prompt_templates import load_prompt_templates
@@ -238,6 +238,19 @@ def build_resource_content(
         )
         for resource in resources
     }
+    packaged_roles_path = get_packaged_roles_path()
+    builtin_role_paths = (
+        []
+        if request.no_agent_roles
+        else collect_resource_files(Path(packaged_roles_path), "roles")
+    )
+    for role_path in builtin_role_paths:
+        metadata_by_path[str(role_path)] = {
+            "source": "builtin",
+            "scope": "builtin",
+            "origin": "package",
+            "baseDir": packaged_roles_path,
+        }
     skill_paths = _merge_paths(
         request.cwd,
         [item.path for item in request.resolved_paths.skills if item.enabled],
@@ -260,7 +273,7 @@ def build_resource_content(
     role_paths = _merge_paths(
         request.cwd,
         [item.path for item in request.resolved_paths.roles if item.enabled],
-        list(request.additional_role_paths),
+        [*request.additional_role_paths, *(str(path) for path in builtin_role_paths)],
     )
     skills_result = _load_skills_result(
         request.cwd,

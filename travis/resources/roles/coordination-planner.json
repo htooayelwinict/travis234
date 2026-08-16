@@ -1,0 +1,144 @@
+{
+  "name": "coordination-planner",
+  "description": "Produce one bounded read-only coordination recommendation for a complex or forced coordination request.",
+  "modelRole": "reviewer",
+  "allowedTools": ["read", "grep", "find", "ls"],
+  "allowedEffects": ["read"],
+  "canSpawn": false,
+  "maxDepth": 1,
+  "skills": [],
+  "context": [],
+  "defaultTimeoutSeconds": 120,
+  "artifactPolicy": "none",
+  "resultSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "route",
+      "rationale",
+      "tasks",
+      "dependencies",
+      "ownership",
+      "risks",
+      "approvalGates",
+      "verification",
+      "stopConditions"
+    ],
+    "properties": {
+      "route": {"enum": ["direct", "subagents", "travis-b", "mixed"]},
+      "rationale": {"type": "string", "minLength": 1, "maxLength": 800},
+      "tasks": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 6,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "objective", "owner"],
+          "properties": {
+            "id": {"type": "string", "pattern": "^task-[a-z0-9-]{1,32}$"},
+            "objective": {"type": "string", "minLength": 1, "maxLength": 600},
+            "owner": {"enum": ["parent", "subagent", "travis-b"]}
+          }
+        }
+      },
+      "dependencies": {
+        "type": "array",
+        "maxItems": 15,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["before", "after"],
+          "properties": {
+            "before": {"type": "string", "pattern": "^task-[a-z0-9-]{1,32}$"},
+            "after": {"type": "string", "pattern": "^task-[a-z0-9-]{1,32}$"}
+          }
+        }
+      },
+      "ownership": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 6,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["taskId", "access", "scopes"],
+          "properties": {
+            "taskId": {"type": "string", "pattern": "^task-[a-z0-9-]{1,32}$"},
+            "access": {"enum": ["read", "write"]},
+            "scopes": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 12,
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 1, "maxLength": 300}
+            }
+          }
+        }
+      },
+      "risks": {
+        "type": "array",
+        "maxItems": 8,
+        "items": {"type": "string", "minLength": 1, "maxLength": 400}
+      },
+      "approvalGates": {
+        "type": "array",
+        "maxItems": 8,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "condition"],
+          "properties": {
+            "kind": {
+              "enum": [
+                "tool-policy",
+                "commit",
+                "integrate",
+                "push",
+                "publish",
+                "deploy",
+                "delete",
+                "external-write",
+                "trust",
+                "memory-retain",
+                "replay"
+              ]
+            },
+            "condition": {"type": "string", "minLength": 1, "maxLength": 400}
+          }
+        }
+      },
+      "verification": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 6,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["taskId", "evidence"],
+          "properties": {
+            "taskId": {"type": "string", "pattern": "^task-[a-z0-9-]{1,32}$"},
+            "evidence": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "items": {"type": "string", "minLength": 1, "maxLength": 400}
+            }
+          }
+        }
+      },
+      "stopConditions": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["success", "failure", "cancellation", "blocker"],
+        "properties": {
+          "success": {"type": "string", "minLength": 1, "maxLength": 400},
+          "failure": {"type": "string", "minLength": 1, "maxLength": 400},
+          "cancellation": {"type": "string", "minLength": 1, "maxLength": 400},
+          "blocker": {"type": "string", "minLength": 1, "maxLength": 400}
+        }
+      }
+    }
+  }
+}

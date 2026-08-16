@@ -3,9 +3,11 @@ from __future__ import annotations
 import travis.coding_agent.system_prompt as system_prompt_module
 
 from tests._support_coding_agent import *  # noqa: F403
+from travis.app import CodingApp
 from travis.coding_agent.capabilities import CapabilityReloadError
 from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.skills import format_skills_for_prompt
+from travis.tui.terminal import FakeTerminal
 
 
 def loaded_resource_loader(tmp_path: Path) -> DefaultResourceLoader:
@@ -180,6 +182,48 @@ def test_no_skills_omits_packaged_builtin_skills(tmp_path: Path) -> None:
     loader.reload({"projectTrustOverride": False})
 
     assert loader.get_skills()["skills"] == []
+
+
+def test_phase_one_tui_exposes_only_bounded_planner_metadata(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    agent_dir = tmp_path / "agent"
+    loader = DefaultResourceLoader(
+        cwd=str(project),
+        agent_dir=str(agent_dir),
+        project_trusted=False,
+    )
+    loader.reload({"projectTrustOverride": False})
+    register_api_provider(
+        create_faux_provider(
+            lambda model, _context: text_response_events(model, "unrelated response")
+        )
+    )
+    app = CodingApp(
+        cwd=str(project),
+        agent_dir=str(agent_dir),
+        model=faux_model(),
+        terminal=FakeTerminal(),
+        enable_tui=True,
+        project_trust_override=False,
+        initial_resource_loader=loader,
+    )
+
+    try:
+        prompt = app.session.system_prompt
+        assert "coordination-planner" in prompt
+        assert "Produce one bounded read-only coordination recommendation" in prompt
+        assert '"approvalGates"' not in prompt
+        assert '"stopConditions"' not in prompt
+        assert "Route and execute" not in prompt
+
+        app.run_turn("Reply with the unrelated response and use no tools.")
+
+        assert app.session.subagents.list_tasks() == []
+    finally:
+        app.close()
 
 
 def test_user_skill_overrides_packaged_builtin_with_same_name(tmp_path: Path) -> None:

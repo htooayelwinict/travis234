@@ -11,6 +11,7 @@
     "bin/travis234.js",
     "skills/**/*.md",
     "skills/**/*.py",
+    "roles/**/*.json",
     "README.md",
     "package.json"
   ],

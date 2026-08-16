@@ -26,13 +26,14 @@ test("package exposes travis234 binaries only", () => {
     "bin/travis234.js",
     "skills/**/*.md",
     "skills/**/*.py",
+    "roles/**/*.json",
     "README.md",
     "package.json",
   ]);
   assert.equal(fs.existsSync(path.join(packageRoot, packageJson.bin.travis234)), true);
 });
 
-test("npm archive contains the complete orchestration skill", () => {
+test("npm archive contains complete built-in coordination resources", () => {
   const destination = fs.mkdtempSync(path.join(os.tmpdir(), "travis234-orchestration-pack-"));
   try {
     const packed = spawnSync("npm", ["pack", "--json", "--pack-destination", destination], {
@@ -48,6 +49,7 @@ test("npm archive contains the complete orchestration skill", () => {
     assert.equal(members.has("package/skills/orchestration/SKILL.md"), true);
     assert.equal(members.has("package/skills/orchestration/references/protocol.md"), true);
     assert.equal(members.has("package/skills/orchestration/scripts/orchestrate.py"), true);
+    assert.equal(members.has("package/roles/coordination-planner.json"), true);
   } finally {
     fs.rmSync(destination, { recursive: true, force: true });
   }
