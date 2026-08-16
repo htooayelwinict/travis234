@@ -89,6 +89,9 @@ def test_guide_emits_one_stable_versioned_json_envelope() -> None:
             "task-create",
             "task-show",
             "task-list",
+            "worker-start",
+            "worker-show",
+            "worker-list",
         ],
         "invocation": "python3 scripts/orchestrate.py <command> [arguments]",
     }

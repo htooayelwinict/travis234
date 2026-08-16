@@ -2,18 +2,24 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
+import queue
 import re
 import secrets
+import shlex
+import socket
 import sqlite3
 import stat
+import struct
 import subprocess
 import sys
+import threading
+import time
 from typing import Iterator, Sequence
 
 
@@ -97,6 +103,35 @@ SECRET_VALUE_PATTERNS = (
 )
 IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 WORKTREE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+RELAY_ACTIONS = {"health", "state", "configure_dispatch", "prompt", "abort", "close"}
+ACTIVE_WORKER_STATUSES = {
+    "starting",
+    "ready",
+    "busy",
+    "idle",
+    "retained",
+    "outcome_unknown",
+}
+WORKER_START_KEYS = {
+    "repository",
+    "workspaceMode",
+    "worktreeName",
+    "branch",
+    "base",
+    "dotenvPath",
+    "model",
+    "thinking",
+}
+TRUST_REQUIRING_PROJECT_RESOURCES = (
+    "settings.json",
+    "extensions",
+    "skills",
+    "prompts",
+    "themes",
+    "SYSTEM.md",
+    "APPEND_SYSTEM.md",
+)
+MAX_RELAY_FRAME_BYTES = MAX_REQUEST_BYTES
 
 GUIDE_COMMANDS = [
     "guide",
@@ -106,6 +141,9 @@ GUIDE_COMMANDS = [
     "task-create",
     "task-show",
     "task-list",
+    "worker-start",
+    "worker-show",
+    "worker-list",
 ]
 
 
@@ -150,6 +188,239 @@ class RepositoryInspection:
     head_commit: str
     branch: str | None
     dirty: bool
+
+
+@dataclass(frozen=True)
+class WorkerStartRequest:
+    repository: Path | str
+    workspace_mode: str
+    worktree_name: str | None = None
+    branch: str | None = None
+    base: str | None = None
+    dotenv_path: Path | str | None = None
+    model: str | None = None
+    thinking: str | None = None
+
+
+@dataclass(frozen=True)
+class WorkerRecord:
+    worker_id: str
+    run_id: str
+    workspace: str | None
+    repository: str | None
+    branch: str | None
+    base_commit: str | None
+    worktree_path: str | None
+    tmux_session: str
+    socket_path: str
+    travis_session_id: str | None
+    status: str
+    retained: bool
+    protocol_version: int
+    created_at: str
+    updated_at: str
+    effect: str = "created"
+    dirty: bool | None = None
+    uncommitted_changes_transferred: bool | None = None
+    automatic_integration: bool = False
+
+    def to_dict(self) -> dict[str, object]:
+        result: dict[str, object] = {
+            "workerId": self.worker_id,
+            "runId": self.run_id,
+            "workspace": self.workspace,
+            "repository": self.repository,
+            "branch": self.branch,
+            "baseCommit": self.base_commit,
+            "worktree": self.worktree_path,
+            "tmuxSession": self.tmux_session,
+            "socketPath": self.socket_path,
+            "travisSessionId": self.travis_session_id,
+            "status": self.status,
+            "retained": self.retained,
+            "protocolVersion": self.protocol_version,
+            "createdAt": self.created_at,
+            "updatedAt": self.updated_at,
+            "automaticIntegration": self.automatic_integration,
+        }
+        if self.dirty is not None:
+            result["dirty"] = self.dirty
+        if self.uncommitted_changes_transferred is not None:
+            result["uncommittedChangesTransferred"] = self.uncommitted_changes_transferred
+        return result
+
+
+def worker_digest(worker_id: str) -> str:
+    validate_id("worker", worker_id)
+    return hashlib.sha256(worker_id.encode("utf-8")).hexdigest()
+
+
+def tmux_name(worker_id: str) -> str:
+    return f"travis234-orch-{worker_digest(worker_id)[:16]}"
+
+
+def socket_path(root: Path, worker_id: str) -> Path:
+    path = root / "sockets" / f"{worker_digest(worker_id)[:24]}.sock"
+    if len(str(path).encode()) >= MAX_UNIX_SOCKET_PATH_BYTES:
+        raise HelperError(
+            "socket_path_too_long",
+            "Orchestration socket path is too long for the configured agent directory",
+            next_actions=(
+                "Use the existing TRAVIS234_CODING_AGENT_DIR override with a shorter path.",
+            ),
+        )
+    return path
+
+
+def _safe_launch_text(value: str | None, field: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value or len(value) > 4096 or any(
+        character in value for character in "\x00\r\n"
+    ):
+        raise HelperError("invalid_request", f"Worker {field} is invalid")
+    return value
+
+
+def worker_request_from_json(request: dict[str, object], state: StateStore) -> WorkerStartRequest:
+    reject_secret_like(request, state)
+    required = {"repository", "workspaceMode"}
+    if set(request) - WORKER_START_KEYS or not required <= set(request):
+        raise HelperError("invalid_request", "Worker request has unknown or missing fields")
+    repository = _safe_launch_text(request.get("repository"), "repository")
+    workspace_mode = request.get("workspaceMode")
+    if workspace_mode not in {"current", "worktree"}:
+        raise HelperError("invalid_request", "Worker workspace mode is invalid")
+    worktree_name = _safe_launch_text(request.get("worktreeName"), "worktree name")
+    branch = _safe_launch_text(request.get("branch"), "branch")
+    base = _safe_launch_text(request.get("base"), "base")
+    if workspace_mode == "worktree" and not all((worktree_name, branch, base)):
+        raise HelperError("invalid_request", "Worktree worker fields are required")
+    if workspace_mode == "current" and any((worktree_name, branch)):
+        raise HelperError("invalid_request", "Current workspace cannot create a branch or path")
+    dotenv = _safe_launch_text(request.get("dotenvPath"), "dotenv path")
+    model = _safe_launch_text(request.get("model"), "model")
+    thinking = _safe_launch_text(request.get("thinking"), "thinking level")
+    assert repository is not None
+    return WorkerStartRequest(
+        repository=repository,
+        workspace_mode=workspace_mode,
+        worktree_name=worktree_name,
+        branch=branch,
+        base=base,
+        dotenv_path=dotenv,
+        model=model,
+        thinking=thinking,
+    )
+
+
+def read_project_trust_entry(cwd: Path | str) -> bool | None:
+    path = agent_dir() / "trust.json"
+    if not path.exists():
+        data: object = {}
+    else:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise HelperError("invalid_trust_store", "Persisted project trust is invalid") from exc
+    if not isinstance(data, dict):
+        raise HelperError("invalid_trust_store", "Persisted project trust is invalid")
+    for key, decision in data.items():
+        valid_decision = decision is True or decision is False or decision is None
+        if not isinstance(key, str) or not valid_decision:
+            raise HelperError("invalid_trust_store", "Persisted project trust is invalid")
+    current = Path(cwd).expanduser().resolve()
+    while True:
+        decision = data.get(str(current))
+        if decision is True or decision is False:
+            return decision
+        if current.parent == current:
+            return None
+        current = current.parent
+
+
+def has_trust_requiring_project_resources_mirror(cwd: Path | str) -> bool:
+    current = Path(cwd).expanduser().resolve()
+    config_dir = current / ".travis234"
+    if any((config_dir / entry).exists() for entry in TRUST_REQUIRING_PROJECT_RESOURCES):
+        return True
+    user_skills = (Path.home().expanduser().resolve() / ".agents" / "skills").resolve()
+    while True:
+        candidate = (current / ".agents" / "skills").resolve()
+        if candidate != user_skills and candidate.exists():
+            return True
+        if current.parent == current:
+            return False
+        current = current.parent
+
+
+@dataclass(frozen=True)
+class TmuxClient:
+    command: tuple[str, ...] = ("tmux",)
+
+    def ensure_available(self) -> None:
+        try:
+            completed = subprocess.run(
+                [*self.command, "-V"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise HelperError("tmux_unavailable", "tmux is unavailable") from exc
+        if completed.returncode != 0:
+            raise HelperError("tmux_unavailable", "tmux is unavailable")
+
+    def has_session(self, name: str) -> bool:
+        try:
+            completed = subprocess.run(
+                [*self.command, "has-session", "-t", name],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        return completed.returncode == 0
+
+    def start_relay(self, name: str, workspace: Path, launch_file: Path, worker_id: str) -> None:
+        for value in (name, str(workspace), str(launch_file), worker_id):
+            if any(character in value for character in "\x00\r\n"):
+                raise HelperError("invalid_request", "Relay launch value is invalid")
+        if self.has_session(name):
+            raise HelperError("worker_conflict", "Worker tmux session already exists")
+        relay_command = shlex.join(
+            [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "_relay",
+                "--worker-id",
+                worker_id,
+                "--launch-file",
+                str(launch_file),
+            ]
+        )
+        try:
+            subprocess.run(
+                [
+                    *self.command,
+                    "new-session",
+                    "-d",
+                    "-s",
+                    name,
+                    "-c",
+                    str(workspace),
+                    relay_command,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            raise HelperError("worker_start_failed", "tmux relay could not be started") from exc
 
 
 def git(
@@ -417,6 +688,487 @@ def prepare_workspace(request: WorktreeRequest) -> dict[str, object]:
         worktree=target,
         branch=request.branch,
     )
+
+
+def _write_private_json(path: Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(path.parent, 0o700)
+    encoded = (_canonical_json(value) + "\n").encode("utf-8")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        os.write(descriptor, encoded)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    os.chmod(path, 0o600)
+
+
+def _append_private_jsonl(path: Path, value: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(path.parent, 0o700)
+    encoded = (_canonical_json(value) + "\n").encode("utf-8")
+    descriptor = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    try:
+        os.write(descriptor, encoded)
+    finally:
+        os.close(descriptor)
+    os.chmod(path, 0o600)
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return
+    if size <= MAX_TRANSCRIPT_BYTES:
+        return
+    with path.open("rb") as source:
+        source.seek(max(0, size - TRANSCRIPT_TAIL_BYTES))
+        tail = source.read(TRANSCRIPT_TAIL_BYTES)
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.write(descriptor, tail)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    os.replace(temporary, path)
+    os.chmod(path, 0o600)
+
+
+class RpcChild:
+    def __init__(
+        self,
+        *,
+        workspace: Path,
+        dotenv_path: str | None,
+        model: str | None,
+        thinking: str | None,
+        session_id: str | None,
+        no_approve: bool,
+        original_umask: int,
+        rpc_log: Path,
+        stderr_log: Path,
+    ) -> None:
+        command = ["travis234", "--cwd", str(workspace)]
+        if dotenv_path is not None:
+            command += ["--dotenv", dotenv_path]
+        if model is not None:
+            command += ["--model", model]
+        if thinking is not None:
+            command += ["--thinking", thinking]
+        if session_id is not None:
+            command += ["--session", session_id]
+        if no_approve:
+            command.append("--no-approve")
+        command += ["--mode", "rpc"]
+        try:
+            self.process = subprocess.Popen(
+                command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                cwd=workspace,
+                env=os.environ.copy(),
+                umask=original_umask,
+            )
+        except OSError as exc:
+            raise HelperError("worker_start_failed", "Travis RPC executable is unavailable") from exc
+        self.rpc_log = rpc_log
+        self.stderr_log = stderr_log
+        self._pending: dict[str, queue.Queue[object]] = {}
+        self._pending_lock = threading.Lock()
+        self._write_lock = threading.Lock()
+        self._fatal: HelperError | None = None
+        self._stdout_thread = threading.Thread(
+            target=self._read_stdout,
+            name="travis234-orchestration-rpc-stdout",
+            daemon=True,
+        )
+        self._stderr_thread = threading.Thread(
+            target=self._read_stderr,
+            name="travis234-orchestration-rpc-stderr",
+            daemon=True,
+        )
+        self._stdout_thread.start()
+        self._stderr_thread.start()
+
+    def _metadata(self, direction: str, frame: dict[str, object]) -> dict[str, object]:
+        result = frame.get("result")
+        error = frame.get("error")
+        event = frame.get("event")
+        metadata: dict[str, object] = {
+            "timestamp": utc_now(),
+            "direction": direction,
+            "requestId": frame.get("id"),
+        }
+        if "method" in frame:
+            metadata["method"] = frame["method"]
+        if isinstance(event, dict):
+            metadata["eventType"] = event.get("type")
+            metadata["status"] = "event"
+        elif isinstance(error, dict):
+            metadata["status"] = "error"
+            metadata["errorCode"] = error.get("code")
+        elif isinstance(result, dict):
+            metadata["status"] = "result"
+            if isinstance(result.get("stopReason"), str):
+                metadata["stopReason"] = result["stopReason"]
+        return metadata
+
+    def _set_fatal(self, error: HelperError) -> None:
+        with self._pending_lock:
+            if self._fatal is None:
+                self._fatal = error
+            queues = list(self._pending.values())
+        for pending in queues:
+            pending.put(error)
+
+    def _read_stdout(self) -> None:
+        assert self.process.stdout is not None
+        try:
+            for raw_line in self.process.stdout:
+                try:
+                    frame = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    self._set_fatal(
+                        HelperError("worker_start_failed", "Travis RPC emitted malformed output")
+                    )
+                    return
+                if not isinstance(frame, dict):
+                    self._set_fatal(
+                        HelperError("worker_start_failed", "Travis RPC emitted an invalid frame")
+                    )
+                    return
+                _append_private_jsonl(self.rpc_log, self._metadata("in", frame))
+                request_id = frame.get("id")
+                if not isinstance(request_id, str) or "event" in frame:
+                    continue
+                with self._pending_lock:
+                    pending = self._pending.get(request_id)
+                if pending is not None:
+                    pending.put(frame)
+        finally:
+            if self.process.poll() is None:
+                return
+            self._set_fatal(
+                HelperError("worker_start_failed", "Travis RPC exited before replying")
+            )
+
+    def _read_stderr(self) -> None:
+        assert self.process.stderr is not None
+        for raw_line in self.process.stderr:
+            encoded = raw_line.encode("utf-8", errors="replace")
+            _append_private_jsonl(
+                self.stderr_log,
+                {
+                    "category": "stderr",
+                    "bytes": len(encoded),
+                    "sha256": hashlib.sha256(encoded).hexdigest(),
+                    "contentOmitted": True,
+                },
+            )
+
+    def request(
+        self,
+        method: str,
+        params: dict[str, object] | None = None,
+        *,
+        timeout: float,
+    ) -> dict[str, object]:
+        with self._pending_lock:
+            if self._fatal is not None:
+                raise self._fatal
+            request_id = f"rpc-{secrets.token_hex(12)}"
+            pending: queue.Queue[object] = queue.Queue(maxsize=2)
+            self._pending[request_id] = pending
+        frame = {"id": request_id, "method": method, "params": params or {}}
+        _append_private_jsonl(self.rpc_log, self._metadata("out", frame))
+        try:
+            with self._write_lock:
+                if self.process.stdin is None or self.process.poll() is not None:
+                    raise HelperError("worker_start_failed", "Travis RPC is not running")
+                self.process.stdin.write(_canonical_json(frame) + "\n")
+                self.process.stdin.flush()
+            try:
+                response = pending.get(timeout=timeout)
+            except queue.Empty as exc:
+                raise HelperError("worker_start_timeout", "Travis RPC response timed out") from exc
+            if isinstance(response, HelperError):
+                raise response
+            if not isinstance(response, dict):
+                raise HelperError("worker_start_failed", "Travis RPC response is invalid")
+            error = response.get("error")
+            if isinstance(error, dict):
+                raise HelperError("rpc_error", "Travis RPC returned an error")
+            result = response.get("result")
+            if not isinstance(result, dict):
+                raise HelperError("worker_start_failed", "Travis RPC result is invalid")
+            return result
+        finally:
+            with self._pending_lock:
+                self._pending.pop(request_id, None)
+
+    def shutdown(self) -> None:
+        if self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=2)
+
+
+def _receive_exact(connection: socket.socket, size: int) -> bytes:
+    chunks: list[bytes] = []
+    remaining = size
+    while remaining:
+        chunk = connection.recv(remaining)
+        if not chunk:
+            raise HelperError("relay_frame_error", "Relay frame ended early")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def _receive_frame(connection: socket.socket) -> dict[str, object]:
+    header = _receive_exact(connection, 4)
+    size = struct.unpack("!I", header)[0]
+    if size < 2 or size > MAX_RELAY_FRAME_BYTES:
+        raise HelperError("relay_frame_error", "Relay frame size is invalid")
+    try:
+        value = json.loads(_receive_exact(connection, size).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HelperError("relay_frame_error", "Relay frame JSON is invalid") from exc
+    if not isinstance(value, dict):
+        raise HelperError("relay_frame_error", "Relay frame must be an object")
+    return value
+
+
+def _send_frame(connection: socket.socket, value: dict[str, object]) -> None:
+    encoded = _canonical_json(value).encode("utf-8")
+    if len(encoded) > MAX_RELAY_FRAME_BYTES:
+        raise HelperError("relay_frame_error", "Relay response exceeds the frame limit")
+    connection.sendall(struct.pack("!I", len(encoded)) + encoded)
+
+
+class RelayServer:
+    def __init__(self, worker_id: str, launch: dict[str, object]) -> None:
+        self.worker_id = validate_id("worker", worker_id)
+        expected_keys = {
+            "workerId",
+            "workspace",
+            "socketPath",
+            "dotenvPath",
+            "model",
+            "thinking",
+            "sessionId",
+            "noApprove",
+            "originalUmask",
+            "rpcLogPath",
+            "stderrLogPath",
+        }
+        if set(launch) != expected_keys or launch.get("workerId") != worker_id:
+            raise HelperError("worker_start_failed", "Relay launch file is invalid")
+        workspace_value = _safe_launch_text(launch.get("workspace"), "workspace")
+        socket_value = _safe_launch_text(launch.get("socketPath"), "socket path")
+        rpc_log_value = _safe_launch_text(launch.get("rpcLogPath"), "RPC log path")
+        stderr_log_value = _safe_launch_text(launch.get("stderrLogPath"), "stderr log path")
+        if not all((workspace_value, socket_value, rpc_log_value, stderr_log_value)):
+            raise HelperError("worker_start_failed", "Relay launch paths are invalid")
+        self.workspace = Path(workspace_value).resolve()
+        self.path = Path(socket_value)
+        if self.path != socket_path(self.path.parents[1], worker_id):
+            raise HelperError("worker_start_failed", "Relay socket identity is invalid")
+        original_umask = launch.get("originalUmask")
+        if isinstance(original_umask, bool) or not isinstance(original_umask, int):
+            raise HelperError("worker_start_failed", "Relay umask is invalid")
+        no_approve = launch.get("noApprove")
+        if not isinstance(no_approve, bool):
+            raise HelperError("worker_start_failed", "Relay trust decision is invalid")
+        self.child = RpcChild(
+            workspace=self.workspace,
+            dotenv_path=launch.get("dotenvPath") if isinstance(launch.get("dotenvPath"), str) else None,
+            model=launch.get("model") if isinstance(launch.get("model"), str) else None,
+            thinking=launch.get("thinking") if isinstance(launch.get("thinking"), str) else None,
+            session_id=launch.get("sessionId") if isinstance(launch.get("sessionId"), str) else None,
+            no_approve=no_approve,
+            original_umask=original_umask,
+            rpc_log=Path(rpc_log_value),
+            stderr_log=Path(stderr_log_value),
+        )
+        try:
+            state = self.child.request("get_state", timeout=30)
+        except BaseException:
+            self.child.shutdown()
+            raise
+        session_id = state.get("sessionId")
+        cwd = state.get("cwd")
+        if (
+            not isinstance(session_id, str)
+            or not session_id
+            or not isinstance(cwd, str)
+            or Path(cwd).resolve() != self.workspace
+        ):
+            self.child.shutdown()
+            raise HelperError("worker_start_failed", "Travis RPC readiness identity is invalid")
+        self.session_id = session_id
+        self._capability: str | None = None
+        self._closing = threading.Event()
+        self._mutation_lock = threading.Lock()
+        self._threads: list[threading.Thread] = []
+
+    def _response(self, request_id: str, result: dict[str, object]) -> dict[str, object]:
+        return {
+            "ok": True,
+            "protocolVersion": PROTOCOL_VERSION,
+            "requestId": request_id,
+            "result": result,
+        }
+
+    def _error_response(self, request_id: object, error: HelperError) -> dict[str, object]:
+        return {
+            "ok": False,
+            "protocolVersion": PROTOCOL_VERSION,
+            "requestId": request_id if isinstance(request_id, str) else None,
+            "error": {"code": error.code, "message": error.message},
+        }
+
+    def _dispatch(self, request: dict[str, object]) -> dict[str, object]:
+        request_id = request.get("requestId")
+        action = request.get("action")
+        version = request.get("protocolVersion")
+        params = request.get("params", {})
+        if not isinstance(request_id, str) or not request_id or len(request_id) > 128:
+            raise HelperError("invalid_relay_request", "Relay request ID is invalid")
+        if version != PROTOCOL_VERSION:
+            raise HelperError("incompatible_protocol", "Relay protocol version is incompatible")
+        if action not in RELAY_ACTIONS or not isinstance(params, dict):
+            raise HelperError("invalid_relay_request", "Relay action or parameters are invalid")
+        if action == "health":
+            return self._response(
+                request_id,
+                {
+                    "status": "ready",
+                    "workerId": self.worker_id,
+                    "sessionId": self.session_id,
+                    "cwd": str(self.workspace),
+                },
+            )
+        if action == "state":
+            return self._response(request_id, self.child.request("get_state", timeout=10))
+        if action == "abort":
+            return self._response(request_id, self.child.request("abort", timeout=10))
+        with self._mutation_lock:
+            if action == "configure_dispatch":
+                capability = params.get("capability")
+                if not isinstance(capability, str) or len(capability) < 32:
+                    raise HelperError("invalid_relay_request", "Dispatch capability is invalid")
+                self._capability = capability
+                return self._response(request_id, {"configured": True})
+            if action == "prompt":
+                return self._response(request_id, self.child.request("prompt", params, timeout=3600))
+            result = self.child.request("close", timeout=10)
+            self._closing.set()
+            return self._response(request_id, result)
+
+    def _handle_connection(self, connection: socket.socket) -> None:
+        with connection:
+            request_id: object = None
+            try:
+                request = _receive_frame(connection)
+                request_id = request.get("requestId")
+                response = self._dispatch(request)
+            except HelperError as error:
+                response = self._error_response(request_id, error)
+            try:
+                _send_frame(connection, response)
+            except (HelperError, OSError):
+                return
+
+    def serve(self) -> int:
+        if self.path.exists() or self.path.is_symlink():
+            self.child.shutdown()
+            raise HelperError("worker_conflict", "Relay socket already exists")
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            server.bind(str(self.path))
+            os.chmod(self.path, 0o600)
+            server.listen(16)
+            server.settimeout(0.2)
+            while not self._closing.is_set():
+                try:
+                    connection, _ = server.accept()
+                except socket.timeout:
+                    continue
+                thread = threading.Thread(
+                    target=self._handle_connection,
+                    args=(connection,),
+                    name="travis234-orchestration-relay-client",
+                    daemon=True,
+                )
+                self._threads.append(thread)
+                thread.start()
+        finally:
+            server.close()
+            for thread in self._threads:
+                thread.join(timeout=1)
+            self.child.shutdown()
+            try:
+                if self.path.is_socket():
+                    self.path.unlink()
+            except OSError:
+                pass
+        return 0
+
+
+class RelayClient:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    def request(
+        self,
+        action: str,
+        params: dict[str, object] | None = None,
+        *,
+        timeout: float,
+    ) -> dict[str, object]:
+        request_id = f"relay-{secrets.token_hex(12)}"
+        frame = {
+            "protocolVersion": PROTOCOL_VERSION,
+            "requestId": request_id,
+            "action": action,
+            "params": params or {},
+        }
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        connection.settimeout(timeout)
+        try:
+            connection.connect(str(self.path))
+            _send_frame(connection, frame)
+            response = _receive_frame(connection)
+        except (OSError, TimeoutError, socket.timeout) as exc:
+            raise HelperError("relay_unavailable", "Worker relay is unavailable") from exc
+        finally:
+            connection.close()
+        if response.get("requestId") != request_id or response.get("protocolVersion") != PROTOCOL_VERSION:
+            raise HelperError("relay_frame_error", "Relay response identity is invalid")
+        if response.get("ok") is not True:
+            error = response.get("error")
+            code = error.get("code") if isinstance(error, dict) else "relay_error"
+            raise HelperError(str(code), "Worker relay rejected the request")
+        result = response.get("result")
+        if not isinstance(result, dict):
+            raise HelperError("relay_frame_error", "Relay result is invalid")
+        return result
+
+
+def run_relay(worker_id: str, launch_file: str) -> int:
+    try:
+        launch = _read_private_request(launch_file, consume=True)
+        server = RelayServer(worker_id, launch)
+        return server.serve()
+    except BaseException:
+        return 1
 
 
 def envelope(
@@ -957,6 +1709,31 @@ class StateStore:
             "updatedAt": row["updated_at"],
         }
 
+    def _worker_from_row(self, row: sqlite3.Row, *, effect: str = "created") -> WorkerRecord:
+        validate_id("worker", row["worker_id"])
+        validate_id("run", row["run_id"])
+        validate_status("worker", row["status"])
+        if row["protocol_version"] != PROTOCOL_VERSION or row["retained"] not in {0, 1}:
+            raise HelperError("invalid_state", "Stored Worker state is invalid")
+        return WorkerRecord(
+            worker_id=row["worker_id"],
+            run_id=row["run_id"],
+            workspace=row["workspace"],
+            repository=row["repository"],
+            branch=row["branch"],
+            base_commit=row["base_commit"],
+            worktree_path=row["worktree_path"],
+            tmux_session=row["tmux_session"],
+            socket_path=row["socket_path"],
+            travis_session_id=row["travis_session_id"],
+            status=row["status"],
+            retained=bool(row["retained"]),
+            protocol_version=row["protocol_version"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            effect=effect,
+        )
+
     def get_run(self, run_id: str) -> dict[str, object]:
         validate_id("run", run_id)
         row = self.connection.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
@@ -1086,6 +1863,318 @@ class StateStore:
             )
             return result
 
+    def get_worker(self, worker_id: str, *, effect: str = "created") -> WorkerRecord:
+        validate_id("worker", worker_id)
+        row = self.connection.execute(
+            "SELECT * FROM workers WHERE worker_id = ?", (worker_id,)
+        ).fetchone()
+        if row is None:
+            raise HelperError("not_found", "Worker was not found")
+        return self._worker_from_row(row, effect=effect)
+
+    def list_workers(
+        self,
+        run_id: str | None,
+        limit: int,
+    ) -> list[WorkerRecord]:
+        if run_id is None:
+            rows = self.connection.execute(
+                "SELECT * FROM workers ORDER BY created_at, worker_id LIMIT ?", (limit,)
+            ).fetchall()
+        else:
+            self.get_run(run_id)
+            rows = self.connection.execute(
+                "SELECT * FROM workers WHERE run_id = ? ORDER BY created_at, worker_id LIMIT ?",
+                (run_id, limit),
+            ).fetchall()
+        return [self._worker_from_row(row) for row in rows]
+
+    def reserve_worker(
+        self,
+        task_id: str,
+        request: WorkerStartRequest,
+        key: str,
+        *,
+        worker_id: str,
+        tmux_session: str,
+        relay_socket: Path,
+        max_workers: int,
+    ) -> WorkerRecord:
+        self.require_compatible()
+        validate_id("task", task_id)
+        validate_idempotency_key(key, self)
+        if (
+            isinstance(max_workers, bool)
+            or not isinstance(max_workers, int)
+            or not 1 <= max_workers <= HARD_MAX_WORKERS
+        ):
+            raise HelperError("invalid_arguments", "Worker limit must be between 1 and 3")
+        scope = f"worker-start:{task_id}"
+        with self.transaction():
+            task = self.get_task(task_id)
+            previous = self.connection.execute(
+                "SELECT response_json FROM idempotency WHERE scope = ? AND key = ?",
+                (scope, key),
+            ).fetchone()
+            if previous is not None:
+                try:
+                    saved = json.loads(previous["response_json"])
+                    previous_id = saved["worker"]["workerId"]
+                except (KeyError, TypeError, json.JSONDecodeError) as exc:
+                    raise HelperError("invalid_state", "Stored idempotency state is invalid") from exc
+                return self.get_worker(previous_id, effect="reused")
+            placeholders = ",".join("?" for _ in ACTIVE_WORKER_STATUSES)
+            active = self.connection.execute(
+                f"SELECT count(*) FROM workers WHERE status IN ({placeholders})",
+                tuple(sorted(ACTIVE_WORKER_STATUSES)),
+            ).fetchone()[0]
+            if active >= max_workers:
+                raise HelperError(
+                    "worker_limit",
+                    "Active Worker limit has been reached",
+                    next_actions=("Reuse, retain, or release an existing Worker before retrying.",),
+                )
+            timestamp = utc_now()
+            self.connection.execute(
+                """
+                INSERT INTO workers(
+                    worker_id, run_id, workspace, repository, branch, base_commit,
+                    worktree_path, tmux_session, socket_path, travis_session_id,
+                    status, retained, protocol_version, created_at, updated_at
+                ) VALUES(?, ?, NULL, ?, ?, NULL, NULL, ?, ?, NULL, 'starting', 0, ?, ?, ?)
+                """,
+                (
+                    worker_id,
+                    task["runId"],
+                    str(Path(request.repository).expanduser().resolve()),
+                    request.branch,
+                    tmux_session,
+                    str(relay_socket),
+                    PROTOCOL_VERSION,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            worker = self.get_worker(worker_id)
+            result = {"effect": "created", "worker": worker.to_dict()}
+            self.connection.execute(
+                "INSERT INTO idempotency(scope, key, response_json, created_at) VALUES(?, ?, ?, ?)",
+                (scope, key, _canonical_json(result), timestamp),
+            )
+            return worker
+
+    def set_worker_workspace(self, worker_id: str, receipt: dict[str, object]) -> WorkerRecord:
+        with self.transaction():
+            self.get_worker(worker_id)
+            timestamp = utc_now()
+            self.connection.execute(
+                """
+                UPDATE workers
+                SET workspace = ?, repository = ?, branch = ?, base_commit = ?,
+                    worktree_path = ?, updated_at = ?
+                WHERE worker_id = ?
+                """,
+                (
+                    receipt["workspace"],
+                    receipt["repository"],
+                    receipt["branch"],
+                    receipt["baseCommit"],
+                    receipt["worktree"],
+                    timestamp,
+                    worker_id,
+                ),
+            )
+            return self.get_worker(worker_id)
+
+    def set_worker_ready(self, worker_id: str, travis_session_id: str) -> WorkerRecord:
+        if not isinstance(travis_session_id, str) or not travis_session_id:
+            raise HelperError("invalid_state", "Travis session identity is invalid")
+        with self.transaction():
+            self.get_worker(worker_id)
+            timestamp = utc_now()
+            self.connection.execute(
+                """
+                UPDATE workers
+                SET travis_session_id = ?, status = 'ready', updated_at = ?
+                WHERE worker_id = ?
+                """,
+                (travis_session_id, timestamp, worker_id),
+            )
+            return self.get_worker(worker_id)
+
+    def set_worker_status(self, worker_id: str, status_value: str) -> WorkerRecord:
+        validate_status("worker", status_value)
+        with self.transaction():
+            self.get_worker(worker_id)
+            timestamp = utc_now()
+            self.connection.execute(
+                "UPDATE workers SET status = ?, updated_at = ? WHERE worker_id = ?",
+                (status_value, timestamp, worker_id),
+            )
+            return self.get_worker(worker_id)
+
+
+def _current_umask() -> int:
+    current = os.umask(0o077)
+    os.umask(current)
+    return current
+
+
+def _validate_worker_launch_request(request: WorkerStartRequest) -> None:
+    _safe_launch_text(str(request.repository), "repository")
+    if request.workspace_mode not in {"current", "worktree"}:
+        raise HelperError("invalid_request", "Worker workspace mode is invalid")
+    if request.workspace_mode == "worktree" and not all(
+        (request.worktree_name, request.branch, request.base)
+    ):
+        raise HelperError("invalid_request", "Worktree worker fields are required")
+    for value, field in (
+        (request.worktree_name, "worktree name"),
+        (request.branch, "branch"),
+        (request.base, "base"),
+        (str(request.dotenv_path) if request.dotenv_path is not None else None, "dotenv path"),
+        (request.model, "model"),
+        (request.thinking, "thinking level"),
+    ):
+        _safe_launch_text(value, field)
+    if request.dotenv_path is not None:
+        dotenv = Path(request.dotenv_path).expanduser()
+        if not dotenv.is_file() or dotenv.is_symlink():
+            raise HelperError("invalid_request", "Selected dotenv file is unavailable")
+
+
+def _worker_with_workspace(worker: WorkerRecord, receipt: dict[str, object]) -> WorkerRecord:
+    return replace(
+        worker,
+        dirty=receipt["dirty"] if isinstance(receipt.get("dirty"), bool) else None,
+        uncommitted_changes_transferred=(
+            receipt["uncommittedChangesTransferred"]
+            if isinstance(receipt.get("uncommittedChangesTransferred"), bool)
+            else None
+        ),
+        automatic_integration=False,
+    )
+
+
+def start_worker(
+    state: StateStore,
+    task_id: str,
+    request: WorkerStartRequest,
+    idempotency_key: str,
+    *,
+    tmux_client: TmuxClient | None = None,
+    max_workers: int = DEFAULT_MAX_WORKERS,
+    readiness_timeout: float = 30,
+) -> WorkerRecord:
+    client = tmux_client or TmuxClient()
+    client.ensure_available()
+    _validate_worker_launch_request(request)
+    task = state.get_task(task_id)
+    repository = inspect_repository(request.repository, request.base or "HEAD").repository
+    trust = read_project_trust_entry(repository)
+    trust_resources = has_trust_requiring_project_resources_mirror(repository)
+    if trust is None and trust_resources:
+        raise HelperError(
+            "trust_required",
+            "Worker project trust is unresolved",
+            next_actions=(
+                "Resolve project trust in an interactive Travis234 session, then retry with the same idempotency key.",
+            ),
+        )
+    no_approve = trust is False or trust is None
+    worker_id = new_id("worker")
+    relay_path = socket_path(state.root, worker_id)
+    session_name = tmux_name(worker_id)
+    worker = state.reserve_worker(
+        task_id,
+        request,
+        idempotency_key,
+        worker_id=worker_id,
+        tmux_session=session_name,
+        relay_socket=relay_path,
+        max_workers=max_workers,
+    )
+    if worker.effect == "reused":
+        return worker
+    workspace_request = WorktreeRequest(
+        repository=request.repository,
+        workspace_mode=request.workspace_mode,
+        worktree_name=request.worktree_name,
+        branch=request.branch,
+        base=request.base,
+    )
+    try:
+        workspace_receipt = prepare_workspace(workspace_request)
+    except HelperError as error:
+        state.set_worker_status(
+            worker.worker_id,
+            "outcome_unknown" if error.code == "outcome_unknown" else "stopped",
+        )
+        raise
+    worker = state.set_worker_workspace(worker.worker_id, workspace_receipt)
+    workspace = Path(str(workspace_receipt["workspace"])).resolve()
+    worker_dir = state.root / "runs" / task["runId"] / "workers" / worker.worker_id
+    _private_directory(state.root / "runs" / task["runId"])
+    _private_directory(state.root / "runs" / task["runId"] / "workers")
+    _private_directory(worker_dir)
+    launch_file = worker_dir / "launch.json"
+    launch = {
+        "workerId": worker.worker_id,
+        "workspace": str(workspace),
+        "socketPath": worker.socket_path,
+        "dotenvPath": (
+            str(Path(request.dotenv_path).expanduser().resolve())
+            if request.dotenv_path is not None
+            else None
+        ),
+        "model": request.model,
+        "thinking": request.thinking,
+        "sessionId": None,
+        "noApprove": no_approve,
+        "originalUmask": _current_umask(),
+        "rpcLogPath": str(worker_dir / "rpc.jsonl"),
+        "stderrLogPath": str(worker_dir / "stderr.jsonl"),
+    }
+    try:
+        _write_private_json(launch_file, launch)
+        client.start_relay(worker.tmux_session, workspace, launch_file, worker.worker_id)
+    except HelperError:
+        status_value = "outcome_unknown" if client.has_session(worker.tmux_session) else "stopped"
+        state.set_worker_status(worker.worker_id, status_value)
+        raise
+
+    deadline = time.monotonic() + max(0.05, readiness_timeout)
+    last_error: HelperError | None = None
+    while time.monotonic() < deadline:
+        if not client.has_session(worker.tmux_session):
+            state.set_worker_status(worker.worker_id, "stopped")
+            raise HelperError("worker_start_failed", "Worker relay stopped before readiness")
+        try:
+            remaining = max(0.05, min(0.25, deadline - time.monotonic()))
+            health = RelayClient(Path(worker.socket_path)).request("health", timeout=remaining)
+        except HelperError as error:
+            last_error = error
+            time.sleep(0.02)
+            continue
+        session_id = health.get("sessionId")
+        cwd = health.get("cwd")
+        if (
+            health.get("status") != "ready"
+            or not isinstance(session_id, str)
+            or not session_id
+            or not isinstance(cwd, str)
+            or Path(cwd).resolve() != workspace
+        ):
+            state.set_worker_status(worker.worker_id, "outcome_unknown")
+            raise HelperError("worker_start_failed", "Worker readiness identity is invalid")
+        ready = state.set_worker_ready(worker.worker_id, session_id)
+        return _worker_with_workspace(ready, workspace_receipt)
+    if client.has_session(worker.tmux_session):
+        state.set_worker_status(worker.worker_id, "outcome_unknown")
+        raise HelperError("worker_start_timeout", "Worker readiness timed out") from last_error
+    state.set_worker_status(worker.worker_id, "stopped")
+    raise HelperError("worker_start_failed", "Worker relay stopped before readiness") from last_error
+
 
 def _bounded_limit(value: int) -> int:
     if isinstance(value, bool) or not 1 <= value <= MAX_MESSAGE_LIMIT:
@@ -1122,6 +2211,24 @@ def build_parser() -> JsonArgumentParser:
     task_list = subparsers.add_parser("task-list", add_help=False)
     task_list.add_argument("--run-id", required=True)
     task_list.add_argument("--limit", type=int, default=MAX_MESSAGE_LIMIT)
+
+    worker_start = subparsers.add_parser("worker-start", add_help=False)
+    worker_start.add_argument("--task-id", required=True)
+    worker_start.add_argument("--request-file", required=True)
+    worker_start.add_argument("--consume-request-file", action="store_true")
+    worker_start.add_argument("--idempotency-key", required=True)
+    worker_start.add_argument("--max-workers", type=int, default=DEFAULT_MAX_WORKERS)
+
+    worker_show = subparsers.add_parser("worker-show", add_help=False)
+    worker_show.add_argument("--worker-id", required=True)
+
+    worker_list = subparsers.add_parser("worker-list", add_help=False)
+    worker_list.add_argument("--run-id")
+    worker_list.add_argument("--limit", type=int, default=MAX_MESSAGE_LIMIT)
+
+    relay = subparsers.add_parser("_relay", add_help=False)
+    relay.add_argument("--worker-id", required=True)
+    relay.add_argument("--launch-file", required=True)
 
     return parser
 
@@ -1167,6 +2274,45 @@ def execute(arguments: Sequence[str]) -> dict[str, object]:
                 command,
                 {"tasks": state.list_tasks(parsed.run_id, _bounded_limit(parsed.limit))},
             )
+        if command == "worker-start":
+            request_json = _read_private_request(
+                parsed.request_file,
+                consume=parsed.consume_request_file,
+            )
+            request = worker_request_from_json(request_json, state)
+            worker = start_worker(
+                state,
+                parsed.task_id,
+                request,
+                parsed.idempotency_key,
+                max_workers=parsed.max_workers,
+            )
+            return envelope(
+                command,
+                {
+                    "effect": worker.effect,
+                    "taskId": parsed.task_id,
+                    "worker": worker.to_dict(),
+                },
+                next_actions=(
+                    "Start a Dispatch only after reviewing Worker ownership and readiness.",
+                ),
+            )
+        if command == "worker-show":
+            return envelope(command, {"worker": state.get_worker(parsed.worker_id).to_dict()})
+        if command == "worker-list":
+            return envelope(
+                command,
+                {
+                    "workers": [
+                        worker.to_dict()
+                        for worker in state.list_workers(
+                            parsed.run_id,
+                            _bounded_limit(parsed.limit),
+                        )
+                    ]
+                },
+            )
     raise HelperError("invalid_arguments", "Command is not implemented")
 
 
@@ -1175,6 +2321,12 @@ def main(argv: list[str] | None = None) -> int:
     command = arguments[0] if arguments and not arguments[0].startswith("-") else "guide"
     original_umask = os.umask(0o077)
     try:
+        if command == "_relay":
+            try:
+                parsed = build_parser().parse_args(arguments)
+                return run_relay(parsed.worker_id, parsed.launch_file)
+            except BaseException:
+                return 1
         try:
             payload = execute(arguments)
         except HelperError as error:
