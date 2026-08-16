@@ -1042,6 +1042,40 @@ def test_extension_command_completion_keeps_eval_trace_schema_safe(tmp_path) -> 
         app.close()
 
 
+def test_skill_command_uses_normal_tui_turn_lifecycle(tmp_path) -> None:
+    trace_path = tmp_path / "events.jsonl"
+    submitted: list[str] = []
+
+    def provider(model, context):
+        submitted.append(context.messages[-1].content[0].text)
+        return text_response_events(model, "coordination turn complete")
+
+    register_api_provider(create_faux_provider(provider))
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=120, rows=40),
+        enable_tui=True,
+        event_trace=EvalTraceWriter(trace_path),
+    )
+    inputs = iter(["/coordination explain the fixture without tools", "/exit"])
+
+    InteractiveMode(app, input_fn=lambda _prompt: next(inputs)).run()
+
+    events = [
+        json.loads(line)
+        for line in trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    event_names = [event["event"] for event in events]
+    assert len(submitted) == 1
+    assert submitted[0].count('<skill name="coordination"') == 1
+    assert "turn_start" in event_names
+    assert "turn_ready" in event_names
+    assert "extension_command" not in event_names
+    rendered = strip_ansi("\n".join(app.tui.render(120)))
+    assert "coordination turn complete" in rendered
+
+
 def test_extension_command_failure_reports_registering_source(tmp_path) -> None:
     app = CodingApp(
         cwd=str(tmp_path),

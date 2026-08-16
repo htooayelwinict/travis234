@@ -90,3 +90,53 @@ finite shell inspection, returned the requested three lines, emitted the normal
 `tui_ready` → `turn_start` → `turn_end` → `turn_ready` lifecycle, spawned no
 child, and changed no file. The role therefore remains passive until explicitly
 selected by the future coordination skill.
+
+## Phase 2: lazy coordination skill and native-TUI pressure gate
+
+The built-in `coordination` skill is explicit and lazy. `/coordination` and
+`/skill:coordination` inject the same skill body and runtime-parsed request;
+ordinary prompts expose only compact metadata. The official skill validator,
+Python/npm mirror checks, and the resource/TUI/package neighborhood passed.
+
+The first attached MiniMax M3 run found two implementation defects before the
+behavioral gate could count: skill-owned commands were sent through the TUI's
+extension-maintenance lane, omitting normal turn lifecycle/conversation events,
+and annotated strings such as `parser.py: top` could evade ownership overlap
+validation. Regression tests were added first. Skill commands now use the
+ordinary turn lane, and semantic validation rejects non-relative annotated
+scopes.
+
+The skill pressure cycle then exposed and closed these model-level loopholes:
+
+- a plan-only turn ran `bash ls`, split one file into fake line-region scopes,
+  reversed prerequisite edges, and later claimed no commands ran;
+- fallback reports sometimes said no spawns or reads despite a consumed planner
+  slot, contract read, or typed planner reads;
+- one-file source answers sometimes used Bash for path probing or expanded a
+  tiny README sentence into unsupported JSONL mechanics and retention claims;
+- an initial deep comparison repeated the shell-report mismatch and presented a
+  Python type annotation as runtime validation.
+
+The final skill is 499 words. Its one-level planning reference now defines plain
+relative path ownership, edge direction, exact gate vocabulary, planner-slot
+accounting, evidence ceilings, conservative fallback, and final reporting.
+
+Final native-TUI evidence is under
+`/private/tmp/travis234-coordination-phase2.Lr7kAh/evidence`. Every final run
+used an isolated agent directory, an attached TUI, `openrouter/minimax/minimax-m3`,
+medium thinking, and the ignored repository `.env` through `--dotenv` only.
+
+| Gate | Final result | Evidence summary |
+| --- | --- | --- |
+| Plan-only wording repetitions | **5/5 PASS** (`plan-j1`…`plan-j5`) | Exactly one planner attempt each; success or labelled no-retry fallback; no parent goal-file inspection, execution worker, mutation, network, Git, memory, replay, or orchestration; planner slot and real reads reported. |
+| Explicit refusal repetitions | **5/5 PASS** (`refusal-t1`…`refusal-t5`) | Exactly one `read` each; literal README facts only; zero planner, Bash/process/tmux, network, Git, memory, replay, orchestration, or write calls. |
+| Auto direct | **PASS** | Refusal runs selected the parent without a planner. |
+| Forced deep | **PASS** (`deep-2`) | One planner, bounded collection, parent verification of exact signature and tested input/output, no mutation or execution worker. |
+| Combined flag order | **PASS** | Both `--plan --deep` and `--deep --plan` behaved as plan-only. |
+| `--` literal terminator | **PASS** (`literal-1`) | Leading `--deep` remained goal data; zero tools. |
+| Ordinary complex prompt | **PASS** (`ordinary-1`) | Two direct reads, no coordination planner/body behavior, no mutation. |
+| Empty/flag-only/unknown inputs | **3/3 PASS** | Error turns had no tools and no primary-model resolution; provider submission never occurred. |
+
+All final fixture Git checks were clean. The retained trace/conversation files
+were scanned for common credential patterns with zero matches. No container,
+remote Git, publication, deployment, or external write was performed.

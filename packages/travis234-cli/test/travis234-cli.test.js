@@ -46,6 +46,8 @@ test("npm archive contains complete built-in coordination resources", () => {
     const listed = spawnSync("tar", ["-tf", archive], { encoding: "utf8" });
     assert.equal(listed.status, 0, listed.stderr);
     const members = new Set(listed.stdout.trim().split("\n"));
+    assert.equal(members.has("package/skills/coordination/SKILL.md"), true);
+    assert.equal(members.has("package/skills/coordination/references/planning-contract.md"), true);
     assert.equal(members.has("package/skills/orchestration/SKILL.md"), true);
     assert.equal(members.has("package/skills/orchestration/references/protocol.md"), true);
     assert.equal(members.has("package/skills/orchestration/scripts/orchestrate.py"), true);

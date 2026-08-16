@@ -74,6 +74,16 @@ def _scopes_overlap(left: str, right: str) -> bool:
     )
 
 
+def _is_plain_relative_scope(value: str) -> bool:
+    normalized = _normalized_scope(value)
+    return (
+        bool(value.strip())
+        and not normalized.startswith("/")
+        and ":" not in normalized
+        and all(component != ".." for component in normalized.split("/"))
+    )
+
+
 def validate_coordination_plan(value: object) -> tuple[str, ...]:
     if not isinstance(value, dict):
         return ("plan must be an object",)
@@ -145,10 +155,13 @@ def validate_coordination_plan(value: object) -> tuple[str, ...]:
             errors.append("ownership references an unknown task")
             continue
         ownership_count[task_id] += 1
-        if row.get("access") == "write" and isinstance(row.get("scopes"), list):
-            write_scopes.extend(
-                (task_id, scope) for scope in row["scopes"] if isinstance(scope, str)
-            )
+        scopes = row.get("scopes")
+        if isinstance(scopes, list):
+            plain_scopes = [scope for scope in scopes if isinstance(scope, str)]
+            if any(not _is_plain_relative_scope(scope) for scope in plain_scopes):
+                errors.append("ownership scopes must be plain relative paths")
+            if row.get("access") == "write":
+                write_scopes.extend((task_id, scope) for scope in plain_scopes)
     if any(count != 1 for count in ownership_count.values()):
         errors.append("every task must have exactly one ownership entry")
     for index, (left_task, left_scope) in enumerate(write_scopes):

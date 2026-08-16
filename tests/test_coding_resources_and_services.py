@@ -6,7 +6,7 @@ from tests._support_coding_agent import *  # noqa: F403
 from travis.app import CodingApp
 from travis.coding_agent.capabilities import CapabilityReloadError
 from travis.coding_agent.resource_loader import DefaultResourceLoader
-from travis.coding_agent.skills import format_skills_for_prompt
+from travis.coding_agent.skills import format_skill_invocation, format_skills_for_prompt
 from travis.tui.terminal import FakeTerminal
 
 
@@ -128,8 +128,14 @@ def test_packaged_builtin_skills_load_as_lazy_defaults(tmp_path: Path) -> None:
     loader.reload({"projectTrustOverride": False})
 
     skills = {skill.name: skill for skill in loader.get_skills()["skills"]}
-    assert set(skills) == {"orchestration", "subagent-delegation", "web-search"}
+    assert set(skills) == {
+        "coordination",
+        "orchestration",
+        "subagent-delegation",
+        "web-search",
+    }
     skill_prompt = format_skills_for_prompt(list(skills.values()))
+    assert "coordination" in skill_prompt
     assert "orchestration" in skill_prompt
     assert "subagent-delegation" in skill_prompt
     assert "web-search" in skill_prompt
@@ -137,6 +143,11 @@ def test_packaged_builtin_skills_load_as_lazy_defaults(tmp_path: Path) -> None:
     assert "Run the private relay" not in skill_prompt
     assert "# Subagent Delegation" not in skill_prompt
     assert "# Web Search" not in skill_prompt
+    assert "# Coordination" not in skill_prompt
+    selected = format_skill_invocation(skills["coordination"], "--plan explain one change")
+    assert selected.count('<skill name="coordination"') == 1
+    assert "# Coordination" in selected
+    assert '{"mode":"plan","goal":"explain one change"}' in selected
 
 
 def test_packaged_subagent_skill_teaches_combined_coordination_contract(
@@ -247,7 +258,12 @@ def test_user_skill_overrides_packaged_builtin_with_same_name(tmp_path: Path) ->
     loader.reload({"projectTrustOverride": False})
 
     skills = {skill.name: skill for skill in loader.get_skills()["skills"]}
-    assert set(skills) == {"orchestration", "subagent-delegation", "web-search"}
+    assert set(skills) == {
+        "coordination",
+        "orchestration",
+        "subagent-delegation",
+        "web-search",
+    }
     assert skills["web-search"].file_path == str(user_skill.resolve())
     assert any(
         diagnostic.type == "collision"
@@ -1139,6 +1155,7 @@ def test_resource_loader_resolves_package_skills_prompts_and_themes(
     themes = loader.get_themes()["themes"]
     assert [skill.name for skill in skills] == [
         "audit-skill",
+        "coordination",
         "orchestration",
         "subagent-delegation",
         "web-search",
@@ -1195,6 +1212,7 @@ def test_default_resource_loader_uses_travis234_settings_manager_resource_paths(
 
     assert [skill.name for skill in loader.get_skills()["skills"]] == [
         "configured-audit",
+        "coordination",
         "orchestration",
         "subagent-delegation",
         "web-search",
@@ -1229,6 +1247,7 @@ def test_default_resource_loader_loads_app_owned_agent_skills(tmp_path: Path, mo
     skills = loader.get_skills()["skills"]
     assert [skill.name for skill in skills] == [
         "systematic-debugging",
+        "coordination",
         "orchestration",
         "subagent-delegation",
         "web-search",
@@ -1363,6 +1382,7 @@ def test_create_agent_session_services_ports_travis234_settings_resource_wiring(
     assert services["settingsManager"] is settings
     assert [skill.name for skill in services["resourceLoader"].get_skills()["skills"]] == [
         "service-audit",
+        "coordination",
         "orchestration",
         "subagent-delegation",
         "web-search",

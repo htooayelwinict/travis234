@@ -527,8 +527,10 @@ class InteractiveExtensions:
         if parsed is None:
             return False
         command, _args = parsed
-        command_name = str(getattr(command, "name", "extension"))
         source_info = getattr(command, "source_info", None)
+        if getattr(source_info, "source", None) == "skill":
+            return False
+        command_name = str(getattr(command, "name", "extension"))
         extension_path = str(getattr(source_info, "path", "<python-extension>"))
         future = self._extension_command_executor().submit(
             f"extension:{command_name}",

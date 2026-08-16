@@ -9,6 +9,10 @@ Travis A owns the user conversation and coordination decisions. Travis B owns
 only the handed-off scope. Treat B as an independent Travis234 session, not a
 subagent or an extension of A's turn.
 
+Explicit coordination may select this route, but then this skill's exact
+helper, protocol, identities, acknowledgement, recovery, retention, release,
+and no-integration rules apply without substitution.
+
 Before acting, read [the protocol](references/protocol.md). Confirm the `bash`
 and `tmux` tools are available. If tmux is excluded, explain that durable local
 orchestration is unavailable; do not improvise a bash-only background worker.

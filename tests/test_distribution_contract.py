@@ -139,6 +139,8 @@ def test_root_wheel_distribution_excludes_optional_mcp_packages(tmp_path: Path) 
     assert not any("ghost_mcp" in name or "ghost-os" in name for name in names)
     assert {
         "travis/resources/roles/coordination-planner.json",
+        "travis/resources/skills/coordination/SKILL.md",
+        "travis/resources/skills/coordination/references/planning-contract.md",
         "travis/resources/skills/orchestration/SKILL.md",
         "travis/resources/skills/orchestration/references/protocol.md",
         "travis/resources/skills/orchestration/scripts/orchestrate.py",
@@ -169,6 +171,8 @@ def test_packaged_builtin_skills_match_npm_distribution() -> None:
     }
     assert npm_files == python_files
     assert {
+        "coordination/SKILL.md",
+        "coordination/references/planning-contract.md",
         "orchestration/SKILL.md",
         "orchestration/references/protocol.md",
         "orchestration/scripts/orchestrate.py",

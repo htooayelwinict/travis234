@@ -744,6 +744,7 @@ def test_coordination_skill_removal_reconciles_only_skill_owned_commands(
         assert session.extension_runner.get_registered_command("skill:coordination") is not None
 
         skill_file.unlink()
+        loader.no_skills = True
         session.reload()
 
         assert session.extension_runner.get_registered_command("coordination") is None

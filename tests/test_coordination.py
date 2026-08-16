@@ -123,6 +123,25 @@ def test_coordination_plan_accepts_valid_bounded_plan():
             ),
             "disjoint",
         ),
+        (
+            lambda plan: plan.update(
+                {
+                    "ownership": [
+                        {
+                            "taskId": "task-a",
+                            "access": "write",
+                            "scopes": ["parser.py: top-of-file region"],
+                        },
+                        {
+                            "taskId": "task-b",
+                            "access": "write",
+                            "scopes": ["parser.py: bottom-of-file region"],
+                        },
+                    ]
+                }
+            ),
+            "plain relative paths",
+        ),
         (lambda plan: plan.update({"route": "direct"}), "route does not match"),
         (
             lambda plan: plan.update(

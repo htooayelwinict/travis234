@@ -10,16 +10,17 @@ Use only for this request. Explicit refusal wins.
 ## Choose
 
 - Use in-process children for bounded current-session work or review.
-- Choose the independent `orchestration` skill for another independent Travis B needing tmux, a separate worktree, durable ping-pong, recovery, or full handoff; never substitute mechanisms.
+- Choose `orchestration` for independent Travis B needing tmux, a worktree, durable ping-pong, recovery, or full handoff; never substitute mechanisms.
+- When coordination selects this route, planner and workers share the three-spawn ceiling. Refusal wins; orchestration semantics remain separate.
 
 ## Delegate
 
-1. Use one wave, at most 3 children; later waves require new explicit user requests. Give each a bounded objective, stop condition, output budget, and disjoint file ownership.
-2. Read `spawn_subagent` metadata and use an exact matching typed role. Roles only narrow worker/reviewer models, allowed tools, tool and effect ceilings, timeout, structured result schema, and artifact policy. Otherwise use a short role.
+1. Use one wave, at most 3 children; later waves require explicit requests. Give each a bounded objective, stop condition, output budget, and disjoint ownership.
+2. Read `spawn_subagent` metadata and use a matching typed role. Roles narrow models, allowed tools, tool and effect ceilings, timeout, structured results, and artifact policy. Otherwise use a short role.
 3. Pass exact user paths or names. Do not pre-read, find, list, grep, or resolve delegated target files in the parent. Never turn vague scope into a workspace sweep.
 4. Start independent children with `wait: false`, do useful parent work, then collect every result. Do not let children spawn more subagents.
 
-Children use a workspace-write catalog: `read`, `grep`, `find`, `ls`, `bash`, `process`, `edit`, `write`, and `tmux`, narrowed by parent tools and typed roles. Use bash for finite commands, bash plus process for interactive PTY work, and tmux for development servers, watchers, REPLs, test loops, long builds, or cross-turn waits.
+Children use a workspace-write catalog: `read`, `grep`, `find`, `ls`, `bash`, `process`, `edit`, `write`, and `tmux`, narrowed by parent tools and roles. Use bash for finite commands, bash plus process for interactive PTY work, and tmux for development servers, watchers, REPLs, test loops, long builds, or cross-turn waits.
 
 ## Child contract
 
