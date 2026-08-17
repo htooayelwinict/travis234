@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from travis.coding_agent.coordination import (
+    coordination_refused_tool_names,
     format_coordination_request,
+    ordinary_prompt_requests_durable_travis,
     parse_coordination_arguments,
     validate_coordination_plan,
 )
@@ -53,6 +57,86 @@ def test_coordination_request_is_compact_typed_json_without_reinterpreting_goal(
     }
 
 
+def test_coordination_named_tool_refusals_are_parsed_from_runtime_goal_only():
+    prompt = (
+        "Skill prose may say: Do not use write here.\n"
+        + format_coordination_request(
+            "Inspect locally. Do not use Bash; without tmux; no memory."
+        )
+    )
+
+    assert coordination_refused_tool_names(
+        prompt,
+        ("read", "bash", "tmux", "write", "memory"),
+    ) == ("bash", "tmux", "memory")
+
+
+def test_ordinary_prompt_does_not_activate_coordination_tool_filter():
+    prompt = "Do not use Bash for this ordinary request."
+
+    assert coordination_refused_tool_names(prompt, ("read", "bash")) == ()
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        (
+            "Could you ask another Travis to look at parser.py and tell me what "
+            "parse_name gives back?"
+        ),
+        "Start another Travis in a new worktree and bring the evidence back.",
+        "Please hand this off to an independent Travis234 B.",
+    ],
+)
+def test_ordinary_durable_travis_request_is_detected(prompt: str) -> None:
+    assert ordinary_prompt_requests_durable_travis(prompt) is True
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        'What does the phrase "another Travis" mean?',
+        "Review this with multiple agents.",
+        "Explain the Travis B architecture documentation.",
+        format_coordination_request("ask another Travis to inspect parser.py"),
+    ],
+)
+def test_non_request_or_runtime_coordination_is_not_ordinary_travis_intent(
+    prompt: str,
+) -> None:
+    assert ordinary_prompt_requests_durable_travis(prompt) is False
+
+
+def test_direct_coordination_does_not_block_parent_tmux_work():
+    from travis.coding_agent.coordination import (
+        coordination_requires_orchestration_guard,
+    )
+
+    prompt = format_coordination_request(
+        "keep this project's local test server running in tmux"
+    )
+
+    assert coordination_requires_orchestration_guard(prompt) is False
+
+
+def test_coordination_tmux_guard_allows_word_inside_helper_request_data() -> None:
+    from travis.coding_agent.coordination import coordination_direct_tmux_block_reason
+
+    command = (
+        "umask 077 && request=$(mktemp) && "
+        "printf '%s\\n' '{\"acceptanceCriteria\":[\"Travis B tmux session is "
+        "stopped\"]}' > \"$request\" && "
+        "python3 /installed/skills/orchestration/scripts/orchestrate.py "
+        "task-create --request-file \"$request\""
+    )
+
+    assert coordination_direct_tmux_block_reason(
+        True,
+        "bash",
+        {"command": command},
+    ) is None
+
+
 def _valid_plan() -> dict[str, object]:
     return {
         "route": "subagents",
@@ -74,6 +158,27 @@ def _valid_plan() -> dict[str, object]:
 
 def test_coordination_plan_accepts_valid_bounded_plan():
     assert validate_coordination_plan(_valid_plan()) == ()
+
+
+def test_coordination_planner_schema_teaches_cross_field_self_check() -> None:
+    root = Path(__file__).parents[1]
+    role = json.loads(
+        (root / "travis/resources/roles/coordination-planner.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    schema = role["resultSchema"]
+
+    assert "count tasks=N, ownership=N, and verification=N" in schema["description"]
+    assert "exactly once in ownership and verification" in schema["description"]
+    example = schema["examples"][0]
+    assert example["route"] == "mixed"
+    assert [task["owner"] for task in example["tasks"]] == ["travis-b", "parent"]
+    assert len(example["tasks"]) == len(example["ownership"]) == len(
+        example["verification"]
+    )
+    Draft202012Validator(schema).validate(example)
+    assert validate_coordination_plan(example) == ()
 
 
 @pytest.mark.parametrize(

@@ -72,7 +72,7 @@ travis234 remove travis234-mcp-adapter
 For a reproducible installation, pin the adapter source:
 
 ```bash
-travis234 install 'travis234-mcp-adapter==0.1.3'
+travis234 install 'travis234-mcp-adapter==0.2.0'
 ```
 
 ## Trusted packaged servers

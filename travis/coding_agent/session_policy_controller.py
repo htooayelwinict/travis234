@@ -8,6 +8,7 @@ the execution boundary.  This bridge only applies extension hook results.
 from __future__ import annotations
 
 from travis.agent.types import AfterToolCallResult, BeforeToolCallResult
+from travis.coding_agent.coordination import coordination_direct_tmux_block_reason
 from travis.coding_agent.policy import argument_fingerprint
 from travis.coding_agent.policy.types import TOOL_EFFECT_ORDER
 from travis.coding_agent.session_types import _MALFORMED_STREAM_RECOVERY_PREFIX
@@ -27,6 +28,13 @@ class SessionPolicyController:
     """Apply ``tool_call`` and ``tool_result`` extension hooks."""
 
     async def _before_tool_call(self, context, signal=None) -> BeforeToolCallResult | None:
+        coordination_reason = coordination_direct_tmux_block_reason(
+            bool(getattr(self, "_coordination_runtime_guard_active", False)),
+            context.tool_call.name,
+            context.args,
+        )
+        if coordination_reason is not None:
+            return BeforeToolCallResult(block=True, reason=coordination_reason)
         if self._extension_runner.has_handlers("tool_call"):
             # Pass the validated object itself. Mutations are visible to later
             # handlers, policy, and tool execution, and are intentionally not revalidated.

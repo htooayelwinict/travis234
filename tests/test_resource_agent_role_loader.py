@@ -123,7 +123,7 @@ def test_loader_discovers_bounded_builtin_coordination_planner(tmp_path: Path) -
     assert planner.source.scope == "builtin"
     assert planner.source.origin == "package"
     assert planner.model_role == "reviewer"
-    assert planner.allowed_tools == ("read", "grep", "find", "ls")
+    assert planner.allowed_tools == ("find", "ls")
     assert planner.allowed_effects == ("read",)
     assert planner.can_spawn is False
     assert planner.default_timeout_seconds == 120

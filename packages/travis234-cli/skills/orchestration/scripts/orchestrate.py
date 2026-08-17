@@ -8,7 +8,7 @@ import hashlib
 import hmac
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import queue
 import re
 import secrets
@@ -27,6 +27,9 @@ SCHEMA_VERSION = 1
 PROTOCOL_VERSION = 1
 ENV_AGENT_DIR = "TRAVIS234_CODING_AGENT_DIR"
 ENV_DISPATCH_CAPABILITY = "TRAVIS234_ORCHESTRATION_CAPABILITY"
+ENV_ACTIVE_DOTENV = "TRAVIS234_ORCHESTRATION_ACTIVE_DOTENV"
+ENV_ACTIVE_MODEL = "TRAVIS234_ORCHESTRATION_ACTIVE_MODEL"
+ENV_ACTIVE_THINKING = "TRAVIS234_ORCHESTRATION_ACTIVE_THINKING"
 
 DEFAULT_MAX_WORKERS = 2
 HARD_MAX_WORKERS = 3
@@ -230,7 +233,9 @@ class JsonArgumentParser(argparse.ArgumentParser):
         raise HelperError(
             "invalid_arguments",
             "Arguments are invalid; run guide for the supported command surface",
-            next_actions=("Run python3 scripts/orchestrate.py guide.",),
+            next_actions=(
+                'Run python3 "$TRAVIS234_ORCHESTRATION_HELPER" guide.',
+            ),
         )
 
 
@@ -400,9 +405,18 @@ def worker_request_from_json(request: dict[str, object], state: StateStore) -> W
         raise HelperError("invalid_request", "Worktree worker fields are required")
     if workspace_mode == "current" and any((worktree_name, branch)):
         raise HelperError("invalid_request", "Current workspace cannot create a branch or path")
-    dotenv = _safe_launch_text(request.get("dotenvPath"), "dotenv path")
-    model = _safe_launch_text(request.get("model"), "model")
-    thinking = _safe_launch_text(request.get("thinking"), "thinking level")
+    dotenv = _safe_launch_text(
+        request.get("dotenvPath") or os.environ.get(ENV_ACTIVE_DOTENV),
+        "dotenv path",
+    )
+    model = _safe_launch_text(
+        request.get("model") or os.environ.get(ENV_ACTIVE_MODEL),
+        "model",
+    )
+    thinking = _safe_launch_text(
+        request.get("thinking") or os.environ.get(ENV_ACTIVE_THINKING),
+        "thinking level",
+    )
     assert repository is not None
     return WorkerStartRequest(
         repository=repository,
@@ -1414,7 +1428,9 @@ def guide() -> dict[str, object]:
         "guide",
         {
             "commands": GUIDE_COMMANDS,
-            "invocation": "python3 scripts/orchestrate.py <command> [arguments]",
+            "invocation": (
+                'python3 "$TRAVIS234_ORCHESTRATION_HELPER" <command> [arguments]'
+            ),
             "signatures": GUIDE_SIGNATURES,
         },
     )
@@ -1641,8 +1657,63 @@ def validate_task_request(request: dict[str, object], state: StateStore) -> dict
     if set(request) - TASK_CREATE_KEYS or not required <= set(request):
         raise HelperError("invalid_request", "Task request has unknown or missing fields")
     ownership = request["ownership"]
-    if not isinstance(ownership, dict):
+    if (
+        not isinstance(ownership, dict)
+        or "ownedPaths" not in ownership
+    ):
         raise HelperError("invalid_request", "Request fields have invalid types or bounds")
+    owned_paths = _text_list(ownership["ownedPaths"])
+    forbidden_paths = _text_list(ownership.get("forbiddenPaths", []))
+
+    def scope_parts(value: str, *, allow_wildcard: bool) -> tuple[str, ...]:
+        if value == "*":
+            if allow_wildcard:
+                return ("*",)
+            raise HelperError(
+                "invalid_request", "Task ownership paths are invalid or overlapping"
+            )
+        if "\\" in value or any(character in value for character in "\x00\r\n"):
+            raise HelperError(
+                "invalid_request", "Task ownership paths are invalid or overlapping"
+            )
+        path = PurePosixPath(value)
+        if path.is_absolute() or ".." in path.parts or any(
+            character in value for character in "?[]"
+        ):
+            raise HelperError(
+                "invalid_request", "Task ownership paths are invalid or overlapping"
+            )
+        return () if path == PurePosixPath(".") else path.parts
+
+    owned_scopes = [scope_parts(value, allow_wildcard=False) for value in owned_paths]
+    forbidden_scopes = [
+        scope_parts(value, allow_wildcard=True) for value in forbidden_paths
+    ]
+    if len(set(owned_scopes)) != len(owned_scopes) or len(set(forbidden_scopes)) != len(
+        forbidden_scopes
+    ):
+        raise HelperError(
+            "invalid_request", "Task ownership paths are invalid or overlapping"
+        )
+
+    def scopes_overlap(left: tuple[str, ...], right: tuple[str, ...]) -> bool:
+        if left == ("*",) or right == ("*",):
+            return True
+        shared = min(len(left), len(right))
+        return left[:shared] == right[:shared]
+
+    if any(
+        scopes_overlap(owned, forbidden)
+        for owned in owned_scopes
+        for forbidden in forbidden_scopes
+    ):
+        raise HelperError(
+            "invalid_request", "Task ownership paths are invalid or overlapping"
+        )
+    normalized_ownership: dict[str, object] = dict(ownership)
+    normalized_ownership["ownedPaths"] = owned_paths
+    if "forbiddenPaths" in ownership:
+        normalized_ownership["forbiddenPaths"] = forbidden_paths
     acceptance = _text_list(request["acceptanceCriteria"], allow_empty=False)
     dependencies = _text_list(request.get("dependencies", []))
     for dependency in dependencies:
@@ -1658,7 +1729,7 @@ def validate_task_request(request: dict[str, object], state: StateStore) -> dict
         raise HelperError("invalid_request", "Task commit policy is invalid")
     return {
         "objective": _required_text(request, "objective"),
-        "ownership": ownership,
+        "ownership": normalized_ownership,
         "acceptanceCriteria": acceptance,
         "dependencies": dependencies,
         "mode": mode,
@@ -1712,6 +1783,40 @@ def build_worker_prompt(
         if task.get("mode") == "full_handoff"
         else "Travis A is supervising this bounded assignment and will process your durable Messages."
     )
+    helper_command = f"python3 {shlex.quote(str(Path(__file__).resolve()))}"
+    dispatch_id = str(dispatch_value["dispatchId"])
+    success_packet = json.dumps(
+        {
+            "outcome": "succeeded",
+            "summary": "<concise evidence-backed result>",
+            "evidence": ["<verified observation>"],
+            "changedFiles": [],
+            "commit": None,
+            "tests": [],
+            "artifacts": [],
+            "failedAttempts": [],
+            "blockers": [],
+            "questions": [],
+            "recommendedNextAction": None,
+        },
+        indent=2,
+    )
+    failure_packet = json.dumps(
+        {
+            "outcome": "failed",
+            "summary": "<concise failure summary>",
+            "evidence": [],
+            "changedFiles": [],
+            "commit": None,
+            "tests": [],
+            "artifacts": [],
+            "failedAttempts": ["<failed attempt and observed result>"],
+            "blockers": ["<blocking condition>"],
+            "questions": [],
+            "recommendedNextAction": None,
+        },
+        indent=2,
+    )
     return f"""# Travis234 orchestration assignment
 
 ## Identity and mode
@@ -1757,7 +1862,17 @@ Required verification:
 If blocked by a choice only the coordinator can make, report one bounded question through the orchestration helper and end your turn after reporting it. Do not guess or wait forever.
 
 ## Completion protocol
-When the assignment is complete, call worker-complete exactly once. If it cannot be completed, call worker-fail exactly once. Use the Dispatch ID above and the private capability already supplied to your process environment. End your turn after reporting the terminal packet.
+Use only the exact version-matched helper below. Do not search for another helper or reporting mechanism. Do not inspect dotenv files, environment variables, SQLite state, RPC logs, tmux, processes, or other installations to discover how to report.
+
+Create one private request file with `umask 077` and `mktemp`, immediately set `trap 'rm -f -- "$request"' EXIT`, and write the required JSON packet described below. Do not echo, cat, preview, or otherwise print the request path or JSON packet. The helper receipt must be the command's only output. Keep the capability already supplied to your process environment private. When the assignment is complete, call exactly:
+
+`{helper_command} worker-complete --dispatch-id {dispatch_id} --request-file "$request" --consume-request-file --idempotency-key complete-{dispatch_id}`
+
+If it cannot be completed, call exactly:
+
+`{helper_command} worker-fail --dispatch-id {dispatch_id} --request-file "$request" --consume-request-file --idempotency-key fail-{dispatch_id}`
+
+Call only one terminal command once. End your turn after its receipt; do not keep investigating or wait for the coordinator.
 
 ## Commit policy
 Policy: {task['commitPolicy']}. Never merge, cherry-pick, reset, clean, delete a worktree, or modify the coordinator workspace. A commit is evidence only, not permission to integrate it.
@@ -1766,7 +1881,21 @@ Policy: {task['commitPolicy']}. Never merge, cherry-pick, reset, clean, delete a
 Submit one private JSON request containing exactly these fields:
 {_prompt_lines(sorted(HANDOFF_KEYS), 'No fields')}
 
-The packet must distinguish verified evidence, changed files, tests, blockers, questions, and the recommended next action. Do not include credentials or private capability values.
+On success, copy this exact shape and replace only placeholder strings or list contents:
+
+```json
+{success_packet}
+```
+
+On failure, copy this exact shape and replace only placeholder strings or list contents:
+
+```json
+{failure_packet}
+```
+
+Every evidence, changedFiles, tests, artifacts, failedAttempts, blockers, and questions value must be a JSON array of strings. `commit` must be null or one full hexadecimal commit ID. `recommendedNextAction` must be null or a string. Do not use an object for `evidence`; do not use `success` for `outcome`.
+
+Do not inspect the helper source to infer packet types or outcome values; these examples are complete. If any earlier work attempt failed, record it in failedAttempts before the one terminal call. The packet must distinguish verified evidence, changed files, tests, blockers, questions, and the recommended next action. Do not include credentials or private capability values.
 """
 
 

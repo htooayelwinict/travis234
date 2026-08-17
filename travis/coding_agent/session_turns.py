@@ -41,6 +41,7 @@ from travis.coding_agent.compaction_coordinator import (
     CompactionTransactionCoordinator,
 )
 from travis.coding_agent.config import get_packaged_context_paths
+from travis.coding_agent.coordination import coordination_requires_orchestration_guard, coordination_turn_tool_names
 from travis.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
 from travis.coding_agent.execution_backend import select_execution_backend
 from travis.coding_agent.mailbox import CodingTurnMailbox, MailboxKind
@@ -310,21 +311,23 @@ class SessionTurnController:
         if preflight_result:
             preflight_result(True)
         restore_active_tool_names: list[str] | None = None
+        previous_coordination_runtime_guard = getattr(
+            self, "_coordination_runtime_guard_active", False
+        )
+        self._coordination_runtime_guard_active = (
+            coordination_requires_orchestration_guard(current_text)
+        )
         current_active_tool_names = self.get_active_tool_names()
-        if _prompt_rejects_subagent_tools(current_text):
-            active_without_subagents = [
-                name for name in current_active_tool_names if name not in set(_SUBAGENT_TOOL_NAMES)
-            ]
-            if active_without_subagents != current_active_tool_names:
-                restore_active_tool_names = current_active_tool_names
-                self.set_active_tools_by_name(active_without_subagents)
-        elif _prompt_requests_subagent_tools(current_text):
-            missing_subagent_tools = [
-                name for name in _SUBAGENT_TOOL_NAMES if name not in set(current_active_tool_names)
-            ]
-            if missing_subagent_tools:
-                restore_active_tool_names = current_active_tool_names
-                self.set_active_tools_by_name([*current_active_tool_names, *missing_subagent_tools])
+        desired_active_tool_names = coordination_turn_tool_names(
+            current_text,
+            current_active_tool_names,
+            _SUBAGENT_TOOL_NAMES,
+            rejects_subagents=_prompt_rejects_subagent_tools(current_text),
+            requests_subagents=_prompt_requests_subagent_tools(current_text),
+        )
+        if desired_active_tool_names != current_active_tool_names:
+            restore_active_tool_names = current_active_tool_names
+            self.set_active_tools_by_name(desired_active_tool_names)
         self.agent.state.system_prompt = self.system_prompt
         self._reset_model_subagent_turn_budget()
         try:
@@ -340,6 +343,7 @@ class SessionTurnController:
             prompt_message = self._apply_before_agent_start(current_text, current_images, prompt_message)
             return self._run_agent_prompt(prompt_message, stream_fn=stream_fn)
         finally:
+            self._coordination_runtime_guard_active = previous_coordination_runtime_guard
             if restore_active_tool_names is not None:
                 self.set_active_tools_by_name(restore_active_tool_names)
 

@@ -51,5 +51,6 @@ uv.lock
 .travis234/
 artifacts/
 pi/
+/oh-my-pi/
 hermes-agent/
 appv231/

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from dataclasses import dataclass
 from dataclasses import field
 from dataclasses import replace
@@ -36,6 +37,47 @@ from travis.tui.interactive_mode import InteractiveMode
 
 
 _VALID_THINKING_LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
+_ORCHESTRATION_ACTIVE_DOTENV = "TRAVIS234_ORCHESTRATION_ACTIVE_DOTENV"
+_ORCHESTRATION_ACTIVE_MODEL = "TRAVIS234_ORCHESTRATION_ACTIVE_MODEL"
+_ORCHESTRATION_ACTIVE_THINKING = "TRAVIS234_ORCHESTRATION_ACTIVE_THINKING"
+_ORCHESTRATION_HELPER = "TRAVIS234_ORCHESTRATION_HELPER"
+
+
+@contextmanager
+def _scoped_orchestration_launch_defaults(
+    *, dotenv_path: str | Path, model: Model, thinking: str
+):
+    resolved_dotenv = Path(dotenv_path).expanduser().resolve()
+    values = {
+        _ORCHESTRATION_ACTIVE_DOTENV: (
+            str(resolved_dotenv)
+            if resolved_dotenv.is_file() and not resolved_dotenv.is_symlink()
+            else None
+        ),
+        _ORCHESTRATION_ACTIVE_MODEL: f"{model.provider}/{model.id}",
+        _ORCHESTRATION_ACTIVE_THINKING: thinking,
+        _ORCHESTRATION_HELPER: str(
+            Path(__file__).resolve().parent
+            / "resources/skills/orchestration/scripts/orchestrate.py"
+        ),
+    }
+    missing = object()
+    previous: dict[str, object] = {
+        name: os.environ.get(name, missing) for name in values
+    }
+    try:
+        for name, value in values.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        yield
+    finally:
+        for name, value in previous.items():
+            if value is missing:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = str(value)
 
 
 def _positive_int_arg(value: str) -> int:
@@ -785,13 +827,18 @@ def main(argv: list[str] | None = None) -> int:
                 )
             noun = "name" if len(unknown_tool_names) == 1 else "names"
             parser.error(f"unknown tool {noun}: {', '.join(unknown_tool_names)}")
-        return _run_configured_app(
-            app,
-            args,
-            config,
-            generation_warnings,
-            open_resume_picker=startup_session.open_resume_picker,
-        )
+        with _scoped_orchestration_launch_defaults(
+            dotenv_path=dotenv_path,
+            model=startup.model,
+            thinking=startup.thinking_level or "off",
+        ):
+            return _run_configured_app(
+                app,
+                args,
+                config,
+                generation_warnings,
+                open_resume_picker=startup_session.open_resume_picker,
+            )
     finally:
         close = getattr(app, "close", None)
         if callable(close):

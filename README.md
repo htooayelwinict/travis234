@@ -10,7 +10,7 @@ TRAVIS234 // NEURAL TERMINAL ONLINE
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-39e6c7?style=for-the-badge&labelColor=10182b"></a>
   <img alt="Python 3.13" src="https://img.shields.io/badge/Python-3.13-63a7ff?style=for-the-badge&labelColor=10182b">
-  <img alt="Version 2.4.6" src="https://img.shields.io/badge/version-2.4.6-bd6cff?style=for-the-badge&labelColor=10182b">
+  <img alt="Version 2.5.0" src="https://img.shields.io/badge/version-2.5.0-bd6cff?style=for-the-badge&labelColor=10182b">
   <img alt="Terminal first" src="https://img.shields.io/badge/interface-terminal-ff7ac6?style=for-the-badge&labelColor=10182b">
 </p>
 
@@ -605,8 +605,9 @@ See the [complete adapter user guide](packages/travis234-mcp-adapter/README.md) 
 
 ## Skills and state
 
-Every PyPI wheel includes three read-only fallback skills:
+Every PyPI wheel includes four read-only fallback skills:
 
+- `coordination` for optional plain-language planning, routing, and verification when selected;
 - `orchestration` for durable Travis-to-Travis worktree handoffs through tmux and structured RPC;
 - `subagent-delegation` for bounded reviewer or worker delegation;
 - `web-search` for source-backed web research.

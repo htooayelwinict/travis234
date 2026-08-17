@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "travis234-mcp-adapter"
-version = "0.1.3"
+version = "0.2.0"
 description = "Optional MCP client adapter extension for Travis234."
 readme = "README.md"
 license = "MIT"

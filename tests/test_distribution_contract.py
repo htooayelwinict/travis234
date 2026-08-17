@@ -40,7 +40,7 @@ def test_npm_distribution_names_only_travis234() -> None:
 def test_release_versions_are_aligned() -> None:
     import json
 
-    expected = "2.4.6"
+    expected = "2.5.0"
     python_metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     adapter_metadata = tomllib.loads(
         (ROOT / "packages/travis234-mcp-adapter/pyproject.toml").read_text(
@@ -55,7 +55,7 @@ def test_release_versions_are_aligned() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert python_metadata["project"]["version"] == expected
-    assert adapter_metadata["project"]["version"] == "0.1.3"
+    assert adapter_metadata["project"]["version"] == "0.2.0"
     assert workspace["version"] == expected
     assert npm_package["version"] == expected
     assert f'VERSION = "{expected}"' in config_source
@@ -65,6 +65,8 @@ def test_release_versions_are_aligned() -> None:
 
 def test_readme_explains_durable_orchestration_without_private_grammar() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "Every PyPI wheel includes four read-only fallback skills:" in readme
+    assert "`coordination` for optional plain-language planning" in readme
     section = readme.split("### Durable multi-Travis orchestration", 1)[1].split(
         "## Managed processes", 1
     )[0]
@@ -93,7 +95,7 @@ def test_release_locks_match_project_metadata() -> None:
     assert _locked_project_version(
         ROOT / "packages/travis234-mcp-adapter/uv.lock",
         "travis234-mcp-adapter",
-    ) == "0.1.3"
+    ) == "0.2.0"
 
 
 def test_retired_ghost_addon_has_no_active_product_surface() -> None:

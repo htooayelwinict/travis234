@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
@@ -1266,6 +1267,71 @@ def test_cli_reads_travis_worker_llm_prefix(monkeypatch, tmp_path, capsys) -> No
     assert app.model.provider == "openrouter"
     assert app.model.id == "openai/gpt-5.4-mini"
     assert "TRAVIS234_WORKER_LLM" not in captured.err
+
+
+def test_cli_scopes_active_launch_defaults_for_orchestrated_travis(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    observed: dict[str, str | None] = {}
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "TRAVIS234_WORKER_LLM_ENABLED=true\n"
+        "TRAVIS234_WORKER_LLM_PROVIDER=openrouter\n"
+        "TRAVIS234_WORKER_LLM_MODEL=minimax/minimax-m3\n"
+        "TRAVIS234_WORKER_LLM_API_KEY=test-only-key\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TRAVIS234_ORCHESTRATION_ACTIVE_DOTENV", "original-dotenv")
+    monkeypatch.delenv("TRAVIS234_ORCHESTRATION_ACTIVE_MODEL", raising=False)
+    monkeypatch.delenv("TRAVIS234_ORCHESTRATION_ACTIVE_THINKING", raising=False)
+    monkeypatch.setenv("TRAVIS234_ORCHESTRATION_HELPER", "original-helper")
+
+    class FakeApp:
+        def __init__(self, **kwargs):
+            self.messages = []
+
+        def run_turn(self, prompt):
+            observed["dotenv"] = os.environ.get(
+                "TRAVIS234_ORCHESTRATION_ACTIVE_DOTENV"
+            )
+            observed["model"] = os.environ.get(
+                "TRAVIS234_ORCHESTRATION_ACTIVE_MODEL"
+            )
+            observed["thinking"] = os.environ.get(
+                "TRAVIS234_ORCHESTRATION_ACTIVE_THINKING"
+            )
+            observed["helper"] = os.environ.get("TRAVIS234_ORCHESTRATION_HELPER")
+
+    monkeypatch.setattr(cli, "CodingApp", FakeApp)
+
+    code = cli.main(
+        [
+            "--cwd",
+            str(tmp_path),
+            "--dotenv",
+            str(env_path),
+            "--thinking",
+            "medium",
+            "--plain",
+            "inspect",
+        ]
+    )
+
+    assert code == 0
+    assert observed == {
+        "dotenv": str(env_path),
+        "model": "openrouter/minimax/minimax-m3",
+        "thinking": "medium",
+        "helper": str(
+            Path(cli.__file__).resolve().parent
+            / "resources/skills/orchestration/scripts/orchestrate.py"
+        ),
+    }
+    assert os.environ["TRAVIS234_ORCHESTRATION_ACTIVE_DOTENV"] == "original-dotenv"
+    assert "TRAVIS234_ORCHESTRATION_ACTIVE_MODEL" not in os.environ
+    assert "TRAVIS234_ORCHESTRATION_ACTIVE_THINKING" not in os.environ
+    assert os.environ["TRAVIS234_ORCHESTRATION_HELPER"] == "original-helper"
 
 
 def test_cli_generation_flags_are_passed_to_registered_provider(monkeypatch, tmp_path, capsys) -> None:

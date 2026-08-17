@@ -43,6 +43,7 @@ def test_agent_harness_composes_existing_owners_inside_async_context(tmp_path: P
             assert harness.resource_loader is harness.session.resource_loader
             assert harness.session.session_path is None
             assert [skill.name for skill in harness.list_skills()] == [
+                "coordination",
                 "orchestration",
                 "subagent-delegation",
                 "web-search",

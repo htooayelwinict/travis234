@@ -225,7 +225,7 @@ def test_phase_one_tui_exposes_only_bounded_planner_metadata(
     try:
         prompt = app.session.system_prompt
         assert "coordination-planner" in prompt
-        assert "Produce one bounded read-only coordination recommendation" in prompt
+        assert "Produce one bounded metadata-only coordination recommendation" in prompt
         assert '"approvalGates"' not in prompt
         assert '"stopConditions"' not in prompt
         assert "Route and execute" not in prompt

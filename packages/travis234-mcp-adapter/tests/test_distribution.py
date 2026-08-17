@@ -51,7 +51,7 @@ def test_built_wheel_installs_and_loads_through_travis(
         metadata_name = next(name for name in names if name.endswith(".dist-info/METADATA"))
         metadata = Parser().parsestr(archive.read(metadata_name).decode("utf-8"))
     assert metadata["Name"] == "travis234-mcp-adapter"
-    assert metadata["Version"] == "0.1.3"
+    assert metadata["Version"] == "0.2.0"
     requirements = metadata.get_all("Requires-Dist", [])
     assert "mcp<3,>=2" in requirements
     assert not any("travis234-ghost-mcp" in item for item in requirements)

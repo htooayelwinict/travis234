@@ -10,7 +10,6 @@ from travis.coding_agent.settings_manager import SettingsManager
 from travis.tui import Editor
 from travis.tui.interactive_extensions import _manual_compression_options
 
-
 def _raw_shortcut(key_id: str) -> str:
     parts = key_id.split("+")
     key = parts[-1]
@@ -24,10 +23,8 @@ def _raw_shortcut(key_id: str) -> str:
     codepoint = functional[key] if key in functional else ord(key)
     return f"\x1b[{codepoint};{modifier}u"
 
-
 def _dispatch_raw_shortcut(mode: InteractiveMode, key_id: str) -> bool:
     return mode._dispatch_extension_shortcut(_raw_shortcut(key_id))
-
 
 def test_compact_deep_help_describes_the_generational_checkpoint(tmp_path: Path) -> None:
     app = CodingApp(
@@ -51,13 +48,11 @@ def test_compact_deep_help_describes_the_generational_checkpoint(tmp_path: Path)
         mode.footer_data_provider.dispose()
         app.close()
 
-
 def test_compress_deep_remains_a_manual_deep_alias() -> None:
     assert _manual_compression_options("/compress deep context envelope") == (
         "context envelope",
         True,
     )
-
 
 def test_interactive_trust_command_persists_without_executing_project_code(tmp_path) -> None:
     agent_dir = tmp_path / "agent"
@@ -92,7 +87,6 @@ def test_interactive_trust_command_persists_without_executing_project_code(tmp_p
         mode.footer_data_provider.dispose()
         app.close()
 
-
 def test_interactive_mode_binds_extension_ui_before_session_start(tmp_path) -> None:
     extension_path = tmp_path / ".travis234" / "extensions" / "ui.py"
     extension_path.parent.mkdir(parents=True)
@@ -120,7 +114,6 @@ def test_interactive_mode_binds_extension_ui_before_session_start(tmp_path) -> N
     finally:
         mode.footer_data_provider.dispose()
         app.close()
-
 
 def test_interactive_replacement_binds_extension_ui_before_deferred_session_start(tmp_path) -> None:
     log_path = tmp_path / "extension-starts.txt"
@@ -157,7 +150,6 @@ def test_interactive_replacement_binds_extension_ui_before_deferred_session_star
     finally:
         mode.footer_data_provider.dispose()
         app.close()
-
 
 def test_interactive_reload_clears_old_extension_ui_before_new_session_start(tmp_path) -> None:
     terminal = FakeTerminal(columns=100, rows=30)
@@ -200,7 +192,6 @@ def test_interactive_reload_clears_old_extension_ui_before_new_session_start(tmp
         mode.footer_data_provider.dispose()
         app.close()
 
-
 def test_interactive_mode_reload_refreshes_extension_code_without_model_turn(tmp_path) -> None:
     calls = {"model": 0}
 
@@ -240,7 +231,6 @@ def test_interactive_mode_reload_refreshes_extension_code_without_model_turn(tmp
     assert command.description == "two"
     assert calls["model"] == 0
     assert "Extensions reloaded" in history
-
 
 def test_interactive_theme_registry_connects_set_theme_and_falls_back_on_reload(tmp_path) -> None:
     themes = tmp_path / "themes"

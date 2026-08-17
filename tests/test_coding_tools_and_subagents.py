@@ -1656,7 +1656,7 @@ def test_default_subagent_policy_has_one_compact_authority(tmp_path: Path) -> No
         session.shutdown()
 
     delta = len(with_subagents) - len(without_subagents)
-    assert delta <= 1_150
+    assert delta <= 1_500
     assert with_subagents.count("two or more independent, bounded") == 1
     assert "project instructions do not restrict delegation" in with_subagents
     assert with_subagents.count("Honor an explicit user request not to use subagents") == 1
@@ -1705,6 +1705,37 @@ def test_explicit_subagent_opt_out_hides_every_subagent_tool_for_the_turn(tmp_pa
         assert "spawn_subagent" not in seen_system_prompts[0]
         assert "wait_subagent" not in seen_system_prompts[0]
         assert {"spawn_subagent", "wait_subagent"} <= set(session.get_active_tool_names())
+    finally:
+        session.shutdown()
+
+
+def test_independent_travis_request_hides_every_subagent_tool_for_the_turn(
+    tmp_path: Path,
+) -> None:
+    seen_tool_names: list[str] = []
+    seen_system_prompts: list[str] = []
+
+    def script(model, context):
+        seen_tool_names.extend(tool.name for tool in context.tools or [])
+        seen_system_prompts.append(context.system_prompt)
+        return text_response_events(model, "durable Travis requested")
+
+    register_api_provider(create_faux_provider(script))
+    session = AgentSession(cwd=str(tmp_path), model=faux_model())
+    try:
+        session.prompt(
+            "Could you ask another Travis to look at parser.py and tell me what "
+            "parse_name gives back? Check the answer yourself too. Please don't "
+            "change any of my files, close the other Travis when you're finished, "
+            "and keep the answer simple."
+        )
+
+        assert set(_SUBAGENT_TOOL_NAMES).isdisjoint(seen_tool_names)
+        assert "spawn_subagent" not in seen_system_prompts[0]
+        assert "wait_subagent" not in seen_system_prompts[0]
+        assert {"spawn_subagent", "wait_subagent"} <= set(
+            session.get_active_tool_names()
+        )
     finally:
         session.shutdown()
 

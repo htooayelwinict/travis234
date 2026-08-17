@@ -19,8 +19,10 @@
 - Schema version: 1
 - Protocol version: 1
 
-Resolve `scripts/orchestrate.py` relative to this skill directory and invoke it
-with `python3`. The helper prints exactly one versioned JSON envelope. Do not
+Use the active helper path only through `TRAVIS234_ORCHESTRATION_HELPER` and
+invoke it as `python3 "$TRAVIS234_ORCHESTRATION_HELPER" COMMAND`.
+Do not guess a relative helper path or change directories to make one work. The helper
+prints exactly one versioned JSON envelope. Do not
 invoke private commands, scrape tmux output, inject terminal keystrokes, or use
 tmux panes as a message protocol.
 
@@ -45,7 +47,7 @@ Lifecycle and recovery:
 - `worker-retain`, `worker-release`
 - `recover`
 
-Run `python3 scripts/orchestrate.py guide`, use its returned signatures, and
+Run `python3 "$TRAVIS234_ORCHESTRATION_HELPER" guide`, use its returned signatures, and
 never infer a command absent from that result.
 
 ## Request files and envelopes
@@ -56,6 +58,10 @@ and normally `--consume-request-file`. Every mutation also requires a bounded
 `--idempotency-key`; reusing it returns the same domain result instead of
 repeating the mutation.
 
+Choose one literal, stable idempotency key before each mutation.
+Never derive it from a timestamp, random value, shell substitution, process ID, or retry
+count. Preserve that exact key and request when a receipt is uncertain.
+
 Create request files as regular private files, never with process substitution:
 
 ```bash
@@ -63,7 +69,7 @@ umask 077
 request_file="$(mktemp)"
 trap 'rm -f -- "$request_file"' EXIT
 printf '%s\n' "$request_json" > "$request_file"
-python3 scripts/orchestrate.py COMMAND --request-file "$request_file" \
+python3 "$TRAVIS234_ORCHESTRATION_HELPER" COMMAND --request-file "$request_file" \
   --consume-request-file --idempotency-key UNIQUE_KEY
 ```
 
@@ -79,6 +85,8 @@ Run creation:
 
 Task creation:
 
+A Task that names a workspace path in its objective must include that path in `ownership.ownedPaths`; do not weaken a validated plan to an empty owned-path list.
+
 ```json
 {
   "objective":"Identify parser ownership",
@@ -92,6 +100,10 @@ Task creation:
 ```
 
 Worker start:
+
+`null` launch fields inherit Travis A's active dotenv reference, model, and
+thinking level. Explicit non-null values override those defaults. The helper
+passes only the dotenv path reference; it never copies dotenv contents.
 
 ```json
 {
@@ -160,7 +172,8 @@ counts every Dispatch prompt and every coordinator reply.
 
 1. Create a Run, then a `supervised` Task.
 2. Start a Worker only after checking ownership and workspace placement.
-3. Start a Dispatch and retain every returned identity.
+3. Start a Dispatch with both `--task-id TASK_ID` and `--worker-id WORKER_ID`,
+   then retain every returned identity.
 4. Call `message-check --run-id ... --wait-seconds N --limit N` or
    `dispatch-wait` in bounded intervals. A timeout is nonterminal.
 5. Read the entire question/handoff/failure. Call `message-ack` only after A has
@@ -171,7 +184,8 @@ counts every Dispatch prompt and every coordinator reply.
    new Dispatch with that Message as `parentMessageId`. Earlier Dispatches stay
    immutable.
 8. Inspect B's workspace, commit, and tests independently. Retain or release B
-   explicitly; never integrate automatically.
+   explicitly; never integrate automatically. Wait for the successful `message-ack` receipt before calling `worker-release`; these lifecycle gates
+   are sequential and must never share one parallel tool batch.
 
 `message-check` records delivery but not acknowledgement. Unacknowledged Worker
 Messages are returned in `(createdAt, messageId)` order and survive A restart.

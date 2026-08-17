@@ -90,8 +90,24 @@ def test_skill_instruction_shape_encodes_observed_safety_guards() -> None:
     assert "Do not" in body and "automatic" in body
     assert "Travis A owns the user conversation" in body
     assert "bash" in body and "tmux" in body
+    assert "Confirm the `bash` and `tmux` tools are available" not in body
+    assert "Do not probe tmux availability" in body
+    assert "worker-start" in body and "structured failure receipt" in body
+    assert "Do not print or probe the helper path" in body
     assert "umask 077" in body and "mktemp" in body
     assert "command signatures" in body
+    assert (
+        'Before the first mutation, run `python3 '
+        '"$TRAVIS234_ORCHESTRATION_HELPER" guide` exactly once' in body
+    )
+    assert (
+        "`dispatch-start` always requires both `--task-id TASK_ID` and "
+        "`--worker-id WORKER_ID`" in body
+    )
+    assert "Never run `message-ack` and `worker-release` concurrently" in body
+    assert (
+        "Copy every named planned scope into the Task's `ownedPaths`" in body
+    )
     assert "_relay" not in body
     assert body.count("For example") == 1
 
@@ -130,6 +146,18 @@ def test_protocol_reference_is_the_detailed_single_owner() -> None:
     assert "umask 077" in source
     assert "mktemp" in source
     assert "--consume-request-file" in source
+    assert 'python3 "$TRAVIS234_ORCHESTRATION_HELPER" guide' in source
+    assert "Do not guess a relative helper path or change directories" in source
+    assert "Choose one literal, stable idempotency key before each mutation" in source
+    assert "Never derive it from a timestamp, random value, shell substitution" in source
+    assert (
+        "Wait for the successful `message-ack` receipt before calling "
+        "`worker-release`" in source
+    )
+    assert (
+        "A Task that names a workspace path in its objective must include that path "
+        "in `ownership.ownedPaths`" in source
+    )
 
 
 def test_combined_prompt_keeps_orchestration_and_subagents_lazy_and_independent(
@@ -161,10 +189,11 @@ def test_combined_prompt_keeps_orchestration_and_subagents_lazy_and_independent(
         ).read_text(encoding="utf-8").split()
     )
     orchestration_source = " ".join(SKILL.read_text(encoding="utf-8").split())
-    assert "Choose the independent `orchestration` skill" in subagent_source
-    assert "another independent Travis B" in subagent_source
+    assert "Choose `orchestration` for independent Travis B" in subagent_source
+    assert "independent Travis B" in subagent_source
     assert "independent Travis234 session, not a subagent" in orchestration_source
     assert "subagent substitution" in orchestration_source
+    assert 'python3 "$TRAVIS234_ORCHESTRATION_HELPER" guide' in orchestration_source
 
 
 def test_guide_emits_one_stable_versioned_json_envelope() -> None:
@@ -210,7 +239,9 @@ def test_guide_emits_one_stable_versioned_json_envelope() -> None:
                 "worker-release",
                 "recover",
             ],
-        "invocation": "python3 scripts/orchestrate.py <command> [arguments]",
+        "invocation": (
+            'python3 "$TRAVIS234_ORCHESTRATION_HELPER" <command> [arguments]'
+        ),
         "signatures": {
             "guide": "guide",
             "run-create": "run-create --request-file FILE [--consume-request-file] --idempotency-key KEY",
@@ -239,6 +270,46 @@ def test_guide_emits_one_stable_versioned_json_envelope() -> None:
         },
     }
     assert payload["nextActions"] == []
+
+
+def test_worker_request_inherits_active_travis_launch_defaults(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_helper()
+    dotenv = tmp_path / ".env"
+    dotenv.write_text("TRAVIS234_WORKER_LLM_ENABLED=false\n", encoding="utf-8")
+    monkeypatch.setenv(module.ENV_ACTIVE_DOTENV, str(dotenv))
+    monkeypatch.setenv(module.ENV_ACTIVE_MODEL, "openrouter/minimax/minimax-m3")
+    monkeypatch.setenv(module.ENV_ACTIVE_THINKING, "medium")
+
+    inherited = module.worker_request_from_json(
+        {
+            "repository": str(tmp_path),
+            "workspaceMode": "current",
+            "dotenvPath": None,
+            "model": None,
+            "thinking": None,
+        },
+        None,
+    )
+    explicit = module.worker_request_from_json(
+        {
+            "repository": str(tmp_path),
+            "workspaceMode": "current",
+            "dotenvPath": str(tmp_path / "other.env"),
+            "model": "openrouter/other/model",
+            "thinking": "low",
+        },
+        None,
+    )
+
+    assert inherited.dotenv_path == str(dotenv)
+    assert inherited.model == "openrouter/minimax/minimax-m3"
+    assert inherited.thinking == "medium"
+    assert explicit.dotenv_path == str(tmp_path / "other.env")
+    assert explicit.model == "openrouter/other/model"
+    assert explicit.thinking == "low"
 
 
 def test_state_store_uses_private_existing_agent_root_and_versioned_sqlite(
@@ -428,6 +499,20 @@ def test_run_and_task_creation_are_idempotent_with_stable_state_receipts(tmp_pat
                 "acceptanceCriteria": ["done"],
                 "mode": "supervised",
                 "maxRounds": 13,
+                "commitPolicy": "no_commit",
+            },
+            "task-create",
+            "invalid_request",
+        ),
+        (
+            {
+                "objective": "Inspect parser.py",
+                "ownership": {
+                    "ownedPaths": ["parser.py"],
+                    "forbiddenPaths": ["."],
+                },
+                "acceptanceCriteria": ["Cite parser.py"],
+                "mode": "supervised",
                 "commitPolicy": "no_commit",
             },
             "task-create",

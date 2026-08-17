@@ -158,6 +158,23 @@ def test_worker_prompt_has_exact_lifecycle_sections_and_no_private_values() -> N
     assert "nested orchestration" in prompt.lower()
     assert "explicit user authorization" in prompt.lower()
     assert "end your turn after reporting" in prompt.lower()
+    helper = str(Path(module.__file__).resolve())
+    assert f"python3 {helper} worker-complete" in prompt
+    assert f"python3 {helper} worker-fail" in prompt
+    assert "--consume-request-file" in prompt
+    assert "umask 077" in prompt and "mktemp" in prompt
+    assert "trap 'rm -f -- \"$request\"' EXIT" in prompt
+    assert "Do not echo, cat, preview, or otherwise print" in prompt
+    assert "The helper receipt must be the command's only output" in prompt
+    assert "Do not inspect dotenv files, environment variables, SQLite state" in prompt
+    assert "Do not search for another helper or reporting mechanism" in prompt
+    assert '"outcome": "succeeded"' in prompt
+    assert '"outcome": "failed"' in prompt
+    assert '"evidence": [\n    "<verified observation>"\n  ]' in prompt
+    assert '"recommendedNextAction": null' in prompt
+    assert "Every evidence, changedFiles, tests, artifacts, failedAttempts" in prompt
+    assert "Do not inspect the helper source to infer packet types or outcome values" in prompt
+    assert "record it in failedAttempts before the one terminal call" in prompt
     forbidden = (
         "dispatch-capability-plaintext",
         "/secret/.env",

@@ -1,8 +1,8 @@
 {
   "name": "coordination-planner",
-  "description": "Produce one bounded read-only coordination recommendation for a complex or forced coordination request.",
+  "description": "Produce one bounded metadata-only coordination recommendation for a complex or forced coordination request without solving delegated work.",
   "modelRole": "reviewer",
-  "allowedTools": ["read", "grep", "find", "ls"],
+  "allowedTools": ["find", "ls"],
   "allowedEffects": ["read"],
   "canSpawn": false,
   "maxDepth": 1,
@@ -12,6 +12,7 @@
   "artifactPolicy": "none",
   "resultSchema": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Do not solve delegated tasks or reveal delegated goal-file contents or expected answers. The plan must not broaden the requested scope or detail level. Before returning, perform this exact self-check: count tasks=N, ownership=N, and verification=N. Every task ID must appear exactly once in ownership and verification. Every dependency endpoint must be a task ID. When Travis B does the work and the parent verifies it afterward, use route mixed with a travis-b task followed by a parent task.",
     "type": "object",
     "additionalProperties": false,
     "required": [
@@ -110,6 +111,7 @@
         }
       },
       "verification": {
+        "description": "Provide exactly one entry for every task ID, including the parent verification task.",
         "type": "array",
         "minItems": 1,
         "maxItems": 6,
@@ -139,6 +141,45 @@
           "blocker": {"type": "string", "minLength": 1, "maxLength": 400}
         }
       }
-    }
+    },
+    "examples": [
+      {
+        "route": "mixed",
+        "rationale": "A separate Travis performs the bounded read-only inspection, then the parent independently verifies its report.",
+        "tasks": [
+          {
+            "id": "task-inspect",
+            "objective": "Inspect parser.py in a separate Travis workspace and report the exact requested behavior without edits.",
+            "owner": "travis-b"
+          },
+          {
+            "id": "task-verify",
+            "objective": "After Travis B reports, independently read parser.py and verify the reported behavior.",
+            "owner": "parent"
+          }
+        ],
+        "dependencies": [
+          {"before": "task-inspect", "after": "task-verify"}
+        ],
+        "ownership": [
+          {"taskId": "task-inspect", "access": "read", "scopes": ["parser.py"]},
+          {"taskId": "task-verify", "access": "read", "scopes": ["parser.py"]}
+        ],
+        "risks": [
+          "The worker report is only an evidence lead until the parent verifies it."
+        ],
+        "approvalGates": [],
+        "verification": [
+          {"taskId": "task-inspect", "evidence": ["A terminal Travis B report cites parser.py and the exact observed behavior."]},
+          {"taskId": "task-verify", "evidence": ["The parent reads parser.py only after the terminal report and confirms or rejects the worker claim."]}
+        ],
+        "stopConditions": {
+          "success": "Travis B reports, the parent verifies the report, and the extra worker is settled.",
+          "failure": "A required read or verification fails.",
+          "cancellation": "Stop dispatch and settle the exact worker without starting replacement work.",
+          "blocker": "Report the blocker and do not substitute an unplanned route."
+        }
+      }
+    ]
   }
 }
