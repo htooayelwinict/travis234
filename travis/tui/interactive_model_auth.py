@@ -310,7 +310,10 @@ class InteractiveModelAuth:
             "set-auth",
             lambda: self.app.session.model_registry.set_auth_credential(provider["id"], credential),
         )
-        self._show_status(f"Saved API key for {provider['name']}", kind="auth")
+        self._show_status(
+            f"Saved API key for {provider['name']}; it will be verified on the first request.",
+            kind="auth",
+        )
         self._refresh_footer()
         self.tui.request_render()
 

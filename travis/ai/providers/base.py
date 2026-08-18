@@ -115,13 +115,14 @@ class ProviderProfile:
         return not isinstance(get_transport(self.api_mode), UnsupportedTransport)
 
     def auth_headers(self, credential: str, *, credential_kind: str = "api_key") -> dict[str, str]:
-        if self.name == "anthropic" and credential_kind == "api_key":
-            if "sk-ant-oat" in credential:
-                return {"Authorization": f"Bearer {credential}", "anthropic-version": "2023-06-01"}
-            return {"x-api-key": credential, "anthropic-version": "2023-06-01"}
-        if self.name in {"gemini", "google", "google-vertex"} and credential_kind == "api_key":
-            return {"x-goog-api-key": credential}
-        return {"Authorization": f"Bearer {credential}"}
+        from travis.ai.providers.request_auth import build_request_auth_headers
+
+        return build_request_auth_headers(
+            self.name,
+            self.api_mode,
+            credential,
+            credential_kind=credential_kind,
+        )
 
     def get_hostname(self) -> str:
         if self.hostname:

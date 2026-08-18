@@ -937,7 +937,7 @@ def test_interactive_mode_login_api_key_offers_active_provider_without_registere
     mode.run()
 
     rendered = strip_ansi("\n".join(app.tui.render(140)))
-    assert "Saved API key for OpenRouter" in rendered
+    assert "Saved API key for OpenRouter; it will be verified on the first request." in rendered
     assert "typed-secret" not in rendered
     assert app.session.model_registry.get_provider_auth_status("openrouter") == {
         "configured": True,

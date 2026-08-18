@@ -180,6 +180,44 @@ def test_apply_pi_promotions_rejects_unavailable_or_unsupported_updates() -> Non
         apply_pi_promotions(current, pi, promotions)
 
 
+def test_apply_pi_promotions_accepts_runtime_supported_compatibility_keys() -> None:
+    current = {"direct": {"keep": _catalog_record("direct", "keep")}}
+    pi = {
+        "direct": {
+            "future": _catalog_record(
+                "direct",
+                "future",
+                compat={
+                    "allowEmptySignature": True,
+                    "sessionAffinityFormat": "openai",
+                },
+            )
+        }
+    }
+    promotions = load_promotion_set(
+        {
+            "piCommit": "bde81c84405514c8b0f57c34405c152fb129c0ce",
+            "promotions": [
+                {
+                    "action": "add",
+                    "provider": "direct",
+                    "model": "future",
+                    "reason": "runtime already implements these compatibility keys",
+                    "evidence": "https://provider.invalid/models",
+                }
+            ],
+        }
+    )
+
+    updated, changed = apply_pi_promotions(current, pi, promotions)
+
+    assert changed == ("add:direct/future",)
+    assert updated["direct"]["future"]["compat"] == {
+        "allowEmptySignature": True,
+        "sessionAffinityFormat": "openai",
+    }
+
+
 def test_apply_pi_promotions_rejects_unregistered_provider() -> None:
     current = {"direct": {"keep": _catalog_record("direct", "keep")}}
     pi = {"new-provider": {"m": _catalog_record("new-provider", "m")}}
@@ -339,6 +377,48 @@ def test_direct_anthropic_omits_retired_opus_4_1_but_partner_routes_remain() -> 
     assert "us.anthropic.claude-opus-4-1-20250805-v1:0" in catalog["amazon-bedrock"]
     assert "claude-opus-4-1" in catalog["cloudflare-ai-gateway"]
     assert "claude-opus-4-1" in catalog["opencode"]
+
+
+def test_direct_kimi_catalog_does_not_claim_another_clients_identity() -> None:
+    root = Path(__file__).resolve().parents[1]
+    catalog = json.loads(
+        (root / "travis" / "ai" / "builtin_models.json").read_text(encoding="utf-8")
+    )
+
+    for record in catalog["kimi-coding"].values():
+        headers = record.get("headers", {})
+        assert all(name.lower() != "user-agent" for name in headers)
+
+
+def test_provider_auth_parity_catalog_matches_current_supported_routes() -> None:
+    root = Path(__file__).resolve().parents[1]
+    catalog = json.loads(
+        (root / "travis" / "ai" / "builtin_models.json").read_text(encoding="utf-8")
+    )
+
+    expected = {
+        "opencode": {
+            "gemini-3.5-flash-lite",
+            "gemini-3.6-flash",
+            "gemini-3.7-flash",
+            "grok-4.6",
+            "kimi-k3",
+            "laguna-s-2.1-free",
+            "muse-spark-1.2",
+            "nemotron-3.5-lightning-free",
+        },
+        "opencode-go": {"glm-5.3", "grok-4.5", "hy3", "kimi-k3", "qwen3.8-max"},
+        "kimi-coding": {"k3", "k3-256k", "kimi-for-coding-highspeed"},
+    }
+    for provider, model_ids in expected.items():
+        assert model_ids <= set(catalog[provider])
+
+    assert set(catalog["kimi-coding"]) == {
+        "k3",
+        "k3-256k",
+        "kimi-for-coding",
+        "kimi-for-coding-highspeed",
+    }
 
 
 def test_openrouter_capability_refresh_is_model_agnostic() -> None:

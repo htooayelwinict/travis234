@@ -1,0 +1,138 @@
+{
+  "piCommit": "209bc7b9a89b01c8fd05861cf5bbdda3e300037a",
+  "promotions": [
+    {
+      "action": "add",
+      "provider": "opencode",
+      "model": "gemini-3.5-flash-lite",
+      "reason": "Current OpenCode Zen model supported by Travis234's Google transport",
+      "evidence": "https://opencode.ai/docs/zen"
+    },
+    {
+      "action": "add",
+      "provider": "opencode",
+      "model": "gemini-3.6-flash",
+      "reason": "Current OpenCode Zen model supported by Travis234's Google transport",
+      "evidence": "https://opencode.ai/docs/zen"
+    },
+    {
+      "action": "add",
+      "provider": "opencode",
+      "model": "gemini-3.7-flash",
+      "reason": "Current OpenCode Zen model supported by Travis234's Google transport",
+      "evidence": "https://opencode.ai/docs/zen"
+    },
+    {
+      "action": "add",
+      "provider": "opencode",
+      "model": "grok-4.6",
+      "reason": "Current OpenCode Zen model supported by Travis234's Responses transport",
+      "evidence": "https://opencode.ai/docs/zen"
+    },
+    {
+      "action": "add",
+      "provider": "opencode",
+      "model": "kimi-k3",
+      "reason": "Current OpenCode Zen model supported by Travis234's Chat Completions transport",
+      "evidence": "https://opencode.ai/docs/zen"
+    },
+    {
+      "action": "add",
+      "provider": "opencode",
+      "model": "laguna-s-2.1-free",
+      "reason": "Current OpenCode Zen model supported by Travis234's Chat Completions transport",
+      "evidence": "https://opencode.ai/docs/zen"
+    },
+    {
+      "action": "add",
+      "provider": "opencode",
+      "model": "muse-spark-1.2",
+      "reason": "Current OpenCode Zen model supported by Travis234's Responses transport",
+      "evidence": "https://opencode.ai/docs/zen"
+    },
+    {
+      "action": "add",
+      "provider": "opencode",
+      "model": "nemotron-3.5-lightning-free",
+      "reason": "Current OpenCode Zen model supported by Travis234's Chat Completions transport",
+      "evidence": "https://opencode.ai/docs/zen"
+    },
+    {
+      "action": "add",
+      "provider": "opencode-go",
+      "model": "glm-5.3",
+      "reason": "Current OpenCode Go model supported by Travis234's Chat Completions transport",
+      "evidence": "https://opencode.ai/zen/go/v1/models"
+    },
+    {
+      "action": "add",
+      "provider": "opencode-go",
+      "model": "grok-4.5",
+      "reason": "Current OpenCode Go model supported by Travis234's Responses transport",
+      "evidence": "https://opencode.ai/zen/go/v1/models"
+    },
+    {
+      "action": "add",
+      "provider": "opencode-go",
+      "model": "hy3",
+      "reason": "Current OpenCode Go model supported by Travis234's Chat Completions transport",
+      "evidence": "https://opencode.ai/zen/go/v1/models"
+    },
+    {
+      "action": "add",
+      "provider": "opencode-go",
+      "model": "kimi-k3",
+      "reason": "Current OpenCode Go model supported by Travis234's Chat Completions transport",
+      "evidence": "https://opencode.ai/zen/go/v1/models"
+    },
+    {
+      "action": "add",
+      "provider": "opencode-go",
+      "model": "qwen3.8-max",
+      "reason": "Current OpenCode Go model supported by Travis234's Chat Completions transport",
+      "evidence": "https://opencode.ai/zen/go/v1/models"
+    },
+    {
+      "action": "add",
+      "provider": "kimi-coding",
+      "model": "k3",
+      "reason": "Current Kimi Code flagship model",
+      "evidence": "https://www.kimi.com/code/docs/en/kimi-code/models.html"
+    },
+    {
+      "action": "add",
+      "provider": "kimi-coding",
+      "model": "k3-256k",
+      "reason": "Current Kimi Code 256K model",
+      "evidence": "https://www.kimi.com/code/docs/en/kimi-code/models.html"
+    },
+    {
+      "action": "add",
+      "provider": "kimi-coding",
+      "model": "kimi-for-coding-highspeed",
+      "reason": "Current Kimi Code high-speed model",
+      "evidence": "https://www.kimi.com/code/docs/en/kimi-code/models.html"
+    },
+    {
+      "action": "update",
+      "provider": "kimi-coding",
+      "model": "kimi-for-coding",
+      "reason": "Refresh the current Kimi Code model metadata and compatibility flags",
+      "evidence": "https://www.kimi.com/code/docs/en/kimi-code/models.html"
+    },
+    {
+      "action": "retire",
+      "provider": "kimi-coding",
+      "model": "k2p7",
+      "reason": "Not one of the four current Kimi Code model IDs",
+      "evidence": "https://www.kimi.com/code/docs/en/kimi-code/models.html"
+    },
+    {
+      "action": "retire",
+      "provider": "kimi-coding",
+      "model": "kimi-k2-thinking",
+      "reason": "Not one of the four current Kimi Code model IDs",
+      "evidence": "https://www.kimi.com/code/docs/en/kimi-code/models.html"
+    }
+  ]
+}

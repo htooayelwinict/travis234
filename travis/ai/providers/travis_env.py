@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from travis.ai.error_redaction import is_sensitive_name
 from travis.ai.env_config import ModelConfig, load_model_config
 from travis.ai.event_stream import AssistantMessageEventStream, create_assistant_message_event_stream
 from travis.ai.providers._shared import blank_assistant_message, settle_callback
@@ -44,6 +45,7 @@ class TravisProvider:
     stream_simple = stream
 
     def _run(self, stream: AssistantMessageEventStream, model: Model, context: Context, options) -> None:
+        request: PreparedProviderRequest | None = None
         try:
             request = prepare_provider_request(
                 model,
@@ -90,7 +92,12 @@ class TravisProvider:
         except Exception as error:
             message = blank_assistant_message(model)
             message.stop_reason = "error"
-            message.error_message = _format_provider_exception(error, model, self.config.model)
+            message.error_message = _format_provider_exception(
+                error,
+                model,
+                self.config.model,
+                secrets=_provider_request_secrets(self.config.api_key, options, request),
+            )
             stream.push(ErrorEvent(reason="error", error=message))
 
     def _run_bedrock(self, stream, model: Model, options, request) -> None:
@@ -191,6 +198,19 @@ def _authorize_google_vertex_request(request: PreparedProviderRequest) -> Prepar
     headers = dict(request.headers)
     headers["Authorization"] = f"Bearer {token}"
     return replace(request, headers=headers)
+
+
+def _provider_request_secrets(
+    configured_api_key: str | None,
+    options: object | None,
+    request: PreparedProviderRequest | None,
+) -> tuple[str, ...]:
+    values = [configured_api_key, getattr(options, "api_key", None) if options is not None else None]
+    if request is not None:
+        for name, value in request.headers.items():
+            if is_sensitive_name(name):
+                values.append(str(value))
+    return tuple(str(value) for value in values if value is not None and str(value))
 
 
 __all__ = [

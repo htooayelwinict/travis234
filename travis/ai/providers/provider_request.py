@@ -16,6 +16,8 @@ from travis.ai.providers.copilot_headers import build_copilot_dynamic_headers
 from travis.ai.providers.message_translation import convert_messages
 from travis.ai.providers.params import GenerationParams, merge_generation_params
 from travis.ai.providers.provider_auth import apply_provider_auth_headers, resolve_provider_base_url
+from travis.ai.providers.provider_identity import apply_provider_identity_headers
+from travis.ai.providers.request_auth import build_request_auth_headers
 from travis.ai.providers.transports import get_transport
 from travis.ai.types import Context, Model
 
@@ -167,7 +169,10 @@ def prepare_provider_request(
     if isinstance(generated_headers, dict):
         _merge_headers(headers, generated_headers)
     if api_key:
-        _merge_headers(headers, profile.auth_headers(api_key))
+        _merge_headers(
+            headers,
+            build_request_auth_headers(runtime.provider, model.api, api_key),
+        )
     if isinstance(model.headers, dict):
         _merge_headers(headers, model.headers)
     if model.provider == "github-copilot":
@@ -187,6 +192,7 @@ def prepare_provider_request(
             cache_retention=cache_retention,
             model=model,
         )
+    apply_provider_identity_headers(model.provider, headers)
     on_headers = getattr(options, "on_headers", None) if options is not None else None
     if callable(on_headers):
         next_headers = settle_callback(on_headers(headers, model))

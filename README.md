@@ -433,6 +433,19 @@ Image APIs are exported from `travis.ai`: `ImageModel`, `ImageGenerationOptions`
 
 Provider credentials should be configured through `/login` or the provider's standard environment variable. Credentials loaded from `--dotenv` are registered only for the provider that declares them; switching models cannot reuse another provider's key.
 
+`/login` stores the selected provider's key locally and intentionally does not make a paid test request. The TUI reports that the key will be verified on the first real prompt. Provider failures are shown with useful status and error detail, but credential-shaped JSON fields, the active request credential, bearer tokens, and `sk-...` token strings are redacted before they reach the TUI or session history.
+
+For direct Kimi Code, MiniMax, and OpenCode routes, use these standard variables in an ignored dotenv file:
+
+```dotenv
+KIMI_API_KEY=...
+MINIMAX_API_KEY=...
+MINIMAX_CN_API_KEY=...
+OPENCODE_API_KEY=...
+```
+
+One OpenCode key works across the `opencode` and `opencode-go` catalogs. Travis234 chooses authentication from the selected model's actual protocol: OpenAI routes use bearer auth, Anthropic-compatible routes use `x-api-key` plus the Anthropic protocol version, and Google routes use `x-goog-api-key`. Direct Kimi requests identify the caller as `Travis234/<version>`; Travis234 never claims another CLI's identity. These details are automatic—users only need `/login`, `/model`, and a normal prompt.
+
 The active worker binding can be explicit:
 
 ```dotenv

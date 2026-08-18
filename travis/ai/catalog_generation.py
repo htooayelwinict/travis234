@@ -35,6 +35,14 @@ COMPARABLE_MODEL_FIELDS = (
     "compat",
 )
 
+_RUNTIME_SUPPORTED_COMPATIBILITY_KEYS = {
+    # Anthropic transport: preserves thinking blocks for providers that accept
+    # an explicitly empty signature.
+    "allowEmptySignature",
+    # OpenAI transports: controls the provider-specific affinity value shape.
+    "sessionAffinityFormat",
+}
+
 
 @dataclass(frozen=True)
 class CatalogDrift:
@@ -104,7 +112,7 @@ def compare_pi_catalogs(
         for record in models.values()
         if record.get("api")
     }
-    current_compat = {
+    current_compat = _RUNTIME_SUPPORTED_COMPATIBILITY_KEYS | {
         str(key)
         for models in current.values()
         for record in models.values()
@@ -256,7 +264,7 @@ def apply_pi_promotions(
         for record in models.values()
         if record.get("api")
     }
-    current_compat = {
+    current_compat = _RUNTIME_SUPPORTED_COMPATIBILITY_KEYS | {
         str(key)
         for models in current.values()
         for record in models.values()
