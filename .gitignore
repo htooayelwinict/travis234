@@ -43,7 +43,6 @@ node_modules/
 .vscode/
 .opencode/
 opencode.json
-uv.lock
 /tmp/
 
 .worktrees/

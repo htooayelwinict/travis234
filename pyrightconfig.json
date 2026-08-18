@@ -1,0 +1,9 @@
+{
+  "include": [
+    "travis/runtime_facade.py",
+    "tests/test_runtime_facade_contract.py",
+    "tests/architecture/test_quality_configuration.py"
+  ],
+  "pythonVersion": "3.13",
+  "typeCheckingMode": "standard"
+}

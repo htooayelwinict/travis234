@@ -25,6 +25,16 @@ browser = [
   "playwright>=1.59",
 ]
 
+[dependency-groups]
+dev = [
+  "build>=1,<2",
+  "coverage>=7,<8",
+  "pyright>=1.1,<2",
+  "pytest>=8,<10",
+  "ruff>=0.12,<1",
+  "twine>=6,<7",
+]
+
 [project.scripts]
 travis234 = "travis.cli:main"
 
