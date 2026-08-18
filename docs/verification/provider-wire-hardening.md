@@ -76,3 +76,12 @@ Final `2.5.2` qualification passed: 2,650 root Python tests in 276.28 seconds, 2
 - Root sdist: `b148c261c190349456b16868dd8eff596f097611993ec1341af08b852b3fbc1a`.
 - npm tarball: `2754141136b3172cba91f07abe2a0126a083a0aac92780606c88de1971c5ad4e`.
 - Local no-cache image: `sha256:bfa6d49b5e7982f81d327ddab9f6f36355f1534d50a4f85a310ea3ed3f942f0b`.
+
+## Public `2.5.2` verification
+
+- GitHub release `v2.5.2` points to source commit `2d84bf0e14c372f8aa53ab5c3dde71da3188dcb2` and is marked latest.
+- PyPI exposes both non-yanked files with hashes exactly matching the qualified root wheel and sdist; a no-cache Python 3.13 install, metadata assertion, and console help smoke passed.
+- npm exposes `@htooayelwinict/travis234@2.5.2` as `latest` with shasum `a0eaa2fcf912661f9bb8d581e76fac3c6dd16fd5`; exact-version npx help passed.
+- The GitHub release workflow passed its Linux Python/npm test job and no-cache image smoke. Its package push alone failed with `permission_denied: write_package`, the known repository-token access limitation for this personal GHCR package.
+- The authenticated direct Docker path pushed `ghcr.io/htooayelwinict/travis234:2.5.2` for amd64 and arm64 at manifest digest `sha256:665b24d6c6d0e4b6eaaa52b32729d4288e0052ee69ce438acc93873958d390ba`; public pull smoke passed.
+- `production` was promoted from that exact candidate without rebuilding, resolves to the same manifest digest, and passed a separate public pull smoke.
