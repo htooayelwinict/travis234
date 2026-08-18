@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import shlex
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -99,6 +100,21 @@ def test_adapter_source_tests_lock_the_local_host_in_their_own_group() -> None:
     )
     assert adapter_commands.count("--group source-test") == 2
     assert "--extra test" not in adapter_commands
+
+    lock_check = subprocess.run(
+        [
+            "uv",
+            "lock",
+            "--project",
+            "packages/travis234-mcp-adapter",
+            "--check",
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert lock_check.returncode == 0, lock_check.stdout + lock_check.stderr
 
 
 def test_source_ci_records_then_strictly_verifies_temporary_evidence() -> None:

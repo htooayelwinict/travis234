@@ -667,6 +667,7 @@ requires-dist = [
 provides-extras = ["browser"]
 
 [package.metadata.requires-dev]
+coverage-test = [{ name = "travis234-mcp-adapter", directory = "." }]
 dev = [
     { name = "build", specifier = ">=1,<2" },
     { name = "coverage", specifier = ">=7,<8" },
