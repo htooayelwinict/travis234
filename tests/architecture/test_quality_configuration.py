@@ -3,7 +3,6 @@ from __future__ import annotations
 import fnmatch
 import json
 import subprocess
-import sys
 import tomllib
 from pathlib import Path
 
@@ -111,8 +110,11 @@ def test_migrated_owners_pass_normal_ruff_rules() -> None:
     assert RUFF_CONFIG.is_file()
     result = subprocess.run(
         [
-            sys.executable,
-            "-m",
+            "uv",
+            "run",
+            "--locked",
+            "--all-extras",
+            "--dev",
             "ruff",
             "check",
             "--config",
