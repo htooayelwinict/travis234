@@ -65,3 +65,5 @@ The verified provider work was fast-forwarded onto clean `main` and qualified as
 - Root sdist SHA-256: `ca8fa17cf9207be20d7d4ff4279435f80d1c77ba41ece1f60239610347682108`.
 - npm tarball SHA-256: `a1d35b970774e04c4f8a778751655b6db36fd6d08582eab2a629ea008c239914`.
 - No-cache `Dockerfile.release` image build and `evals/container_smoke.py`: passed; local image ID `sha256:4f6554a82b37ae96d2e510a7af543a59930375b5bd6d4035e05eda754f562107`.
+
+The first GitHub release run exposed a clean-runner dependency gap before registry mutation: `tests/test_contract_parity_benchmark.py` imports the separately packaged MCP adapter, but the workflow provisioned only the root project and pytest. A failing workflow regression was added first. The test job now injects the local adapter package explicitly; 32 isolated release/benchmark tests and the 2,650-test repository suite passed after the fix.

@@ -36,7 +36,18 @@ def test_release_test_job_provisions_pytest_on_a_clean_runner() -> None:
         step for step in test_job["steps"] if step.get("name") == "Run Python tests"
     )
 
-    assert 'uv run --with "pytest>=8,<10" pytest' in test_step["run"]
+    assert 'uv run' in test_step["run"]
+    assert '--with "pytest>=8,<10"' in test_step["run"]
+    assert 'pytest -q -p no:cacheprovider tests' in test_step["run"]
+
+
+def test_release_test_job_provisions_optional_adapter_for_root_benchmarks() -> None:
+    test_job = _workflow()["jobs"]["test"]
+    test_step = next(
+        step for step in test_job["steps"] if step.get("name") == "Run Python tests"
+    )
+
+    assert '--with "./packages/travis234-mcp-adapter"' in test_step["run"]
 
 
 def test_release_smoke_build_is_no_cache_and_never_pushes() -> None:

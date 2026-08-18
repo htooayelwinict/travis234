@@ -47,7 +47,11 @@ jobs:
       - name: Install dependencies
         run: uv sync
       - name: Run Python tests
-        run: PYTHONPATH=. uv run --with "pytest>=8,<10" pytest -q -p no:cacheprovider tests
+        run: >-
+          PYTHONPATH=. uv run
+          --with "pytest>=8,<10"
+          --with "./packages/travis234-mcp-adapter"
+          pytest -q -p no:cacheprovider tests
       - name: Set up Node
         uses: actions/setup-node@v7
         with:
