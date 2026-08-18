@@ -1,0 +1,14 @@
+[run]
+branch = True
+parallel = True
+source =
+    travis
+omit =
+    */tests/*
+    */.worktrees/*
+    */build/*
+    */travis234-audit-*/*
+    */tmp/*audit*/*
+
+[report]
+skip_empty = True

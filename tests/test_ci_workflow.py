@@ -72,6 +72,26 @@ def test_source_ci_records_then_strictly_verifies_temporary_evidence() -> None:
     assert "docs/verification/acceptance-evidence.json" not in source
 
 
+def test_source_ci_runs_reproducible_statement_and_branch_coverage() -> None:
+    workflow, source = _workflow()
+    commands = _run_commands(workflow)
+    joined = "\n".join(commands)
+    coverage_run = next(command for command in commands if "coverage run -m pytest" in command)
+
+    erase_index = joined.index("coverage erase")
+    run_index = joined.index("coverage run -m pytest")
+    combine_index = joined.index("coverage combine")
+    json_index = joined.index("coverage json -o coverage.json")
+    floor_index = joined.index("scripts/check_coverage_floor.py")
+    evidence_index = joined.index("--record-automated-evidence")
+
+    assert erase_index < run_index < combine_index < json_index < floor_index < evidence_index
+    assert "PYTHONDONTWRITEBYTECODE: \"1\"" in source
+    assert "-q -p no:cacheprovider tests" in joined
+    assert '--with "./packages/travis234-mcp-adapter"' in coverage_run
+    assert "coverage.json --statements 83.0 --branches 68.0" in joined
+
+
 def test_source_ci_contains_no_publish_registry_or_container_mutation() -> None:
     _workflow_data, source = _workflow()
     lowered = source.casefold()
