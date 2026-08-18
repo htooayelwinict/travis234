@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from dataclasses import field

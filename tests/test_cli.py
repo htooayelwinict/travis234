@@ -4,8 +4,10 @@ import json
 import logging
 import os
 from argparse import Namespace
+from collections.abc import Iterable
 from pathlib import Path
 from types import SimpleNamespace
+from typing import get_type_hints
 
 import pytest
 
@@ -35,6 +37,16 @@ from travis.coding_agent.settings_manager import FileSettingsStorage, SettingsMa
 def setup_function() -> None:
     reset_api_providers()
     reset_models()
+
+
+def test_registered_models_helper_type_hints_resolve() -> None:
+    hints = get_type_hints(cli._registered_models_with_env_fallback)
+
+    assert hints == {
+        "env_model": Model,
+        "registered_models": Iterable[Model] | None,
+        "return": list[Model],
+    }
 
 
 def _use_registered_model_runtime(monkeypatch) -> ModelRegistry:
