@@ -35,8 +35,8 @@ Baseline commands and summarized outcomes:
 - Focused GREEN command:
   `PYTHONPATH=. /Users/htooayelwin/orca/travis234/.venv/bin/python -m pytest -q tests/test_runtime_facade_contract.py tests/coding_agent/test_agent_session_characterization.py tests/tui/test_interactive_dispatch_characterization.py tests/tui/test_interactive_shutdown_characterization.py tests/ai/providers/test_provider_characterization.py`
   — 31 passed in 2.64s (3.46s wall time).
-- Phase suite command: pending until Task 0.6
-- Installed-wheel TUI scenario: pending until Task 0.6
+- Phase suite command: completed; see Task 0.6.
+- Installed-wheel TUI scenario: completed; see Task 0.6.
 - Protected-loop SHA-256:
   `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`
 - Notes/remaining risks: later composition work must preserve these contracts; Phase 0
@@ -54,8 +54,8 @@ Baseline commands and summarized outcomes:
 - Surrounding GREEN command:
   `PYTHONPATH=. /Users/htooayelwin/orca/travis234/.venv/bin/python -m pytest -q tests/test_coding_exports_and_boundaries.py tests/test_subprocess_environment.py tests/test_process_context.py`
   — 56 passed in 4.21s (5.01s wall time).
-- Phase suite command: pending until Task 0.6
-- Installed-wheel TUI scenario: pending until Task 0.6
+- Phase suite command: completed; see Task 0.6.
+- Installed-wheel TUI scenario: completed; see Task 0.6.
 - Protected-loop SHA-256:
   `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`
 - Notes/remaining risks: the fix canonicalizes the apparent executable parent while
@@ -101,8 +101,8 @@ Baseline commands and summarized outcomes:
     importing the façade back would preserve the TUI composition cycle Phase 2 removes.
   These are exact-file `F821` entries only; repository-wide syntax and undefined-name
   rules remain enabled.
-- Phase suite command: pending until Task 0.6
-- Installed-wheel TUI scenario: pending until Task 0.6
+- Phase suite command: completed; see Task 0.6.
+- Installed-wheel TUI scenario: completed; see Task 0.6.
 - Protected-loop SHA-256:
   `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`
 - Notes/remaining risks: the Pyright include list is intentionally scoped to current
@@ -126,8 +126,8 @@ Baseline commands and summarized outcomes:
   temporary file was removed and was not tracked.
 - Quality gates: fatal Ruff passed; scoped Pyright reported 0 errors, 0 warnings, and
   0 informations.
-- Phase suite command: pending until Task 0.6
-- Installed-wheel TUI scenario: pending until Task 0.6
+- Phase suite command: completed; see Task 0.6.
+- Installed-wheel TUI scenario: completed; see Task 0.6.
 - Protected-loop SHA-256:
   `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`
 - Notes/remaining risks: source-workflow semantics are locally contract-tested; the
@@ -136,7 +136,7 @@ Baseline commands and summarized outcomes:
 
 ### Task 0.5 — Independent statement and branch coverage floors
 
-- Commit: recorded at the next ledger checkpoint after this task's commit is created.
+- Commit: `11bdcc8307430d08afba1b1bcebec4332efb7e93`
 - Checker RED command and expected failure:
   `uv run --locked --all-extras --dev pytest -q -p no:cacheprovider tests/test_coverage_floor.py`
   — 4 failed in 0.25s (2.70s wall time) because the coverage-floor checker did not
@@ -164,10 +164,69 @@ Baseline commands and summarized outcomes:
   floors without changing exclusions or lowering either floor.
 - Generated `.coverage` data and `coverage.json` were removed after the summarized
   counts were recorded.
-- Phase suite command: pending until Task 0.6
-- Installed-wheel TUI scenario: pending until Task 0.6
+- Phase suite command: completed; see Task 0.6.
+- Installed-wheel TUI scenario: completed; see Task 0.6.
 - Protected-loop SHA-256:
   `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`
 - Notes/remaining risks: coverage timing is materially slower than the ordinary root
   suite. Adapter behavior is still qualified independently; the root-only ephemeral
   layer exists solely for the benchmark contract that imports its public types.
+
+### Task 0.6 — Phase 0 qualification and installed-wheel TUI
+
+- Qualification corrections discovered test-first:
+  - `a0be864ffe9d48d1e129e7a69544452907dc126a` makes the migrated-owner
+    quality contract invoke Ruff through the locked uv toolchain. The first pinned
+    full-suite run proved the regression with 1 failure and 2,685 passes in 321.97s
+    (324.05s wall): the planning interpreter correctly remained unchanged and did not
+    contain the newly locked Ruff package. The isolated RED selector failed with
+    1 failure / 4 deselected in 1.96s; after the test-only fix it passed with
+    1 pass / 4 deselected in 0.36s (1.27s wall), and all 5 quality-configuration
+    tests passed in 2.50s.
+  - `6695c5e7a6b96f1d14159014939fa91a256252bb` adds a non-published adapter
+    `source-test` dependency group and locks the editable local Travis234 host in the
+    adapter's own environment. The first isolated adapter run produced 11 collection
+    errors in 4.57s (6.78s wall) because its previous test extra lacked the host and
+    host runtime dependencies. A new workflow contract then failed as expected with
+    1 failure / 5 deselected in 0.14s. The locked adapter suite passed 125 tests in
+    16.25s (16.81s wall), and the focused workflow/package/release group passed
+    37 tests in 8.65s (10.24s wall). Published adapter dependencies are unchanged.
+- Final root checkpoint:
+  `PYTHONPATH=. /Users/htooayelwin/orca/travis234/.venv/bin/python -m pytest -q -p no:cacheprovider tests`
+  — 2,687 passed in 385.00s (386.75s wall time). This is 37 Phase 0 tests above
+  the 2,650-test planning baseline.
+- Adapter checkpoint:
+  `uv run --project packages/travis234-mcp-adapter --locked --group source-test pytest -q -p no:cacheprovider packages/travis234-mcp-adapter/tests`
+  — 125 passed in 16.25s (16.81s wall time).
+- npm launcher: 24 passed in 1.17s (1.76s wall time).
+- npm dry-pack: passed in 1.04s wall time with the expected 11-file inventory.
+- Package qualification:
+  - root wheel and sdist built in 6.16s wall time;
+  - adapter wheel and sdist built in 2.76s wall time;
+  - Twine passed all four artifacts in 5.05s wall time.
+- Installed-wheel qualification used the exact root wheel in a fresh Python 3.13.13
+  environment, an isolated `TRAVIS234_CODING_AGENT_DIR`, the actual installed
+  `travis234` console entry, an attached PTY, `--offline`, and an in-memory faux
+  provider supplied by a task-owned global extension. No dotenv or live provider was
+  used. Scenario outcomes:
+  1. **PASS — help:** the installed console displayed complete help and exited 0.
+  2. **PASS — normal read-only prompt:** the faux provider returned
+     `PHASE0_READ_ONLY_OK` and the TUI returned to Idle.
+  3. **PASS — `/coordination --plan`:** the exact no-goal invocation produced the
+     preserved `A coordination goal is required` validation error, made no provider
+     or tool turn, and returned to Idle.
+  4. **PASS — aliased runtime PATH:** the console ran through an interpreter path
+     whose `bin` symlink resolved to the canonical installed environment `bin`, while
+     the incoming `PATH` contained that canonical directory. The real bash tool exited
+     0 with `RUNTIME_BIN_OMITTED`, proving the tool environment removed it.
+  5. **PASS — clean shutdown:** `/exit` returned 0, displayed `status: Exiting`,
+     restored the cursor and bracketed-paste terminal modes, and left no owned
+     Travis234 or managed-process child.
+- Protected-loop SHA-256:
+  `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`
+- Protected-loop diff from `7838749452b567940bd5b69a715b6184b8f9f13e`:
+  empty.
+- Remaining risks: source CI semantics are locally proven but have not run on a
+  remote GitHub runner. Live 21-prompt and public-repository evidence remain explicitly
+  blocked/pending outside the automated source gate. Coverage qualification is
+  materially slower than the ordinary suite. Phase 1 has not started.
