@@ -230,3 +230,78 @@ Baseline commands and summarized outcomes:
   remote GitHub runner. Live 21-prompt and public-repository evidence remain explicitly
   blocked/pending outside the automated source gate. Coverage qualification is
   materially slower than the ordinary suite. Phase 1 has not started.
+
+### Phase 0 checkpoint correction — fully locked source coverage
+
+- Review finding: the source-coverage command used uv's `--with` package layer. Live
+  `uv run --help` identifies `--with` as adding packages while `--locked` only asserts
+  that the project lock remains unchanged, so the adapter and MCP graph used by coverage
+  was not governed by the committed root lock.
+- Correction commits:
+  - `d3f99f4a838d02fb80dc10b374d3dc23adffef53` — add the root `coverage-test`
+    dependency group, map `travis234-mcp-adapter` through `[tool.uv.sources]`, update
+    the committed root lock, and sync/run that group under `--locked` in source CI.
+  - `b31fb938dbdb5e261235bb18b6e6960ff7744ff9` — require the adapter lock to remain
+    current for its editable root host and refresh its single root-host group metadata
+    row. No adapter package or dependency version changed.
+- Primary RED command:
+  `uv run --locked --all-extras --dev pytest -q -p no:cacheprovider tests/test_ci_workflow.py -k 'source_ci_runs_reproducible_statement_and_branch_coverage or source_coverage_dependencies_are_owned_by_the_committed_root_lock'`
+  — 2 failed and 5 deselected in 0.31s (1.81s wall): one failure found `--with` and
+  the other found the missing `coverage-test` group.
+- Primary GREEN selector: the same command — 2 passed and 5 deselected in 0.32s
+  (3.44s wall).
+- Secondary adapter-lock RED:
+  `uv run --locked --all-extras --dev --group coverage-test pytest -q -p no:cacheprovider tests/test_ci_workflow.py -k adapter_source_tests_lock_the_local_host_in_their_own_group`
+  — 1 failed and 6 deselected in 0.23s (1.31s wall) because the adapter lock's
+  editable-root metadata did not yet contain the new group.
+- Secondary adapter-lock GREEN: the same selector — 1 passed and 6 deselected in
+  3.83s (5.09s wall). Both `uv lock --check` and
+  `uv lock --project packages/travis234-mcp-adapter --check` pass at the final code
+  commit, resolving 84 and 56 packages respectively.
+- Published package boundary: `travis234-mcp-adapter` remains absent from root
+  `[project].dependencies` and all root extras. Its local source exists only in the
+  non-published `coverage-test` dependency group; no release-image file changed.
+- Focused final workflow/config command:
+  `uv run --locked --all-extras --dev --group coverage-test pytest -q -p no:cacheprovider tests/test_ci_workflow.py tests/architecture/test_quality_configuration.py tests/test_release_workflow.py tests/test_coverage_floor.py`
+  — 30 passed in 8.89s (11.48s wall).
+- Clean current-commit coverage command:
+  `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. uv run --locked --all-extras --dev --group coverage-test coverage run -m pytest -q -p no:cacheprovider tests`
+  — 2,688 passed in 595.04s (598.02s wall). The independent checker passed
+  83.96% statement coverage and 68.53% branch coverage against the unchanged
+  83.0% statement and 68.0% branch floors.
+- Final root checkpoint:
+  `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. /Users/htooayelwin/orca/travis234/.venv/bin/python -m pytest -q -p no:cacheprovider tests`
+  — 2,688 passed in 409.27s (410.99s wall).
+- Adapter checkpoint:
+  `uv run --project packages/travis234-mcp-adapter --locked --group source-test pytest -q -p no:cacheprovider packages/travis234-mcp-adapter/tests`
+  — 125 passed in 27.22s (28.66s wall).
+- npm launcher: 24 passed in 1.63s (2.70s wall). npm dry-pack passed in 2.38s
+  wall time with the expected 11-file inventory.
+- Static and acceptance gates: repository fatal Ruff passed in 0.15s; scoped Pyright
+  reported 0 errors, warnings, or informations in 2.15s; current-commit acceptance
+  passed with 20 automated results, Pi 78 / Hermes 11 parity, one blocked and one
+  pending live-required row, and one passed manual row.
+- Package qualification: the root wheel/sdist built in 5.83s and the adapter
+  wheel/sdist in 3.06s; Twine passed all four artifacts in 1.35s.
+- Installed-wheel qualification again used the actual installed `travis234` console
+  from the final root wheel in real attached PTYs, a fresh Python 3.13.13 environment,
+  isolated task-owned agent state, `--offline`, and an in-memory faux provider. No
+  dotenv or live provider was used:
+  1. **PASS — help:** the installed console displayed complete help and exited 0.
+  2. **PASS — normal read-only prompt:** the faux provider returned
+     `PHASE0_READ_ONLY_OK` and the TUI returned to Idle.
+  3. **PASS — `/coordination --plan`:** the exact command produced
+     `A coordination goal is required` and returned to Idle without a provider turn.
+  4. **PASS — aliased runtime PATH:** a console whose interpreter shebang used an
+     aliased environment path ran with the canonical environment `bin` in incoming
+     `PATH`; the real bash tool selected `RUNTIME_BIN_OMITTED` and exited 0.
+  5. **PASS — clean shutdown:** `/exit` exited 0, rendered `status: Exiting`, restored
+     cursor and bracketed-paste terminal modes, and left no task-owned console process.
+- Protected-loop SHA-256:
+  `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`.
+- Protected-loop diff from `7838749452b567940bd5b69a715b6184b8f9f13e`: empty.
+- Generated coverage files were erased after recording metrics. The task-owned build,
+  install, extension, acceptance, and TUI directory is deleted after final checks.
+- Remaining risks: source CI has still not run on a remote GitHub runner; live-provider
+  and public-repository evidence remain blocked/pending by policy; clean coverage remains
+  materially slow. No container was built, and Phase 1 has not started.
