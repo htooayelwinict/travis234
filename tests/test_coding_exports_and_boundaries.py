@@ -1570,6 +1570,25 @@ def test_bash_shell_env_matches_travis234_without_runtime_python_path(tmp_path: 
     assert runtime_python_bin not in path_entries
     assert "PYTHONPATH" not in env
 
+def test_bash_shell_env_removes_runtime_python_bin_through_path_alias(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from travis.coding_agent.config import ENV_AGENT_DIR
+    from travis.coding_agent.tools.bash import get_shell_env
+
+    real_bin = tmp_path / "real-runtime" / "bin"
+    real_bin.mkdir(parents=True)
+    (real_bin / "python").symlink_to(Path(sys.executable).resolve())
+    alias_root = tmp_path / "alias-runtime"
+    alias_root.symlink_to(real_bin.parent, target_is_directory=True)
+
+    monkeypatch.setattr(sys, "executable", str(alias_root / "bin" / "python"))
+    monkeypatch.setattr(sys, "prefix", str(alias_root))
+    monkeypatch.setenv(ENV_AGENT_DIR, str(tmp_path / "agent"))
+    monkeypatch.setenv("PATH", str(real_bin))
+
+    assert str(real_bin) not in get_shell_env()["PATH"].split(os.pathsep)
+
 def test_bash_shell_env_preserves_system_runtime_bin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from travis.coding_agent.config import ENV_AGENT_DIR
     from travis.coding_agent.tools.bash import get_shell_env

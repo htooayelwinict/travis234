@@ -250,7 +250,11 @@ def _runtime_pythonpath_roots() -> set[Path]:
 def _without_runtime_python_bin(path_entries: list[str]) -> list[str]:
     if sys.prefix == sys.base_prefix:
         return path_entries
-    runtime_python_bins = {Path(sys.executable).expanduser().parent, Path(sys.executable).resolve().parent}
+    runtime_executable = Path(sys.executable).expanduser()
+    runtime_python_bins = {
+        runtime_executable.parent.resolve(),
+        runtime_executable.resolve().parent,
+    }
     return [entry for entry in path_entries if _resolve_path_entry(entry) not in runtime_python_bins]
 
 
