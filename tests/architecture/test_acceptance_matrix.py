@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import json
 import importlib.util
+import inspect
+import json
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -22,8 +23,50 @@ def _verifier_module():
     return module
 
 
+def _classified_rows(verifier):
+    assert verifier.AcceptanceRow._fields[-1] == "evidence_class"
+    rows = {}
+    for acceptance_id in verifier.REQUIRED_IDS:
+        if acceptance_id in {"live-21-prompt-tui", "public-repository"}:
+            evidence_class = "live-required"
+            status = "blocked" if acceptance_id == "live-21-prompt-tui" else "pending"
+        elif acceptance_id == "pi-sdk-production-qualification":
+            evidence_class = "manual"
+            status = "passed"
+        else:
+            evidence_class = "automated-required"
+            status = "passed"
+        rows[acceptance_id] = verifier.AcceptanceRow(
+            acceptance_id,
+            f"requirement {acceptance_id}",
+            "command",
+            "expected",
+            "evidence",
+            status,
+            evidence_class,
+        )
+    return rows
+
+
+def _mock_current_commit(verifier, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        verifier.subprocess,
+        "run",
+        lambda *_args, **_kwargs: type("Result", (), {"stdout": "current-head\n"})(),
+    )
+
+
+def _write_evidence(path: Path, results: dict[str, str], *, commit: str = "current-head") -> None:
+    path.write_text(
+        json.dumps({"commit": commit, "results": results}),
+        encoding="utf-8",
+    )
+
+
 def test_acceptance_matrix_has_every_required_row() -> None:
     verifier = _verifier_module()
+    assert verifier.AcceptanceRow._fields[-1] == "evidence_class"
+    assert hasattr(verifier, "VALID_CLASSES")
     matrix = verifier.load_acceptance_matrix(ROOT / "docs/verification/acceptance-matrix.md")
 
     assert set(matrix) == verifier.REQUIRED_IDS
@@ -32,6 +75,38 @@ def test_acceptance_matrix_has_every_required_row() -> None:
     assert all(row.expected for row in matrix.values())
     assert all(row.evidence for row in matrix.values())
     assert all(row.status in {"pending", "passed", "failed", "blocked"} for row in matrix.values())
+    assert all(row.evidence_class in verifier.VALID_CLASSES for row in matrix.values())
+    assert matrix["live-21-prompt-tui"].evidence_class == "live-required"
+    assert matrix["public-repository"].evidence_class == "live-required"
+    assert matrix["pi-sdk-production-qualification"].evidence_class == "manual"
+    assert {
+        row.acceptance_id
+        for row in matrix.values()
+        if row.evidence_class == "automated-required"
+    }
+
+
+@pytest.mark.parametrize("bad_class", [None, "always-pass"])
+def test_acceptance_matrix_rejects_missing_or_invalid_classes(
+    tmp_path: Path,
+    bad_class: str | None,
+) -> None:
+    verifier = _verifier_module()
+    rows = [
+        "| ID | Requirement | Command | Expected | Evidence | Status | Class |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for index, acceptance_id in enumerate(sorted(verifier.REQUIRED_IDS)):
+        evidence_class = bad_class if index == 0 else "automated-required"
+        cells = [acceptance_id, "requirement", "command", "expected", "evidence", "passed"]
+        if evidence_class is not None:
+            cells.append(evidence_class)
+        rows.append("| " + " | ".join(cells) + " |")
+    matrix_path = tmp_path / "acceptance-matrix.md"
+    matrix_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    with pytest.raises(verifier.AcceptanceMatrixError, match="evidence class"):
+        verifier.load_acceptance_matrix(matrix_path)
 
 
 def test_parity_report_has_only_resolved_evidence() -> None:
@@ -144,24 +219,116 @@ def test_current_commit_verifier_rejects_stale_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     verifier = _verifier_module()
-    monkeypatch.setattr(
-        verifier.subprocess,
-        "run",
-        lambda *_args, **_kwargs: type("Result", (), {"stdout": "current-head\n"})(),
-    )
+    assert "rows" in inspect.signature(verifier.verify_current_commit).parameters
+    rows = _classified_rows(verifier)
+    _mock_current_commit(verifier, monkeypatch)
     evidence = tmp_path / "acceptance-evidence.json"
-    evidence.write_text(
-        json.dumps(
-            {
-                "commit": "not-the-current-commit",
-                "results": {acceptance_id: "passed" for acceptance_id in verifier.REQUIRED_IDS},
-            }
-        ),
-        encoding="utf-8",
+    automated_results = {
+        acceptance_id: "passed"
+        for acceptance_id, row in rows.items()
+        if row.evidence_class == "automated-required"
+    }
+    _write_evidence(
+        evidence,
+        automated_results,
+        commit="not-the-current-commit",
     )
 
     with pytest.raises(verifier.AcceptanceEvidenceError, match="current commit"):
-        verifier.verify_current_commit(evidence, root=ROOT)
+        verifier.verify_current_commit(evidence, rows, root=ROOT)
+
+
+@pytest.mark.parametrize("failed_value", [None, "failed"])
+def test_current_commit_requires_every_automated_result_to_pass(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failed_value: str | None,
+) -> None:
+    verifier = _verifier_module()
+    assert "rows" in inspect.signature(verifier.verify_current_commit).parameters
+    rows = _classified_rows(verifier)
+    _mock_current_commit(verifier, monkeypatch)
+    automated_ids = sorted(
+        acceptance_id
+        for acceptance_id, row in rows.items()
+        if row.evidence_class == "automated-required"
+    )
+    results = {acceptance_id: "passed" for acceptance_id in automated_ids}
+    if failed_value is None:
+        results.pop(automated_ids[0])
+    else:
+        results[automated_ids[0]] = failed_value
+    evidence = tmp_path / "acceptance-evidence.json"
+    _write_evidence(evidence, results)
+
+    with pytest.raises(verifier.AcceptanceEvidenceError, match="incomplete"):
+        verifier.verify_current_commit(evidence, rows, root=ROOT)
+
+
+def test_blocked_live_evidence_is_reported_without_failing_automated_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    verifier = _verifier_module()
+    assert "rows" in inspect.signature(verifier.verify_current_commit).parameters
+    rows = _classified_rows(verifier)
+    _mock_current_commit(verifier, monkeypatch)
+    evidence = tmp_path / "acceptance-evidence.json"
+    automated_results = {
+        acceptance_id: "passed"
+        for acceptance_id, row in rows.items()
+        if row.evidence_class == "automated-required"
+    }
+    _write_evidence(evidence, automated_results)
+
+    verification = verifier.verify_current_commit(evidence, rows, root=ROOT)
+
+    assert verification["results"] == automated_results
+    assert verification["non_automated"]["live-required"]["blocked"] == [
+        "live-21-prompt-tui"
+    ]
+    assert "live-21-prompt-tui" not in verification["results"]
+
+
+def test_markdown_passed_status_is_not_current_commit_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    verifier = _verifier_module()
+    assert "rows" in inspect.signature(verifier.verify_current_commit).parameters
+    rows = _classified_rows(verifier)
+    _mock_current_commit(verifier, monkeypatch)
+    evidence = tmp_path / "acceptance-evidence.json"
+    _write_evidence(evidence, {})
+
+    assert all(
+        row.status == "passed"
+        for row in rows.values()
+        if row.evidence_class == "automated-required"
+    )
+    with pytest.raises(verifier.AcceptanceEvidenceError, match="incomplete"):
+        verifier.verify_current_commit(evidence, rows, root=ROOT)
+
+
+def test_record_automated_evidence_writes_only_bounded_automated_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    verifier = _verifier_module()
+    assert hasattr(verifier, "record_automated_evidence")
+    rows = _classified_rows(verifier)
+    _mock_current_commit(verifier, monkeypatch)
+    evidence = tmp_path / "acceptance-evidence.json"
+
+    payload = verifier.record_automated_evidence(evidence, rows, root=ROOT)
+
+    assert json.loads(evidence.read_text(encoding="utf-8")) == payload
+    assert payload["commit"] == "current-head"
+    assert payload["results"] == {
+        acceptance_id: "passed"
+        for acceptance_id, row in rows.items()
+        if row.evidence_class == "automated-required"
+    }
 
 
 def test_parity_json_cli_runs_directly_without_pythonpath() -> None:

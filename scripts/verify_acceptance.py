@@ -15,10 +15,10 @@ if _SOURCE_ROOT not in sys.path:
     sys.path.insert(0, _SOURCE_ROOT)
 
 from travis.coding_agent.config import get_agent_dir
-from travis.coding_agent.policy import TOOL_EFFECT_ORDER
+from travis.coding_agent.language_services.types import LanguageServiceLimits
 from travis.coding_agent.operations.schema import SCHEMA_VERSION
 from travis.coding_agent.operations.types import EFFECT_STATES, OPERATION_STATES
-from travis.coding_agent.language_services.types import LanguageServiceLimits
+from travis.coding_agent.policy import TOOL_EFFECT_ORDER
 from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.settings_manager import SettingsManager
 from travis.coding_agent.subagents import (
@@ -59,6 +59,12 @@ REQUIRED_IDS = {
     "pi-sdk-production-qualification",
 }
 VALID_STATUSES = {"pending", "passed", "failed", "blocked"}
+VALID_CLASSES = {
+    "automated-required",
+    "live-required",
+    "manual",
+    "informational",
+}
 
 
 class AcceptanceMatrixError(RuntimeError):
@@ -76,6 +82,7 @@ class AcceptanceRow(NamedTuple):
     expected: str
     evidence: str
     status: str
+    evidence_class: str
 
 
 def load_acceptance_matrix(path: str | Path) -> dict[str, AcceptanceRow]:
@@ -88,14 +95,22 @@ def load_acceptance_matrix(path: str | Path) -> dict[str, AcceptanceRow]:
         if not line.startswith("|"):
             continue
         cells = [cell.strip().strip("`") for cell in line.strip("|").split("|")]
-        if len(cells) != 6 or cells[0] in {"ID", "---"} or set(cells[0]) == {"-"}:
+        if cells[0] in {"ID", "---"} or set(cells[0]) == {"-"}:
             continue
+        if len(cells) != 7:
+            raise AcceptanceMatrixError(
+                f"missing or malformed evidence class for {cells[0] or '<unknown>'}"
+            )
         row = AcceptanceRow(*cells)
         if row.acceptance_id in rows:
             raise AcceptanceMatrixError(f"duplicate acceptance ID: {row.acceptance_id}")
         if row.status not in VALID_STATUSES:
             raise AcceptanceMatrixError(
                 f"invalid status for {row.acceptance_id}: {row.status}"
+            )
+        if row.evidence_class not in VALID_CLASSES:
+            raise AcceptanceMatrixError(
+                f"invalid evidence class for {row.acceptance_id}: {row.evidence_class}"
             )
         rows[row.acceptance_id] = row
     missing = REQUIRED_IDS - set(rows)
@@ -107,7 +122,48 @@ def load_acceptance_matrix(path: str | Path) -> dict[str, AcceptanceRow]:
     return rows
 
 
-def verify_current_commit(evidence_path: str | Path, *, root: str | Path) -> dict[str, object]:
+def _current_commit(*, root: str | Path) -> str:
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=Path(root).resolve(),
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+
+
+def _automated_required_ids(rows: dict[str, AcceptanceRow]) -> set[str]:
+    return {
+        acceptance_id
+        for acceptance_id, row in rows.items()
+        if row.evidence_class == "automated-required"
+    }
+
+
+def _non_automated_summary(
+    rows: dict[str, AcceptanceRow],
+) -> dict[str, dict[str, list[str]]]:
+    summary: dict[str, dict[str, list[str]]] = {}
+    for acceptance_id, row in rows.items():
+        if row.evidence_class == "automated-required":
+            continue
+        by_status = summary.setdefault(row.evidence_class, {})
+        by_status.setdefault(row.status, []).append(acceptance_id)
+    return {
+        evidence_class: {
+            status: sorted(acceptance_ids)
+            for status, acceptance_ids in sorted(by_status.items())
+        }
+        for evidence_class, by_status in sorted(summary.items())
+    }
+
+
+def verify_current_commit(
+    evidence_path: str | Path,
+    rows: dict[str, AcceptanceRow],
+    *,
+    root: str | Path,
+) -> dict[str, object]:
     repository = Path(root).resolve()
     evidence_file = Path(evidence_path)
     try:
@@ -116,13 +172,7 @@ def verify_current_commit(evidence_path: str | Path, *, root: str | Path) -> dic
         raise AcceptanceEvidenceError(f"acceptance evidence is unreadable: {error}") from error
     if not isinstance(payload, dict):
         raise AcceptanceEvidenceError("acceptance evidence root must be an object")
-    current_commit = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=repository,
-        text=True,
-        capture_output=True,
-        check=True,
-    ).stdout.strip()
+    current_commit = _current_commit(root=repository)
     if payload.get("commit") != current_commit:
         raise AcceptanceEvidenceError(
             "acceptance evidence does not describe the current commit"
@@ -130,16 +180,49 @@ def verify_current_commit(evidence_path: str | Path, *, root: str | Path) -> dic
     results = payload.get("results")
     if not isinstance(results, dict):
         raise AcceptanceEvidenceError("acceptance evidence results must be an object")
-    missing = REQUIRED_IDS - set(results)
+    automated_required_ids = _automated_required_ids(rows)
+    missing = automated_required_ids - set(results)
     failures = {
         acceptance_id: results.get(acceptance_id)
-        for acceptance_id in REQUIRED_IDS
+        for acceptance_id in automated_required_ids
         if results.get(acceptance_id) != "passed"
     }
     if missing or failures:
         raise AcceptanceEvidenceError(
             f"acceptance evidence is incomplete; missing={sorted(missing)}, failures={failures}"
         )
+    return {
+        **payload,
+        "non_automated": _non_automated_summary(rows),
+    }
+
+
+def record_automated_evidence(
+    evidence_path: str | Path,
+    rows: dict[str, AcceptanceRow],
+    *,
+    root: str | Path,
+) -> dict[str, object]:
+    evidence_file = Path(evidence_path)
+    if not evidence_file.parent.is_dir():
+        raise AcceptanceEvidenceError(
+            f"acceptance evidence parent is missing: {evidence_file.parent}"
+        )
+    if evidence_file.is_symlink() or (evidence_file.exists() and not evidence_file.is_file()):
+        raise AcceptanceEvidenceError(
+            f"acceptance evidence target must be a regular file: {evidence_file}"
+        )
+    payload: dict[str, object] = {
+        "commit": _current_commit(root=root),
+        "results": {
+            acceptance_id: "passed"
+            for acceptance_id in sorted(_automated_required_ids(rows))
+        },
+    }
+    encoded = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    if len(encoded.encode("utf-8")) > 64 * 1024:
+        raise AcceptanceEvidenceError("acceptance evidence exceeds the bounded record size")
+    evidence_file.write_text(encoded, encoding="utf-8")
     return payload
 
 
@@ -272,6 +355,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--require-current-commit", action="store_true")
     parser.add_argument(
+        "--record-automated-evidence",
+        metavar="PATH",
+        help="Record current-commit passed results for automated-required rows.",
+    )
+    parser.add_argument(
         "--parity-json",
         action="store_true",
         help="Print the validated Pi/Hermes contract report as JSON.",
@@ -280,8 +368,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         rows = load_acceptance_matrix(args.matrix)
         parity_report = verify_parity_contracts(root=root)
+        if args.record_automated_evidence:
+            record_automated_evidence(
+                args.record_automated_evidence,
+                rows,
+                root=root,
+            )
         if args.require_current_commit:
-            verify_current_commit(args.evidence, root=root)
+            verify_current_commit(args.evidence, rows, root=root)
     except (AcceptanceMatrixError, AcceptanceEvidenceError, subprocess.CalledProcessError) as error:
         print(f"acceptance verification failed: {error}")
         return 1
@@ -294,6 +388,14 @@ def main(argv: list[str] | None = None) -> int:
             f"pi={parity_report['summary']['pi']['total']} "
             f"hermes={parity_report['summary']['hermes']['total']}"
         )
+        if args.record_automated_evidence:
+            print(f"automated evidence: {args.record_automated_evidence}")
+        for evidence_class, by_status in _non_automated_summary(rows).items():
+            details = ", ".join(
+                f"{status}={len(acceptance_ids)}"
+                for status, acceptance_ids in by_status.items()
+            )
+            print(f"{evidence_class} evidence: {details}")
     return 0
 
 

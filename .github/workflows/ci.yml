@@ -1,0 +1,68 @@
+name: Source qualification
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  qualify-source:
+    runs-on: ubuntu-latest
+    env:
+      NO_COLOR: "1"
+      TERM: xterm-256color
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+      - name: Sync locked root environment
+        run: uv sync --locked --all-extras --dev
+      - name: Run fatal Ruff rules
+        run: >-
+          uv run --locked --all-extras --dev
+          ruff check --select E9,F63,F7,F82 travis tests
+      - name: Run scoped Pyright
+        run: uv run --locked --all-extras --dev pyright
+      - name: Run root tests
+        run: >-
+          PYTHONPATH=. uv run --locked --all-extras --dev
+          pytest -q -p no:cacheprovider tests
+      - name: Sync locked adapter environment
+        run: >-
+          uv sync --project packages/travis234-mcp-adapter
+          --locked --extra test
+      - name: Run adapter source tests
+        run: >-
+          uv run --project packages/travis234-mcp-adapter
+          --locked --extra test pytest -q -p no:cacheprovider
+          packages/travis234-mcp-adapter/tests
+      - name: Test npm launcher
+        run: npm --prefix packages/travis234-cli test
+      - name: Verify npm package
+        run: npm --prefix packages/travis234-cli run pack:dry-run
+      - name: Build source packages
+        run: |
+          uv build --out-dir "$RUNNER_TEMP/travis234-dist/root" .
+          uv build --out-dir "$RUNNER_TEMP/travis234-dist/adapter" packages/travis234-mcp-adapter
+      - name: Check package metadata
+        run: >-
+          uv run --locked --all-extras --dev twine check
+          "$RUNNER_TEMP"/travis234-dist/root/*
+          "$RUNNER_TEMP"/travis234-dist/adapter/*
+      - name: Record and verify current-commit acceptance evidence
+        run: |
+          evidence_path="$RUNNER_TEMP/acceptance-evidence.json"
+          uv run --locked --all-extras --dev python scripts/verify_acceptance.py --record-automated-evidence "$evidence_path"
+          uv run --locked --all-extras --dev python scripts/verify_acceptance.py --evidence "$evidence_path" --require-current-commit

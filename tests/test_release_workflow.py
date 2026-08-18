@@ -15,6 +15,15 @@ def _uses_action(step: dict, action: str) -> bool:
     return isinstance(uses, str) and uses.partition("@")[0] == action
 
 
+def test_release_workflow_remains_manual_or_release_triggered() -> None:
+    workflow = _workflow()
+    triggers = workflow.get("on", workflow.get(True))
+
+    assert set(triggers) == {"workflow_dispatch", "release"}
+    assert "pull_request" not in triggers
+    assert "push" not in triggers
+
+
 def test_release_push_depends_on_tests_and_smoke() -> None:
     workflow = _workflow()
     jobs = workflow["jobs"]
