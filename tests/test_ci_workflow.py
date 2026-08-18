@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 import tomllib
 from pathlib import Path
 
@@ -9,6 +10,12 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 CI_PATH = ROOT / ".github" / "workflows" / "ci.yml"
 ADAPTER_ROOT = ROOT / "packages" / "travis234-mcp-adapter"
+EPHEMERAL_UV_FLAGS = {
+    "--isolated",
+    "--with",
+    "--with-editable",
+    "--with-requirements",
+}
 
 
 def _workflow() -> tuple[dict, str]:
@@ -30,6 +37,11 @@ def _run_commands(workflow: dict) -> list[str]:
         for step in job.get("steps", [])
         if "run" in step
     ]
+
+
+def _package_name(requirement: str) -> str:
+    name = re.split(r"[<>=!~;\[\s]", requirement, maxsplit=1)[0]
+    return re.sub(r"[-_.]+", "-", name.casefold())
 
 
 def test_source_ci_triggers_and_permissions_are_least_privilege() -> None:
@@ -117,8 +129,53 @@ def test_source_ci_runs_reproducible_statement_and_branch_coverage() -> None:
     assert erase_index < run_index < combine_index < json_index < floor_index < evidence_index
     assert "PYTHONDONTWRITEBYTECODE: \"1\"" in source
     assert "-q -p no:cacheprovider tests" in joined
-    assert '--with "./packages/travis234-mcp-adapter"' in coverage_run
+    coverage_tokens = shlex.split(coverage_run)
+    assert not (EPHEMERAL_UV_FLAGS & set(coverage_tokens))
+    assert "--locked" in coverage_tokens
+    assert "--group" in coverage_tokens
+    assert coverage_tokens[coverage_tokens.index("--group") + 1] == "coverage-test"
+    assert "uv sync --locked --all-extras --dev --group coverage-test" in joined
     assert "coverage.json --statements 83.0 --branches 68.0" in joined
+
+
+def test_source_coverage_dependencies_are_owned_by_the_committed_root_lock() -> None:
+    with (ROOT / "pyproject.toml").open("rb") as handle:
+        project = tomllib.load(handle)
+    with (ROOT / "uv.lock").open("rb") as handle:
+        lock = tomllib.load(handle)
+
+    coverage_test = project["dependency-groups"]["coverage-test"]
+    assert coverage_test == ["travis234-mcp-adapter"]
+    assert project["tool"]["uv"]["sources"]["travis234-mcp-adapter"] == {
+        "path": "packages/travis234-mcp-adapter",
+    }
+
+    published_requirements = [
+        *project["project"]["dependencies"],
+        *(
+            requirement
+            for requirements in project["project"]["optional-dependencies"].values()
+            for requirement in requirements
+        ),
+    ]
+    assert "travis234-mcp-adapter" not in {
+        _package_name(requirement) for requirement in published_requirements
+    }
+
+    coverage_requirements = [
+        *published_requirements,
+        *project["dependency-groups"]["dev"],
+        *coverage_test,
+    ]
+    locked_names = {_package_name(package["name"]) for package in lock["package"]}
+    assert {_package_name(requirement) for requirement in coverage_requirements} <= locked_names
+
+    locked_adapter = next(
+        package for package in lock["package"] if package["name"] == "travis234-mcp-adapter"
+    )
+    locked_source = locked_adapter["source"]
+    assert set(locked_source) == {"directory"}
+    assert (ROOT / locked_source["directory"]).resolve() == ADAPTER_ROOT
 
 
 def test_source_ci_contains_no_publish_registry_or_container_mutation() -> None:

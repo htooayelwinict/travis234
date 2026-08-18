@@ -26,6 +26,9 @@ browser = [
 ]
 
 [dependency-groups]
+coverage-test = [
+  "travis234-mcp-adapter",
+]
 dev = [
   "build>=1,<2",
   "coverage>=7,<8",
@@ -34,6 +37,9 @@ dev = [
   "ruff>=0.12,<1",
   "twine>=6,<7",
 ]
+
+[tool.uv.sources]
+travis234-mcp-adapter = { path = "packages/travis234-mcp-adapter" }
 
 [project.scripts]
 travis234 = "travis.cli:main"

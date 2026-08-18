@@ -35,15 +35,17 @@ jobs:
           ruff check --select E9,F63,F7,F82 travis tests
       - name: Run scoped Pyright
         run: uv run --locked --all-extras --dev pyright
+      - name: Sync locked coverage environment
+        run: uv sync --locked --all-extras --dev --group coverage-test
       - name: Run root tests with coverage
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
-          uv run --locked --all-extras --dev coverage erase
-          PYTHONPATH=. uv run --locked --all-extras --dev --with "./packages/travis234-mcp-adapter" coverage run -m pytest -q -p no:cacheprovider tests
-          uv run --locked --all-extras --dev coverage combine
-          uv run --locked --all-extras --dev coverage json -o coverage.json
-          uv run --locked --all-extras --dev python scripts/check_coverage_floor.py coverage.json --statements 83.0 --branches 68.0
+          uv run --locked --all-extras --dev --group coverage-test coverage erase
+          PYTHONPATH=. uv run --locked --all-extras --dev --group coverage-test coverage run -m pytest -q -p no:cacheprovider tests
+          uv run --locked --all-extras --dev --group coverage-test coverage combine
+          uv run --locked --all-extras --dev --group coverage-test coverage json -o coverage.json
+          uv run --locked --all-extras --dev --group coverage-test python scripts/check_coverage_floor.py coverage.json --statements 83.0 --branches 68.0
       - name: Sync locked adapter environment
         run: >-
           uv sync --project packages/travis234-mcp-adapter
