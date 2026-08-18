@@ -51,3 +51,17 @@ Each scenario used a clean Python 3.13 environment, the built `travis234` wheel,
 - `evals/container_smoke.py` against that image: passed.
 
 The live dotenv credential was read only for the authorized OpenCode Go smoke, was never printed, copied into the repository, or persisted in the isolated test session, and remains outside Git.
+
+## Main release qualification
+
+The verified provider work was fast-forwarded onto clean `main` and qualified as the aligned Travis234 `2.5.1` patch release on 2026-08-18.
+
+- Merged-tree Python suite: 2,649 passed in 287.25 seconds.
+- npm launcher suite: 24 passed; the `@htooayelwinict/travis234@2.5.1` archive contained the expected 11 declared files.
+- Generic MCP adapter suite: 125 passed in 20.54 seconds; its independent version remains `0.2.0` and is not republished by this root-only patch.
+- Clean `travis234==2.5.1` wheel install, metadata, provider-module imports, and console help smoke: passed.
+- Root and adapter wheel/sdist builds: all four distributions passed `twine check`.
+- Root wheel SHA-256: `4db4a1f1334f4aa5b8a15da168ab0a5a657b7c408486d1b9d5d37795f261be06`.
+- Root sdist SHA-256: `ca8fa17cf9207be20d7d4ff4279435f80d1c77ba41ece1f60239610347682108`.
+- npm tarball SHA-256: `a1d35b970774e04c4f8a778751655b6db36fd6d08582eab2a629ea008c239914`.
+- No-cache `Dockerfile.release` image build and `evals/container_smoke.py`: passed; local image ID `sha256:4f6554a82b37ae96d2e510a7af543a59930375b5bd6d4035e05eda754f562107`.
