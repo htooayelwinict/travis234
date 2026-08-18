@@ -47,11 +47,11 @@ jobs:
       - name: Sync locked adapter environment
         run: >-
           uv sync --project packages/travis234-mcp-adapter
-          --locked --extra test
+          --locked --group source-test
       - name: Run adapter source tests
         run: >-
           uv run --project packages/travis234-mcp-adapter
-          --locked --extra test pytest -q -p no:cacheprovider
+          --locked --group source-test pytest -q -p no:cacheprovider
           packages/travis234-mcp-adapter/tests
       - name: Test npm launcher
         run: npm --prefix packages/travis234-cli test

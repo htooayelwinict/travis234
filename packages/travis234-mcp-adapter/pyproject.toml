@@ -14,6 +14,12 @@ dependencies = ["mcp>=2,<3"]
 [project.optional-dependencies]
 test = ["pytest>=8", "pytest-asyncio>=1"]
 
+[dependency-groups]
+source-test = ["pytest>=8", "pytest-asyncio>=1", "travis234"]
+
+[tool.uv.sources]
+travis234 = { path = "../..", editable = true }
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["travis234_mcp_adapter*"]

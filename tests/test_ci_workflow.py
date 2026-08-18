@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 CI_PATH = ROOT / ".github" / "workflows" / "ci.yml"
+ADAPTER_ROOT = ROOT / "packages" / "travis234-mcp-adapter"
 
 
 def _workflow() -> tuple[dict, str]:
@@ -58,6 +60,33 @@ def test_source_ci_runs_locked_quality_root_adapter_npm_and_build_gates() -> Non
     assert "uv build --out-dir" in joined
     assert "packages/travis234-mcp-adapter" in joined
     assert "twine check" in joined
+
+
+def test_adapter_source_tests_lock_the_local_host_in_their_own_group() -> None:
+    with (ADAPTER_ROOT / "pyproject.toml").open("rb") as handle:
+        project = tomllib.load(handle)
+    source_test = project["dependency-groups"]["source-test"]
+    assert "travis234" in source_test
+    assert project["tool"]["uv"]["sources"]["travis234"] == {
+        "path": "../..",
+        "editable": True,
+    }
+
+    with (ADAPTER_ROOT / "uv.lock").open("rb") as handle:
+        lock = tomllib.load(handle)
+    locked_host = next(package for package in lock["package"] if package["name"] == "travis234")
+    locked_source = locked_host["source"]
+    assert set(locked_source) == {"editable"}
+    assert (ADAPTER_ROOT / locked_source["editable"]).resolve() == ROOT
+
+    workflow, _source = _workflow()
+    adapter_commands = "\n".join(
+        command
+        for command in _run_commands(workflow)
+        if "--project packages/travis234-mcp-adapter" in command
+    )
+    assert adapter_commands.count("--group source-test") == 2
+    assert "--extra test" not in adapter_commands
 
 
 def test_source_ci_records_then_strictly_verifies_temporary_evidence() -> None:
