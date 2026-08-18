@@ -4,9 +4,11 @@ import pytest
 
 from travis.tui.interactive_mode import (
     _is_help_command,
+    _is_lsp_status_command,
     _is_manual_compression_command,
     _is_processes_command,
     _is_reload_command,
+    _parse_agents_command,
     _parse_memory_command,
     _parse_auth_command,
     _parse_bash_command,
@@ -35,6 +37,11 @@ from travis.tui.interactive_command_dispatcher import (
         ("/login", "auth"),
         ("/model", "model"),
         ("/params", "params"),
+        ("/memory status", "memory"),
+        ("/operations", "operations"),
+        ("/lsp status", "lsp"),
+        ("/agents", "agents"),
+        ("/coordination", "agent-prompt"),
         ("implement", "agent-prompt"),
     ],
 )
@@ -49,6 +56,10 @@ def test_builtin_command_classification_is_stable(prompt: str, expected: str) ->
         ("auth", _parse_auth_command(prompt) is not None),
         ("model", _parse_model_command(prompt) is not None),
         ("params", _parse_params_command(prompt) is not None),
+        ("memory", _parse_memory_command(prompt) is not _NOT_MEMORY_COMMAND),
+        ("operations", _parse_operations_command(prompt) is not _NOT_OPERATIONS_COMMAND),
+        ("lsp", _is_lsp_status_command(prompt)),
+        ("agents", _parse_agents_command(prompt) is not None),
     )
     observed = next((name for name, matched in checks if matched), "agent-prompt")
 

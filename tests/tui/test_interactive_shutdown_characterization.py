@@ -15,6 +15,7 @@ def test_shutdown_deadline_characterization(tmp_path: Path) -> None:
 def test_os_sigint_defers_tui_mutation_to_owner_dispatcher(tmp_path: Path, monkeypatch) -> None:
     app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=FakeTerminal(), enable_tui=True)
     runtime = InteractiveMode(app)._runtime
+    runtime.tui.drain_dispatcher()
     installed: dict[int, object] = {}
     handled: list[tuple[object, object]] = []
 
@@ -29,5 +30,6 @@ def test_os_sigint_defers_tui_mutation_to_owner_dispatcher(tmp_path: Path, monke
     handler(signal.SIGINT, None)
 
     assert handled == []
-    runtime.tui.drain_dispatcher()
+    assert runtime.tui.drain_dispatcher() == 1
     assert handled == [(signal.SIGINT, None)]
+    assert runtime.tui.drain_dispatcher() == 0

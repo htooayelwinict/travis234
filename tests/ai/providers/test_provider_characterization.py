@@ -17,4 +17,5 @@ def test_chat_stream_event_tuple_is_stable() -> None:
     events = list(parse_sse_chunks(lines, model))
 
     assert [type(event) for event in events] == [StartEvent, TextStartEvent, TextDeltaEvent, TextEndEvent, DoneEvent]
+    assert [event.type for event in events] == ["start", "text_start", "text_delta", "text_end", "done"]
     assert events[-1].message.content[0].text == "hello"
