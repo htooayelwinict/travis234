@@ -67,3 +67,12 @@ The verified provider work was fast-forwarded onto clean `main` and qualified as
 - No-cache `Dockerfile.release` image build and `evals/container_smoke.py`: passed; local image ID `sha256:4f6554a82b37ae96d2e510a7af543a59930375b5bd6d4035e05eda754f562107`.
 
 The first GitHub release run exposed a clean-runner dependency gap before registry mutation: `tests/test_contract_parity_benchmark.py` imports the separately packaged MCP adapter, but the workflow provisioned only the root project and pytest. A failing workflow regression was added first. The test job now injects the local adapter package explicitly; 32 isolated release/benchmark tests and the 2,650-test repository suite passed after the fix.
+
+The corrected run then exposed a cross-platform failed-artifact redaction defect. A fixture named `folder` accidentally modified macOS's `/var/folders/...` prefix during relative-path replacement, hiding the leak locally; Linux's `/tmp/...` prefix revealed it. A platform-neutral failing regression now proves the issue, and unavailable artifact promotion replaces both declared relative paths and their absolute workspace forms. Because `2.5.1` Python/npm artifacts were already immutable and public when the Linux failure surfaced, the corrected source advances to `2.5.2` instead of moving the public tag or overwriting artifacts.
+
+Final `2.5.2` qualification passed: 2,650 root Python tests in 276.28 seconds, 24 npm launcher tests, 125 adapter tests, the 11-file npm archive check, all four Twine metadata checks, an exact-wheel install/import/console smoke, and the no-cache release-container smoke. Release artifact SHA-256 values are:
+
+- Root wheel: `753b8de6de898b1e49382077b43b9822bf1803f567e475f2f0b44e28afc94a5f`.
+- Root sdist: `b148c261c190349456b16868dd8eff596f097611993ec1341af08b852b3fbc1a`.
+- npm tarball: `2754141136b3172cba91f07abe2a0126a083a0aac92780606c88de1971c5ad4e`.
+- Local no-cache image: `sha256:bfa6d49b5e7982f81d327ddab9f6f36355f1534d50a4f85a310ea3ed3f942f0b`.

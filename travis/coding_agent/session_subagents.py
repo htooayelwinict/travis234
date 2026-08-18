@@ -539,6 +539,7 @@ class SessionSubagentController:
             if self._artifacts.is_readable_reference(raw_path):
                 artifact_ids.append(raw_path)
                 continue
+            lexical: Path | None = None
             try:
                 requested = Path(raw_path).expanduser()
                 lexical = requested if requested.is_absolute() else self._workspace.root / requested
@@ -563,13 +564,12 @@ class SessionSubagentController:
                 artifact_ids.append(ref.id)
                 replacements[raw_path] = ref.id
                 replacements[str(resolved)] = ref.id
-            except ArtifactPromotionError as error:
-                errors.append(f"artifact_unavailable:{error.code}")
+            except (ArtifactPromotionError, OSError, RuntimeError, ValueError) as error:
+                code = error.code if isinstance(error, ArtifactPromotionError) else "invalid_source"
+                errors.append(f"artifact_unavailable:{code}")
                 replacements[raw_path] = "[artifact unavailable]"
-            except (OSError, RuntimeError, ValueError):
-                errors.append("artifact_unavailable:invalid_source")
-                replacements[raw_path] = "[artifact unavailable]"
-
+                if lexical is not None:
+                    replacements[str(lexical)] = "[artifact unavailable]"
         self._subagent_artifact_promotions[task_id] = (
             raw_paths,
             list(artifact_ids),

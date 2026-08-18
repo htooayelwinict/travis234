@@ -63,7 +63,7 @@ def test_declared_policy_promotes_only_regular_utf8_workspace_files(tmp_path: Pa
     good.write_text("evidence", encoding="utf-8")
     bad = tmp_path / "bad.bin"
     bad.write_bytes(b"\xff\xfe")
-    directory = tmp_path / "folder"
+    directory = tmp_path / "artifact-dir"
     directory.mkdir()
     outside = tmp_path.parent / "outside.txt"
     outside.write_text("outside", encoding="utf-8")
@@ -79,7 +79,7 @@ def test_declared_policy_promotes_only_regular_utf8_workspace_files(tmp_path: Pa
         role=task.role,
         status="completed",
         summary=f"paths {good} {bad} {directory} {link}",
-        artifacts=["good.txt", "bad.bin", "folder", "escape.txt", "missing.txt"],
+        artifacts=["good.txt", "bad.bin", "artifact-dir", "escape.txt", "missing.txt"],
     )
     try:
         session.subagents.spawn(task)
