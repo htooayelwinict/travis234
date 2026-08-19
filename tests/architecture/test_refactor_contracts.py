@@ -12,7 +12,9 @@ from travis.tui.interactive_mode import InteractiveMode, _InteractiveRuntime
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACT_MODULES = (
     ROOT / "travis/coding_agent/session_contracts.py",
+    ROOT / "travis/coding_agent/session_ports.py",
     ROOT / "travis/tui/interactive_contracts.py",
+    ROOT / "travis/tui/interactive_services.py",
 )
 FORBIDDEN_CONTRACT_IMPORTS = {
     "travis.app",
@@ -55,6 +57,17 @@ def test_contract_inventories_are_immutable_and_public_only() -> None:
 def test_contract_modules_do_not_import_facades_or_composition_roots() -> None:
     for path in CONTRACT_MODULES:
         assert _imported_modules(path).isdisjoint(FORBIDDEN_CONTRACT_IMPORTS)
+
+
+def test_collaborator_contracts_do_not_expose_generic_runtime_escape_hatches() -> None:
+    for path in CONTRACT_MODULES:
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(path))
+        assert not any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "__getattr__"
+            for node in ast.walk(tree)
+        )
+        assert "state: object" not in source
 
 
 def test_session_factory_modules_do_not_import_concrete_agent_session() -> None:

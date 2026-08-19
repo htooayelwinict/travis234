@@ -121,6 +121,7 @@ from travis.coding_agent.session_persistence import SessionPersistence
 from travis.coding_agent.session_bash import SessionBashController
 from travis.coding_agent.session_policy_controller import SessionPolicyController
 from travis.coding_agent.session_operations import SessionOperationController
+from travis.coding_agent.session_controllers import SessionControllers
 
 from travis.coding_agent.session_types import default_convert_to_llm
 
@@ -528,6 +529,20 @@ class _SessionRuntime(
         self.set_active_tools_by_name(initial_active_tool_names)
         if restored_context:
             self.agent.state.messages = restored_context.messages
+        self.controllers = SessionControllers(
+            events=self,
+            models=self,
+            generation=self,
+            persistence=self,
+            bash=self,
+            policy=self,
+            operations=self,
+            tools=self,
+            extensions=self,
+            subagents=self,
+            subagent_trace=self,
+            turns=self,
+        )
 
 
 class AgentSession(RuntimeFacade):

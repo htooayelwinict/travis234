@@ -12,6 +12,9 @@ FACADE_LIMITS = {
     "travis/ai/providers/travis_env.py": (320, None, 12),
 }
 OWNER_GLOBS = (
+    "travis/coding_agent/session_ports.py",
+    "travis/coding_agent/session_state.py",
+    "travis/coding_agent/session_controllers.py",
     "travis/coding_agent/session_types.py",
     "travis/coding_agent/session_models.py",
     "travis/coding_agent/model_roles.py",
@@ -26,6 +29,9 @@ OWNER_GLOBS = (
     "travis/coding_agent/session_operations.py",
     "travis/coding_agent/session_events.py",
     "travis/tui/components/*.py",
+    "travis/tui/interactive_state.py",
+    "travis/tui/interactive_services.py",
+    "travis/tui/interactive_controllers.py",
     "travis/tui/interactive_turn_controller.py",
     "travis/tui/interactive_command_dispatcher.py",
     "travis/tui/interactive_session_commands.py",

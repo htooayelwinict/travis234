@@ -75,6 +75,7 @@ from travis.runtime_facade import RuntimeFacade
 from travis.tui.footer_data import _ExtensionFooterDataProvider
 from travis.tui.interactive_shutdown import InputFn
 from travis.tui.interactive_tool_approval import InteractiveToolApprovalBroker
+from travis.tui.interactive_controllers import InteractiveControllers
 
 
 def _builtin_theme_records() -> list[Theme]:
@@ -294,6 +295,22 @@ class _InteractiveRuntime(
             )
         self.setup_autocomplete_provider()
         self._theme_render_ready = True
+        self.controllers = InteractiveControllers(
+            command_dispatch=self,
+            view=self,
+            model_auth=self,
+            params=self,
+            processes=self,
+            lsp=self,
+            memory=self,
+            operations=self,
+            subagents=self,
+            sessions=self,
+            extensions=self,
+            turns=self,
+            shutdown=self,
+            motion=self,
+        )
 
     def _ensure_builtin_themes(self) -> None:
         existing = {theme.name for theme in self.theme_registry.list()}
