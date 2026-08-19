@@ -512,6 +512,11 @@ Baseline commands and summarized outcomes:
 
 ### Task 2.1 — Composition containers and explicit ports
 
+> **Superseded by the Phase 2 contract-first correction below.** The original
+> qualification proved container identity and removed inheritance, but did not prove
+> narrow dependency ownership: each controller still received the complete runtime and
+> its methods were dynamically rebound to that runtime.
+
 - Commit: `0a3e11e6471d0e575de0edbbb1b4da3cabfda562`.
 - RED command and expected failure:
   `uv run --locked --all-extras --dev pytest -q -p no:cacheprovider tests/coding_agent/test_session_controller_composition.py tests/tui/test_interactive_controller_composition.py tests/architecture/test_refactor_contracts.py tests/architecture/test_facade_boundaries.py`
@@ -580,6 +585,11 @@ Baseline commands and summarized outcomes:
 
 ### Task 2.8 — Explicit imports and migrated-owner quality gates
 
+> **Superseded by the Phase 2 contract-first correction below.** The recorded dynamic
+> compatibility bridge and its line-level Pyright annotations were not an acceptable
+> collaborator boundary. The correction removes the bridge and annotations rather than
+> treating them as qualified architecture.
+
 - Commits: `18c966c5a4f761efd9fe3290ff047e4512478259` (explicit imports and exports),
   `5d5e954f7b087f2dac735f359ed67eebf5834c56` (bounded delegate-map ownership), and
   `487d7a3c93fb56c42ebe57ae2a7cde42b51ce2b4` (diagnostic-free collaborator checks).
@@ -604,6 +614,10 @@ Baseline commands and summarized outcomes:
   remain additive; supported members are explicitly inventoried and delegated.
 
 ### Task 2.9 — Phase 2 qualification and installed-wheel TUI
+
+> **Rejected as an architecture qualification and superseded below.** The commands and
+> historical runtime evidence remain factual for commit `9f4516b`, but the composition
+> assertions did not detect that controller methods were rebound to complete runtimes.
 
 - Reviewed predecessor: Phase 1 head
   `e67d94d` (`docs: record phase 1 review qualification`).
@@ -670,3 +684,95 @@ Baseline commands and summarized outcomes:
   master plan reserves container qualification for Phase 5. Generated coverage and
   task-owned build/install/TUI artifacts are removed after the final repository checks;
   Phase 3 has not started.
+
+### Task 2.10 — Contract-first correction and requalification
+
+- Rejected base: `9f4516bf07b8ba899043b510134e303ba1a03f10`. All 12 session
+  controllers retained `_SessionRuntime` and all 14 TUI controllers retained
+  `_InteractiveRuntime`; `BoundController.__getattribute__` used `MethodType` to make
+  controller methods report the complete runtime as `method.__self__`. The state and
+  service records were declarations without production consumers, and TUI session
+  rebinding had no typed third-controller rollback path. Therefore the earlier statements
+  that complete runtimes were rejected and ports/state were real dependencies were false.
+- RED commit: `224f2aa` (`test(composition): expose runtime rebinding bridge`). Eight
+  architecture/composition regressions failed against the rejected base, proving the
+  `MethodType`/generic-`__getattribute__` bridge, runtime retention, incorrect method
+  binding, unused state/services, and missing transactional rebind rollback.
+- GREEN implementation: `44b5c80` (`refactor(composition): replace runtime rebinding
+  bridge`). `ControllerBindingRegistry` now owns explicit named cells and collaborator
+  bindings; every controller receives a frozen/slotted dependency record containing an
+  allowlisted `ControllerPort`, never a runtime or public façade. Controller methods stay
+  bound to their controller, cross-domain access is through named port members, runtime
+  compatibility is explicit delegation, and the declared session/TUI state and service
+  records back production values.
+- Full-suite correction: the first coverage checkpoint exposed omitted named port members
+  for model-change notification, LSP/memory discovery, and the coordination guard, plus a
+  duplicated delegate implementation. Commit `3dbf5ca` (`fix(composition): declare
+  cross-domain controller ports`) followed a new failing composition regression, added
+  those members to their responsibility-specific ports, and centralized the explicit
+  descriptor without reintroducing a dynamic attribute bridge.
+- Transactional TUI rebind now updates view, parameter, and process controllers in order.
+  If a later controller rejects the new session, already-rebound controllers are restored
+  in reverse order; focused fault injection proves rollback when the third controller
+  fails.
+- Final architecture and characterization gates:
+  - session/TUI controller, façade-boundary, and repository-quality slice: 28 passed;
+  - complete session/TUI behavior characterization: 654 passed;
+  - full Pyright: 0 errors, 0 warnings, 0 informations;
+  - fatal and migrated-owner Ruff gates: passed;
+  - repository hygiene: 0 unused dependencies, camel symbols, duplicate groups,
+    oversized tests, forbidden compatibility surfaces, reference coupling, or
+    distribution leaks.
+- Root source qualification:
+  - coverage suite: 2,816 passed in 873.37s; 84.06% statements and 68.68% branches,
+    above the unchanged 83.0% and 68.0% floors;
+  - independent pinned Python 3.13.13 suite: 2,816 passed in 611.61s;
+  - root and adapter locks resolved 84 and 56 packages;
+  - locked adapter suite: 125 passed in 31.37s;
+  - npm launcher: 24 passed; dry-pack contained the expected 11 files.
+- Fresh builds and Twine validation passed for all four artifacts. SHA-256 values:
+  - root wheel: `bd2afe044ef7bf864167d92535d1222bd2d14df72ca6b3b82c896f4809b0ccc0`;
+  - root sdist: `92353f09b54b5d22abad60f441ecf38eb369cba09ae6453234ff3e17ed0972c4`;
+  - adapter wheel: `48f91ebb21fcbed46232fc0b196240094447f568efb3ca9943cbcf09356e2f8a`;
+  - adapter sdist: `655183cabe75c6dc0940f2d61880f272f033526e8fe0c2cc2f4cc1ad389ea46d`.
+- The exact root wheel installed into an isolated Python 3.13.13 environment and imported
+  `travis` from that environment's `site-packages`. Its actual installed `travis234`
+  console entry ran as the current unprivileged user in a real attached PTY with isolated
+  task-owned `HOME` and `TRAVIS234_CODING_AGENT_DIR`, `--offline`, `--no-session`, and an
+  operator-authorized task-owned keyless faux provider extension. It completed this fresh
+  21-input matrix in one TUI process:
+  1. ordinary streamed controller-response prompt;
+  2. help and command inventory;
+  3. model inventory;
+  4. generation-parameter display;
+  5. generation-parameter set;
+  6. generation-parameter reset;
+  7. motion status;
+  8. motion disable;
+  9. managed-process inspection;
+  10. language-service status;
+  11. memory-command usage validation;
+  12. operation-journal inspection;
+  13. subagent-supervisor status;
+  14. extension command dispatch;
+  15. extension reload and session rebind;
+  16. provider streaming after reload;
+  17. unknown slash command remains local;
+  18. manual compaction boundary;
+  19. session metadata;
+  20. read-only memory status;
+  21. final provider response after all controller commands.
+- The trace contained one TUI-ready event, three streamed model turns with matching
+  start/end/ready events, one extension command, one compaction end, one shutdown, and no
+  fatal event. `/exit` rendered `status: Exiting`, returned 0, restored cursor and
+  bracketed-paste modes, and left no installed-console process.
+- Manual-evidence caveats from the predecessor review remain explicit and are not upgraded
+  by the fresh faux-provider matrix: compaction was manual rather than automatic; there was
+  no direct pre-compaction recall challenge; scenario 11 required a forced TUI-side exit;
+  scenario 17 demonstrated file-not-found rather than an explicit guardrail denial; and
+  provider SSE observation required no-data retries.
+- Protected-loop SHA-256 remains
+  `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`, and
+  its diff from `7838749452b567940bd5b69a715b6184b8f9f13e` remains empty. No container,
+  credential, user-state, merge, push, publish, version, permission, protected-loop, or
+  Phase 3 action was performed. Remote CI remains an external follow-up.
