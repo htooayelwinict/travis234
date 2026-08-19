@@ -6,7 +6,7 @@ import importlib
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, cast
 from urllib.parse import urlparse
 
 from travis.agent.types import AgentMessage
@@ -25,6 +25,7 @@ from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.session_catalog import SessionCatalog
 from travis.coding_agent.session_composition import SessionDependencies
 from travis.coding_agent.session_contracts import SessionLifecyclePort
+from travis.coding_agent.session_options import SessionBootstrapOptions
 from travis.coding_agent.session_store import SessionContextSnapshot, SessionStore
 from travis.coding_agent.session_types import default_convert_to_llm
 from travis.coding_agent.settings_manager import SettingsManager
@@ -58,14 +59,17 @@ def create_session_artifact_registry(
 
 
 
-def _build_session_dependencies(options: Mapping[str, object]) -> SessionDependencies:
-    cwd = str(Path(str(options.get("cwd", "."))).expanduser().resolve())
-    agent_dir = str(Path(str(options.get("agentDir", options.get("agent_dir", Path.home() / ".travis234" / "agent")))).expanduser().resolve())
-    settings_manager = options.get("settingsManager") or options.get("settings_manager") or SettingsManager.create(
+def _build_session_dependencies(
+    raw_options: Mapping[str, object] | SessionBootstrapOptions,
+) -> SessionDependencies:
+    options = SessionBootstrapOptions.from_mapping(raw_options)
+    cwd = str(Path(str(options.cwd)).expanduser().resolve())
+    agent_dir = str(Path(str(options.agent_dir or Path.home() / ".travis234" / "agent")).expanduser().resolve())
+    settings_manager = options.settings_manager or SettingsManager.create(
         cwd,
         agent_dir,
     )
-    configured_session_dir = options.get("sessionDir", options.get("session_dir"))
+    configured_session_dir = options.session_dir
     if configured_session_dir is None:
         get_session_dir = getattr(settings_manager, "getSessionDir", None) or getattr(
             settings_manager,
@@ -74,13 +78,13 @@ def _build_session_dependencies(options: Mapping[str, object]) -> SessionDepende
         )
         if callable(get_session_dir):
             configured_session_dir = get_session_dir()
-    session_catalog = options.get("sessionCatalog") or options.get("session_catalog") or SessionCatalog(
+    session_catalog = options.session_catalog or SessionCatalog(
         agent_dir,
         session_dir=str(configured_session_dir) if configured_session_dir else None,
     )
-    resource_loader = options.get("resourceLoader") or options.get("resource_loader")
+    resource_loader = options.resource_loader
     if resource_loader is None:
-        resource_loader_options = dict(options.get("resourceLoaderOptions") or options.get("resource_loader_options") or {})
+        resource_loader_options = dict(cast(Mapping[str, object], options.resource_loader_options or {}))
         resource_loader = DefaultResourceLoader(
             cwd=cwd,
             agent_dir=agent_dir,
@@ -88,25 +92,24 @@ def _build_session_dependencies(options: Mapping[str, object]) -> SessionDepende
             **resource_loader_options,
         )
         reload_options = dict(
-            options.get("resourceLoaderReloadOptions")
-            or options.get("resource_loader_reload_options")
-            or {}
+            cast(Mapping[str, object], options.resource_loader_reload_options or {})
         )
-        for camel_name, snake_name in (
-            ("projectTrustOverride", "project_trust_override"),
-            ("projectTrustContext", "project_trust_context"),
-            ("trustStore", "trust_store"),
+        for camel_name, snake_name, value in (
+            ("projectTrustOverride", "project_trust_override", options.project_trust_override),
+            ("projectTrustContext", "project_trust_context", options.project_trust_context),
+            ("trustStore", "trust_store", options.trust_store),
         ):
-            if camel_name not in reload_options and snake_name not in reload_options:
-                if camel_name in options:
-                    reload_options[camel_name] = options[camel_name]
-                elif snake_name in options:
-                    reload_options[snake_name] = options[snake_name]
+            if (
+                value is not None
+                and camel_name not in reload_options
+                and snake_name not in reload_options
+            ):
+                reload_options[camel_name] = value
         resource_loader.reload(reload_options)
-    auth_storage = options.get("authStorage") or options.get("auth_storage") or AuthStorage.create(
+    auth_storage = options.auth_storage or AuthStorage.create(
         str(Path(agent_dir) / "auth.json")
     )
-    model_registry = options.get("modelRegistry") or options.get("model_registry") or ModelRegistry.create(
+    model_registry = options.model_registry or ModelRegistry.create(
         auth_storage,
         str(Path(agent_dir) / "models.json"),
     )
@@ -114,8 +117,8 @@ def _build_session_dependencies(options: Mapping[str, object]) -> SessionDepende
         raise TypeError("modelRegistry must be a ModelRegistry")
     if model_registry.auth_storage is not auth_storage:
         raise ValueError("modelRegistry and authStorage must share the same AuthStorage")
-    session_id = options.get("sessionId", options.get("session_id"))
-    session_path = options.get("sessionPath", options.get("session_path"))
+    session_id = options.session_id
+    session_path = options.session_path
     if session_path is None:
         session_path, session_id = session_catalog.new_session_path(cwd, str(session_id) if session_id else None)
     else:
@@ -128,7 +131,7 @@ def _build_session_dependencies(options: Mapping[str, object]) -> SessionDepende
         diagnostics.extend(
             apply_extension_flag_values(
                 runtime,
-                options.get("extensionFlagValues") or options.get("extension_flag_values"),
+                cast(Mapping[str, object] | None, options.extension_flag_values),
             )
         )
     return SessionDependencies(
@@ -141,15 +144,15 @@ def _build_session_dependencies(options: Mapping[str, object]) -> SessionDepende
         session_catalog=session_catalog,
         session_path=str(session_path),
         session_id=str(session_id or ""),
-        operation_runtime=options.get(
-            "operationRuntime", options.get("operation_runtime")
-        ),
+        operation_runtime=options.operation_runtime,
         diagnostics=tuple(diagnostics),
-        session_factory=options.get("sessionFactory", options.get("session_factory")),
+        session_factory=options.session_factory,
     )
 
 
-def create_agent_session_services(options: dict[str, Any]) -> dict[str, Any]:
+def create_agent_session_services(
+    options: Mapping[str, object] | SessionBootstrapOptions,
+) -> dict[str, Any]:
     return _build_session_dependencies(options).to_legacy_mapping()
 
 
@@ -165,34 +168,49 @@ def create_agent_session(options: Mapping[str, Any] | None = None, **kwargs: Any
     else:
         raise TypeError("create_agent_session options must be a mapping")
     resolved_options.update(kwargs)
-    services = resolved_options.get("services")
+    bootstrap = SessionBootstrapOptions.from_mapping(resolved_options)
+    services = bootstrap.services
     if services is None:
-        services = create_agent_session_services(resolved_options)
-    return create_agent_session_from_services({**resolved_options, "services": services})
+        services = create_agent_session_services(bootstrap)
+    return create_agent_session_from_services(replace(bootstrap, services=services))
 
 
 
 
-def create_agent_session_from_services(options: dict[str, Any]) -> CreateAgentSessionResult:
-    raw_services = options["services"]
+def create_agent_session_from_services(
+    raw_options: Mapping[str, object] | SessionBootstrapOptions,
+) -> CreateAgentSessionResult:
+    options = SessionBootstrapOptions.from_mapping(raw_options)
+    raw_services = options.services
+    if raw_services is None:
+        raise ValueError("services are required")
     if isinstance(raw_services, SessionDependencies):
         services = raw_services
     elif isinstance(raw_services, Mapping):
         services = SessionDependencies.from_legacy_mapping(raw_services)
     else:
         raise TypeError("services must be SessionDependencies or a mapping")
-    operation_runtime = options.get(
-        "operationRuntime",
-        options.get("operation_runtime", services.operation_runtime),
+    operation_runtime = (
+        options.operation_runtime
+        if options.was_provided("operation_runtime")
+        else services.operation_runtime
     )
     owns_operation_runtime = False
-    model: Model | None = options.get("model")
+    model = cast(Model | None, options.model)
     model_fallback_message: str | None = None
-    thinking_level = options.get("thinkingLevel", options.get("thinking_level"))
-    session_path = options.get("sessionPath", options.get("session_path", services.session_path))
+    thinking_level = cast(str | None, options.thinking_level)
+    session_path = (
+        options.session_path
+        if options.was_provided("session_path")
+        else services.session_path
+    )
     if session_path is not None:
         session_path = str(Path(str(session_path)).expanduser().resolve())
-    session_id = options.get("sessionId", options.get("session_id", services.session_id or None))
+    session_id = (
+        options.session_id
+        if options.was_provided("session_id")
+        else services.session_id or None
+    )
     fresh_session = _is_fresh_session_path(session_path)
     existing_session = _load_existing_session_context(services.cwd, session_path, thinking_level or "off")
     has_existing_session = bool(existing_session and existing_session.messages)
@@ -212,11 +230,11 @@ def create_agent_session_from_services(options: dict[str, Any]) -> CreateAgentSe
     if model is None:
         settings_manager = services.settings_manager
         initial = find_initial_model(
-            scoped_models=options.get("scopedModels", options.get("scoped_models")) or [],
-            is_continuing=has_existing_session or bool(options.get("isContinuing", options.get("is_continuing", False))),
+            scoped_models=cast(list[object], options.scoped_models or []),
+            is_continuing=has_existing_session or bool(options.is_continuing),
             model_registry=services.model_registry,
-            cli_provider=options.get("provider"),
-            cli_model=options.get("modelId", options.get("model_id")),
+            cli_provider=cast(str | None, options.provider),
+            cli_model=cast(str | None, options.model_id),
             default_provider=_call_or_none(settings_manager, "getDefaultProvider", "get_default_provider"),
             default_model_id=_call_or_none(settings_manager, "getDefaultModel", "get_default_model"),
             default_thinking_level=_call_or_none(
@@ -270,12 +288,10 @@ def create_agent_session_from_services(options: dict[str, Any]) -> CreateAgentSe
             agent_dir=services.agent_dir,
             model=model,
             thinking_level=thinking_level or "off",
-            scoped_models=options.get("scopedModels", options.get("scoped_models")),
+            scoped_models=options.scoped_models,
             active_tool_names=active_tool_names,
             allowed_tool_names=allowed_tool_names,
-            excluded_tool_names=options.get(
-                "excludeTools", options.get("exclude_tools")
-            ),
+            excluded_tool_names=options.exclude_tools,
             transport=_call_or_none(
                 services.settings_manager, "getTransport", "get_transport"
             ),
@@ -291,7 +307,7 @@ def create_agent_session_from_services(options: dict[str, Any]) -> CreateAgentSe
             tool_definitions=_tool_definitions_for_sdk(services, options),
             convert_to_llm=_convert_to_llm_for_sdk(
                 services.settings_manager,
-                options.get("convertToLlm", options.get("convert_to_llm")),
+                cast(Callable[[list[AgentMessage]], list[Message]] | None, options.convert_to_llm),
             ),
             resource_loader=services.resource_loader,
             settings_manager=services.settings_manager,
@@ -303,26 +319,12 @@ def create_agent_session_from_services(options: dict[str, Any]) -> CreateAgentSe
             model_registry=services.model_registry,
             session_index=services.session_catalog.index,
             session_path=session_path,
-            parent_session_path=options.get(
-                "parentSession", options.get("parent_session_path")
-            ),
+            parent_session_path=options.parent_session_path,
             session_id=str(session_id) if session_id else None,
-            session_start_event=options.get(
-                "sessionStartEvent", options.get("session_start_event")
-            ),
-            defer_session_start=bool(
-                options.get(
-                    "deferSessionStart", options.get("defer_session_start", False)
-                )
-            ),
-            model_role_bindings=options.get(
-                "modelRoleBindings",
-                options.get("model_role_bindings"),
-            ),
-            model_role_event_sink=options.get(
-                "modelRoleEventSink",
-                options.get("model_role_event_sink"),
-            ),
+            session_start_event=options.session_start_event,
+            defer_session_start=bool(options.defer_session_start),
+            model_role_bindings=options.model_role_bindings,
+            model_role_event_sink=options.model_role_event_sink,
             operation_runtime=operation_runtime,
             owns_operation_runtime=owns_operation_runtime,
         )
@@ -559,9 +561,9 @@ def _format_no_models_available_message() -> str:
 
 def _tool_definitions_for_sdk(
     services: SessionDependencies,
-    options: Mapping[str, Any],
+    options: SessionBootstrapOptions,
 ) -> list[object] | None:
-    custom_tools = options.get("customTools", options.get("custom_tools"))
+    custom_tools = options.custom_tools
     if custom_tools is None:
         return None
     return [
@@ -585,15 +587,15 @@ def _builtin_tool_options(settings_manager: object) -> dict[str, dict[str, objec
 
 
 def _resolve_tool_options(
-    options: Mapping[str, Any],
+    options: SessionBootstrapOptions,
     *,
     memory_enabled: bool = False,
 ) -> tuple[list[str] | None, list[str] | None]:
-    tools = options.get("tools")
+    tools = options.tools
     if tools is not None:
         selected = [str(name) for name in tools]
         return selected, selected
-    no_tools = options.get("noTools", options.get("no_tools"))
+    no_tools = options.no_tools
     if no_tools:
         return [], [] if no_tools == "all" else None
     active = ["read", "bash", "edit", "write"]

@@ -43,6 +43,19 @@ def _write_extension_tool(path: Path, name: str = "extension_tool") -> None:
     )
 
 
+def test_session_service_bootstrap_rejects_conflicting_cli_aliases(tmp_path: Path) -> None:
+    from travis.coding_agent.agent_session_services import create_agent_session_services
+
+    with pytest.raises(ValueError, match="agentDir.*agent_dir"):
+        create_agent_session_services(
+            {
+                "cwd": str(tmp_path),
+                "agentDir": str(tmp_path / "camel-agent"),
+                "agent_dir": str(tmp_path / "snake-agent"),
+            }
+        )
+
+
 def _write_extension_flags(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
