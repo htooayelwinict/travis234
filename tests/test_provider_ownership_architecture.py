@@ -1,10 +1,48 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
+
+ROOT = Path(__file__).parents[1]
+
+
+def _imported_modules(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            modules.add(node.module)
+    return modules
+
+
+def test_provider_leaf_modules_do_not_depend_on_runtime_or_concrete_transports() -> None:
+    provider_root = ROOT / "travis" / "ai" / "providers"
+    forbidden_prefixes = (
+        "travis.application",
+        "travis.coding_agent",
+        "travis.session",
+        "travis.tui",
+        "travis.ai.providers.catalog",
+        "travis.ai.providers.provider_request",
+        "travis.ai.providers.transport_families",
+        "travis.ai.providers.transport_registry",
+        "travis.ai.providers.transports",
+    )
+    failures: list[str] = []
+    for filename in ("provider_contracts.py", "provider_modes.py", "provider_profiles.py"):
+        path = provider_root / filename
+        assert path.is_file(), f"missing leaf provider owner: {path.relative_to(ROOT)}"
+        for module in sorted(_imported_modules(path)):
+            if module.startswith(forbidden_prefixes):
+                failures.append(f"{filename}: {module}")
+
+    assert failures == []
 
 
 def test_provider_consumers_do_not_access_registry_privates() -> None:
-    root = Path(__file__).parents[1] / "travis"
+    root = ROOT / "travis"
     forbidden = ("._models", "._registered_providers", "._fallback_api_key", "_DEFAULT_API_PROVIDER_REGISTRY")
     failures: list[str] = []
     for path in root.rglob("*.py"):

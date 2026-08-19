@@ -4,6 +4,7 @@ from travis.ai.providers.base import (
     NormalizedToolCall,
     NormalizedUsage,
     ProviderProfile,
+    ProviderTransport,
 )
 from travis.ai.providers.catalog import (
     CANONICAL_PROVIDERS,
@@ -32,6 +33,7 @@ __all__ = [
     "ProviderDef",
     "ProviderEntry",
     "ProviderProfile",
+    "ProviderTransport",
     "determine_api_mode",
     "get_provider",
     "get_provider_profile",

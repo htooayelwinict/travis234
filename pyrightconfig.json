@@ -1,6 +1,9 @@
 {
   "include": [
     "travis/ai/__init__.py",
+    "travis/ai/providers/provider_contracts.py",
+    "travis/ai/providers/provider_modes.py",
+    "travis/ai/providers/provider_profiles.py",
     "travis/controller_ports.py",
     "travis/runtime_facade.py",
     "travis/coding_agent/agent_harness.py",
