@@ -483,19 +483,20 @@ def test_agent_session_factory_closes_owned_runtime_when_construction_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime = _TrackingRuntime()
+
+    def fail_session(**_kwargs: object):
+        raise RuntimeError("session construction failed")
+
     services = create_agent_session_services(
-        {"cwd": str(tmp_path), "agentDir": str(tmp_path / "agent")}
+        {
+            "cwd": str(tmp_path),
+            "agentDir": str(tmp_path / "agent"),
+            "sessionFactory": fail_session,
+        }
     )
     monkeypatch.setattr(
         "travis.coding_agent.agent_session_services.OperationRuntime.from_settings",
         lambda *_args, **_kwargs: runtime,
-    )
-
-    def fail_session(*_args, **_kwargs):
-        raise RuntimeError("session construction failed")
-
-    monkeypatch.setattr(
-        "travis.coding_agent.agent_session_services.AgentSession", fail_session
     )
 
     with pytest.raises(RuntimeError, match="session construction failed"):
