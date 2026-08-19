@@ -72,3 +72,17 @@ def test_low_coupling_session_owners_are_owned_collaborators(tmp_path) -> None:
 
     assert all(owner is not runtime for owner in owners)
     assert all(type(owner) not in type(runtime).__bases__ for owner in owners)
+
+
+def test_persistence_tool_extension_and_subagent_owners_are_collaborators(tmp_path) -> None:
+    runtime = AgentSession(cwd=str(tmp_path), model=faux_model())._runtime
+    owners = (
+        runtime.controllers.persistence,
+        runtime.controllers.tools,
+        runtime.controllers.extensions,
+        runtime.controllers.subagents,
+        runtime.controllers.subagent_trace,
+    )
+
+    assert all(owner is not runtime for owner in owners)
+    assert all(type(owner) not in type(runtime).__bases__ for owner in owners)
