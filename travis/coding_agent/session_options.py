@@ -2,10 +2,22 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
+from typing import Any, cast
 
+from travis.agent.types import AgentMessage
+from travis.ai.model_resolver import ScopedModel
+from travis.ai.types import Message, Model
+from travis.coding_agent.auth_storage import AuthStorage
+from travis.coding_agent.model_registry import ModelRegistry
+from travis.coding_agent.model_roles import ModelRole
+from travis.coding_agent.resource_loader import DefaultResourceLoader
+from travis.coding_agent.session_catalog import SessionCatalog
+from travis.coding_agent.session_contracts import SessionFactory
+from travis.coding_agent.settings_manager import SettingsManager
+from travis.coding_agent.tools.types import ToolDefinition
 
 SESSION_BOOTSTRAP_ALIASES: Mapping[str, str] = MappingProxyType(
     {
@@ -63,44 +75,44 @@ def _equal_alias_values(left: object, right: object) -> bool:
 @dataclass(frozen=True, slots=True, repr=False)
 class SessionBootstrapOptions:
     cwd: object = "."
-    model: object | None = None
-    provider: object | None = None
+    model: Model | None = None
+    provider: str | None = None
     services: object | None = None
-    tools: object | None = None
+    tools: Iterable[str] | None = None
     agent_dir: object | None = None
-    settings_manager: object | None = None
+    settings_manager: SettingsManager | None = None
     session_dir: object | None = None
-    session_catalog: object | None = None
-    resource_loader: object | None = None
-    resource_loader_options: object | None = None
-    resource_loader_reload_options: object | None = None
+    session_catalog: SessionCatalog | None = None
+    resource_loader: DefaultResourceLoader | None = None
+    resource_loader_options: Mapping[str, object] | None = None
+    resource_loader_reload_options: Mapping[str, object] | None = None
     project_trust_override: object | None = None
     project_trust_context: object | None = None
     trust_store: object | None = None
-    auth_storage: object | None = None
-    model_registry: object | None = None
+    auth_storage: AuthStorage | None = None
+    model_registry: ModelRegistry | None = None
     session_id: object | None = None
     session_path: object | None = None
-    extension_flag_values: object | None = None
+    extension_flag_values: Mapping[str, object] | None = None
     operation_runtime: object | None = None
-    session_factory: object | None = None
-    thinking_level: object | None = None
-    scoped_models: object | None = None
-    is_continuing: object | None = None
-    model_id: object | None = None
-    exclude_tools: object | None = None
-    convert_to_llm: object | None = None
-    parent_session_path: object | None = None
-    session_start_event: object | None = None
-    defer_session_start: object | None = None
-    model_role_bindings: object | None = None
-    model_role_event_sink: object | None = None
-    custom_tools: object | None = None
-    no_tools: object | None = None
-    retry_enabled: object | None = None
-    max_retries: object | None = None
-    retry_delay_ms: object | None = None
-    max_retry_delay_ms: object | None = None
+    session_factory: SessionFactory | None = None
+    thinking_level: str | None = None
+    scoped_models: list[ScopedModel] | None = None
+    is_continuing: bool | None = None
+    model_id: str | None = None
+    exclude_tools: list[str] | None = None
+    convert_to_llm: Callable[[list[AgentMessage]], list[Message]] | None = None
+    parent_session_path: str | None = None
+    session_start_event: dict[str, object] | None = None
+    defer_session_start: bool | None = None
+    model_role_bindings: Mapping[ModelRole, ScopedModel] | None = None
+    model_role_event_sink: Callable[[dict[str, object]], None] | None = None
+    custom_tools: Iterable[ToolDefinition] | None = None
+    no_tools: bool | str | None = None
+    retry_enabled: bool | None = None
+    max_retries: int | None = None
+    retry_delay_ms: int | None = None
+    max_retry_delay_ms: int | None = None
     extras: Mapping[str, object] = field(
         default_factory=lambda: MappingProxyType({})
     )
@@ -140,7 +152,7 @@ class SessionBootstrapOptions:
             if name not in consumed
         }
         return cls(
-            **normalized,
+            **cast(Any, normalized),
             extras=MappingProxyType(extras),
             _provided=frozenset(normalized),
         )

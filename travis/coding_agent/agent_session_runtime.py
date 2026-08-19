@@ -9,6 +9,7 @@ import stat
 import tempfile
 import uuid
 from collections.abc import Callable, Coroutine, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -617,10 +618,8 @@ def _atomic_copy_sidecar(source: Path, destination: Path) -> None:
         finally:
             os.close(directory_descriptor)
     except BaseException:
-        try:
+        with suppress(OSError):
             os.close(descriptor)
-        except OSError:
-            pass
         temporary.unlink(missing_ok=True)
         raise
 

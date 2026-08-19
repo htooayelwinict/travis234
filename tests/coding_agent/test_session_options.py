@@ -6,7 +6,6 @@ import pytest
 
 from travis.coding_agent.session_options import SessionBootstrapOptions
 
-
 ALIAS_PAIRS = (
     ("agent_dir", "agentDir"),
     ("settings_manager", "settingsManager"),

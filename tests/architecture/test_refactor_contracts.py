@@ -9,7 +9,6 @@ from travis.coding_agent.session_contracts import AGENT_SESSION_PUBLIC_MEMBERS
 from travis.tui.interactive_contracts import INTERACTIVE_MODE_PUBLIC_MEMBERS
 from travis.tui.interactive_mode import InteractiveMode, _InteractiveRuntime
 
-
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACT_MODULES = (
     ROOT / "travis/coding_agent/session_contracts.py",

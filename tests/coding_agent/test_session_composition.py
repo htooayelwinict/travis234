@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
 
@@ -26,6 +27,13 @@ class _OperationCoordinator:
 class _OperationRuntime:
     def for_session(self, _session_id: str, *, diagnostic_sink=None) -> _OperationCoordinator:
         return _OperationCoordinator()
+
+
+class _ComposedSessionView(Protocol):
+    cwd: str
+    auth_storage: AuthStorage
+    model_registry: ModelRegistry
+    operation_runtime: object | None
 
 
 def _injected_dependencies(tmp_path: Path) -> tuple[dict[str, object], dict[str, object]]:
@@ -133,9 +141,10 @@ def test_create_agent_session_from_services_accepts_typed_dependencies(tmp_path:
     )
 
     try:
-        assert result.session.cwd == dependencies.cwd
-        assert result.session.auth_storage is dependencies.auth_storage
-        assert result.session.model_registry is dependencies.model_registry
-        assert result.session.operation_runtime is dependencies.operation_runtime
+        session = cast(_ComposedSessionView, result.session)
+        assert session.cwd == dependencies.cwd
+        assert session.auth_storage is dependencies.auth_storage
+        assert session.model_registry is dependencies.model_registry
+        assert session.operation_runtime is dependencies.operation_runtime
     finally:
         result.session.dispose()

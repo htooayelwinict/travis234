@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol
 
-
 INTERACTIVE_MODE_PUBLIC_MEMBERS: frozenset[str] = frozenset(
     {
         "active_editor",

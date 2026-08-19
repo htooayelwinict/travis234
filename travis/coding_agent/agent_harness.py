@@ -6,20 +6,17 @@ import asyncio
 import copy
 import inspect
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any, cast
 
+import travis.app as app_module
+import travis.coding_agent.agent_session as agent_session_module
 from travis.ai.types import AssistantMessage, Model
 from travis.coding_agent.automation import serialize_machine_value
 from travis.coding_agent.config import get_agent_dir
 from travis.coding_agent.session_catalog import SessionCatalog
-
-if TYPE_CHECKING:
-    from travis.app import CodingApp
-    from travis.coding_agent.agent_session import AgentSession
-
 
 HarnessListener = Callable[[dict[str, object]], object]
 logger = logging.getLogger(__name__)
@@ -47,7 +44,7 @@ class AgentHarnessConfig:
 class AgentHarness:
     """Async facade that delegates to one CodingApp and its existing owners."""
 
-    def __init__(self, app: CodingApp) -> None:
+    def __init__(self, app: app_module.CodingApp) -> None:
         self._app = app
         self._operation_lock = asyncio.Lock()
         self._active_task: asyncio.Task[Any] | None = None
@@ -59,7 +56,7 @@ class AgentHarness:
         self._bind_session_events(app.session)
 
     @classmethod
-    def create(cls, config: AgentHarnessConfig) -> "AgentHarness":
+    def create(cls, config: AgentHarnessConfig) -> AgentHarness:
         from travis.app import CodingApp
 
         cwd = str(Path(config.cwd).expanduser().resolve())
@@ -92,11 +89,11 @@ class AgentHarness:
         return cls(app)
 
     @property
-    def app(self) -> CodingApp:
+    def app(self) -> app_module.CodingApp:
         return self._app
 
     @property
-    def session(self) -> AgentSession:
+    def session(self) -> agent_session_module.AgentSession:
         return self._app.session
 
     @property
@@ -107,7 +104,7 @@ class AgentHarness:
     def closed(self) -> bool:
         return self._closed
 
-    async def __aenter__(self) -> "AgentHarness":
+    async def __aenter__(self) -> AgentHarness:
         self._ensure_open()
         return self
 
@@ -240,7 +237,7 @@ class AgentHarness:
             finally:
                 self._active_task = None
 
-    def _bind_session_events(self, session: AgentSession) -> None:
+    def _bind_session_events(self, session: agent_session_module.AgentSession) -> None:
         if self._session_unsubscribe is not None:
             self._session_unsubscribe()
         self._session_unsubscribe = session.subscribe(self._forward_event)
@@ -259,10 +256,11 @@ class AgentHarness:
                 result = listener(copy.deepcopy(normalized))
                 if not inspect.isawaitable(result):
                     continue
+                coroutine = cast(Coroutine[Any, Any, object], result)
                 if self._loop is not None and self._loop.is_running():
-                    asyncio.run_coroutine_threadsafe(result, self._loop).result()
+                    asyncio.run_coroutine_threadsafe(coroutine, self._loop).result()
                 else:
-                    asyncio.run(result)
+                    asyncio.run(coroutine)
             except Exception as error:  # noqa: BLE001 - harness observers are non-critical.
                 logger.warning(
                     "AgentHarness observer failed for %s (%s)",

@@ -11,6 +11,17 @@ PYRIGHT_CONFIG = ROOT / "pyrightconfig.json"
 RUFF_CONFIG = ROOT / "ruff.toml"
 MIGRATED_OWNERS = (
     "travis/runtime_facade.py",
+    "travis/coding_agent/agent_harness.py",
+    "travis/coding_agent/agent_session_runtime.py",
+    "travis/coding_agent/agent_session_services.py",
+    "travis/coding_agent/session_composition.py",
+    "travis/coding_agent/session_contracts.py",
+    "travis/coding_agent/session_options.py",
+    "travis/tui/interactive_contracts.py",
+    "tests/architecture/test_public_type_hints.py",
+    "tests/architecture/test_refactor_contracts.py",
+    "tests/coding_agent/test_session_composition.py",
+    "tests/coding_agent/test_session_options.py",
     "tests/test_runtime_facade_contract.py",
     "tests/architecture/test_quality_configuration.py",
 )

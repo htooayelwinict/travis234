@@ -6,7 +6,6 @@ from typing import Protocol
 
 from travis.coding_agent.extensions import ExtensionRunner
 
-
 AGENT_SESSION_PUBLIC_MEMBERS: frozenset[str] = frozenset(
     {
         "abort_bash",

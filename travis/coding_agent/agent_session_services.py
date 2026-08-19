@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import importlib
 import os
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Mapping, cast
+from typing import Any, cast
 from urllib.parse import urlparse
 
 from travis.agent.types import AgentMessage
@@ -84,7 +85,10 @@ def _build_session_dependencies(
     )
     resource_loader = options.resource_loader
     if resource_loader is None:
-        resource_loader_options = dict(cast(Mapping[str, object], options.resource_loader_options or {}))
+        resource_loader_options = cast(
+            dict[str, Any],
+            dict(options.resource_loader_options or {}),
+        )
         resource_loader = DefaultResourceLoader(
             cwd=cwd,
             agent_dir=agent_dir,
@@ -131,7 +135,7 @@ def _build_session_dependencies(
         diagnostics.extend(
             apply_extension_flag_values(
                 runtime,
-                cast(Mapping[str, object] | None, options.extension_flag_values),
+                options.extension_flag_values,
             )
         )
     return SessionDependencies(
@@ -196,9 +200,9 @@ def create_agent_session_from_services(
         else services.operation_runtime
     )
     owns_operation_runtime = False
-    model = cast(Model | None, options.model)
+    model = options.model
     model_fallback_message: str | None = None
-    thinking_level = cast(str | None, options.thinking_level)
+    thinking_level = options.thinking_level
     session_path = (
         options.session_path
         if options.was_provided("session_path")
@@ -230,11 +234,11 @@ def create_agent_session_from_services(
     if model is None:
         settings_manager = services.settings_manager
         initial = find_initial_model(
-            scoped_models=cast(list[object], options.scoped_models or []),
+            scoped_models=options.scoped_models or [],
             is_continuing=has_existing_session or bool(options.is_continuing),
             model_registry=services.model_registry,
-            cli_provider=cast(str | None, options.provider),
-            cli_model=cast(str | None, options.model_id),
+            cli_provider=options.provider,
+            cli_model=options.model_id,
             default_provider=_call_or_none(settings_manager, "getDefaultProvider", "get_default_provider"),
             default_model_id=_call_or_none(settings_manager, "getDefaultModel", "get_default_model"),
             default_thinking_level=_call_or_none(
@@ -262,12 +266,14 @@ def create_agent_session_from_services(
         memory_enabled=memory_settings.enabled,
     )
     provider_retry_settings = _provider_retry_settings(services.settings_manager)
+    owned_operation_runtime: OperationRuntime | None = None
     if operation_runtime is None:
-        operation_runtime = OperationRuntime.from_settings(
+        owned_operation_runtime = OperationRuntime.from_settings(
             services.agent_dir,
             services.settings_manager.get_operation_settings(),
             heartbeat_interval_seconds=None,
         )
+        operation_runtime = owned_operation_runtime
         owns_operation_runtime = True
         diagnostics = list(services.diagnostics)
         recovery_report = getattr(operation_runtime, "recovery_report", None)
@@ -307,7 +313,7 @@ def create_agent_session_from_services(
             tool_definitions=_tool_definitions_for_sdk(services, options),
             convert_to_llm=_convert_to_llm_for_sdk(
                 services.settings_manager,
-                cast(Callable[[list[AgentMessage]], list[Message]] | None, options.convert_to_llm),
+                options.convert_to_llm,
             ),
             resource_loader=services.resource_loader,
             settings_manager=services.settings_manager,
@@ -329,8 +335,8 @@ def create_agent_session_from_services(
             owns_operation_runtime=owns_operation_runtime,
         )
     except BaseException:
-        if owns_operation_runtime:
-            operation_runtime.close()
+        if owned_operation_runtime is not None:
+            owned_operation_runtime.close()
         raise
     _record_initial_session_state(session, model, thinking_level or "off", fresh_session)
     return CreateAgentSessionResult(
@@ -393,7 +399,7 @@ def _has_session_entry_type(session_path: str | None, entry_type: str) -> bool:
 
 def _default_session_factory(**kwargs: object) -> SessionLifecyclePort:
     module = importlib.import_module("travis.coding_agent.agent_session")
-    factory = getattr(module, "AgentSession")
+    factory = vars(module)["AgentSession"]
     return factory(**kwargs)
 
 
@@ -566,13 +572,14 @@ def _tool_definitions_for_sdk(
     custom_tools = options.custom_tools
     if custom_tools is None:
         return None
-    return [
+    definitions: list[object] = [
         *create_all_tool_definitions(
             services.cwd,
             _builtin_tool_options(services.settings_manager),
         ),
         *list(custom_tools),
     ]
+    return definitions
 
 
 def _builtin_tool_options(settings_manager: object) -> dict[str, dict[str, object]]:
