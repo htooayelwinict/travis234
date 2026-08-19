@@ -507,3 +507,166 @@ Baseline commands and summarized outcomes:
   from `7838749452b567940bd5b69a715b6184b8f9f13e` remains empty. No credential,
   container, provider, persistence-format, TUI-command, user-state, or protected-loop
   change was made. Phase 2 has not started.
+
+## Phase 2 — Session and TUI collaborator extraction
+
+### Task 2.1 — Composition containers and explicit ports
+
+- Commit: `0a3e11e6471d0e575de0edbbb1b4da3cabfda562`.
+- RED command and expected failure:
+  `uv run --locked --all-extras --dev pytest -q -p no:cacheprovider tests/coding_agent/test_session_controller_composition.py tests/tui/test_interactive_controller_composition.py tests/architecture/test_refactor_contracts.py tests/architecture/test_facade_boundaries.py`
+  — the new composition-contract tests failed against the reviewed Phase 1 base because
+  the controller containers, narrow ports, and mutable state records did not exist.
+- Focused GREEN command: the same command passed after adding frozen/slotted controller
+  bundles, responsibility-specific structural ports, and cohesive session/TUI state
+  records. Leaf-controller dependency tests reject either complete runtime or public
+  façade as a constructor dependency.
+- Phase suite and installed-wheel scenario: completed under Task 2.9.
+- Protected-loop SHA-256:
+  `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`.
+- Notes/remaining risks: the containers expose named controller fields; no generic
+  controller/service dictionary or runtime-checkable catch-all protocol was introduced.
+
+### Tasks 2.2–2.4 — TUI collaborators and mixin removal
+
+- Commits:
+  `2f6cfea07f541dc70f93df81b9df615529914732` (view, motion, routing),
+  `d6bf890a82033f64783acd168c347307bcc41c84` (model and parameters),
+  `f72d3c8bd6de2957f68ca2f3d5cd711b40a3a499` (process and inspection),
+  `d3cb7c325eafe9fd406bd1ee9f2fac89a2fbdb28` (subagent and session), and
+  `6fb9f6c855b6aae4c28011de121dd3a0aa9c178b` (extensions, turns, shutdown, and final
+  TUI mixin removal).
+- Characterization-first command:
+  `uv run --locked --all-extras --dev pytest -q -p no:cacheprovider tests/tui tests/test_tui_*.py tests/test_extension_host_runtime.py tests/test_extension_event_parity.py tests/test_session_commands.py`
+  — the pre-move command/renderer, model/auth/parameter, process/LSP/memory/operation,
+  subagent/session-rebind, extension/turn, cancellation, and shutdown characterizations
+  passed before their respective moves and after explicit composition.
+- RED command and expected failure: not applicable to the behavior moves; they used
+  GREEN-before/GREEN-after characterization as required. New ownership assertions failed
+  until each runtime base was removed and the corresponding named controller was owned.
+- Phase suite and installed-wheel scenario: completed under Task 2.9.
+- Protected-loop SHA-256:
+  `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`.
+- Notes/remaining risks: command precedence, session replacement rollback, extension
+  ordering, active-turn steering/follow-up, Escape cancellation, repeated Ctrl-C,
+  bounded shutdown, and terminal restoration retain focused regression coverage.
+
+### Tasks 2.5–2.7 — Session collaborators and mixin removal
+
+- Commits:
+  `9dacabd48bf47f5cc564979420bfd2fb3e738b36` (low-coupling ports),
+  `83a0c2d50441f3fb71b397877fed17fac043a6bc` (model, policy, operations),
+  `7fd7ebb312e32eaf9947d5091e19db0cb6d6da9a` (persistence),
+  `ecd848a9867e66d9279de1329713b54fbc463ec4` (tools and extensions),
+  `a6a4aabac8d63ba379c58d8841c9403f5b2be31c` (subagents),
+  `a2cd5c4727afc98951097b8a687933507a7550b3` (controller composition), and
+  `4ec962ba0e4f7ddf2fc118ea23c380fe023ffcc9` (turn ownership and final session mixin
+  removal).
+- Characterization-first command:
+  `uv run --locked --all-extras --dev pytest -q -p no:cacheprovider tests/coding_agent tests/test_agent_loop.py tests/test_agent_runtime_hardening.py tests/test_abort_context.py tests/test_coding_mailbox.py tests/test_coding_persistence_and_compaction.py tests/test_compaction_integration.py tests/test_session_parity.py tests/test_session_commands.py tests/test_coding_policy_and_extensions.py tests/test_extension_event_parity.py tests/test_coding_tools_and_subagents.py tests/test_subagent_controls.py tests/test_subagent_artifact_results.py tests/test_subagent_structured_results.py`
+  — the event/model/parameter/bash/policy/operation, JSONL/compaction, tool/extension,
+  subagent/result/expansion, turn ordering, cancellation, steering, follow-up, and
+  source-ordered continuation characterizations passed before and after their moves.
+- RED command and expected failure: not applicable to the behavior moves; ownership tests
+  rejected inherited mixins until the named collaborators and delegate boundary were in
+  place.
+- Phase suite and installed-wheel scenario: completed under Task 2.9.
+- Protected-loop SHA-256:
+  `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`.
+- Notes/remaining risks: the turn collaborator continues to call the public session/agent
+  contracts and introduces no replacement queue, thread, async bridge, or scheduler.
+  Expanded subagent results, artifact references, coordination, and orchestration remain
+  additive and are covered by the unchanged full-suite behavior tests.
+
+### Task 2.8 — Explicit imports and migrated-owner quality gates
+
+- Commits: `18c966c5a4f761efd9fe3290ff047e4512478259` (explicit imports and exports),
+  `5d5e954f7b087f2dac735f359ed67eebf5834c56` (bounded delegate-map ownership), and
+  `487d7a3c93fb56c42ebe57ae2a7cde42b51ce2b4` (diagnostic-free collaborator checks).
+- RED command and expected failure:
+  `uv run --locked --all-extras --dev pytest -q -p no:cacheprovider tests/architecture/test_quality_configuration.py -k migrated_owners_pass_pyright_without_diagnostics`
+  — 1 failed because scoped Pyright returned eight `reportInvalidTypeVarUse` warnings at
+  the dynamic, generic controller-port compatibility bridges.
+- Focused GREEN command:
+  `uv run --locked --all-extras --dev pytest -q -p no:cacheprovider tests/architecture/test_quality_configuration.py tests/architecture/test_repository_hygiene.py`
+  — 8 passed after exact line-level diagnostic annotations were limited to those
+  unconstrained compatibility signatures. Replacing the signatures with `object` was
+  rejected after producing 1,348 type errors; no broad configuration suppression or
+  `Any` escape hatch was added.
+- Static GREEN gates:
+  `uv run --locked --all-extras --dev pyright` reported 0 errors, 0 warnings, and 0
+  informations; fatal repository Ruff and migrated-owner Ruff both passed. An independent
+  source and installed-wheel AST walk found 0 production star imports.
+- Phase suite and installed-wheel scenario: completed under Task 2.9.
+- Protected-loop SHA-256:
+  `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`.
+- Notes/remaining risks: public re-exports and the dynamic private compatibility bridge
+  remain additive; supported members are explicitly inventoried and delegated.
+
+### Task 2.9 — Phase 2 qualification and installed-wheel TUI
+
+- Reviewed predecessor: Phase 1 head
+  `e67d94d` (`docs: record phase 1 review qualification`).
+- Root coverage checkpoint:
+  `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. uv run --locked --all-extras --dev --group coverage-test coverage run -m pytest -q -p no:cacheprovider tests`
+  — 2,807 passed in 445.01s. Coverage JSON contained 37,445 / 44,596 statements
+  (83.96%) and 10,431 / 15,196 branches (68.64%); the independent checker passed the
+  unchanged 83.0% statement and 68.0% branch floors.
+- Exact pinned-interpreter checkpoint:
+  `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. /Users/htooayelwin/orca/travis234/.venv/bin/python -m pytest -q -p no:cacheprovider tests`
+  — 2,807 passed in 313.66s.
+- Lock and package checkpoints: the root and adapter locks passed with 84 and 56 packages.
+  The locked adapter source suite passed 125 tests in 25.84s. The npm launcher passed
+  24/24 tests, and npm dry-pack passed with its expected 11-file inventory.
+- Build qualification: fresh root and adapter wheel/source builds passed, and locked
+  Twine validation passed all four artifacts. SHA-256 values were root wheel
+  `84ebc09c623f31a21d295b54cde019cea97f0d6eaf492c9bcb5027125ee7d354`, root sdist
+  `6b1569b4f94e36d71f3215f962a91921dadec8d895df81ad4b1f9300d9e82aad`, adapter wheel
+  `64014e811b37ef2fb4a68da1b2d7e4835b858b2867e667d9e5993b3a8fef642c`, and adapter
+  sdist `0e7a45d22d6b80981f53494cd7d73e61b918de43e16572acb943efab27d23fe2`.
+  The exact root wheel installed into a fresh Python 3.13.13 environment; an import from
+  outside the repository resolved `travis` from that environment's `site-packages`, and
+  a keyless offline faux-provider console print smoke returned
+  `PHASE2_FAUX_OK:installed smoke`.
+- Architecture invariants: both source and installed-wheel checks reported
+  `_SessionRuntime.__bases__ == (object,)`, `_InteractiveRuntime.__bases__ == (object,)`,
+  and 0 production star imports.
+- Installed-wheel qualification used the exact installed `travis234` console entry in a
+  real attached PTY, isolated task-owned `HOME` and `TRAVIS234_CODING_AGENT_DIR`,
+  `--offline`, and a task-owned keyless faux provider extension. No dotenv, credential,
+  live provider, project extension, or user state was loaded or changed. The retained
+  matrix reported each scenario immediately:
+  1. **PASS — help and command inventory.**
+  2. **PASS — ordinary faux-model prompt and streamed rendering.**
+  3. **PASS — model inventory.**
+  4. **PASS — generation parameter display, set, and reset.**
+  5. **PASS — motion status and disable.**
+  6. **PASS — unknown slash command remains local.**
+  7. **PASS — managed-process inspection.**
+  8. **PASS — actual user command and process output.**
+  9. **PASS — language-service status.**
+  10. **PASS — memory status remains read-only.**
+  11. **PASS — operation-journal inspection.**
+  12. **PASS — subagent supervisor status.**
+  13. **PASS — extension reload and session rebind.**
+  14. **PASS — extension command dispatch.**
+  15. **PASS — partial provider streaming.**
+  16. **PASS — active-turn steering continuation.**
+  17. **PASS — Escape cancellation and recovery to Idle.**
+  18. **PASS — manual compaction boundary.**
+  19. **PASS — session naming and metadata.**
+  20. **PASS — session clone.**
+  21. **PASS — new, resume, and fork with transactional rebind.**
+- Shutdown qualification: repeated idle Ctrl-C rendered `Press Ctrl-C again to exit`
+  and `Exiting`, emitted a successful shutdown trace, restored terminal modes, and exited
+  0. The first verifier wait stopped draining the PTY and filled its output buffer; a
+  process sample proved the main thread was blocked in `write`, so the task-owned harness
+  was corrected to drain concurrently. The unchanged wheel then passed 21/21 plus clean
+  shutdown in 10.2s.
+- Protected-loop SHA-256:
+  `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`.
+- Protected-loop diff from `7838749452b567940bd5b69a715b6184b8f9f13e`: empty.
+- Remaining risks: remote CI has not run. No container was built because the approved
+  master plan reserves container qualification for Phase 5. Generated coverage and
+  task-owned build/install/TUI artifacts are removed after the final repository checks;
+  Phase 3 has not started.
