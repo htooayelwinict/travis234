@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
+
 import inspect
 import json
 import os
@@ -281,7 +283,7 @@ def _apply_hidden_thinking_label(component, label: str) -> None:
     for child in getattr(component, "children", []) or []:
         _apply_hidden_thinking_label(child, label)
 
-class InteractiveExtensions:
+class InteractiveExtensions(PortBoundController[InteractiveCommandPort]):
     """Owns a focused interactive runtime concern."""
 
     def _extension_bindings(self, session=None) -> dict[str, object]:

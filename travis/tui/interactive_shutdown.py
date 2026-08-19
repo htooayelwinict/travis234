@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
+
 import inspect
 import json
 import os
@@ -57,7 +59,7 @@ ACTIVE_TURN_SHUTDOWN_TIMEOUT_SECONDS = 2.0
 SESSION_COMMAND_SHUTDOWN_TIMEOUT_SECONDS = 1.0
 _SIGINT_HANDLER_UNCHANGED = object()
 
-class InteractiveShutdown:
+class InteractiveShutdown(PortBoundController[InteractiveCommandPort]):
     """Owns a focused interactive runtime concern."""
 
     def _defer_sigint(self, signum, frame) -> None:

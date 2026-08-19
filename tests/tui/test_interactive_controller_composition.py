@@ -8,6 +8,7 @@ from travis.tui.interactive_controllers import InteractiveControllers
 from travis.tui.interactive_state import InteractiveLifecycleState, InteractiveState
 from tests._support_tui import CodingApp, FakeTerminal, faux_model
 from travis.tui.interactive_mode import InteractiveMode
+from travis.tui.interactive_mode import _InteractiveRuntime
 
 
 INTERACTIVE_CONTROLLER_NAMES = (
@@ -59,7 +60,7 @@ def test_interactive_runtime_owns_the_typed_controller_bundle(tmp_path) -> None:
 
     assert isinstance(runtime.controllers, InteractiveControllers)
     assert type(runtime.controllers.view).__name__ == "InteractiveView"
-    assert runtime.controllers.shutdown is runtime
+    assert type(runtime.controllers.shutdown).__name__ == "InteractiveShutdown"
 
 
 def test_view_motion_and_dispatch_are_owned_collaborators(tmp_path) -> None:
@@ -112,3 +113,13 @@ def test_subagent_and_session_owners_are_owned_collaborators(tmp_path) -> None:
 
     assert all(owner is not runtime for owner in owners)
     assert all(type(owner) not in type(runtime).__bases__ for owner in owners)
+
+
+def test_interactive_runtime_is_plain_composition_after_lifecycle_extraction(tmp_path) -> None:
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=FakeTerminal(), enable_tui=True)
+    runtime = InteractiveMode(app)._runtime
+
+    assert _InteractiveRuntime.__bases__ == (object,)
+    assert runtime.controllers.extensions is not runtime
+    assert runtime.controllers.turns is not runtime
+    assert runtime.controllers.shutdown is not runtime

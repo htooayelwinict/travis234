@@ -105,11 +105,7 @@ def _terminal_color_mode() -> str:
         return "256color"
     return "truecolor"
 
-class _InteractiveRuntime(
-    InteractiveExtensions,
-    InteractiveShutdown,
-    InteractiveTurnController,
-):
+class _InteractiveRuntime:
     """Internal TUI runtime assembled from focused behavior owners."""
 
     MAX_WIDGET_LINES = 10
@@ -136,9 +132,9 @@ class _InteractiveRuntime(
             operations=InteractiveOperations(self),
             subagents=InteractiveSubagents(self),
             sessions=InteractiveSessionCommands(self),
-            extensions=self,
-            turns=self,
-            shutdown=self,
+            extensions=InteractiveExtensions(self),
+            turns=InteractiveTurnController(self),
+            shutdown=InteractiveShutdown(self),
             motion=InteractiveMotion(self),
         )
         self.startup_generation_params = generation_params or GenerationParams()
@@ -334,6 +330,21 @@ install_controller_delegates(
     _InteractiveRuntime,
     {
         "command_dispatch": ("run", "_run_motion_command"),
+        "extensions": (
+            "_extension_bindings",
+            "_reset_extension_ui",
+            "_run_reload_command",
+            "_run_reload_body",
+            "_run_package_command",
+            "_dispatch_extension_shortcut",
+            "_dispatch_extension_command",
+            "_extension_command_executor",
+            "_finish_extension_command",
+            "_is_registered_extension_command",
+            "_is_registered_prompt_template",
+            "_extension_shortcut_context",
+            "_extension_compact",
+        ),
         "lsp": ("_run_lsp_status_command",),
         "memory": ("_run_memory_status_command",),
         "model_auth": (
@@ -426,6 +437,15 @@ install_controller_delegates(
             "_run_unknown_command",
             "_run_manual_compress",
         ),
+        "shutdown": (
+            "_defer_sigint",
+            "_install_sigint_handler",
+            "_restore_sigint_handler",
+            "_wait_for_active_turn",
+            "_abort_active_turn_for_shutdown",
+            "_request_shutdown",
+            "_shutdown_tool_approvals",
+        ),
         "subagents": (
             "_current_subagent_snapshot",
             "_bind_subagent_supervisor",
@@ -434,6 +454,21 @@ install_controller_delegates(
             "_shutdown_subagent_ui",
             "_run_agents_command",
             "_inspect_subagent",
+        ),
+        "turns": (
+            "_read_prompt_from_tui",
+            "_read_prompt_from_line_input",
+            "_handle_tui_terminal_input",
+            "_handle_sigint",
+            "_is_recently_finished_turn",
+            "_is_turn_active",
+            "_start_turn_thread",
+            "_run_turn_thread",
+            "_finish_turn_thread",
+            "_trace_turn_ready",
+            "_handle_active_turn_prompt",
+            "_handle_editor_escape",
+            "_show_post_response_compaction_status",
         ),
         "view": (
             "init",

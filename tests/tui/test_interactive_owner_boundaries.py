@@ -23,17 +23,17 @@ def test_interactive_mode_composes_bounded_runtime_owners(tmp_path) -> None:
     mode = InteractiveMode(app)
     runtime = mode._runtime
 
-    assert isinstance(runtime, InteractiveCommandDispatcher)
-    assert isinstance(runtime, InteractiveExtensions)
-    assert isinstance(runtime, InteractiveModelAuth)
-    assert isinstance(runtime, InteractiveMemory)
-    assert isinstance(runtime, InteractiveOperations)
-    assert isinstance(runtime, InteractiveProcessCommands)
-    assert isinstance(runtime, InteractiveSubagents)
-    assert isinstance(runtime, InteractiveSessionCommands)
-    assert isinstance(runtime, InteractiveShutdown)
-    assert isinstance(runtime, InteractiveTurnController)
-    assert isinstance(runtime, InteractiveView)
+    assert isinstance(runtime.controllers.command_dispatch, InteractiveCommandDispatcher)
+    assert isinstance(runtime.controllers.extensions, InteractiveExtensions)
+    assert isinstance(runtime.controllers.model_auth, InteractiveModelAuth)
+    assert isinstance(runtime.controllers.memory, InteractiveMemory)
+    assert isinstance(runtime.controllers.operations, InteractiveOperations)
+    assert isinstance(runtime.controllers.processes, InteractiveProcessCommands)
+    assert isinstance(runtime.controllers.subagents, InteractiveSubagents)
+    assert isinstance(runtime.controllers.sessions, InteractiveSessionCommands)
+    assert isinstance(runtime.controllers.shutdown, InteractiveShutdown)
+    assert isinstance(runtime.controllers.turns, InteractiveTurnController)
+    assert isinstance(runtime.controllers.view, InteractiveView)
     assert isinstance(runtime.tool_approval_broker, InteractiveToolApprovalBroker)
 
 

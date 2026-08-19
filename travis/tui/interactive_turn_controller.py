@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
+
 import inspect
 import json
 import os
@@ -51,7 +53,7 @@ from travis.tui.user_commands import (
 from travis.tui.interactive_shutdown import IDLE_CTRL_C_EXIT_WINDOW_SECONDS, LATE_ABORT_GRACE_SECONDS
 from travis.tui.motion import MotionState
 
-class InteractiveTurnController:
+class InteractiveTurnController(PortBoundController[InteractiveCommandPort]):
     """Owns a focused interactive runtime concern."""
 
     def _read_prompt_from_tui(self, submitted_queue: "queue.Queue[str]") -> str | None:
