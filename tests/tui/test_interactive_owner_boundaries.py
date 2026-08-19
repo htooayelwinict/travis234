@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from tests._support_tui import CodingApp, FakeTerminal, faux_model
+from travis.tui.interactive_contracts import INTERACTIVE_MODE_PUBLIC_MEMBERS
 from travis.tui.interactive_mode import InteractiveMode
 
 
@@ -45,3 +46,25 @@ def test_interactive_mode_forwards_runtime_overrides(tmp_path) -> None:
 
     assert mode._runtime._shutdown_requested is True
     assert mode._show_status("ready") == ("ready", "info")
+
+
+def test_interactive_mode_records_extension_compatibility_surface() -> None:
+    assert {
+        "add_autocomplete_provider",
+        "add_terminal_input_listener",
+        "prompt_extension_confirm",
+        "prompt_extension_custom",
+        "prompt_extension_editor",
+        "prompt_extension_input",
+        "prompt_extension_select",
+        "set_editor_text",
+        "set_extension_footer",
+        "set_extension_header",
+        "set_extension_status",
+        "set_extension_widget",
+        "set_hidden_thinking_label",
+        "set_terminal_title",
+        "set_working_indicator",
+        "set_working_message",
+        "set_working_visible",
+    } <= INTERACTIVE_MODE_PUBLIC_MEMBERS

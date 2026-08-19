@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from travis.ai.providers.faux import faux_model
 from travis.coding_agent.agent_session import AgentSession
+from travis.coding_agent.session_contracts import AGENT_SESSION_PUBLIC_MEMBERS
 
 
 def test_agent_session_composes_bounded_runtime_owners(tmp_path) -> None:
@@ -39,3 +40,9 @@ def test_agent_session_forwards_runtime_overrides(tmp_path) -> None:
 
     assert session._runtime._max_retries == 7
     assert session.compact() == "replacement"
+
+
+def test_agent_session_declares_lifecycle_contract_explicitly() -> None:
+    assert "dispose" in AgentSession.__dict__
+    assert "shutdown" in AgentSession.__dict__
+    assert {"dispose", "shutdown"} <= AGENT_SESSION_PUBLIC_MEMBERS
