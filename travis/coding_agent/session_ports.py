@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Protocol
 
-from travis.controller_ports import ControllerDependencies, ExplicitController
 from travis.coding_agent.session_state import SessionPresentationState, SessionTurnState
+from travis.controller_ports import (
+    ControllerDependencies,
+    ExplicitController,
+)
+from travis.controller_ports import (
+    install_controller_delegates as install_session_controller_delegates,
+)
 
 
 class SessionControllerPort(Protocol):
@@ -38,6 +43,8 @@ class SessionPortBoundController[SessionControllerPortT](
         "_extension_runner", "_extension_shutdown_handler", "_extension_ui_context",
         "_extensions_bound", "_flush_pending_bash_messages", "_format_subagent_result",
         "_generation_param_overrides", "_is_retryable_error", "_max_retries",
+        "_language_services",
+        "_memory_settings", "_memory_tool_runtime", "_model_change_listener",
         "_messages_to_summary", "_model_subagent_spawn_signatures_this_turn",
         "_model_subagents_spawned_this_turn", "_operation_assistant_sequence",
         "_operation_continue", "_operation_finish_turn", "_operation_invoke_provider",
@@ -81,43 +88,6 @@ class SessionModelDependencies(ControllerDependencies[SessionControllerPort]):
 @dataclass(frozen=True, slots=True)
 class SessionTurnDependencies(ControllerDependencies[SessionControllerPort]):
     turn_state: SessionTurnState
-
-
-class SessionControllerDelegate:
-    __slots__ = ("controller_name", "method_name")
-
-    def __init__(self, controller_name: str, method_name: str) -> None:
-        self.controller_name = controller_name
-        self.method_name = method_name
-
-    def __get__(self, instance: object, owner: type[object]) -> object:
-        if instance is None:
-            return self
-        controllers = object.__getattribute__(instance, "controllers")
-        controller = object.__getattribute__(controllers, self.controller_name)
-        descriptor = inspect.getattr_static(type(controller), self.method_name)
-        if isinstance(descriptor, property):
-            return descriptor.__get__(controller, type(controller))
-        return getattr(controller, self.method_name)
-
-    def __call__(self, *args: object, **kwargs: object) -> object:
-        raise TypeError("controller delegates must be bound to a runtime instance")
-
-    def __set__(self, instance: object, value: object) -> None:
-        controllers = object.__getattribute__(instance, "controllers")
-        controller = object.__getattribute__(controllers, self.controller_name)
-        setattr(controller, self.method_name, value)
-
-
-def install_session_controller_delegates(
-    owner: type[object],
-    methods: dict[str, tuple[str, ...]],
-) -> None:
-    for controller_name, names in methods.items():
-        for name in names:
-            if name in owner.__dict__:
-                raise ValueError(f"delegate would replace explicit runtime member: {name}")
-            setattr(owner, name, SessionControllerDelegate(controller_name, name))
 
 
 class SessionEventPort(Protocol):
@@ -197,7 +167,6 @@ class SessionCancellationPort(Protocol):
 
 __all__ = [
     "SessionCancellationPort",
-    "SessionControllerDelegate",
     "SessionControllerPort",
     "SessionEventPort",
     "SessionExtensionPort",

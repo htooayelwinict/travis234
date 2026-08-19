@@ -5,7 +5,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import cast
 
-from travis.coding_agent.processes.types import ProcessEvent, ProcessOwner, ProcessSnapshot, ProcessState
+from travis.coding_agent.processes.types import (
+    ProcessEvent,
+    ProcessOwner,
+    ProcessSnapshot,
+    ProcessState,
+)
 from travis.coding_agent.session_types import BashResult
 from travis.coding_agent.tools.bash import BashExecOptions, get_shell_env
 from travis.coding_agent.tools.output_spool import OutputSpool
@@ -16,8 +21,8 @@ from travis.tui.components import (
 from travis.tui.interactive import (
     BashExecutionComponent,
 )
-from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
 from travis.tui.interactive_rebind import rebind_cached_session
+from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
 from travis.tui.interactive_view import _short_status_text
 from travis.tui.motion import MotionState
 from travis.tui.user_commands import (

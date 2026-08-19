@@ -16,6 +16,10 @@ from travis.coding_agent.processes.types import ProcessState
 from travis.coding_agent.session_commands import SessionCommandExecutor
 from travis.coding_agent.source_info import SourceInfo
 from travis.coding_agent.themes import Theme, ThemeRegistry
+from travis.controller_ports import (
+    ControllerBindingRegistry,
+    install_runtime_state_attributes,
+)
 from travis.runtime_facade import RuntimeFacade
 from travis.tui.builtin_themes import BUILTIN_THEMES, resolve_builtin_theme
 from travis.tui.components import (
@@ -45,7 +49,6 @@ from travis.tui.interactive import (
 from travis.tui.interactive_command_dispatcher import (
     BUILTIN_COMMAND_BINDINGS,
     CommandBinding,
-    InteractiveCommandDispatcher,
     _is_command_like_slash_prompt,
     _is_help_command,
     _is_lsp_status_command,
@@ -66,13 +69,12 @@ from travis.tui.interactive_command_dispatcher import (
     _parse_session_command,
     classify_builtin_command,
 )
+from travis.tui.interactive_composition import compose_interactive_controllers
 from travis.tui.interactive_controllers import (
     INTERACTIVE_CONTROLLER_DELEGATES,
     INTERACTIVE_CONTROLLER_STATE_NAMES,
     INTERACTIVE_DELEGATED_NAMES,
-    InteractiveControllers,
 )
-from travis.tui.interactive_composition import compose_interactive_controllers
 from travis.tui.interactive_extensions import (
     InteractiveExtensions,
     _apply_hidden_thinking_label,
@@ -108,12 +110,10 @@ from travis.tui.interactive_params import (
 )
 from travis.tui.interactive_process_commands import InteractiveProcessCommands
 from travis.tui.interactive_services import (
-    InteractiveCommandPort,
     InteractiveCommandPortAdapter,
     InteractiveSessionPortAdapter,
     install_controller_delegates,
 )
-from travis.tui.interactive_state import InteractiveLifecycleState, InteractiveState
 from travis.tui.interactive_session_commands import InteractiveSessionCommands
 from travis.tui.interactive_shutdown import (
     _SIGINT_HANDLER_UNCHANGED,
@@ -126,6 +126,7 @@ from travis.tui.interactive_shutdown import (
     InputFn,
     InteractiveShutdown,
 )
+from travis.tui.interactive_state import InteractiveLifecycleState, InteractiveState
 from travis.tui.interactive_subagents import InteractiveSubagents
 from travis.tui.interactive_tool_approval import InteractiveToolApprovalBroker
 from travis.tui.interactive_turn_controller import InteractiveTurnController
@@ -133,7 +134,6 @@ from travis.tui.interactive_view import InteractiveView, _short_status_text
 from travis.tui.motion import MotionController
 from travis.tui.theme import ThemeContext
 from travis.tui.theme_controller import ThemeController
-from travis.controller_ports import ControllerBindingRegistry, install_runtime_state_attributes
 from travis.tui.user_commands import (
     UserCommandController,
     UserCommandHandle,

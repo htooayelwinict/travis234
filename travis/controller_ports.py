@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-
 
 _UNBOUND = object()
 
@@ -147,6 +147,47 @@ class ExplicitController[DependenciesT]:
         self.dependencies = dependencies
 
 
+class ControllerDelegate:
+    """Expose one named member from an explicitly owned controller."""
+
+    __slots__ = ("controller_name", "member_name")
+
+    def __init__(self, controller_name: str, member_name: str) -> None:
+        self.controller_name = controller_name
+        self.member_name = member_name
+
+    def __get__(self, instance: object | None, owner: type[object]) -> object:
+        if instance is None:
+            return self
+        controllers = object.__getattribute__(instance, "controllers")
+        controller = object.__getattribute__(controllers, self.controller_name)
+        descriptor = inspect.getattr_static(type(controller), self.member_name)
+        if isinstance(descriptor, property):
+            return descriptor.__get__(controller, type(controller))
+        return getattr(controller, self.member_name)
+
+    def __call__(self, *args: object, **kwargs: object) -> object:
+        raise TypeError("controller delegates must be bound to a runtime instance")
+
+    def __set__(self, instance: object, value: object) -> None:
+        controllers = object.__getattribute__(instance, "controllers")
+        controller = object.__getattribute__(controllers, self.controller_name)
+        setattr(controller, self.member_name, value)
+
+
+def install_controller_delegates(
+    owner: type[object],
+    members: dict[str, tuple[str, ...]],
+) -> None:
+    """Install named controller delegates without replacing explicit members."""
+
+    for controller_name, names in members.items():
+        for name in names:
+            if name in owner.__dict__:
+                raise ValueError(f"delegate would replace explicit runtime member: {name}")
+            setattr(owner, name, ControllerDelegate(controller_name, name))
+
+
 def install_explicit_port_attributes(owner: type[object], names: tuple[str, ...]) -> None:
     """Install only the attributes declared for ``owner``'s domain contract."""
 
@@ -166,11 +207,13 @@ def install_runtime_state_attributes(
 
 
 __all__ = (
+    "ControllerDelegate",
     "ControllerDependencies",
     "ControllerBindingRegistry",
     "ControllerPort",
     "DependencyAttribute",
     "ExplicitController",
+    "install_controller_delegates",
     "install_explicit_port_attributes",
     "install_runtime_state_attributes",
 )

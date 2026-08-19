@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from travis.controller_ports import ControllerBindingRegistry, install_explicit_port_attributes
 from travis.coding_agent.session_bash import SessionBashController
 from travis.coding_agent.session_events import SessionEventController
 from travis.coding_agent.session_extensions import SessionExtensionController
@@ -17,6 +16,10 @@ from travis.coding_agent.session_subagents import SessionSubagentController
 from travis.coding_agent.session_tooling import SessionToolController
 from travis.coding_agent.session_turns import SessionTurnController
 from travis.coding_agent.subagent_trace import SessionSubagentTraceController
+from travis.controller_ports import (
+    ControllerBindingRegistry,
+    install_explicit_port_attributes,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,7 +149,8 @@ SESSION_CONTROLLER_PORT_ATTRIBUTES = {
     ),
     "models": (
         "_bash_signals", "_bash_signals_lock", "_emit", "_extension_runner",
-        "_pending_bash_messages", "_resource_loader", "_retry_attempt", "_retry_enabled",
+        "_model_change_listener", "_pending_bash_messages", "_resource_loader",
+        "_retry_attempt", "_retry_enabled",
         "_retry_signal", "_scoped_models", "_session_name", "_session_store",
         "_turn_mailbox", "agent", "model_registry", "model_role_router", "settings_manager",
     ),
@@ -164,7 +168,8 @@ SESSION_CONTROLLER_PORT_ATTRIBUTES = {
         "cwd", "is_streaming",
     ),
     "policy": (
-        "_emit_tool_policy_decision", "_extension_runner", "_operation_record_tools_settled",
+        "_coordination_runtime_guard_active", "_emit_tool_policy_decision",
+        "_extension_runner", "_operation_record_tools_settled",
         "_operation_tool_effects", "_operation_tool_effects_lock", "_tool_policy_engine",
         "get_tool_definition", "operation_coordinator",
     ),
@@ -179,8 +184,8 @@ SESSION_CONTROLLER_PORT_ATTRIBUTES = {
         "_base_source_info_by_name", "_base_tool_by_name", "_context_files", "_custom_prompt",
         "_excluded_tool_names", "_extension_runner", "_resource_loader", "_tool_by_name",
         "_tool_definition_by_name", "_tool_source_info_by_name", "_workspace", "agent", "cwd",
-        "execution_backend", "process_owner", "process_service", "session_id", "settings_manager",
-        "system_prompt",
+        "execution_backend", "_language_services", "_memory_settings", "_memory_tool_runtime",
+        "process_owner", "process_service", "session_id", "settings_manager", "system_prompt",
     ),
     "extensions": (
         "_append_system_prompt", "_artifacts", "_command_signal", "_context_files",

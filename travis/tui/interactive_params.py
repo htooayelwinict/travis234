@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from travis.ai.providers.capabilities import ProviderParamWarning, build_generation_payload
+from travis.ai.providers.capabilities import (
+    ProviderParamWarning,
+    build_generation_payload,
+)
 from travis.ai.providers.catalog import determine_api_mode
 from travis.ai.providers.params import (
     GENERATION_PARAM_FIELDS,
@@ -14,8 +17,8 @@ from travis.ai.providers.params import (
 )
 from travis.ai.providers.transports import get_transport
 from travis.ai.types import SimpleStreamOptions
-from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
 from travis.tui.interactive_rebind import rebind_cached_session
+from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
 
 _PARAM_NAMES = ("thinking", *GENERATION_PARAM_FIELDS)
 

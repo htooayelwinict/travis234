@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from travis.controller_ports import ControllerBindingRegistry, install_explicit_port_attributes
+from travis.controller_ports import (
+    ControllerBindingRegistry,
+    install_explicit_port_attributes,
+)
 from travis.tui.interactive_command_dispatcher import InteractiveCommandDispatcher
 from travis.tui.interactive_extensions import InteractiveExtensions
 from travis.tui.interactive_lsp import InteractiveLsp
@@ -14,12 +17,12 @@ from travis.tui.interactive_motion import InteractiveMotion
 from travis.tui.interactive_operations import InteractiveOperations
 from travis.tui.interactive_params import InteractiveParams
 from travis.tui.interactive_process_commands import InteractiveProcessCommands
+from travis.tui.interactive_services import InteractiveSessionRebindController
 from travis.tui.interactive_session_commands import InteractiveSessionCommands
 from travis.tui.interactive_shutdown import InteractiveShutdown
 from travis.tui.interactive_subagents import InteractiveSubagents
 from travis.tui.interactive_turn_controller import InteractiveTurnController
 from travis.tui.interactive_view import InteractiveView
-from travis.tui.interactive_services import InteractiveSessionRebindController
 
 
 @dataclass(frozen=True, slots=True)

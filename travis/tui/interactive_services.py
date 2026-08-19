@@ -7,44 +7,12 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Protocol, cast
 
-from travis.controller_ports import ControllerDependencies, ExplicitController
+from travis.controller_ports import (
+    ControllerDependencies,
+    ExplicitController,
+    install_controller_delegates,
+)
 from travis.tui.interactive_state import InteractiveLifecycleState, InteractiveState
-
-
-class ControllerDelegate:
-    """Descriptor that exposes one named method from an owned controller."""
-
-    __slots__ = ("controller_name", "method_name")
-
-    def __init__(self, controller_name: str, method_name: str) -> None:
-        self.controller_name = controller_name
-        self.method_name = method_name
-
-    def __get__(self, instance: object, owner: type[object]) -> object:
-        if instance is None:
-            return self
-        controllers = object.__getattribute__(instance, "controllers")
-        controller = object.__getattribute__(controllers, self.controller_name)
-        return getattr(controller, self.method_name)
-
-    def __call__(self, *args: object, **kwargs: object) -> object:
-        raise TypeError("controller delegates must be bound to a runtime instance")
-
-    def __set__(self, instance: object, value: object) -> None:
-        controllers = object.__getattribute__(instance, "controllers")
-        controller = object.__getattribute__(controllers, self.controller_name)
-        setattr(controller, self.method_name, value)
-
-
-def install_controller_delegates(
-    owner: type[object],
-    methods: dict[str, tuple[str, ...]],
-) -> None:
-    for controller_name, names in methods.items():
-        for name in names:
-            if name in owner.__dict__:
-                raise ValueError(f"delegate would replace explicit runtime member: {name}")
-            setattr(owner, name, ControllerDelegate(controller_name, name))
 
 
 class PortBoundController[ControllerPortT](
@@ -179,6 +147,9 @@ class InteractiveAppPort(Protocol):
 
 
 class InteractiveControllerPort(Protocol):
+    @property
+    def declared_names(self) -> frozenset[str]: ...
+
     def read(self, name: str) -> object: ...
 
     def write(self, name: str, value: object) -> None: ...
@@ -288,7 +259,7 @@ class InteractiveCommandPortAdapter:
 
     @property
     def declared_names(self) -> frozenset[str]:
-        return cast(frozenset[str], getattr(self._port, "declared_names"))
+        return cast(frozenset[str], self._port.declared_names)
 
     @property
     def app(self) -> InteractiveAppPort:
@@ -420,7 +391,6 @@ class InteractiveViewDependencies(ControllerDependencies[InteractiveViewPort]):
 __all__ = [
     "InteractiveHistoryPort",
     "InteractiveAppPort",
-    "ControllerDelegate",
     "InteractiveCommandDependencies",
     "InteractiveCommandPortAdapter",
     "InteractiveControllerPort",

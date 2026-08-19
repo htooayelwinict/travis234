@@ -142,3 +142,18 @@ def test_declared_session_state_records_are_real_controller_dependencies(tmp_pat
     runtime._session_name = "contract-first"
     assert runtime.turn_state.retry_attempt == 3
     assert runtime.presentation_state.session_name == "contract-first"
+
+
+def test_session_controller_ports_declare_cross_domain_runtime_dependencies() -> None:
+    """Every runtime value read by an extracted owner belongs to its named port."""
+
+    assert {
+        "_language_services",
+        "_memory_settings",
+        "_memory_tool_runtime",
+    } <= set(SESSION_CONTROLLER_PORT_ATTRIBUTES["tools"])
+    assert "_model_change_listener" in SESSION_CONTROLLER_PORT_ATTRIBUTES["models"]
+    assert (
+        "_coordination_runtime_guard_active"
+        in SESSION_CONTROLLER_PORT_ATTRIBUTES["policy"]
+    )

@@ -8,7 +8,13 @@ from pathlib import Path
 from typing import cast
 
 from travis.agent.agent import Agent
-from travis.agent.types import AbortSignal, AgentMessage, AgentTool, QueueMode, ThinkingLevel
+from travis.agent.types import (
+    AbortSignal,
+    AgentMessage,
+    AgentTool,
+    QueueMode,
+    ThinkingLevel,
+)
 from travis.ai.model_resolver import ScopedModel
 from travis.ai.providers.params import GenerationParams
 from travis.ai.types import AssistantMessage, Message, Model
@@ -72,7 +78,6 @@ from travis.coding_agent.session_operations import SessionOperationController
 from travis.coding_agent.session_persistence import SessionPersistence
 from travis.coding_agent.session_policy_controller import SessionPolicyController
 from travis.coding_agent.session_ports import (
-    SessionControllerPort,
     SessionModelDependencies,
     SessionTurnDependencies,
     install_session_controller_delegates,
@@ -544,7 +549,9 @@ class _SessionRuntime:
             role=operation_role,
             task_id=operation_task_id,
         )
-        from travis.coding_agent.agent_session_services import create_session_artifact_registry
+        from travis.coding_agent.agent_session_services import (
+            create_session_artifact_registry,
+        )
 
         self._artifacts = create_session_artifact_registry(
             session_path=session_path,
