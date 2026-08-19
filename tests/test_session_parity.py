@@ -97,6 +97,38 @@ def test_runtime_session_factory_accepts_structural_session(tmp_path: Path) -> N
     assert runtime.session is session
 
 
+def test_runtime_session_factory_rejects_structural_session_without_cwd(
+    tmp_path: Path,
+) -> None:
+    session = _StructuralSession(str(tmp_path))
+    del session.cwd
+
+    with pytest.raises(TypeError, match="cwd"):
+        create_agent_session_runtime(lambda _options: session, {})
+
+
+@pytest.mark.parametrize(
+    "member",
+    [
+        "create_branched_session",
+        "dispose",
+        "emit_deferred_session_start",
+        "get_session_entry",
+        "get_session_leaf_id",
+        "shutdown",
+    ],
+)
+def test_runtime_session_factory_rejects_noncallable_required_member(
+    tmp_path: Path,
+    member: str,
+) -> None:
+    session = _StructuralSession(str(tmp_path))
+    setattr(session, member, None)
+
+    with pytest.raises(TypeError, match=member):
+        create_agent_session_runtime(lambda _options: session, {"cwd": str(tmp_path)})
+
+
 def test_session_tree_reports_stable_depth_first_structure_and_active_branch(tmp_path: Path) -> None:
     store = SessionStore(str(tmp_path / "tree.jsonl"), cwd=str(tmp_path))
     root_id = store.append_message(UserMessage("root"))

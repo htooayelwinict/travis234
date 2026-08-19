@@ -423,27 +423,55 @@ def _coerce_result(
     raw_result: CreateAgentSessionRuntimeResult | SessionRuntimePort | dict[str, Any],
 ) -> CreateAgentSessionRuntimeResult:
     if isinstance(raw_result, CreateAgentSessionRuntimeResult):
+        _validate_runtime_session(raw_result.session)
         return raw_result
     if isinstance(raw_result, dict):
         return CreateAgentSessionRuntimeResult(
-            session=raw_result["session"],
+            session=_validate_runtime_session(raw_result["session"]),
             services=dict(raw_result.get("services") or {}),
             diagnostics=list(raw_result.get("diagnostics") or []),
             model_fallback_message=raw_result.get("model_fallback_message") or raw_result.get("modelFallbackMessage"),
         )
-    required_members = (
+    return CreateAgentSessionRuntimeResult(
+        session=_validate_runtime_session(raw_result)
+    )
+
+
+def _validate_runtime_session(session: object) -> SessionRuntimePort:
+    required_attributes = (
+        "cwd",
+        "extension_runner",
+        "session_path",
+    )
+    required_methods = (
         "create_branched_session",
         "dispose",
         "emit_deferred_session_start",
-        "extension_runner",
         "get_session_entry",
         "get_session_leaf_id",
-        "session_path",
         "shutdown",
     )
-    if all(hasattr(raw_result, name) for name in required_members):
-        return CreateAgentSessionRuntimeResult(session=raw_result)
-    raise TypeError(f"Unsupported runtime result: {type(raw_result).__name__}")
+    missing = [
+        name
+        for name in (*required_attributes, *required_methods)
+        if not hasattr(session, name)
+    ]
+    noncallable = [
+        name
+        for name in required_methods
+        if hasattr(session, name) and not callable(getattr(session, name))
+    ]
+    if missing or noncallable:
+        details = []
+        if missing:
+            details.append(f"missing required members: {', '.join(missing)}")
+        if noncallable:
+            details.append(f"non-callable required members: {', '.join(noncallable)}")
+        raise TypeError(
+            f"Unsupported runtime result: {type(session).__name__} "
+            f"({'; '.join(details)})"
+        )
+    return cast(SessionRuntimePort, session)
 
 
 def _dispose_session(session: SessionRuntimePort) -> None:
