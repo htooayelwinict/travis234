@@ -7,6 +7,8 @@ the execution boundary.  This bridge only applies extension hook results.
 
 from __future__ import annotations
 
+from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
+
 from travis.agent.types import AfterToolCallResult, BeforeToolCallResult
 from travis.coding_agent.coordination import coordination_direct_tmux_block_reason
 from travis.coding_agent.policy import argument_fingerprint
@@ -24,7 +26,7 @@ def _is_internal_steering_user_message(text: str | None) -> bool:
     )
 
 
-class SessionPolicyController:
+class SessionPolicyController(SessionPortBoundController[SessionControllerPort]):
     """Apply ``tool_call`` and ``tool_result`` extension hooks."""
 
     async def _before_tool_call(self, context, signal=None) -> BeforeToolCallResult | None:

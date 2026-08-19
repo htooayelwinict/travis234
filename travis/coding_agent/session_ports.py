@@ -3,7 +3,70 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from typing import Protocol
+import inspect
+from types import MethodType
+from typing import Generic, Protocol, TypeVar
+
+
+SessionControllerPortT = TypeVar("SessionControllerPortT")
+
+
+class SessionControllerPort(Protocol):
+    cwd: str
+    agent: object
+    model_registry: object
+    settings_manager: object
+
+
+class SessionPortBoundController(Generic[SessionControllerPortT]):
+    """Bind a characterized session owner to its injected structural port."""
+
+    __slots__ = ("_port",)
+
+    def __init__(self, port: SessionControllerPortT) -> None:
+        object.__setattr__(self, "_port", port)
+
+    def __getattribute__(self, name: str) -> object:
+        attribute = object.__getattribute__(self, name)
+        if isinstance(attribute, MethodType) and attribute.__self__ is self:
+            try:
+                port = object.__getattribute__(self, "_port")
+            except AttributeError:
+                return attribute
+            return attribute.__func__.__get__(port, type(port))
+        return attribute
+
+
+class SessionControllerDelegate:
+    __slots__ = ("controller_name", "method_name")
+
+    def __init__(self, controller_name: str, method_name: str) -> None:
+        self.controller_name = controller_name
+        self.method_name = method_name
+
+    def __get__(self, instance: object, owner: type[object]) -> object:
+        if instance is None:
+            return self
+        controllers = object.__getattribute__(instance, "controllers")
+        controller = object.__getattribute__(controllers, self.controller_name)
+        descriptor = inspect.getattr_static(type(controller), self.method_name)
+        if isinstance(descriptor, property):
+            return descriptor.__get__(instance, type(instance))
+        return getattr(controller, self.method_name)
+
+    def __call__(self, *args: object, **kwargs: object) -> object:
+        raise TypeError("controller delegates must be bound to a runtime instance")
+
+
+def install_session_controller_delegates(
+    owner: type[object],
+    methods: dict[str, tuple[str, ...]],
+) -> None:
+    for controller_name, names in methods.items():
+        for name in names:
+            if name in owner.__dict__:
+                raise ValueError(f"delegate would replace explicit runtime member: {name}")
+            setattr(owner, name, SessionControllerDelegate(controller_name, name))
 
 
 class SessionEventPort(Protocol):
@@ -83,6 +146,8 @@ class SessionCancellationPort(Protocol):
 
 __all__ = [
     "SessionCancellationPort",
+    "SessionControllerDelegate",
+    "SessionControllerPort",
     "SessionEventPort",
     "SessionExtensionPort",
     "SessionMessageStatePort",
@@ -93,4 +158,6 @@ __all__ = [
     "SessionSubagentPort",
     "SessionToolRegistryPort",
     "SessionTurnMailboxPort",
+    "SessionPortBoundController",
+    "install_session_controller_delegates",
 ]

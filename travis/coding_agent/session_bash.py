@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
+
 import json
 import os
 import re
@@ -87,7 +89,7 @@ from travis.coding_agent.tools.types import (
 
 from travis.coding_agent.session_types import BashResult
 
-class SessionBashController:
+class SessionBashController(SessionPortBoundController[SessionControllerPort]):
     """Owns a focused AgentSession runtime concern."""
 
     def execute_bash(self, command: str, on_chunk=None, options: dict | None = None) -> BashResult:

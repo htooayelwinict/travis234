@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
+
 import hashlib
 import re
 import sys
@@ -64,7 +66,7 @@ def _effect_name(value: object) -> str:
     return f"provider-{_hash_text(candidate)[:16]}"
 
 
-class SessionOperationController:
+class SessionOperationController(SessionPortBoundController[SessionControllerPort]):
     """Observe session effects without owning execution or conversation state."""
 
     def _initialize_session_operations(

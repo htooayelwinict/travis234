@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
+
 import json
 import os
 import re
@@ -88,7 +90,7 @@ from travis.coding_agent.tools.types import (
 
 from travis.coding_agent.session_types import ModelCycleResult, SessionInfoChangedEvent, ThinkingLevelChangedEvent, _THINKING_LEVELS
 
-class SessionModelController:
+class SessionModelController(SessionPortBoundController[SessionControllerPort]):
     """Owns a focused AgentSession runtime concern."""
 
     @property

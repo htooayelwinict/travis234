@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
+
 from travis.ai.providers.params import (
     GenerationParams,
     remove_generation_param,
@@ -9,7 +11,7 @@ from travis.ai.providers.params import (
 )
 
 
-class SessionGenerationParams:
+class SessionGenerationParams(SessionPortBoundController[SessionControllerPort]):
     """Own the active session's immutable override-only parameter snapshot."""
 
     @property

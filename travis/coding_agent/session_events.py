@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
+
 import copy
 import json
 import logging
@@ -124,7 +126,7 @@ def _canonicalize_process_tool_calls(message: AssistantMessage) -> None:
             # Invalid calls remain intact so normal tool validation can report the exact model output.
             continue
 
-class SessionEventController:
+class SessionEventController(SessionPortBoundController[SessionControllerPort]):
     """Owns a focused AgentSession runtime concern."""
 
     def _emit_session_start_event(self) -> None:
