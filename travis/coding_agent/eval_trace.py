@@ -26,7 +26,7 @@ SAFE_FIELDS = {
     "process_id", "process_state", "origin", "interrupt_count",
     "context_tokens", "context_window", "context_percent", "context_estimated", "context_confidence",
     "context_system_tokens", "context_tool_tokens", "context_message_tokens",
-    "summary_model_requested", "summary_model_used", "summary_model_fallback",
+    "summary_model_requested", "summary_model_used", "summary_model_fallback", "summary_fallback",
     "role", "selectedRole", "source", "fallbackTrace",
     "artifact_id", "kind", "byte_size", "outcome",
     "effects", "mode", "allow",

@@ -771,6 +771,103 @@ def test_agent_session_manual_compaction_persists_travis234_first_kept_boundary(
     assert getattr(session.messages[0], "role", None) == "compactionSummary"
     assert _user_text(session.messages[1]) == _user_text(messages[expected_cut])
 
+
+def test_persistent_compaction_entry_ids_include_retained_older_compaction_summaries(
+    tmp_path: Path,
+) -> None:
+    session_path = tmp_path / "nested-compaction-boundaries.jsonl"
+    store = SessionStore(str(session_path), cwd=str(tmp_path))
+    user_id = store.append_message(UserMessage(content="retained goal", timestamp=now_ms()))
+    old_call_id = store.append_message(
+        AssistantMessage(
+            content=[ToolCall(id="old-call", name="read", arguments={"path": "old.txt"})],
+            api="faux",
+            provider="faux",
+            model="m",
+            usage=empty_usage(),
+            stop_reason="toolUse",
+            timestamp=now_ms(),
+        )
+    )
+    older_compaction_id = store.append_compaction("older summary", user_id, 1_000)
+    latest_compaction_id = store.append_compaction("latest summary", user_id, 900)
+    latest_call_id = store.append_message(
+        AssistantMessage(
+            content=[ToolCall(id="latest-call", name="write", arguments={"path": "new.txt"})],
+            api="faux",
+            provider="faux",
+            model="m",
+            usage=empty_usage(),
+            stop_reason="toolUse",
+            timestamp=now_ms(),
+        )
+    )
+    latest_result_id = store.append_message(
+        ToolResultMessage(
+            tool_call_id="latest-call",
+            tool_name="write",
+            content=[TextContent(text="written")],
+            is_error=False,
+            timestamp=now_ms(),
+        )
+    )
+
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        session_path=str(session_path),
+    )
+
+    assert session._compaction_adapter.context_message_entry_ids() == [  # noqa: SLF001
+        latest_compaction_id,
+        user_id,
+        old_call_id,
+        older_compaction_id,
+        latest_call_id,
+        latest_result_id,
+    ]
+    assert len(session._compaction_adapter.context_message_entry_ids()) == len(session.messages)  # noqa: SLF001
+
+
+def test_persisted_compaction_context_omits_orphaned_tool_results(tmp_path: Path) -> None:
+    session_path = tmp_path / "orphaned-tool-result.jsonl"
+    store = SessionStore(str(session_path), cwd=str(tmp_path))
+    store.append_message(
+        AssistantMessage(
+            content=[ToolCall(id="lost-call", name="write", arguments={"path": "lost.txt"})],
+            api="faux",
+            provider="faux",
+            model="m",
+            usage=empty_usage(),
+            stop_reason="toolUse",
+            timestamp=now_ms(),
+        )
+    )
+    orphaned_result_id = store.append_message(
+        ToolResultMessage(
+            tool_call_id="lost-call",
+            tool_name="write",
+            content=[TextContent(text="written")],
+            is_error=False,
+            timestamp=now_ms(),
+        )
+    )
+    compaction_id = store.append_compaction(
+        "summary with a bad historical cut", orphaned_result_id, 1_000
+    )
+
+    snapshot = store.build_context()
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        session_path=str(session_path),
+    )
+
+    assert [getattr(message, "role", None) for message in snapshot.messages] == [
+        "compactionSummary"
+    ]
+    assert session._compaction_adapter.context_message_entry_ids() == [compaction_id]  # noqa: SLF001
+
 def test_agent_session_manual_compaction_persists_travis234_file_operation_details(tmp_path: Path) -> None:
     from travis.compaction import CompactionManager, ContextCompressor
 

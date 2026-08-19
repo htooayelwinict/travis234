@@ -270,34 +270,7 @@ class SessionCompactionAdapter:
     def _session_context_message_entry_ids(self) -> list[str]:
         if self._session_store is None:
             return []
-        branch = self._session_store.get_branch()
-        compaction_entry = None
-        for entry in branch:
-            if entry.get("type") == "compaction" and entry.get("summary"):
-                compaction_entry = entry
-
-        def contributes(entry: dict) -> bool:
-            entry_type = entry.get("type")
-            if entry_type in {"message", "custom_message"}:
-                return True
-            return bool(entry_type == "branch_summary" and entry.get("summary"))
-
-        if compaction_entry is None:
-            return [entry["id"] for entry in branch if entry.get("id") and contributes(entry)]
-
-        ids = [compaction_entry["id"]]
-        compaction_index = branch.index(compaction_entry)
-        first_kept_id = compaction_entry.get("firstKeptEntryId")
-        found_first_kept = first_kept_id is None
-        for entry in branch[:compaction_index]:
-            if entry.get("id") == first_kept_id:
-                found_first_kept = True
-            if found_first_kept and entry.get("id") and contributes(entry):
-                ids.append(entry["id"])
-        for entry in branch[compaction_index + 1 :]:
-            if entry.get("id") and contributes(entry):
-                ids.append(entry["id"])
-        return ids
+        return self._session_store.context_message_entry_ids()
 
 
 def extract_compaction_summary(messages: Sequence[AgentMessage]) -> str:

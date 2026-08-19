@@ -160,6 +160,49 @@ def test_eval_trace_accepts_sanitized_feature_audit_metadata(tmp_path: Path) -> 
     assert events[-2]["context_percent"] == 25.0
 
 
+def test_compaction_trace_distinguishes_deterministic_summary_fallback(tmp_path: Path) -> None:
+    path = tmp_path / "trace.jsonl"
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=120),
+        context_length=1_000,
+        enable_tui=False,
+        event_trace=EvalTraceWriter(path),
+    )
+    messages = [UserMessage(content="retained goal", timestamp=now_ms())]
+    for index in range(12):
+        messages.extend(
+            [
+                UserMessage(content=f"old request {index}", timestamp=now_ms() + index),
+                AssistantMessage(
+                    content=[TextContent(text=f"old response {index} " * 400)],
+                    api="faux",
+                    provider="faux",
+                    model="m",
+                    usage=empty_usage(),
+                    stop_reason="stop",
+                    timestamp=now_ms() + index,
+                ),
+            ]
+        )
+    messages.append(UserMessage(content="latest request", timestamp=now_ms() + 100))
+    app.session.agent.state.messages = messages
+
+    try:
+        status = app.session.compact(
+            summarizer=lambda _prompt: (_ for _ in ()).throw(RuntimeError("summary generation unavailable"))
+        )
+    finally:
+        app.close()
+
+    events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    compaction_end = next(event for event in events if event["event"] == "compaction_end")
+    assert status.compressed is True
+    assert compaction_end["summary_model_fallback"] is False
+    assert compaction_end["summary_fallback"] is True
+
+
 def test_interactive_trace_emits_ordered_safe_lifecycle(tmp_path: Path) -> None:
     path = tmp_path / "trace.jsonl"
     writer = EvalTraceWriter(path, redactor=SecretRedactor(["private prompt text"]))

@@ -724,6 +724,12 @@ class CodingApp:
             )
         elif event_type == "compaction_end":
             result = self.compaction.last_compression_result
+            result_details = getattr(result, "details", None)
+            summary_fallback = bool(
+                result_details.get("summaryFallback", False)
+                if isinstance(result_details, Mapping)
+                else False
+            )
             if getattr(event, "error_message", None):
                 status = "error"
             elif getattr(event, "aborted", False):
@@ -739,6 +745,7 @@ class CodingApp:
                     "summary_model_requested": getattr(result, "summary_model_requested", None),
                     "summary_model_used": getattr(result, "summary_model_used", None),
                     "summary_model_fallback": bool(getattr(result, "summary_model_fallback", False)),
+                    "summary_fallback": summary_fallback,
                 },
             )
 

@@ -564,12 +564,10 @@ class SessionStore:
 
     def build_context(self, *, default_thinking_level: str = "off") -> SessionContextSnapshot:
         branch = self.get_branch()
-        messages: list[AgentMessage] = []
         thinking_level = default_thinking_level
         model: dict[str, str] | None = None
         session_name: str | None = None
         generation_params = GenerationParams()
-        compaction_entry: dict[str, Any] | None = None
 
         for entry in branch:
             entry_type = entry.get("type")
@@ -583,30 +581,7 @@ class SessionStore:
                 restored_params = generation_params_from_session_mapping(entry.get("params"))
                 if restored_params is not None:
                     generation_params = restored_params
-            elif entry_type == "compaction" and entry.get("summary"):
-                compaction_entry = entry
-
-        if compaction_entry:
-            messages.append(_entry_to_message(compaction_entry))
-            compaction_index = branch.index(compaction_entry)
-            first_kept_id = compaction_entry.get("firstKeptEntryId")
-            found_first_kept = first_kept_id is None
-            for entry in branch[:compaction_index]:
-                if entry.get("id") == first_kept_id:
-                    found_first_kept = True
-                if found_first_kept:
-                    message = _entry_to_message(entry)
-                    if message is not None:
-                        messages.append(message)
-            for entry in branch[compaction_index + 1 :]:
-                message = _entry_to_message(entry)
-                if message is not None:
-                    messages.append(message)
-        else:
-            for entry in branch:
-                message = _entry_to_message(entry)
-                if message is not None:
-                    messages.append(message)
+        messages, _entry_ids = _context_messages_and_entry_ids(branch)
 
         return SessionContextSnapshot(
             messages=messages,
@@ -615,6 +590,11 @@ class SessionStore:
             session_name=session_name,
             generation_params=generation_params,
         )
+
+    def context_message_entry_ids(self) -> list[str]:
+        """Return IDs aligned one-for-one with ``build_context().messages``."""
+        _messages, entry_ids = _context_messages_and_entry_ids(self.get_branch())
+        return entry_ids
 
     def append_checkpoint(self, entry: dict[str, Any]) -> str:
         return self._append_entry(entry, durable=True)
@@ -786,6 +766,59 @@ def _entry_to_message(entry: dict[str, Any]) -> AgentMessage | None:
             details=entry.get("details"),
         )
     return None
+
+
+def _context_messages_and_entry_ids(
+    branch: list[dict[str, Any]],
+) -> tuple[list[AgentMessage], list[str]]:
+    compaction_entry = next(
+        (
+            entry
+            for entry in reversed(branch)
+            if entry.get("type") == "compaction" and entry.get("summary")
+        ),
+        None,
+    )
+    selected_entries: list[dict[str, Any]] = []
+    if compaction_entry is None:
+        selected_entries = branch
+    else:
+        selected_entries.append(compaction_entry)
+        compaction_index = branch.index(compaction_entry)
+        first_kept_id = compaction_entry.get("firstKeptEntryId")
+        found_first_kept = first_kept_id is None
+        for entry in branch[:compaction_index]:
+            if entry.get("id") == first_kept_id:
+                found_first_kept = True
+            if found_first_kept:
+                selected_entries.append(entry)
+        selected_entries.extend(branch[compaction_index + 1 :])
+
+    pairs = [
+        (message, str(entry.get("id") or ""))
+        for entry in selected_entries
+        if (message := _entry_to_message(entry)) is not None
+    ]
+    tool_call_ids = {
+        block.id
+        for message, _entry_id in pairs
+        if isinstance(message, AssistantMessage)
+        for block in message.content
+        if isinstance(block, ToolCall) and block.id
+    }
+    safe_pairs = [
+        (message, entry_id)
+        for message, entry_id in pairs
+        if not (
+            isinstance(message, ToolResultMessage)
+            and message.tool_call_id
+            and message.tool_call_id not in tool_call_ids
+        )
+    ]
+    return (
+        [message for message, _entry_id in safe_pairs],
+        [entry_id for _message, entry_id in safe_pairs],
+    )
 
 
 def serialize_message(message: AgentMessage) -> dict[str, Any]:
