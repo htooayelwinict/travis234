@@ -776,3 +776,93 @@ Baseline commands and summarized outcomes:
   its diff from `7838749452b567940bd5b69a715b6184b8f9f13e` remains empty. No container,
   credential, user-state, merge, push, publish, version, permission, protected-loop, or
   Phase 3 action was performed. Remote CI remains an external follow-up.
+
+#### Main-agent legacy TUI review and compaction correction
+
+- The main agent independently exercised the README legacy 21-prompt fixture protocol
+  with an exact installed root wheel, a real attached PTY, the explicitly supplied main
+  worktree dotenv, provider `opencode-go`, model `minimax-m3`, and thinking level
+  `medium`. The run preserved one session across `/continue` after prompt 7, process exit
+  and resume after prompt 14, repeated Ctrl-C after prompt 11, and the scheduled
+  `/compact` checkpoints after prompts 4, 8, 12, 16, and 20. No credential value was
+  printed or persisted in tracked files.
+- Prompts 1–20 reached terminal green verifier states. Prompt 6 first produced an empty
+  successful provider response and passed after a corrective user turn. Prompt 11's
+  repeated-Ctrl-C path recorded interrupt counts 1 then 2 and terminated the managed
+  process. Prompt 17's attempted `../outside-workspace.txt` read was normalized inside
+  the fixture and returned file-not-found rather than an explicit guardrail denial.
+  Prompt 18 briefly wrote to a typoed task-owned `/private/tmp` path and removed that
+  scratch tree before completion.
+- The five explicit compactions produced these observed reductions:
+  1. 158 to 29 messages; approximately 64,327 to 15,324 request tokens;
+  2. 208 to 183 messages; approximately 111,451 to 102,440 request tokens;
+  3. 446 to 390 messages; approximately 191,172 to 149,580 request tokens, using the
+     deterministic summary fallback after the model stream ended before `message_stop`;
+  4. 569 to 456 messages; approximately 209,325 to 154,084 request tokens;
+  5. 620 to 458 messages; approximately 198,960 to 155,675 request tokens.
+  Compactions 1, 2, 4, and 5 used `opencode-go/minimax-m3` summaries without fallback.
+- The first prompt-21 attempt exposed a real durable-boundary defect rather than a fixture
+  failure. OpenCode Go rejected the post-compaction history with provider error 2013:
+  tool result `call_b7f8490e894e24d2` had no matching tool call. The smoking gun was an
+  index drift between `SessionStore.build_context()` and
+  `SessionCompactionAdapter._session_context_message_entry_ids()`: two retained older
+  compaction-summary entries contributed messages but not IDs, so the durable cut moved
+  from an assistant call onto its following tool result.
+- Regression-first corrections now:
+  - make `SessionStore` the single owner of aligned derived context messages and entry
+    IDs, including retained older compaction summaries;
+  - derive a provider-safe view that omits orphaned tool results without rewriting the
+    append-only JSONL, so sessions produced by the earlier defect recover on upgrade;
+  - make the adapter consume that owner-generated ID list instead of reconstructing it;
+  - expose separate `summary_fallback` and `summary_model_fallback` trace fields so a
+    deterministic summary fallback is no longer confused with model-selection fallback.
+  The RED tests failed on the missing older-summary ID, retained orphan result, and absent
+  trace field before their respective implementations. The complete focused
+  compaction/app/session qualification passed 274 tests, and the direct persisted-session
+  probe reported 460 derived messages, 460 aligned IDs, and zero orphan results.
+- Post-correction repository qualification:
+  - root Python suite: 2,826 passed in 465.19s;
+  - adapter Python suite: 125 passed in 23.38s;
+  - npm launcher suite: 24 passed;
+  - Ruff: all checks passed;
+  - Pyright: 0 errors, 0 warnings, 0 informations;
+  - root and adapter wheel/sdist builds: passed;
+  - Twine: all four artifacts passed;
+  - npm dry-pack: passed with the expected 11-file inventory.
+- Exact post-correction build artifacts under
+  `/tmp/travis234-phase2-final-build.57Y5nu` have SHA-256 values:
+  - root wheel: `a2942ba9c16555d721be8465cdbe4a72b4ecde8dd86ead28e301d9f7727bd825`;
+  - root sdist: `0465d2c0e71f741b0d0f03d1f9186dccb9c36af6dc795e0ee5e0c4da37e7eca7`;
+  - adapter wheel: `24801789fb1804eb344fac9899c01bcf3fa9482197c055a583a65ee985465f4e`;
+  - adapter sdist: `347d5498edadfcf7fb9ac11890a89084f6bcdfd215afced61f00b9278c9b277d`.
+- The exact rebuilt root wheel was reinstalled into the isolated Python 3.13.13 TUI
+  environment and independently resolved `travis` from `site-packages` outside the
+  repository. It resumed the unchanged append-only session
+  `cbb7ad933b004c20b09b6692008945f1`; MiniMax accepted the previously rejected context,
+  completed prompt 21, and returned to Idle. Independent prompt-21 verifiers then passed:
+  14 Python tests, 8 Node tests, and npm pack dry-run for
+  `release-fixture-2.3.4.tgz`. The recovery conversation record has status `ok`, turn ID
+  `42e60d33a512`, and a 2,191-character final response. `/session` reported 518 messages,
+  approximately 175,190 context tokens, the same session ID, the same provider/model, and
+  thinking `medium`; `/exit` returned 0 and left no process.
+- Evidence paths:
+  - original events: `/tmp/travis234-phase2-review.ydlB4O/tui-evidence/events.jsonl`;
+  - original conversations:
+    `/tmp/travis234-phase2-review.ydlB4O/tui-evidence/conversation.jsonl`;
+  - recovery events:
+    `/tmp/travis234-phase2-review.ydlB4O/tui-evidence-recovery/events.jsonl`;
+  - recovery conversations:
+    `/tmp/travis234-phase2-review.ydlB4O/tui-evidence-recovery/conversation.jsonl`;
+  - durable session:
+    `/private/tmp/travis234-phase2-review.ydlB4O/tui-agent/sessions/--private-tmp-travis234-phase2-review.ydlB4O-tui-workspace--/2026-08-19T20-21-50-421146Z_cbb7ad933b004c20b09b6692008945f1.jsonl`.
+- Evidence limits remain explicit: automatic compaction did not trigger because the live
+  one-million-token window reached only about 20%; pre-compaction semantic recall was not
+  directly challenged; prompt 6 required recovery from an empty-success response; prompt
+  11 used the intentional double-interrupt path; and prompt 17 did not emit an explicit
+  guardrail-denial message. This evidence proves compaction mechanics, durable-session
+  repair, continued task execution, and all 21 fixture outcomes, not automatic-trigger or
+  dedicated semantic-memory-recall behavior.
+- The protected loop SHA and empty protected-loop diff remain unchanged. No container was
+  built because container qualification remains deferred until the complete design
+  implementation gate. No merge, push, publish, version, permission, or Phase 3 action
+  occurred.
