@@ -19,7 +19,7 @@ from travis.ai.types import (
 from travis.coding_agent.extensions import ExtensionRunner
 from travis.coding_agent.model_roles import ModelRole, ModelRoleResolution
 from travis.coding_agent.resource_loader import DefaultResourceLoader
-from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
+from travis.coding_agent.session_surfaces import SessionModelControllerSurface
 from travis.coding_agent.session_types import (
     _THINKING_LEVELS,
     ModelCycleResult,
@@ -28,8 +28,10 @@ from travis.coding_agent.session_types import (
 )
 
 
-class SessionModelController(SessionPortBoundController[SessionControllerPort]):
+class SessionModelController(SessionModelControllerSurface):
     """Owns a focused AgentSession runtime concern."""
+
+    __slots__ = ()
 
     @property
     def pending_message_count(self) -> int:

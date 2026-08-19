@@ -164,12 +164,12 @@ def test_packaged_builtin_skills_match_npm_distribution() -> None:
     python_files = {
         path.relative_to(python_skills).as_posix(): path.read_bytes()
         for path in python_skills.rglob("*")
-        if path.is_file()
+        if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
     }
     npm_files = {
         path.relative_to(npm_skills).as_posix(): path.read_bytes()
         for path in npm_skills.rglob("*")
-        if path.is_file()
+        if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
     }
     assert npm_files == python_files
     assert {

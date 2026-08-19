@@ -10,13 +10,15 @@ from travis.compaction import estimate_tokens
 from travis.tui.components import (
     StatusLine,
 )
-from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
 from travis.tui.interactive_shutdown import IDLE_CTRL_C_EXIT_WINDOW_SECONDS, LATE_ABORT_GRACE_SECONDS
+from travis.tui.interactive_surfaces import InteractiveTurnSurface
 from travis.tui.motion import MotionState
 
 
-class InteractiveTurnController(PortBoundController[InteractiveCommandPort]):
+class InteractiveTurnController(InteractiveTurnSurface):
     """Owns a focused interactive runtime concern."""
+
+    __slots__ = ()
 
     def _read_prompt_from_tui(self, submitted_queue: queue.Queue[str]) -> str | None:
         while not self._shutdown_requested:
@@ -64,7 +66,7 @@ class InteractiveTurnController(PortBoundController[InteractiveCommandPort]):
         has_user_command = self._user_commands is not None and bool(self._user_commands.list())
         if (
             has_user_command
-            or self.dependencies.port._is_turn_active()
+            or self._turn_active_from_binding()
             or self.app.session.is_streaming
             or self.app.session.is_bash_running
         ):
@@ -102,6 +104,12 @@ class InteractiveTurnController(PortBoundController[InteractiveCommandPort]):
         if not active and self.tui.dispatcher.is_owner_thread():
             self.tui.drain_dispatcher()
         return active
+
+    def _turn_active_from_binding(self) -> bool:
+        probe = self.dependencies._is_turn_active.get()
+        if not callable(probe):
+            raise TypeError("turn-active dependency is not callable")
+        return bool(probe())
 
     def _start_turn_thread(self, prompt: str, before_compressions: int, before_tokens: int) -> None:
         future = self._command_executor().submit(
@@ -183,7 +191,7 @@ class InteractiveTurnController(PortBoundController[InteractiveCommandPort]):
         )
 
     def _handle_active_turn_prompt(self, prompt: str) -> bool:
-        if not self.dependencies.port._is_turn_active():
+        if not self._turn_active_from_binding():
             return False
         if self._dispatch_extension_command(prompt):
             self._refresh_footer()
@@ -211,7 +219,7 @@ class InteractiveTurnController(PortBoundController[InteractiveCommandPort]):
             self.tui.request_render()
             return
 
-        if self.dependencies.port._is_turn_active() or self.app.session.is_streaming:
+        if self._turn_active_from_binding() or self.app.session.is_streaming:
             if not self._agent_abort_requested:
                 self._agent_abort_requested = True
                 self._set_motion_signal("termination", MotionState.TERMINATING)

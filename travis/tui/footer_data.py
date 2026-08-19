@@ -7,8 +7,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-
-from travis.tui.interactive_services import InteractiveCommandPort
+from typing import Protocol
 
 
 def _footer_usage_stats(messages) -> dict[str, object]:
@@ -56,6 +55,11 @@ class _GitPaths:
 _UNSET_BRANCH = object()
 _GIT_WATCH_DEBOUNCE_SECONDS = 0.5
 _GIT_WATCH_POLL_SECONDS = 0.1
+
+
+class _FooterAppPort(Protocol):
+    @property
+    def cwd(self) -> object: ...
 
 
 def _find_git_paths(cwd: str) -> _GitPaths | None:
@@ -134,9 +138,9 @@ def _path_signature(path: Path) -> tuple[int, int] | None:
 
 
 class _ExtensionFooterDataProvider:
-    def __init__(self, mode: InteractiveCommandPort) -> None:
-        self._mode = mode
-        self._cwd = str(mode.app.cwd)
+    def __init__(self, app: _FooterAppPort, extension_statuses: dict[str, str]) -> None:
+        self._extension_statuses = extension_statuses
+        self._cwd = str(app.cwd)
         self._git_paths = _find_git_paths(self._cwd)
         self._cached_branch: str | None | object = _UNSET_BRANCH
         self._branch_change_callbacks: list[Callable[[], object]] = []
@@ -159,18 +163,18 @@ class _ExtensionFooterDataProvider:
 
 
     def get_extension_statuses(self) -> dict[str, str]:
-        return dict(self._mode.extension_statuses)
+        return dict(self._extension_statuses)
 
 
     def set_extension_status(self, key: str, text: str | None) -> None:
         if text is None:
-            self._mode.extension_statuses.pop(str(key), None)
+            self._extension_statuses.pop(str(key), None)
         else:
-            self._mode.extension_statuses[str(key)] = str(text)
+            self._extension_statuses[str(key)] = str(text)
 
 
     def clear_extension_statuses(self) -> None:
-        self._mode.extension_statuses.clear()
+        self._extension_statuses.clear()
 
 
     def get_available_provider_count(self) -> int:

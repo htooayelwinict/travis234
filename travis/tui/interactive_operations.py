@@ -6,7 +6,7 @@ import hashlib
 
 from travis.coding_agent.operations import OperationSnapshot, OperationStore
 from travis.tui.components import StatusLine, Text
-from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
+from travis.tui.interactive_surfaces import InteractiveOperationsSurface
 
 _UNKNOWN = ("Unknown operation.",)
 _UNAVAILABLE = ("Operation journal is unavailable.",)
@@ -110,8 +110,10 @@ def _summary_line(snapshot: OperationSnapshot) -> str:
     )
 
 
-class InteractiveOperations(PortBoundController[InteractiveCommandPort]):
+class InteractiveOperations(InteractiveOperationsSurface):
     """TUI mixin that exposes operation metadata without mutations."""
+
+    __slots__ = ()
 
     def _run_operations_command(self, operation_id: str | None) -> None:
         runtime = getattr(self.app.session, "operation_runtime", None)

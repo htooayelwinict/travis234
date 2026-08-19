@@ -9,7 +9,7 @@ from collections.abc import Callable
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import suppress
 
-from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
+from travis.tui.interactive_surfaces import InteractiveShutdownSurface
 
 InputFn = Callable[[str], str]
 OPENROUTER_MODEL_CACHE_TTL_SECONDS = 300
@@ -20,8 +20,10 @@ ACTIVE_TURN_SHUTDOWN_TIMEOUT_SECONDS = 2.0
 SESSION_COMMAND_SHUTDOWN_TIMEOUT_SECONDS = 1.0
 _SIGINT_HANDLER_UNCHANGED = object()
 
-class InteractiveShutdown(PortBoundController[InteractiveCommandPort]):
+class InteractiveShutdown(InteractiveShutdownSurface):
     """Owns a focused interactive runtime concern."""
+
+    __slots__ = ()
 
     def _defer_sigint(self, signum, frame) -> None:
         self.tui.dispatcher.post(lambda: self._handle_sigint(signum, frame))

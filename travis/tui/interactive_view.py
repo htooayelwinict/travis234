@@ -39,7 +39,7 @@ from travis.tui.interactive_extensions import (
 from travis.tui.interactive_params import _params_argument_completions
 from travis.tui.interactive_prompt_input import prompt_tui_value
 from travis.tui.interactive_rebind import rebind_cached_session
-from travis.tui.interactive_services import InteractiveViewPort, PortBoundController
+from travis.tui.interactive_surfaces import InteractiveViewSurface
 from travis.tui.interactive_theme_helpers import (
     ensure_view_builtin_themes,
     reload_view_resource_themes,
@@ -54,9 +54,9 @@ def _short_status_text(text: str, *, limit: int) -> str:
     return value[: max(0, limit - 3)].rstrip() + "..."
 
 
-class InteractiveView(PortBoundController[InteractiveViewPort]):
+class InteractiveView(InteractiveViewSurface):
     """Owns a focused interactive runtime concern."""
-
+    __slots__ = ()
     MAX_WIDGET_LINES = 10
     _ensure_builtin_themes = ensure_view_builtin_themes
     _reload_resource_themes = reload_view_resource_themes
@@ -87,7 +87,7 @@ class InteractiveView(PortBoundController[InteractiveViewPort]):
             ]
         )
         if self._unsubscribe_session_events is None:
-            self._unsubscribe_session_events = self.app.session.subscribe(
+            self._unsubscribe_session_events = self.session.subscribe(
                 lambda event: self.tui.post(lambda: self._handle_session_event(event))
             )
         if self._unsubscribe_footer_branch_change is None:
@@ -108,7 +108,7 @@ class InteractiveView(PortBoundController[InteractiveViewPort]):
         if self._extension_host is not None:
             self._extension_host.start()
         else:
-            self.app.session.bind_extensions(self._extension_bindings())
+            self.session.bind_extensions(self._extension_bindings())
         self._reload_resource_themes()
         self.theme_controller.sync()
         self.setup_autocomplete_provider()
@@ -116,10 +116,10 @@ class InteractiveView(PortBoundController[InteractiveViewPort]):
             self.app.event_trace.write(
                 "tui_ready",
                 {
-                    "provider": self.app.session.model.provider,
-                    "model": self.app.session.model.id,
-                    "session_id": self.app.session.session_id,
-                    "session_path": self.app.session.session_path,
+                    "provider": self.session.model.provider,
+                    "model": self.session.model.id,
+                    "session_id": self.session.session_id,
+                    "session_path": self.session.session_path,
                 },
             )
         self._initialized = True
@@ -140,7 +140,7 @@ class InteractiveView(PortBoundController[InteractiveViewPort]):
                 self.history.add(component)
 
     def _custom_message_renderers(self) -> dict:
-        runner = getattr(self.app.session, "extension_runner", None)
+        runner = getattr(self.session, "extension_runner", None)
         if runner is None or not hasattr(runner, "get_message_renderers"):
             return {}
         return runner.get_message_renderers()
@@ -189,7 +189,7 @@ class InteractiveView(PortBoundController[InteractiveViewPort]):
             {"name": "tree", "description": "Navigate the active session tree"},
             {"name": "trust", "description": "View or change the project trust decision"},
         ]
-        runner = getattr(self.app.session, "extension_runner", None)
+        runner = getattr(self.session, "extension_runner", None)
         if runner is not None and hasattr(runner, "get_all_registered_commands"):
             for command in runner.get_all_registered_commands():
                 command_info = {"name": command.name, "description": command.description}
@@ -198,7 +198,7 @@ class InteractiveView(PortBoundController[InteractiveViewPort]):
                     command_info["getArgumentCompletions"] = get_argument_completions
                 commands.append(command_info)
         command_names = {str(command.get("name", "")) for command in commands}
-        for template in getattr(self.app.session, "prompt_templates", []):
+        for template in getattr(self.session, "prompt_templates", []):
             name = str(getattr(template, "name", ""))
             if not name or name in command_names:
                 continue
@@ -386,23 +386,23 @@ class InteractiveView(PortBoundController[InteractiveViewPort]):
     def _refresh_footer(self) -> None:
         self._ensure_builtin_themes()
         self.theme_controller.sync()
-        self.footer.model = self.app.session.model.id
-        self.footer.provider = self.app.session.model.provider
-        self.footer.thinking_level = self.app.session.thinking_level
-        self.footer.session_name = self.app.session.session_name
-        self.footer.pending = len(self.app.session.agent.state.pending_tool_calls)
+        self.footer.model = self.session.model.id
+        self.footer.provider = self.session.model.provider
+        self.footer.thinking_level = self.session.thinking_level
+        self.footer.session_name = self.session.session_name
+        self.footer.pending = len(self.session.agent.state.pending_tool_calls)
         if self.footer.pending:
             self._set_motion_signal("agent-tools", MotionState.TOOL)
         else:
             self._clear_motion_signal("agent-tools")
-        usage_stats = _footer_usage_stats(self.app.session.messages)
+        usage_stats = _footer_usage_stats(self.session.messages)
         self.footer.total_input = usage_stats["input"]
         self.footer.total_output = usage_stats["output"]
         self.footer.total_cache_read = usage_stats["cache_read"]
         self.footer.total_cache_write = usage_stats["cache_write"]
         self.footer.latest_cache_hit_rate = usage_stats["latest_cache_hit_rate"]
         self.footer.total_cost = usage_stats["cost"]
-        context_usage = self.app.session.get_context_usage()
+        context_usage = self.session.get_context_usage()
         self.footer.context_tokens = estimate_tokens(self.app.messages)
         self.footer.context_window = None
         self.footer.context_percent = None
@@ -432,7 +432,7 @@ class InteractiveView(PortBoundController[InteractiveViewPort]):
         self.footer.extension_statuses = dict(self.extension_statuses)
         self.footer.git_branch = self.footer_data_provider.get_git_branch()
         self.footer.available_provider_count = self.footer_data_provider.get_available_provider_count()
-        self.footer.model_reasoning = bool(getattr(self.app.session.model, "reasoning", False))
+        self.footer.model_reasoning = bool(getattr(self.session.model, "reasoning", False))
         self.footer.history_hint = None
 
     def set_hidden_thinking_label(self, label: str | None = None) -> None:

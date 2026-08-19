@@ -1,20 +1,27 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, fields, is_dataclass
+from typing import get_type_hints
 
 import pytest
 
+from tests._support_tui import CodingApp, FakeTerminal, faux_model
+from travis.coding_agent.agent_session import AgentSession
+from travis.controller_ports import ControllerBinding
+from travis.runtime_facade import RuntimeFacade
 from travis.tui.interactive_controllers import (
     INTERACTIVE_CONTROLLER_PORT_ATTRIBUTES,
     InteractiveControllers,
 )
-from travis.tui.interactive_state import InteractiveLifecycleState, InteractiveState
-from tests._support_tui import CodingApp, FakeTerminal, faux_model
-from travis.tui.interactive_mode import InteractiveMode
-from travis.tui.interactive_mode import _InteractiveRuntime
+from travis.tui.interactive_mode import InteractiveMode, _InteractiveRuntime
+from travis.tui.interactive_rebind import InteractiveProcessSession
 from travis.tui.interactive_services import InteractiveServices
-from travis.runtime_facade import RuntimeFacade
-
+from travis.tui.interactive_state import InteractiveLifecycleState, InteractiveState
+from travis.tui.user_commands import (
+    UserCommandBinding,
+    UserCommandExtensionPort,
+    UserCommandSessionPort,
+)
 
 INTERACTIVE_CONTROLLER_NAMES = (
     "command_dispatch",
@@ -159,8 +166,49 @@ def test_interactive_controllers_do_not_retain_a_runtime_or_public_facade(tmp_pa
         assert runtime not in (getattr(dependencies, field.name) for field in fields(dependencies))
 
     for name in INTERACTIVE_CONTROLLER_NAMES:
-        port = getattr(runtime.controllers, name).dependencies.port
-        assert port.declared_names == frozenset(INTERACTIVE_CONTROLLER_PORT_ATTRIBUTES[name])
+        dependencies = getattr(runtime.controllers, name).dependencies
+        binding_names = {
+            field.name
+            for field in fields(dependencies)
+            if isinstance(getattr(dependencies, field.name), ControllerBinding)
+        }
+        assert binding_names == set(INTERACTIVE_CONTROLLER_PORT_ATTRIBUTES[name])
+
+
+def test_interactive_controllers_receive_distinct_explicit_dependency_records(tmp_path) -> None:
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=FakeTerminal(), enable_tui=True)
+    runtime = InteractiveMode(app)._runtime
+    dependencies = [
+        getattr(runtime.controllers, name).dependencies
+        for name in INTERACTIVE_CONTROLLER_NAMES
+    ]
+
+    assert len({type(record) for record in dependencies}) == len(dependencies)
+    assert all(is_dataclass(record) for record in dependencies)
+    assert all(not hasattr(record, "port") for record in dependencies)
+    assert all(not hasattr(controller, "__dict__") for controller in (
+        getattr(runtime.controllers, name) for name in INTERACTIVE_CONTROLLER_NAMES
+    ))
+
+
+def test_interactive_controllers_receive_an_app_port_not_the_complete_app(tmp_path) -> None:
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=FakeTerminal(), enable_tui=True)
+    runtime = InteractiveMode(app)._runtime
+
+    for name in INTERACTIVE_CONTROLLER_NAMES:
+        controller = getattr(runtime.controllers, name)
+        if "app" in INTERACTIVE_CONTROLLER_PORT_ATTRIBUTES[name]:
+            assert controller.app is not app
+            assert type(controller.app).__name__ == "InteractiveAppAdapter"
+    assert runtime.services.sessions is not app
+    assert type(runtime.services.sessions).__name__ == "InteractiveAppAdapter"
+
+
+def test_user_command_binding_declares_the_narrow_rebindable_session_port() -> None:
+    assert get_type_hints(UserCommandBinding)["session"] is UserCommandSessionPort
+    getter = InteractiveProcessSession.extension_runner.fget
+    assert getter is not None
+    assert get_type_hints(getter)["return"] is UserCommandExtensionPort
 
 
 def test_declared_interactive_state_and_services_are_real_controller_dependencies(tmp_path) -> None:
@@ -179,48 +227,47 @@ def test_declared_interactive_state_and_services_are_real_controller_dependencie
     assert runtime.controllers.view.dependencies.services.history is runtime.history
 
 
-class _RebindRecorder:
-    def __init__(self, binding: object, *, fail_on: object | None = None) -> None:
-        self.binding = binding
-        self.fail_on = fail_on
-        self.calls: list[object] = []
+def test_interactive_session_rebind_changes_services_consumed_by_real_controllers(tmp_path) -> None:
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=FakeTerminal(), enable_tui=True)
+    runtime = InteractiveMode(app)._runtime
+    new_session = AgentSession(cwd=str(tmp_path / "new"), model=faux_model())
+    new_overrides = new_session.set_generation_param_override("temperature", 0.7)
 
-    def rebind_session(self, binding: object) -> object:
-        self.calls.append(binding)
-        if binding is self.fail_on:
-            raise RuntimeError("third rebind failed")
-        previous = self.binding
-        self.binding = binding
-        return previous
+    runtime.controllers.rebind_session(new_session)
+
+    assert not isinstance(runtime.controllers.view.session, RuntimeFacade)
+    assert not isinstance(runtime.controllers.params.session, RuntimeFacade)
+    assert not isinstance(runtime.controllers.processes.session, RuntimeFacade)
+    assert runtime.controllers.view.session.model is new_session.model
+    assert runtime.controllers.processes.session.session_id == new_session.session_id
+    assert runtime.controllers.params._session_generation_param_overrides() is new_overrides
 
 
-def test_interactive_session_rebind_rolls_back_earlier_controllers() -> None:
-    old_binding = object()
-    new_binding = object()
-    first = _RebindRecorder(old_binding)
-    second = _RebindRecorder(old_binding)
-    third = _RebindRecorder(old_binding, fail_on=new_binding)
-    controllers = InteractiveControllers(
-        command_dispatch=object(),
-        view=first,
-        model_auth=object(),
-        params=second,
-        processes=third,
-        lsp=object(),
-        memory=object(),
-        operations=object(),
-        subagents=object(),
-        sessions=object(),
-        extensions=object(),
-        turns=object(),
-        shutdown=object(),
-        motion=object(),
+def test_interactive_session_rebind_rolls_back_real_controller_bindings(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=FakeTerminal(), enable_tui=True)
+    runtime = InteractiveMode(app)._runtime
+    old_session = app.session
+    new_session = AgentSession(cwd=str(tmp_path / "new"), model=faux_model())
+
+    def fail_third_rebind(_controller, _session):
+        raise RuntimeError("third rebind failed")
+
+    monkeypatch.setattr(
+        type(runtime.controllers.processes),
+        "rebind_session",
+        fail_third_rebind,
     )
 
     with pytest.raises(RuntimeError, match="third rebind failed"):
-        controllers.rebind_session(new_binding)
+        runtime.controllers.rebind_session(new_session)
 
-    assert first.binding is old_binding
-    assert second.binding is old_binding
-    assert first.calls == [new_binding, old_binding]
-    assert second.calls == [new_binding, old_binding]
+    assert runtime.controllers.view.session.model is old_session.model
+    assert runtime.controllers.params.session.model is old_session.model
+    assert not isinstance(runtime.controllers.view.session, RuntimeFacade)
+    assert not isinstance(runtime.controllers.params.session, RuntimeFacade)
+    assert runtime.controllers.params._session_generation_param_overrides() == (
+        old_session.generation_param_overrides
+    )

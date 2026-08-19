@@ -22,7 +22,7 @@ from travis.tui.interactive import (
     BashExecutionComponent,
 )
 from travis.tui.interactive_rebind import rebind_cached_session
-from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
+from travis.tui.interactive_surfaces import InteractiveProcessSurface
 from travis.tui.interactive_view import _short_status_text
 from travis.tui.motion import MotionState
 from travis.tui.user_commands import (
@@ -32,8 +32,10 @@ from travis.tui.user_commands import (
 )
 
 
-class InteractiveProcessCommands(PortBoundController[InteractiveCommandPort]):
+class InteractiveProcessCommands(InteractiveProcessSurface):
     """Owns a focused interactive runtime concern."""
+
+    __slots__ = ()
 
     rebind_session = rebind_cached_session
 
@@ -172,8 +174,8 @@ class InteractiveProcessCommands(PortBoundController[InteractiveCommandPort]):
         self.tui.request_render()
 
     def _rebind_session_ui(self) -> None:
-        self.dependencies.port._rebind_controller_sessions(self.app.session)
-        self.tool_approval_broker.bind_session(self.app.session)
+        self._rebind_controller_sessions(self.app.session)
+        self.tool_approval_broker.bind_session(self.session)
         self._rebind_subagent_supervisor()
         if self._unsubscribe_session_events is not None:
             self._unsubscribe_session_events()
@@ -189,7 +191,7 @@ class InteractiveProcessCommands(PortBoundController[InteractiveCommandPort]):
         self._refresh_generation_param_state()
         self.setup_autocomplete_provider()
         if self._initialized:
-            self._unsubscribe_session_events = self.app.session.subscribe(
+            self._unsubscribe_session_events = self.session.subscribe(
                 lambda event: self.tui.post(lambda: self._handle_session_event(event))
             )
         self._refresh_footer()
@@ -207,9 +209,9 @@ class InteractiveProcessCommands(PortBoundController[InteractiveCommandPort]):
             if self._user_commands is None:
                 raise RuntimeError("User command controller is unavailable")
             binding = UserCommandBinding(
-                session=self.app.session,
-                session_id=self.app.session.session_id or None,
-                session_path=self.app.session.session_path,
+                session=self.session,
+                session_id=self.session.session_id or None,
+                session_path=self.session.session_path,
                 exclude_from_context=exclude_from_context,
             )
             handle = self._user_commands.start(command, binding)

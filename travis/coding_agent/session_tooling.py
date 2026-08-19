@@ -14,7 +14,7 @@ from travis.coding_agent.extensions import (
 from travis.coding_agent.object_utils import settings_value as _settings_value
 from travis.coding_agent.processes.local import create_local_process_transport
 from travis.coding_agent.session_extensions import _extension_resource_path, _tool_info
-from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
+from travis.coding_agent.session_surfaces import SessionToolControllerSurface
 from travis.coding_agent.session_types import _DEFAULT_ACTIVE_TOOL_NAMES
 from travis.coding_agent.system_prompt import BuildSystemPromptOptions, build_system_prompt
 from travis.coding_agent.tools.types import (
@@ -22,8 +22,10 @@ from travis.coding_agent.tools.types import (
 )
 
 
-class SessionToolController(SessionPortBoundController[SessionControllerPort]):
+class SessionToolController(SessionToolControllerSurface):
     """Owns a focused AgentSession runtime concern."""
+
+    __slots__ = ()
 
     def _default_subagent_log_dir(self, *, session_path: str | None, session_id: str | None) -> str:
         namespace = session_id or (Path(session_path).stem if session_path else "ephemeral")

@@ -163,6 +163,27 @@ def test_controller_composition_has_no_generic_method_rebinding_bridge() -> None
     assert offenders == []
 
 
+def test_controller_composition_has_no_any_typed_dependency_escape_hatch() -> None:
+    offenders: list[str] = []
+    for path in COMPOSITION_MODULES:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and node.id == "Any":
+                offenders.append(f"{path.relative_to(ROOT)}:{node.lineno}")
+
+    assert offenders == []
+
+
+def test_controller_composition_has_no_string_keyed_dependency_service_locator() -> None:
+    source = (ROOT / "travis/controller_ports.py").read_text(encoding="utf-8")
+
+    assert "ControllerBindingRegistry" not in source
+    assert "class ControllerPort" not in source
+    assert "def read(self, name:" not in source
+    assert "def write(self, name:" not in source
+    assert "install_explicit_port_attributes" not in source
+
+
 def test_session_factory_modules_do_not_import_concrete_agent_session() -> None:
     for path in SESSION_FACTORY_MODULES:
         assert "travis.coding_agent.agent_session" not in _imported_modules(path)

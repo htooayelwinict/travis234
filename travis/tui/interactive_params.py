@@ -18,7 +18,7 @@ from travis.ai.providers.params import (
 from travis.ai.providers.transports import get_transport
 from travis.ai.types import SimpleStreamOptions
 from travis.tui.interactive_rebind import rebind_cached_session
-from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
+from travis.tui.interactive_surfaces import InteractiveParamsSurface
 
 _PARAM_NAMES = ("thinking", *GENERATION_PARAM_FIELDS)
 
@@ -53,13 +53,15 @@ def _params_argument_completions(argument_text: str) -> list[dict[str, str]]:
     ]
 
 
-class InteractiveParams(PortBoundController[InteractiveCommandPort]):
+class InteractiveParams(InteractiveParamsSurface):
     """Own `/params` grammar, display, mutation, and capability state."""
+
+    __slots__ = ()
 
     rebind_session = rebind_cached_session
 
     def _session_generation_param_overrides(self) -> GenerationParams:
-        params = getattr(self.app.session, "generation_param_overrides", None)
+        params = getattr(self.session, "generation_param_overrides", None)
         return params if isinstance(params, GenerationParams) else GenerationParams()
 
     def _effective_generation_params(self) -> GenerationParams:
@@ -70,8 +72,8 @@ class InteractiveParams(PortBoundController[InteractiveCommandPort]):
 
     def _refresh_generation_param_state(self) -> None:
         self.generation_params = self._effective_generation_params()
-        model = self.app.session.model
-        get_active_tool_names = getattr(self.app.session, "get_active_tool_names", None)
+        model = self.session.model
+        get_active_tool_names = getattr(self.session, "get_active_tool_names", None)
         tools_enabled = bool(get_active_tool_names()) if callable(get_active_tool_names) else False
         api_mode = getattr(get_transport(model.api), "api_mode", model.api)
         try:
@@ -106,7 +108,7 @@ class InteractiveParams(PortBoundController[InteractiveCommandPort]):
             generation_params=effective,
             max_tokens=bounded_max,
         )
-        return self.app.session.model_registry.stream_simple(model, context, adapted)
+        return self.session.model_registry.stream_simple(model, context, adapted)
 
     def _run_params_command(self, query: str | None = None) -> None:
         normalized_query = (query or "").strip()
@@ -132,9 +134,9 @@ class InteractiveParams(PortBoundController[InteractiveCommandPort]):
 
     def _show_params(self, query: str | None = None) -> None:
         self._refresh_generation_param_state()
-        provider = getattr(self.app.session.model, "provider", "")
-        model_id = getattr(self.app.session.model, "id", "")
-        thinking_display = f"thinking={self.app.session.thinking_level}"
+        provider = getattr(self.session.model, "provider", "")
+        model_id = getattr(self.session.model, "id", "")
+        thinking_display = f"thinking={self.session.thinking_level}"
         params_display = compact_generation_params_display(self.generation_params)
         warning_display = _compact_generation_param_warnings(self.generation_param_warnings)
 
@@ -171,9 +173,9 @@ class InteractiveParams(PortBoundController[InteractiveCommandPort]):
             return
         try:
             if name == "thinking":
-                self.app.session.set_thinking_level(raw_value.strip().lower())
+                self.session.set_thinking_level(raw_value.strip().lower())
             else:
-                self.app.session.set_generation_param_override(name, raw_value)
+                self.session.set_generation_param_override(name, raw_value)
         except ValueError as error:
             self._show_status(str(error), kind="error")
             return
@@ -182,7 +184,7 @@ class InteractiveParams(PortBoundController[InteractiveCommandPort]):
             return
 
         self._refresh_generation_param_state()
-        value_display = self.app.session.thinking_level if name == "thinking" else self._effective_param_display(name)
+        value_display = self.session.thinking_level if name == "thinking" else self._effective_param_display(name)
         self._show_status(
             f"Session {name}={value_display}; applies to the next turn.",
             kind="model",
@@ -206,7 +208,7 @@ class InteractiveParams(PortBoundController[InteractiveCommandPort]):
         if self._reject_active_param_write():
             return
         try:
-            self.app.session.reset_generation_param_override(name)
+            self.session.reset_generation_param_override(name)
         except Exception as error:  # noqa: BLE001 - persistence errors must preserve the running TUI.
             self._show_status(f"Failed to reset {name}: {error}", kind="error")
             return
@@ -223,7 +225,7 @@ class InteractiveParams(PortBoundController[InteractiveCommandPort]):
         if self._reject_active_param_write():
             return
         try:
-            self.app.session.reset_generation_param_overrides()
+            self.session.reset_generation_param_overrides()
         except Exception as error:  # noqa: BLE001 - persistence errors must preserve the running TUI.
             self._show_status(f"Failed to reset session parameters: {error}", kind="error")
             return

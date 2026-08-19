@@ -30,11 +30,11 @@ from travis.coding_agent.compaction_adapter import (
 from travis.coding_agent.compaction_coordinator import (
     CompactionTransactionCoordinator,
 )
-from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
 from travis.coding_agent.session_store import (
     SessionStore,
     deserialize_message,
 )
+from travis.coding_agent.session_surfaces import SessionPersistenceControllerSurface
 from travis.compaction.timing import CompactionManager
 
 
@@ -121,8 +121,10 @@ def _get_user_message_text(message: UserMessage) -> str:
         return content
     return "".join(block.text for block in content if isinstance(block, TextContent))
 
-class SessionPersistence(SessionPortBoundController[SessionControllerPort]):
+class SessionPersistence(SessionPersistenceControllerSurface):
     """Owns a focused AgentSession runtime concern."""
+
+    __slots__ = ()
 
     def compact(self, focus: str | None = None, summarizer=None, deep: bool = False):
         if self._compaction_transactions is None:

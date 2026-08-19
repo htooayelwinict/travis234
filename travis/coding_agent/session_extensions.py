@@ -24,7 +24,7 @@ from travis.coding_agent.extension_host import ExtensionCommandContextProxy, cal
 from travis.coding_agent.extension_messages import send_extension_user_message
 from travis.coding_agent.extensions import ExtensionErrorListener, ExtensionRunner, emit_session_shutdown_event
 from travis.coding_agent.object_utils import settings_value as _settings_value
-from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
+from travis.coding_agent.session_surfaces import SessionExtensionControllerSurface
 from travis.coding_agent.session_types import ExtensionCommandContext, ExtensionCompactionResult
 from travis.coding_agent.skills import Skill, format_skill_invocation
 from travis.coding_agent.source_info import SourceInfo
@@ -170,8 +170,10 @@ def _extension_resource_path(entry: dict[str, str]) -> dict[str, object]:
         },
     }
 
-class SessionExtensionController(SessionPortBoundController[SessionControllerPort]):
+class SessionExtensionController(SessionExtensionControllerSurface):
     """Owns a focused AgentSession runtime concern."""
+
+    __slots__ = ()
 
     def bind_extensions(self, bindings: dict[str, object] | None = None) -> None:
         first_bind = not self._extensions_bound

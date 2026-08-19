@@ -3,112 +3,88 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from collections.abc import Callable
+from typing import cast, get_origin, get_type_hints
 
 _UNBOUND = object()
 
 
-@dataclass(slots=True)
-class _Binding:
-    value: object = _UNBOUND
-    getter: Callable[[], object] | None = None
-    setter: Callable[[object], None] | None = None
+class ControllerBinding[ValueT]:
+    """One explicitly named dependency cell shared at composition time."""
 
-    def read(self, name: str) -> object:
-        if self.getter is not None:
-            return self.getter()
-        if self.value is _UNBOUND:
-            raise AttributeError(f"controller dependency is not bound: {name}")
-        return self.value
+    __slots__ = ("_coerce", "_getter", "_setter", "_value")
 
-    def write(self, value: object) -> None:
-        if self.setter is not None:
-            self.setter(value)
+    def __init__(
+        self,
+        value: ValueT | object = _UNBOUND,
+        *,
+        coerce: Callable[[object], ValueT] | None = None,
+    ) -> None:
+        self._coerce = coerce
+        self._value = (
+            coerce(value)
+            if coerce is not None and value is not _UNBOUND
+            else value
+        )
+        self._getter: Callable[[], ValueT] | None = None
+        self._setter: Callable[[ValueT], None] | None = None
+
+    def get(self) -> ValueT:
+        if self._getter is not None:
+            return self._getter()
+        if self._value is _UNBOUND:
+            raise AttributeError("controller dependency is not bound")
+        return cast(ValueT, self._value)
+
+    def set(self, value: object) -> None:
+        if self._setter is not None:
+            self._setter(cast(ValueT, value))
         else:
-            self.value = value
+            self._value = self._coerce(value) if self._coerce is not None else value
+
+    def swap(self, value: object) -> object:
+        previous = self.get()
+        self.set(value)
+        return previous
+
+    def bind_attribute(self, owner: object, attribute: str) -> None:
+        def get_value() -> ValueT:
+            return cast(ValueT, getattr(owner, attribute))
+
+        def set_value(value: ValueT) -> None:
+            setattr(owner, attribute, value)
+
+        self._getter = get_value
+        self._setter = set_value
+
+    def bind_controller_attribute(self, owner: object, attribute: str) -> None:
+        """Bind an owner member while preserving per-runtime compatibility overrides."""
+
+        self._value = _UNBOUND
+
+        def get_value() -> ValueT:
+            if self._value is not _UNBOUND:
+                return cast(ValueT, self._value)
+            return cast(ValueT, getattr(owner, attribute))
+
+        def set_value(value: ValueT) -> None:
+            self._value = value
+
+        self._getter = get_value
+        self._setter = set_value
 
 
-class ControllerBindingRegistry:
-    """Shared cells and named collaborator bindings owned by a composition root."""
+class ExplicitController[DependenciesT]:
+    """Store one immutable responsibility-specific dependency record."""
 
-    __slots__ = ("_bindings",)
+    __slots__ = ("dependencies",)
 
-    def __init__(self, names: Iterable[str]) -> None:
-        self._bindings = {name: _Binding() for name in names}
-
-    def read(self, name: str) -> object:
-        return self._bindings[name].read(name)
-
-    def write(self, name: str, value: object) -> None:
-        self._bindings[name].write(value)
-
-    def bind_owner(self, name: str, owner: object) -> None:
-        binding = self._bindings[name]
-        binding.getter = lambda: getattr(owner, name)
-        binding.setter = lambda value: setattr(owner, name, value)
-
-    def bind_attribute(self, name: str, owner: object, attribute: str) -> None:
-        binding = self._bindings[name]
-        binding.getter = lambda: getattr(owner, attribute)
-        binding.setter = lambda value: setattr(owner, attribute, value)
-
-    def port(self, names: Iterable[str]) -> ControllerPort:
-        return ControllerPort(self, frozenset(names))
+    def __init__(self, dependencies: DependenciesT) -> None:
+        self.dependencies = dependencies
 
 
-class ControllerPort:
-    """An allowlisted controller dependency surface with no runtime reference."""
-
-    __slots__ = ("_names", "_registry")
-
-    def __init__(self, registry: ControllerBindingRegistry, names: frozenset[str]) -> None:
-        self._registry = registry
-        self._names = names
-
-    def read(self, name: str) -> object:
-        if name not in self._names:
-            raise AttributeError(f"controller dependency is not declared: {name}")
-        return self._registry.read(name)
-
-    def write(self, name: str, value: object) -> None:
-        if name not in self._names:
-            raise AttributeError(f"controller dependency is not declared: {name}")
-        self._registry.write(name, value)
-
-    @property
-    def declared_names(self) -> frozenset[str]:
-        return self._names
-
-
-class RuntimeStateAttribute:
-    """Route composition-root state through shared controller cells."""
-
-    __slots__ = ("name",)
-
-    def __init__(self, name: str) -> None:
-        self.name = name
-
-    def __get__(self, instance: object | None, owner: type[object]) -> object:
-        if instance is None:
-            return self
-        registry = object.__getattribute__(instance, "_controller_bindings")
-        return registry.read(self.name)
-
-    def __set__(self, instance: object, value: object) -> None:
-        registry = object.__getattribute__(instance, "_controller_bindings")
-        registry.write(self.name, value)
-
-
-@dataclass(frozen=True, slots=True)
-class ControllerDependencies[ControllerPortT]:
-    """The named structural port consumed by one controller domain."""
-
-    port: ControllerPortT
-
-
-class DependencyAttribute:
-    """An explicitly installed attribute on a controller's narrow port surface."""
+class ControllerDependencyAttribute:
+    """Expose one field from a controller's explicit dependency record."""
 
     __slots__ = ("name",)
 
@@ -125,8 +101,10 @@ class DependencyAttribute:
             if self.name in instance_dict:
                 return instance_dict[self.name]
             raise
-        port = object.__getattribute__(dependencies, "port")
-        return port.read(self.name)
+        binding = getattr(dependencies, self.name)
+        if not isinstance(binding, ControllerBinding):
+            raise TypeError(f"controller dependency is not a binding: {self.name}")
+        return binding.get()
 
     def __set__(self, instance: object, value: object) -> None:
         try:
@@ -134,17 +112,44 @@ class DependencyAttribute:
         except AttributeError:
             object.__getattribute__(instance, "__dict__")[self.name] = value
             return
-        port = object.__getattribute__(dependencies, "port")
-        port.write(self.name, value)
+        binding = getattr(dependencies, self.name)
+        if not isinstance(binding, ControllerBinding):
+            raise TypeError(f"controller dependency is not a binding: {self.name}")
+        binding.set(value)
 
 
-class ExplicitController[DependenciesT]:
-    """Base class that stores an immutable responsibility-specific dependency record."""
+class RuntimeBindingAttribute:
+    """Expose an explicit root binding without retaining the complete runtime."""
 
-    __slots__ = ("dependencies",)
+    __slots__ = ("binding_record_attribute", "name")
 
-    def __init__(self, dependencies: DependenciesT) -> None:
-        self.dependencies = dependencies
+    def __init__(self, binding_record_attribute: str, name: str) -> None:
+        self.binding_record_attribute = binding_record_attribute
+        self.name = name
+
+    def __get__(self, instance: object | None, owner: type[object]) -> object:
+        if instance is None:
+            return self
+        binding_record = object.__getattribute__(instance, self.binding_record_attribute)
+        binding = getattr(binding_record, self.name)
+        return binding.get()
+
+    def __set__(self, instance: object, value: object) -> None:
+        binding_record = object.__getattribute__(instance, self.binding_record_attribute)
+        binding = getattr(binding_record, self.name)
+        binding.set(value)
+
+
+def _runtime_controller_binding(instance: object, name: str) -> ControllerBinding[object] | None:
+    for record_name in ("_session_bindings", "_interactive_bindings"):
+        try:
+            record = object.__getattribute__(instance, record_name)
+            binding = getattr(record, name)
+        except AttributeError:
+            continue
+        if isinstance(binding, ControllerBinding):
+            return binding
+    return None
 
 
 class ControllerDelegate:
@@ -159,6 +164,12 @@ class ControllerDelegate:
     def __get__(self, instance: object | None, owner: type[object]) -> object:
         if instance is None:
             return self
+        binding = _runtime_controller_binding(instance, self.member_name)
+        if binding is not None:
+            try:
+                return binding.get()
+            except AttributeError:
+                pass
         controllers = object.__getattribute__(instance, "controllers")
         controller = object.__getattribute__(controllers, self.controller_name)
         descriptor = inspect.getattr_static(type(controller), self.member_name)
@@ -170,9 +181,63 @@ class ControllerDelegate:
         raise TypeError("controller delegates must be bound to a runtime instance")
 
     def __set__(self, instance: object, value: object) -> None:
+        binding = _runtime_controller_binding(instance, self.member_name)
+        if binding is not None:
+            binding.set(value)
+            return
         controllers = object.__getattribute__(instance, "controllers")
         controller = object.__getattribute__(controllers, self.controller_name)
         setattr(controller, self.member_name, value)
+
+
+def _dataclass_field_names(dataclass_type: type[object]) -> tuple[str, ...]:
+    raw_fields = getattr(dataclass_type, "__dataclass_fields__", None)
+    if not isinstance(raw_fields, dict):
+        raise TypeError(f"dependency record is not a dataclass: {dataclass_type!r}")
+    names: list[str] = []
+    for name in raw_fields:
+        if not isinstance(name, str):
+            raise TypeError("dataclass dependency field names must be strings")
+        names.append(name)
+    return tuple(names)
+
+
+def controller_dependency_names(dependency_type: type[object]) -> tuple[str, ...]:
+    """Return only dependency fields backed by explicit cells."""
+
+    hints = get_type_hints(dependency_type)
+    return tuple(
+        name
+        for name in _dataclass_field_names(dependency_type)
+        if get_origin(hints[name]) is ControllerBinding
+    )
+
+
+def compose_controller_dependencies[DependenciesT](
+    dependency_type: type[DependenciesT],
+    bindings: object,
+    **explicit_values: object,
+) -> DependenciesT:
+    """Build one narrow record from explicit binding fields and direct services."""
+
+    values = [
+        explicit_values[name]
+        if name in explicit_values
+        else getattr(bindings, name)
+        for name in _dataclass_field_names(dependency_type)
+    ]
+    return dependency_type(*values)
+
+
+def install_controller_dependency_attributes(
+    owner: type[object],
+    dependency_type: type[object],
+) -> None:
+    """Install descriptors only for fields declared by one dependency record."""
+
+    for name in controller_dependency_names(dependency_type):
+        if name not in owner.__dict__:
+            setattr(owner, name, ControllerDependencyAttribute(name))
 
 
 def install_controller_delegates(
@@ -188,32 +253,32 @@ def install_controller_delegates(
             setattr(owner, name, ControllerDelegate(controller_name, name))
 
 
-def install_explicit_port_attributes(owner: type[object], names: tuple[str, ...]) -> None:
-    """Install only the attributes declared for ``owner``'s domain contract."""
-
-    for name in names:
-        if name not in owner.__dict__:
-            setattr(owner, name, DependencyAttribute(name))
-
-
-def install_runtime_state_attributes(
+def install_runtime_binding_attributes(
     owner: type[object],
-    names: Iterable[str],
+    *,
+    binding_record_attribute: str,
+    binding_type: type[object],
     delegated_names: frozenset[str],
 ) -> None:
-    for name in names:
+    """Expose explicit per-instance binding fields on a compatibility runtime."""
+
+    for name in _dataclass_field_names(binding_type):
         if name not in delegated_names and name not in owner.__dict__:
-            setattr(owner, name, RuntimeStateAttribute(name))
+            setattr(
+                owner,
+                name,
+                RuntimeBindingAttribute(binding_record_attribute, name),
+            )
 
 
 __all__ = (
+    "ControllerBinding",
     "ControllerDelegate",
-    "ControllerDependencies",
-    "ControllerBindingRegistry",
-    "ControllerPort",
-    "DependencyAttribute",
+    "ControllerDependencyAttribute",
     "ExplicitController",
+    "compose_controller_dependencies",
+    "controller_dependency_names",
     "install_controller_delegates",
-    "install_explicit_port_attributes",
-    "install_runtime_state_attributes",
+    "install_controller_dependency_attributes",
+    "install_runtime_binding_attributes",
 )

@@ -21,7 +21,7 @@ from travis.coding_agent.artifact_store import ArtifactPromotionError
 from travis.coding_agent.policy.context import fixed_action_context, subagent_policy_context
 from travis.coding_agent.policy.types import ALL_TOOL_EFFECTS
 from travis.coding_agent.processes.types import ProcessOwner
-from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
+from travis.coding_agent.session_surfaces import SessionSubagentControllerSurface
 from travis.coding_agent.session_types import (
     _CANCEL_SUBAGENT_SCHEMA,
     _DEFAULT_SUBAGENT_ALLOWED_TOOLS,
@@ -90,8 +90,10 @@ class _InternalSubagentControlHandle:
                 callback()
         return ControlResult(True, "cancellation_requested")
 
-class SessionSubagentController(SessionPortBoundController[SessionControllerPort]):
+class SessionSubagentController(SessionSubagentControllerSurface):
     """Owns a focused AgentSession runtime concern."""
+
+    __slots__ = ()
 
     def _subagent_allowed_tools_for_role(self, role: str) -> tuple[str, ...]:
         if self._resource_loader is None:
@@ -206,6 +208,25 @@ class SessionSubagentController(SessionPortBoundController[SessionControllerPort
         task_id = self.subagents.spawn(task)
         return task_id, task
 
+    def _invoke_spawn_subagent_task(
+        self,
+        role: str,
+        goal: str,
+        options: dict | None = None,
+    ) -> tuple[str, SubagentTask]:
+        spawn = self.dependencies._spawn_subagent_task.get()
+        if not callable(spawn):
+            raise TypeError("subagent spawn dependency is not callable")
+        result = spawn(role, goal, options)
+        if (
+            not isinstance(result, tuple)
+            or len(result) != 2
+            or not isinstance(result[0], str)
+            or not isinstance(result[1], SubagentTask)
+        ):
+            raise TypeError("subagent spawn dependency returned an invalid task")
+        return result
+
     def _spawn_and_wait_for_subagent(
         self,
         role: str,
@@ -214,7 +235,7 @@ class SessionSubagentController(SessionPortBoundController[SessionControllerPort
         *,
         signal: AbortSignal | None = None,
     ) -> SubagentResult:
-        task_id, task = self._spawn_subagent_task(role, goal, options)
+        task_id, task = self._invoke_spawn_subagent_task(role, goal, options)
         return self._prepare_public_subagent_result(
             self.subagents.wait(
                 task_id,
@@ -362,7 +383,7 @@ class SessionSubagentController(SessionPortBoundController[SessionControllerPort
                 "Summarize the existing child results and ask the user before launching another wave.",
                 details,
             )
-        task_id, task = self._spawn_subagent_task(normalized_role, goal, options)
+        task_id, task = self._invoke_spawn_subagent_task(normalized_role, goal, options)
         self._model_subagents_spawned_this_turn += 1
         self._model_subagent_spawn_signatures_this_turn.add(spawn_signature)
         if wait_for_result:

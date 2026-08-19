@@ -63,8 +63,6 @@ from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.session_bash import SessionBashController
 from travis.coding_agent.session_controllers import (
     SESSION_CONTROLLER_DELEGATES,
-    SESSION_CONTROLLER_PORT_ATTRIBUTES,
-    SESSION_CONTROLLER_STATE_NAMES,
     SESSION_DELEGATED_NAMES,
     SessionControllers,
     bind_session_controller_owners,
@@ -78,9 +76,19 @@ from travis.coding_agent.session_operations import SessionOperationController
 from travis.coding_agent.session_persistence import SessionPersistence
 from travis.coding_agent.session_policy_controller import SessionPolicyController
 from travis.coding_agent.session_ports import (
+    SessionBashDependencies,
+    SessionEventDependencies,
+    SessionExtensionDependencies,
+    SessionGenerationDependencies,
     SessionModelDependencies,
+    SessionOperationDependencies,
+    SessionPersistenceDependencies,
+    SessionPolicyDependencies,
+    SessionRuntimeBindings,
+    SessionSubagentDependencies,
+    SessionSubagentTraceDependencies,
+    SessionToolDependencies,
     SessionTurnDependencies,
-    install_session_controller_delegates,
 )
 from travis.coding_agent.session_state import SessionPresentationState, SessionTurnState
 from travis.coding_agent.session_store import (
@@ -247,9 +255,9 @@ from travis.coding_agent.tools.types import (
 )
 from travis.compaction.timing import CompactionManager
 from travis.controller_ports import (
-    ControllerBindingRegistry,
-    ControllerDependencies,
-    install_runtime_state_attributes,
+    compose_controller_dependencies,
+    install_controller_delegates,
+    install_runtime_binding_attributes,
 )
 from travis.runtime_facade import RuntimeFacade
 
@@ -340,69 +348,101 @@ class _SessionRuntime:
         operation_role: str | None = None,
         operation_task_id: str | None = None,
     ) -> None:
-        self._controller_bindings = ControllerBindingRegistry(SESSION_CONTROLLER_STATE_NAMES)
+        self._session_bindings = SessionRuntimeBindings()
         self.turn_state = SessionTurnState()
         self.presentation_state = SessionPresentationState()
-        self._controller_bindings.bind_attribute(
-            "_pending_next_turn_messages", self.turn_state, "pending_next_turn_messages"
+        self._session_bindings._pending_next_turn_messages.bind_attribute(
+            self.turn_state, "pending_next_turn_messages"
         )
-        self._controller_bindings.bind_attribute(
-            "_retry_attempt", self.turn_state, "retry_attempt"
+        self._session_bindings._retry_attempt.bind_attribute(
+            self.turn_state, "retry_attempt"
         )
-        self._controller_bindings.bind_attribute(
-            "_retry_enabled", self.turn_state, "retry_enabled"
+        self._session_bindings._retry_enabled.bind_attribute(
+            self.turn_state, "retry_enabled"
         )
-        self._controller_bindings.bind_attribute(
-            "_session_name", self.presentation_state, "session_name"
+        self._session_bindings._session_name.bind_attribute(
+            self.presentation_state, "session_name"
         )
-        self._controller_bindings.bind_attribute(
-            "_generation_param_overrides", self.presentation_state, "generation_overrides"
+        self._session_bindings._generation_param_overrides.bind_attribute(
+            self.presentation_state, "generation_overrides"
         )
         self.controllers = SessionControllers(
             events=SessionEventController(
-                ControllerDependencies(
-                    self._controller_bindings.port(SESSION_CONTROLLER_PORT_ATTRIBUTES["events"])
+                compose_controller_dependencies(
+                    SessionEventDependencies,
+                    self._session_bindings,
                 )
             ),
             models=SessionModelController(
-                SessionModelDependencies(
-                    self._controller_bindings.port(SESSION_CONTROLLER_PORT_ATTRIBUTES["models"]),
-                    self.presentation_state,
+                compose_controller_dependencies(
+                    SessionModelDependencies,
+                    self._session_bindings,
+                    presentation_state=self.presentation_state,
                 )
             ),
-            generation=SessionGenerationParams(ControllerDependencies(
-                self._controller_bindings.port(SESSION_CONTROLLER_PORT_ATTRIBUTES["generation"])
-            )),
-            persistence=SessionPersistence(ControllerDependencies(
-                self._controller_bindings.port(SESSION_CONTROLLER_PORT_ATTRIBUTES["persistence"])
-            )),
-            bash=SessionBashController(ControllerDependencies(
-                self._controller_bindings.port(SESSION_CONTROLLER_PORT_ATTRIBUTES["bash"])
-            )),
-            policy=SessionPolicyController(ControllerDependencies(
-                self._controller_bindings.port(SESSION_CONTROLLER_PORT_ATTRIBUTES["policy"])
-            )),
-            operations=SessionOperationController(ControllerDependencies(
-                self._controller_bindings.port(SESSION_CONTROLLER_PORT_ATTRIBUTES["operations"])
-            )),
-            tools=SessionToolController(ControllerDependencies(
-                self._controller_bindings.port(SESSION_CONTROLLER_PORT_ATTRIBUTES["tools"])
-            )),
-            extensions=SessionExtensionController(ControllerDependencies(
-                self._controller_bindings.port(SESSION_CONTROLLER_PORT_ATTRIBUTES["extensions"])
-            )),
-            subagents=SessionSubagentController(ControllerDependencies(
-                self._controller_bindings.port(SESSION_CONTROLLER_PORT_ATTRIBUTES["subagents"])
-            )),
-            subagent_trace=SessionSubagentTraceController(ControllerDependencies(
-                self._controller_bindings.port(SESSION_CONTROLLER_PORT_ATTRIBUTES["subagent_trace"])
-            )),
-            turns=SessionTurnController(SessionTurnDependencies(
-                self._controller_bindings.port(SESSION_CONTROLLER_PORT_ATTRIBUTES["turns"]),
-                self.turn_state,
-            )),
+            generation=SessionGenerationParams(
+                compose_controller_dependencies(
+                    SessionGenerationDependencies,
+                    self._session_bindings,
+                )
+            ),
+            persistence=SessionPersistence(
+                compose_controller_dependencies(
+                    SessionPersistenceDependencies,
+                    self._session_bindings,
+                )
+            ),
+            bash=SessionBashController(
+                compose_controller_dependencies(
+                    SessionBashDependencies,
+                    self._session_bindings,
+                )
+            ),
+            policy=SessionPolicyController(
+                compose_controller_dependencies(
+                    SessionPolicyDependencies,
+                    self._session_bindings,
+                )
+            ),
+            operations=SessionOperationController(
+                compose_controller_dependencies(
+                    SessionOperationDependencies,
+                    self._session_bindings,
+                )
+            ),
+            tools=SessionToolController(
+                compose_controller_dependencies(
+                    SessionToolDependencies,
+                    self._session_bindings,
+                )
+            ),
+            extensions=SessionExtensionController(
+                compose_controller_dependencies(
+                    SessionExtensionDependencies,
+                    self._session_bindings,
+                )
+            ),
+            subagents=SessionSubagentController(
+                compose_controller_dependencies(
+                    SessionSubagentDependencies,
+                    self._session_bindings,
+                )
+            ),
+            subagent_trace=SessionSubagentTraceController(
+                compose_controller_dependencies(
+                    SessionSubagentTraceDependencies,
+                    self._session_bindings,
+                )
+            ),
+            turns=SessionTurnController(
+                compose_controller_dependencies(
+                    SessionTurnDependencies,
+                    self._session_bindings,
+                    turn_state=self.turn_state,
+                )
+            ),
         )
-        bind_session_controller_owners(self._controller_bindings, self.controllers)
+        bind_session_controller_owners(self._session_bindings, self.controllers)
         self.cwd = cwd
         self.model_registry = model_registry or ModelRegistry.create(AuthStorage.create())
         self.model_registry.ensure_model(model)
@@ -745,12 +785,13 @@ class _SessionRuntime:
             self.agent.state.messages = restored_context.messages
 
 
-install_runtime_state_attributes(
+install_runtime_binding_attributes(
     _SessionRuntime,
-    SESSION_CONTROLLER_STATE_NAMES,
-    SESSION_DELEGATED_NAMES,
+    binding_record_attribute="_session_bindings",
+    binding_type=SessionRuntimeBindings,
+    delegated_names=SESSION_DELEGATED_NAMES,
 )
-install_session_controller_delegates(
+install_controller_delegates(
     _SessionRuntime,
     SESSION_CONTROLLER_DELEGATES,
 )

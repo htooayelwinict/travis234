@@ -10,10 +10,12 @@ from travis.coding_agent.subagent_supervision import SupervisorSnapshot
 from travis.coding_agent.subagents import SubagentResult
 from travis.tui.components import StatusLine, Text
 from travis.tui.components.subagent_roster import SubagentRoster
-from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
+from travis.tui.interactive_surfaces import InteractiveSubagentSurface
 
 
-class InteractiveSubagents(PortBoundController[InteractiveCommandPort]):
+class InteractiveSubagents(InteractiveSubagentSurface):
+    __slots__ = ()
+
     def _current_subagent_snapshot(self) -> SupervisorSnapshot:
         supervisor = getattr(self.app.session, "subagents", None)
         snapshot = getattr(supervisor, "snapshot", None)

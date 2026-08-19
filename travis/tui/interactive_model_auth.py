@@ -8,8 +8,8 @@ from travis.tui.components import (
     StatusLine,
     Text,
 )
-from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
 from travis.tui.interactive_shutdown import OPENROUTER_MODEL_PICKER_LIMIT
+from travis.tui.interactive_surfaces import InteractiveModelAuthSurface
 
 
 def _dedupe_models(models) -> list:
@@ -80,8 +80,10 @@ def _match_oauth_provider(providers: list[dict[str, str]], query: str) -> dict[s
             return provider
     return None
 
-class InteractiveModelAuth(PortBoundController[InteractiveCommandPort]):
+class InteractiveModelAuth(InteractiveModelAuthSurface):
     """Owns a focused interactive runtime concern."""
+
+    __slots__ = ()
 
     def _get_model_candidates(self, *, fetch_remote: bool = False, query: str | None = None):
         del fetch_remote

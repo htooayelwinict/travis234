@@ -7,17 +7,19 @@ import time
 from travis.agent.types import (
     AbortSignal,
 )
-from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
 from travis.coding_agent.session_store import (
     BashExecutionMessage,
 )
+from travis.coding_agent.session_surfaces import SessionBashControllerSurface
 from travis.coding_agent.session_types import BashResult
 from travis.coding_agent.tools.bash import BashExecOptions, BashOperations, create_local_bash_operations
 from travis.coding_agent.tools.output_spool import OutputSpool
 
 
-class SessionBashController(SessionPortBoundController[SessionControllerPort]):
+class SessionBashController(SessionBashControllerSurface):
     """Owns a focused AgentSession runtime concern."""
+
+    __slots__ = ()
 
     def execute_bash(self, command: str, on_chunk=None, options: dict | None = None) -> BashResult:
         options = options or {}

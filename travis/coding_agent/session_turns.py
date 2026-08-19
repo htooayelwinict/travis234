@@ -40,10 +40,10 @@ from travis.coding_agent.session_persistence import _user_message
 from travis.coding_agent.session_policy_controller import (
     _is_internal_steering_user_message,
 )
-from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
 from travis.coding_agent.session_store import (
     CustomMessage,
 )
+from travis.coding_agent.session_surfaces import SessionTurnControllerSurface
 from travis.coding_agent.session_types import (
     _MALFORMED_STREAM_RECOVERY_PREFIX,
     _MALFORMED_STREAMED_TOOL_ARGS_MARKER,
@@ -189,8 +189,10 @@ def _extract_malformed_stream_tool_names(error_message: str) -> str:
     )
     return match.group(1).strip() if match else ""
 
-class SessionTurnController(SessionPortBoundController[SessionControllerPort]):
+class SessionTurnController(SessionTurnControllerSurface):
     """Owns a focused AgentSession runtime concern."""
+
+    __slots__ = ()
 
     def prompt(
         self,

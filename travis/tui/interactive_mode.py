@@ -17,8 +17,8 @@ from travis.coding_agent.session_commands import SessionCommandExecutor
 from travis.coding_agent.source_info import SourceInfo
 from travis.coding_agent.themes import Theme, ThemeRegistry
 from travis.controller_ports import (
-    ControllerBindingRegistry,
-    install_runtime_state_attributes,
+    install_controller_delegates,
+    install_runtime_binding_attributes,
 )
 from travis.runtime_facade import RuntimeFacade
 from travis.tui.builtin_themes import BUILTIN_THEMES, resolve_builtin_theme
@@ -72,9 +72,9 @@ from travis.tui.interactive_command_dispatcher import (
 from travis.tui.interactive_composition import compose_interactive_controllers
 from travis.tui.interactive_controllers import (
     INTERACTIVE_CONTROLLER_DELEGATES,
-    INTERACTIVE_CONTROLLER_STATE_NAMES,
     INTERACTIVE_DELEGATED_NAMES,
 )
+from travis.tui.interactive_dependencies import InteractiveRuntimeBindings
 from travis.tui.interactive_extensions import (
     InteractiveExtensions,
     _apply_hidden_thinking_label,
@@ -109,11 +109,6 @@ from travis.tui.interactive_params import (
     _params_argument_completions,
 )
 from travis.tui.interactive_process_commands import InteractiveProcessCommands
-from travis.tui.interactive_services import (
-    InteractiveCommandPortAdapter,
-    InteractiveSessionPortAdapter,
-    install_controller_delegates,
-)
 from travis.tui.interactive_session_commands import InteractiveSessionCommands
 from travis.tui.interactive_shutdown import (
     _SIGINT_HANDLER_UNCHANGED,
@@ -274,11 +269,8 @@ class _InteractiveRuntime:
         generation_param_warnings: list[ProviderParamWarning] | None = None,
         open_resume_picker: bool = False,
     ) -> None:
-        self._controller_bindings = ControllerBindingRegistry(INTERACTIVE_CONTROLLER_STATE_NAMES)
+        self._interactive_bindings = InteractiveRuntimeBindings()
         self.app = app
-        command_port = InteractiveCommandPortAdapter(
-            self._controller_bindings.port(("app", "extension_statuses"))
-        )
         self.state = InteractiveState()
         self.lifecycle = InteractiveLifecycleState()
         for binding_name, state_name in (
@@ -287,7 +279,10 @@ class _InteractiveRuntime:
             ("active_editor", "active_editor"),
             ("generation_params", "generation_params"),
         ):
-            self._controller_bindings.bind_attribute(binding_name, self.state, state_name)
+            getattr(self._interactive_bindings, binding_name).bind_attribute(
+                self.state,
+                state_name,
+            )
         for binding_name, state_name in (
             ("_shutdown_requested", "shutdown_requested"),
             ("_run_loop_active", "run_loop_active"),
@@ -295,7 +290,10 @@ class _InteractiveRuntime:
             ("_queued_after_turn", "queued_after_turn"),
             ("_agent_abort_requested", "agent_abort_requested"),
         ):
-            self._controller_bindings.bind_attribute(binding_name, self.lifecycle, state_name)
+            getattr(self._interactive_bindings, binding_name).bind_attribute(
+                self.lifecycle,
+                state_name,
+            )
         self.startup_generation_params = generation_params or GenerationParams()
         self.generation_params = self.startup_generation_params
         self.generation_param_warnings = list(generation_param_warnings or [])
@@ -351,7 +349,7 @@ class _InteractiveRuntime:
             static=color_mode == "none",
         )
         self.services, self.controllers = compose_interactive_controllers(
-            self._controller_bindings,
+            self._interactive_bindings,
             app=self.app,
             tui=self.tui,
             history=self.history,
@@ -360,9 +358,7 @@ class _InteractiveRuntime:
             state=self.state,
             lifecycle=self.lifecycle,
         )
-        self.controllers.rebind_session(
-            InteractiveSessionPortAdapter(id(self.app.session))
-        )
+        self.controllers.rebind_session(self.app.session)
         self._refresh_generation_param_state()
         self.default_working_message = "Idle"
         self.default_hidden_thinking_label = ""
@@ -436,7 +432,10 @@ class _InteractiveRuntime:
             theme_context=self.theme_context,
         )
         self.footer_container = Container([self.footer])
-        self.footer_data_provider = _ExtensionFooterDataProvider(command_port)
+        self.footer_data_provider = _ExtensionFooterDataProvider(
+            self.app,
+            self.extension_statuses,
+        )
         self.custom_footer: object | None = None
         if hasattr(app, "renderer") and hasattr(app.renderer, "set_output_container"):
             app.renderer.set_output_container(self.history)
@@ -471,10 +470,11 @@ class _InteractiveRuntime:
         self.setup_autocomplete_provider()
         self._theme_render_ready = True
 
-install_runtime_state_attributes(
+install_runtime_binding_attributes(
     _InteractiveRuntime,
-    INTERACTIVE_CONTROLLER_STATE_NAMES,
-    INTERACTIVE_DELEGATED_NAMES,
+    binding_record_attribute="_interactive_bindings",
+    binding_type=InteractiveRuntimeBindings,
+    delegated_names=INTERACTIVE_DELEGATED_NAMES,
 )
 install_controller_delegates(
     _InteractiveRuntime,

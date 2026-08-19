@@ -14,7 +14,7 @@ from travis.ai.types import (
 )
 from travis.coding_agent.policy.types import TOOL_EFFECT_ORDER, ToolPolicyDecision
 from travis.coding_agent.session_extensions import _replace_message_in_place
-from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
+from travis.coding_agent.session_surfaces import SessionEventControllerSurface
 from travis.coding_agent.session_types import QueueUpdateEvent
 from travis.coding_agent.tools.process import PROCESS_ACTIONS, prepare_process_arguments
 
@@ -50,8 +50,10 @@ def _canonicalize_process_tool_calls(message: AssistantMessage) -> None:
             # Invalid calls remain intact so normal tool validation can report the exact model output.
             continue
 
-class SessionEventController(SessionPortBoundController[SessionControllerPort]):
+class SessionEventController(SessionEventControllerSurface):
     """Owns a focused AgentSession runtime concern."""
+
+    __slots__ = ()
 
     def _emit_session_start_event(self) -> None:
         self._extension_runner.emit(self._session_start_event)

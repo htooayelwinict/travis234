@@ -13,7 +13,7 @@ from travis.agent.types import AfterToolCallResult, BeforeToolCallResult
 from travis.coding_agent.coordination import coordination_direct_tmux_block_reason
 from travis.coding_agent.policy import argument_fingerprint
 from travis.coding_agent.policy.types import TOOL_EFFECT_ORDER
-from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
+from travis.coding_agent.session_surfaces import SessionPolicyControllerSurface
 from travis.coding_agent.session_types import _MALFORMED_STREAM_RECOVERY_PREFIX
 
 
@@ -27,8 +27,10 @@ def _is_internal_steering_user_message(text: str | None) -> bool:
     )
 
 
-class SessionPolicyController(SessionPortBoundController[SessionControllerPort]):
+class SessionPolicyController(SessionPolicyControllerSurface):
     """Apply ``tool_call`` and ``tool_result`` extension hooks."""
+
+    __slots__ = ()
 
     async def _before_tool_call(self, context, signal=None) -> BeforeToolCallResult | None:
         coordination_reason = coordination_direct_tmux_block_reason(

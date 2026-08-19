@@ -18,7 +18,7 @@ from travis.tui.components import (
 from travis.tui.interactive import (
     AssistantMessageComponent,
 )
-from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
+from travis.tui.interactive_surfaces import InteractiveExtensionSurface
 from travis.tui.keybindings import get_keybindings
 from travis.tui.keys import matches_key
 from travis.tui.motion import MotionState
@@ -31,7 +31,7 @@ class _AutocompleteTriggerProvider(Protocol):
 
 
 class _ExtensionShortcutUI:
-    def __init__(self, mode: InteractiveCommandPort) -> None:
+    def __init__(self, mode: InteractiveExtensions) -> None:
         self._mode = mode
 
     def notify(self, message: str) -> None:
@@ -256,8 +256,10 @@ def _apply_hidden_thinking_label(component, label: str) -> None:
     for child in getattr(component, "children", []) or []:
         _apply_hidden_thinking_label(child, label)
 
-class InteractiveExtensions(PortBoundController[InteractiveCommandPort]):
+class InteractiveExtensions(InteractiveExtensionSurface):
     """Owns a focused interactive runtime concern."""
+
+    __slots__ = ()
 
     def _extension_bindings(self, session=None) -> dict[str, object]:
         active_session = session or self.app.session
@@ -269,7 +271,7 @@ class InteractiveExtensions(PortBoundController[InteractiveCommandPort]):
             self.tui.request_render()
 
         return {
-            "uiContext": _ExtensionShortcutUI(self.dependencies.port),
+            "uiContext": _ExtensionShortcutUI(self),
             "hasUI": True,
             "mode": "tui",
             "abortHandler": active_session.agent.abort,
@@ -573,7 +575,7 @@ class InteractiveExtensions(PortBoundController[InteractiveCommandPort]):
 
     def _extension_shortcut_context(self) -> dict[str, object]:
         return {
-            "ui": _ExtensionShortcutUI(self.dependencies.port),
+            "ui": _ExtensionShortcutUI(self),
             "mode": "tui",
             "hasUI": True,
             "cwd": str(self.app.cwd),

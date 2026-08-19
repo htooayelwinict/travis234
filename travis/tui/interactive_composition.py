@@ -2,14 +2,30 @@
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Protocol, cast
 
-from travis.controller_ports import ControllerBindingRegistry
+from travis.controller_ports import ControllerBinding, compose_controller_dependencies
 from travis.tui.interactive_command_dispatcher import InteractiveCommandDispatcher
 from travis.tui.interactive_controllers import (
-    INTERACTIVE_CONTROLLER_PORT_ATTRIBUTES,
     InteractiveControllers,
     bind_interactive_controller_owners,
+)
+from travis.tui.interactive_dependencies import (
+    InteractiveCommandDispatchDependencies,
+    InteractiveExtensionDependencies,
+    InteractiveLspDependencies,
+    InteractiveMemoryDependencies,
+    InteractiveModelAuthDependencies,
+    InteractiveMotionDependencies,
+    InteractiveOperationsDependencies,
+    InteractiveParamsDependencies,
+    InteractiveProcessDependencies,
+    InteractiveRuntimeBindings,
+    InteractiveSessionDependencies,
+    InteractiveShutdownDependencies,
+    InteractiveSubagentDependencies,
+    InteractiveTurnDependencies,
+    InteractiveViewDependencies,
 )
 from travis.tui.interactive_extensions import InteractiveExtensions
 from travis.tui.interactive_lsp import InteractiveLsp
@@ -19,13 +35,14 @@ from travis.tui.interactive_motion import InteractiveMotion
 from travis.tui.interactive_operations import InteractiveOperations
 from travis.tui.interactive_params import InteractiveParams
 from travis.tui.interactive_process_commands import InteractiveProcessCommands
+from travis.tui.interactive_rebind import (
+    build_params_session,
+    build_process_session,
+    build_view_session,
+)
 from travis.tui.interactive_services import (
-    InteractiveCommandDependencies,
-    InteractiveCommandPort,
-    InteractiveCommandPortAdapter,
+    InteractiveAppAdapter,
     InteractiveHistoryPort,
-    InteractiveMotionDependencies,
-    InteractiveMotionPort,
     InteractiveOwnerThreadPort,
     InteractiveRenderPort,
     InteractiveServices,
@@ -33,8 +50,6 @@ from travis.tui.interactive_services import (
     InteractiveStatusPort,
     InteractiveTerminalInputPort,
     InteractiveThemePort,
-    InteractiveViewDependencies,
-    InteractiveViewPort,
 )
 from travis.tui.interactive_session_commands import InteractiveSessionCommands
 from travis.tui.interactive_shutdown import InteractiveShutdown
@@ -44,75 +59,116 @@ from travis.tui.interactive_turn_controller import InteractiveTurnController
 from travis.tui.interactive_view import InteractiveView
 
 
+class _InteractiveTuiCompositionPort(Protocol):
+    @property
+    def dispatcher(self) -> InteractiveOwnerThreadPort: ...
+
+
 def compose_interactive_controllers(
-    registry: ControllerBindingRegistry,
+    bindings: InteractiveRuntimeBindings,
     *,
-    app: object,
-    tui: object,
+    app: InteractiveSessionBindingPort,
+    tui: _InteractiveTuiCompositionPort,
     history: object,
     status: object,
     theme: object,
     state: InteractiveState,
     lifecycle: InteractiveLifecycleState,
 ) -> tuple[InteractiveServices, InteractiveControllers]:
+    app_port = InteractiveAppAdapter(app)
     services = InteractiveServices(
         render=cast(InteractiveRenderPort, tui),
         status=cast(InteractiveStatusPort, status),
         history=cast(InteractiveHistoryPort, history),
-        sessions=cast(InteractiveSessionBindingPort, app),
-        owner_thread=cast(InteractiveOwnerThreadPort, getattr(tui, "dispatcher")),
+        sessions=cast(InteractiveSessionBindingPort, app_port),
+        owner_thread=cast(InteractiveOwnerThreadPort, tui.dispatcher),
         terminal_input=cast(InteractiveTerminalInputPort, tui),
         theme=cast(InteractiveThemePort, theme),
     )
-    registry.bind_attribute("tui", services, "render")
-    registry.bind_attribute("status", services, "status")
-    registry.bind_attribute("history", services, "history")
-    registry.bind_attribute("theme_context", services, "theme")
-    def dependencies(name: str) -> InteractiveCommandDependencies:
-        return InteractiveCommandDependencies(
-            InteractiveCommandPortAdapter(
-                registry.port(INTERACTIVE_CONTROLLER_PORT_ATTRIBUTES[name])
-            ),
-            state,
-            lifecycle,
-            services,
+    bindings.tui.bind_attribute(services, "render")
+    bindings.status.bind_attribute(services, "status")
+    bindings.history.bind_attribute(services, "history")
+    bindings.theme_context.bind_attribute(services, "theme")
+    session = app.session
+
+    def command_dependencies[DependenciesT](
+        dependency_type: type[DependenciesT],
+        *,
+        session_binding: ControllerBinding[object] | None = None,
+    ) -> DependenciesT:
+        explicit: dict[str, object] = {
+            "app": ControllerBinding(app_port),
+            "state": state,
+            "lifecycle": lifecycle,
+            "services": services,
+        }
+        if session_binding is not None:
+            explicit["session"] = session_binding
+        return compose_controller_dependencies(
+            dependency_type,
+            bindings,
+            **explicit,
         )
 
     controllers = InteractiveControllers(
-        command_dispatch=InteractiveCommandDispatcher(dependencies("command_dispatch")),
+        command_dispatch=InteractiveCommandDispatcher(
+            command_dependencies(InteractiveCommandDispatchDependencies)
+        ),
         view=InteractiveView(
-            InteractiveViewDependencies(
-                cast(
-                    InteractiveViewPort,
-                    registry.port(INTERACTIVE_CONTROLLER_PORT_ATTRIBUTES["view"]),
-                ),
-                state,
-                services,
+            compose_controller_dependencies(
+                InteractiveViewDependencies,
+                bindings,
+                app=ControllerBinding(app_port),
+                session=ControllerBinding(session, coerce=build_view_session),
+                state=state,
+                services=services,
             )
         ),
-        model_auth=InteractiveModelAuth(dependencies("model_auth")),
-        params=InteractiveParams(dependencies("params")),
-        processes=InteractiveProcessCommands(dependencies("processes")),
-        lsp=InteractiveLsp(dependencies("lsp")),
-        memory=InteractiveMemory(dependencies("memory")),
-        operations=InteractiveOperations(dependencies("operations")),
-        subagents=InteractiveSubagents(dependencies("subagents")),
-        sessions=InteractiveSessionCommands(dependencies("sessions")),
-        extensions=InteractiveExtensions(dependencies("extensions")),
-        turns=InteractiveTurnController(dependencies("turns")),
-        shutdown=InteractiveShutdown(dependencies("shutdown")),
+        model_auth=InteractiveModelAuth(
+            command_dependencies(InteractiveModelAuthDependencies)
+        ),
+        params=InteractiveParams(
+            command_dependencies(
+                InteractiveParamsDependencies,
+                session_binding=ControllerBinding(session, coerce=build_params_session),
+            )
+        ),
+        processes=InteractiveProcessCommands(
+            command_dependencies(
+                InteractiveProcessDependencies,
+                session_binding=ControllerBinding(session, coerce=build_process_session),
+            )
+        ),
+        lsp=InteractiveLsp(command_dependencies(InteractiveLspDependencies)),
+        memory=InteractiveMemory(command_dependencies(InteractiveMemoryDependencies)),
+        operations=InteractiveOperations(
+            command_dependencies(InteractiveOperationsDependencies)
+        ),
+        subagents=InteractiveSubagents(
+            command_dependencies(InteractiveSubagentDependencies)
+        ),
+        sessions=InteractiveSessionCommands(
+            command_dependencies(InteractiveSessionDependencies)
+        ),
+        extensions=InteractiveExtensions(
+            command_dependencies(InteractiveExtensionDependencies)
+        ),
+        turns=InteractiveTurnController(
+            command_dependencies(InteractiveTurnDependencies)
+        ),
+        shutdown=InteractiveShutdown(
+            command_dependencies(InteractiveShutdownDependencies)
+        ),
         motion=InteractiveMotion(
-            InteractiveMotionDependencies(
-                cast(
-                    InteractiveMotionPort,
-                    registry.port(INTERACTIVE_CONTROLLER_PORT_ATTRIBUTES["motion"]),
-                ),
-                state,
-                services,
+            compose_controller_dependencies(
+                InteractiveMotionDependencies,
+                bindings,
+                state=state,
+                services=services,
             )
         ),
     )
-    bind_interactive_controller_owners(registry, controllers)
+    bind_interactive_controller_owners(bindings, controllers)
     return services, controllers
 
 

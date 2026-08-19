@@ -18,12 +18,14 @@ from travis.tui.components import (
 )
 from travis.tui.footer_data import _footer_usage_stats
 from travis.tui.interactive_extensions import _manual_compression_options
-from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
+from travis.tui.interactive_surfaces import InteractiveSessionSurface
 from travis.tui.motion import MotionState
 
 
-class InteractiveSessionCommands(PortBoundController[InteractiveCommandPort]):
+class InteractiveSessionCommands(InteractiveSessionSurface):
     """Owns a focused interactive runtime concern."""
+
+    __slots__ = ()
 
     def _command_executor(self) -> SessionCommandExecutor:
         if self._session_commands is None:

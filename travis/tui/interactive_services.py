@@ -2,77 +2,18 @@
 
 from __future__ import annotations
 
+import weakref
 from collections.abc import Callable, Sequence
-from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Protocol, cast
 
-from travis.controller_ports import (
-    ControllerDependencies,
-    ExplicitController,
-    install_controller_delegates,
-)
-from travis.tui.interactive_state import InteractiveLifecycleState, InteractiveState
+from travis.controller_ports import ExplicitController
 
 
-class PortBoundController[ControllerPortT](
-    ExplicitController[ControllerDependencies[ControllerPortT]]
-):
+class PortBoundController[DependenciesT](ExplicitController[DependenciesT]):
     """Own a responsibility-specific dependency record."""
 
-    __slots__ = (
-        "MAX_WIDGET_LINES", "_abort_active_turn_for_shutdown", "_agent_abort_requested",
-        "_bound_session",
-        "_clear_motion_signal", "_command_executor", "_completed_user_commands",
-        "_dispatch_extension_command", "_dispatch_extension_shortcut", "_dispatch_terminal_input",
-        "_builtin_theme_records", "_emit_pending_model_picker_trace", "_ensure_builtin_themes",
-        "_extension_bindings",
-        "_extension_commands", "_extension_host", "_handle_active_turn_prompt",
-        "_handle_editor_escape", "_handle_process_event", "_handle_session_event", "_handle_sigint",
-        "_handle_tui_terminal_input", "_history_populated", "_initialized",
-        "_install_sigint_handler", "_is_registered_extension_command",
-        "_is_registered_prompt_template", "_is_turn_active",
-        "_last_compaction_failure_notice_key", "_last_idle_ctrl_c_at", "_last_turn_finished_at",
-        "_line_input_mode", "_notified_processes", "_open_resume_picker",
-        "_pending_model_picker_trace", "_populate_existing_history", "_process_cursors",
-        "_queued_after_turn", "_read_prompt_from_line_input", "_read_prompt_from_tui",
-        "_rebind_session_ui", "_rebind_subagent_supervisor", "_refresh_extension_motion_signal",
-        "_refresh_footer", "_refresh_generation_param_state", "_reload_resource_themes",
-        "_render_auto_compaction_notice", "_render_widgets", "_request_shutdown",
-        "_restore_sigint_handler", "_run_agents_command", "_run_auth_command", "_run_bash_command",
-        "_run_clone_command", "_run_copy_command", "_run_export_command", "_run_fork_command",
-        "_run_help_command", "_run_import_command", "_run_loop_active",
-        "_run_lsp_status_command", "_run_manual_compress", "_run_memory_status_command",
-        "_run_model_command", "_run_name_command", "_run_new_session_command",
-        "_run_operations_command", "_run_package_command", "_run_params_command",
-        "_run_processes_command", "_run_reload_command", "_run_resume_command",
-        "_run_session_command", "_run_session_info_command", "_run_share_command",
-        "_run_theme_command", "_run_tree_command", "_run_trust_command", "_run_unknown_command",
-        "_session_commands", "_set_motion_signal", "_show_status", "_shutdown_requested",
-        "_shutdown_subagent_ui", "_start_turn_thread", "_startup_text",
-        "_stream_with_session_generation_params", "_subagent_snapshot", "_terminal_input_listeners",
-        "_turn_future", "_turn_lock", "_turn_thread", "_unsubscribe_app_session_rebound",
-        "_unsubscribe_footer_branch_change", "_unsubscribe_process_events",
-        "_unsubscribe_session_events", "_unsubscribe_subagents", "_unsubscribe_tui_scroll_change",
-        "_unsubscribe_tui_terminal_input", "_update_available_provider_count",
-        "_user_command_components", "_user_command_order", "_user_commands",
-        "_wait_for_active_turn", "active_editor", "app", "autocomplete_provider",
-        "autocomplete_provider_wrappers", "built_in_header", "custom_footer", "custom_header",
-        "default_hidden_thinking_label", "default_working_message", "editor_container", "editor_text",
-        "extension_status_states", "extension_statuses", "extension_widgets_above",
-        "extension_widgets_below", "extension_working_active", "footer", "footer_container",
-        "footer_data_provider", "generation_param_warnings", "generation_params", "header_container",
-        "hidden_thinking_label", "hide_thinking_block", "history", "init", "input_fn",
-        "motion_controller", "prompt_extension_confirm", "prompt_extension_input",
-        "prompt_extension_select", "prompt_history", "prompt_label", "set_extension_footer",
-        "set_extension_header", "set_hidden_thinking_label", "set_terminal_title",
-        "set_working_indicator", "set_working_message", "set_working_visible",
-        "setup_autocomplete_provider", "startup_generation_params", "status", "theme_context",
-        "theme_controller", "theme_registry", "tool_approval_broker", "tui",
-        "widget_container_above", "widget_container_below",
-    )
-    _turn_lock: AbstractContextManager[object]
-
+    __slots__ = ()
 
 
 class InteractiveRenderPort(Protocol):
@@ -88,7 +29,12 @@ class InteractiveStatusPort(Protocol):
 
     def set_visible(self, visible: bool) -> None: ...
 
-    def set_indicator(self, indicator: str | None, *, position: str = "suffix") -> None: ...
+    def set_indicator(
+        self,
+        indicator: str | None,
+        *,
+        position: str = "suffix",
+    ) -> None: ...
 
 
 class InteractiveHistoryPort(Protocol):
@@ -101,18 +47,188 @@ class InteractiveSessionBindingPort(Protocol):
     @property
     def session(self) -> object: ...
 
-    def replace_session(self, session: object) -> object: ...
+
+class _InteractiveAppSourcePort(Protocol):
+    session: object
+    compaction: object
+    event_trace: object
+    messages: object
+    cwd: object
+    session_runtime: object
+    process_service: object
+    renderer: object
+    session_catalog: object
+    _project_trust_override: object
+
+    def process_owner(self, *, origin: str = "agent") -> object: ...
+
+    def user_command_transport(self, request: object) -> object: ...
+
+    def user_command_request(
+        self,
+        command: str,
+        *,
+        session: object,
+        command_prefix: str | None = None,
+        shell_path: str | None = None,
+    ) -> object: ...
+
+    def switch_session(self, path: str, *, cwd_override: str | None = None) -> object: ...
+
+    def new_session(self) -> object: ...
+
+    def rename_session(self, name: str | None) -> object: ...
+
+    def fork_session(self, entry_id: str, *, position: str = "before") -> object: ...
+
+    def clone_session(self) -> object: ...
+
+    def session_tree(self) -> object: ...
+
+    def navigate_session_tree(self, target_id: str, options: dict | None = None) -> object: ...
+
+    def export_session_jsonl(self, output_path: str | None = None) -> object: ...
+
+    def import_session(self, input_path: str, *, cwd_override: str | None = None) -> object: ...
+
+    def run_turn(
+        self,
+        prompt: str,
+        stream_fn: object | None = None,
+        on_post_response_compaction_start: Callable[[], object] | None = None,
+        image_paths: list[str] | tuple[str, ...] | None = None,
+        input_source: str = "interactive",
+    ) -> object: ...
+
+
+class InteractiveAppAdapter:
+    """Expose named TUI application operations without retaining the app facade."""
+
+    __slots__ = ("_app_ref",)
+
+    def __init__(self, app: object) -> None:
+        try:
+            self._app_ref = weakref.ref(app)
+        except TypeError as error:
+            raise TypeError("interactive app dependency must support weak references") from error
+
+    def _app(self) -> _InteractiveAppSourcePort:
+        app = self._app_ref()
+        if app is None:
+            raise RuntimeError("interactive application is no longer available")
+        return cast(_InteractiveAppSourcePort, app)
+
+    @property
+    def session(self) -> object:
+        return self._app().session
+
+    @property
+    def compaction(self) -> object:
+        return self._app().compaction
+
+    @property
+    def event_trace(self) -> object:
+        return self._app().event_trace
+
+    @property
+    def messages(self) -> object:
+        return self._app().messages
+
+    @property
+    def cwd(self) -> object:
+        return self._app().cwd
+
+    @property
+    def session_runtime(self) -> object:
+        return self._app().session_runtime
+
+    @property
+    def process_service(self) -> object:
+        return self._app().process_service
+
+    @property
+    def renderer(self) -> object:
+        return self._app().renderer
+
+    @property
+    def session_catalog(self) -> object:
+        return self._app().session_catalog
+
+    @property
+    def _project_trust_override(self) -> object:
+        return self._app()._project_trust_override
+
+    @_project_trust_override.setter
+    def _project_trust_override(self, value: object) -> None:
+        self._app()._project_trust_override = value
+
+    def process_owner(self, *, origin: str = "agent") -> object:
+        return self._app().process_owner(origin=origin)
+
+    def user_command_transport(self, request: object) -> object:
+        return self._app().user_command_transport(request)
+
+    def user_command_request(
+        self,
+        command: str,
+        *,
+        session: object,
+        command_prefix: str | None = None,
+        shell_path: str | None = None,
+    ) -> object:
+        return self._app().user_command_request(
+            command,
+            session=session,
+            command_prefix=command_prefix,
+            shell_path=shell_path,
+        )
+
+    def switch_session(self, path: str, *, cwd_override: str | None = None) -> object:
+        return self._app().switch_session(path, cwd_override=cwd_override)
+
+    def new_session(self) -> object:
+        return self._app().new_session()
+
+    def rename_session(self, name: str | None) -> object:
+        return self._app().rename_session(name)
+
+    def fork_session(self, entry_id: str, *, position: str = "before") -> object:
+        return self._app().fork_session(entry_id, position=position)
+
+    def clone_session(self) -> object:
+        return self._app().clone_session()
+
+    def session_tree(self) -> object:
+        return self._app().session_tree()
+
+    def navigate_session_tree(self, target_id: str, options: dict | None = None) -> object:
+        return self._app().navigate_session_tree(target_id, options)
+
+    def export_session_jsonl(self, output_path: str | None = None) -> object:
+        return self._app().export_session_jsonl(output_path)
+
+    def import_session(self, input_path: str, *, cwd_override: str | None = None) -> object:
+        return self._app().import_session(input_path, cwd_override=cwd_override)
+
+    def run_turn(
+        self,
+        prompt: str,
+        stream_fn: object | None = None,
+        on_post_response_compaction_start: Callable[[], object] | None = None,
+        image_paths: list[str] | tuple[str, ...] | None = None,
+        input_source: str = "interactive",
+    ) -> object:
+        return self._app().run_turn(
+            prompt,
+            stream_fn=stream_fn,
+            on_post_response_compaction_start=on_post_response_compaction_start,
+            image_paths=image_paths,
+            input_source=input_source,
+        )
 
 
 class InteractiveSessionRebindController(Protocol):
     def rebind_session(self, session: object) -> object: ...
-
-
-@dataclass(frozen=True, slots=True)
-class InteractiveSessionPortAdapter:
-    """Typed session-facing value used during transactional controller rebinding."""
-
-    identity: int
 
 
 class InteractiveOwnerThreadPort(Protocol):
@@ -120,7 +236,11 @@ class InteractiveOwnerThreadPort(Protocol):
 
     def post(self, callback: Callable[[], None]) -> None: ...
 
-    def call_later(self, delay: float, callback: Callable[[], None]) -> object: ...
+    def call_later(
+        self,
+        delay: float,
+        callback: Callable[[], None],
+    ) -> object: ...
 
 
 class InteractiveTerminalInputPort(Protocol):
@@ -133,231 +253,6 @@ class InteractiveThemePort(Protocol):
     def role(self, name: str) -> object: ...
 
 
-class InteractiveThemeRegistryPort(Protocol):
-    def select(self, name: str) -> object: ...
-
-
-class InteractiveSessionPort(Protocol):
-    settings_manager: object
-
-
-class InteractiveAppPort(Protocol):
-    cwd: object
-    session: InteractiveSessionPort
-
-
-class InteractiveControllerPort(Protocol):
-    @property
-    def declared_names(self) -> frozenset[str]: ...
-
-    def read(self, name: str) -> object: ...
-
-    def write(self, name: str, value: object) -> None: ...
-
-
-class InteractiveViewPort(InteractiveControllerPort, Protocol):
-    """View-facing state and render services supplied by the composition root."""
-
-    app: InteractiveAppPort
-    tui: InteractiveRenderPort
-    history: InteractiveHistoryPort
-    status: InteractiveStatusPort
-    theme_context: InteractiveThemePort
-
-class InteractiveMotionPort(InteractiveControllerPort, Protocol):
-    """Motion-facing status state supplied by the composition root."""
-
-    tui: InteractiveRenderPort
-    status: InteractiveStatusPort
-    motion_controller: object
-    extension_statuses: dict[str, str]
-    extension_status_states: dict[str, str]
-
-class InteractiveCommandPort(InteractiveControllerPort, Protocol):
-    """Command-loop state and named handlers supplied by the composition root."""
-
-    @property
-    def app(self) -> InteractiveAppPort: ...
-
-    @property
-    def tui(self) -> InteractiveRenderPort: ...
-
-    @property
-    def history(self) -> InteractiveHistoryPort: ...
-
-    @property
-    def status(self) -> InteractiveStatusPort: ...
-
-    @property
-    def extension_statuses(self) -> dict[str, str]: ...
-
-    @property
-    def theme_registry(self) -> InteractiveThemeRegistryPort: ...
-
-    def _is_turn_active(self) -> bool: ...
-
-    def _rebind_controller_sessions(self, session: object) -> None: ...
-
-    def add_autocomplete_provider(self, factory: Callable[[object], object]) -> None: ...
-
-    def add_terminal_input_listener(
-        self, handler: Callable[[str], object]
-    ) -> Callable[[], None]: ...
-
-    def get_editor_text(self) -> str: ...
-
-    def paste_to_editor(self, text: str) -> None: ...
-
-    def prompt_extension_confirm(self, title: str, message: str, options: object = None) -> bool: ...
-
-    def prompt_extension_custom(self, factory: Callable[..., object], options: object = None) -> object: ...
-
-    def prompt_extension_editor(self, title: str, prefill: str | None = None) -> str | None: ...
-
-    def prompt_extension_input(
-        self, title: str, placeholder: str | None = None, options: object = None
-    ) -> str | None: ...
-
-    def prompt_extension_select(
-        self, title: str, options: Sequence[str], dialog_options: object = None
-    ) -> str | None: ...
-
-    def set_editor_text(self, text: str) -> None: ...
-
-    def set_extension_footer(self, factory: Callable[..., object] | None = None) -> None: ...
-
-    def set_extension_header(self, factory: Callable[..., object] | None = None) -> None: ...
-
-    def set_extension_status(self, key: str, text: str | None, options: object = None) -> None: ...
-
-    def set_extension_widget(self, key: str, content: object = None, options: object = None) -> None: ...
-
-    def set_hidden_thinking_label(self, label: str | None = None) -> None: ...
-
-    def set_terminal_title(self, title: str) -> None: ...
-
-    def set_working_indicator(self, options: object = None) -> None: ...
-
-    def set_working_message(self, message: str | None = None) -> None: ...
-
-    def set_working_visible(self, visible: bool) -> None: ...
-
-
-class InteractiveCommandPortAdapter:
-    """Explicit command-facing adapter over an allowlisted binding port."""
-
-    __slots__ = ("_port",)
-
-    def __init__(self, port: InteractiveControllerPort) -> None:
-        self._port = port
-
-    def read(self, name: str) -> object:
-        return self._port.read(name)
-
-    def write(self, name: str, value: object) -> None:
-        self._port.write(name, value)
-
-    @property
-    def declared_names(self) -> frozenset[str]:
-        return cast(frozenset[str], self._port.declared_names)
-
-    @property
-    def app(self) -> InteractiveAppPort:
-        return cast(InteractiveAppPort, self.read("app"))
-
-    @property
-    def tui(self) -> InteractiveRenderPort:
-        return cast(InteractiveRenderPort, self.read("tui"))
-
-    @property
-    def history(self) -> InteractiveHistoryPort:
-        return cast(InteractiveHistoryPort, self.read("history"))
-
-    @property
-    def status(self) -> InteractiveStatusPort:
-        return cast(InteractiveStatusPort, self.read("status"))
-
-    @property
-    def extension_statuses(self) -> dict[str, str]:
-        return cast(dict[str, str], self.read("extension_statuses"))
-
-    @property
-    def theme_registry(self) -> InteractiveThemeRegistryPort:
-        return cast(InteractiveThemeRegistryPort, self.read("theme_registry"))
-
-    def _call(self, name: str, *args: object) -> object:
-        return cast(Callable[..., object], self.read(name))(*args)
-
-    def _is_turn_active(self) -> bool:
-        return bool(self._call("_is_turn_active"))
-
-    def _rebind_controller_sessions(self, session: object) -> None:
-        self._call(
-            "_rebind_controller_sessions",
-            InteractiveSessionPortAdapter(id(session)),
-        )
-
-    def add_autocomplete_provider(self, factory: Callable[[object], object]) -> None:
-        self._call("add_autocomplete_provider", factory)
-
-    def add_terminal_input_listener(self, handler: Callable[[str], object]) -> Callable[[], None]:
-        return cast(Callable[[], None], self._call("add_terminal_input_listener", handler))
-
-    def get_editor_text(self) -> str:
-        return str(self._call("get_editor_text"))
-
-    def paste_to_editor(self, text: str) -> None:
-        self._call("paste_to_editor", text)
-
-    def prompt_extension_confirm(self, title: str, message: str, options: object = None) -> bool:
-        return bool(self._call("prompt_extension_confirm", title, message, options))
-
-    def prompt_extension_custom(self, factory: Callable[..., object], options: object = None) -> object:
-        return self._call("prompt_extension_custom", factory, options)
-
-    def prompt_extension_editor(self, title: str, prefill: str | None = None) -> str | None:
-        return cast(str | None, self._call("prompt_extension_editor", title, prefill))
-
-    def prompt_extension_input(
-        self, title: str, placeholder: str | None = None, options: object = None
-    ) -> str | None:
-        return cast(str | None, self._call("prompt_extension_input", title, placeholder, options))
-
-    def prompt_extension_select(
-        self, title: str, options: Sequence[str], dialog_options: object = None
-    ) -> str | None:
-        return cast(str | None, self._call("prompt_extension_select", title, options, dialog_options))
-
-    def set_editor_text(self, text: str) -> None:
-        self._call("set_editor_text", text)
-
-    def set_extension_footer(self, factory: Callable[..., object] | None = None) -> None:
-        self._call("set_extension_footer", factory)
-
-    def set_extension_header(self, factory: Callable[..., object] | None = None) -> None:
-        self._call("set_extension_header", factory)
-
-    def set_extension_status(self, key: str, text: str | None, options: object = None) -> None:
-        self._call("set_extension_status", key, text, options)
-
-    def set_extension_widget(self, key: str, content: object = None, options: object = None) -> None:
-        self._call("set_extension_widget", key, content, options)
-
-    def set_hidden_thinking_label(self, label: str | None = None) -> None:
-        self._call("set_hidden_thinking_label", label)
-
-    def set_terminal_title(self, title: str) -> None:
-        self._call("set_terminal_title", title)
-
-    def set_working_indicator(self, options: object = None) -> None:
-        self._call("set_working_indicator", options)
-
-    def set_working_message(self, message: str | None = None) -> None:
-        self._call("set_working_message", message)
-
-    def set_working_visible(self, visible: bool) -> None:
-        self._call("set_working_visible", visible)
-
 @dataclass(frozen=True, slots=True)
 class InteractiveServices:
     render: InteractiveRenderPort
@@ -369,47 +264,16 @@ class InteractiveServices:
     theme: InteractiveThemePort
 
 
-@dataclass(frozen=True, slots=True)
-class InteractiveCommandDependencies(ControllerDependencies[InteractiveCommandPort]):
-    state: InteractiveState
-    lifecycle: InteractiveLifecycleState
-    services: InteractiveServices
-
-
-@dataclass(frozen=True, slots=True)
-class InteractiveMotionDependencies(ControllerDependencies[InteractiveMotionPort]):
-    state: InteractiveState
-    services: InteractiveServices
-
-
-@dataclass(frozen=True, slots=True)
-class InteractiveViewDependencies(ControllerDependencies[InteractiveViewPort]):
-    state: InteractiveState
-    services: InteractiveServices
-
-
 __all__ = [
+    "InteractiveAppAdapter",
     "InteractiveHistoryPort",
-    "InteractiveAppPort",
-    "InteractiveCommandDependencies",
-    "InteractiveCommandPortAdapter",
-    "InteractiveControllerPort",
-    "InteractiveCommandPort",
-    "InteractiveMotionPort",
-    "InteractiveMotionDependencies",
     "InteractiveOwnerThreadPort",
-    "PortBoundController",
-    "install_controller_delegates",
     "InteractiveRenderPort",
     "InteractiveServices",
     "InteractiveSessionBindingPort",
     "InteractiveSessionRebindController",
-    "InteractiveSessionPort",
-    "InteractiveSessionPortAdapter",
     "InteractiveStatusPort",
     "InteractiveTerminalInputPort",
     "InteractiveThemePort",
-    "InteractiveThemeRegistryPort",
-    "InteractiveViewPort",
-    "InteractiveViewDependencies",
+    "PortBoundController",
 ]

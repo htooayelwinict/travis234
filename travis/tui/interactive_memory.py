@@ -6,7 +6,7 @@ import time
 
 from travis.coding_agent.memory import MemorySettings, MemoryStore
 from travis.tui.components import StatusLine, Text
-from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
+from travis.tui.interactive_surfaces import InteractiveMemorySurface
 
 
 class MemoryInspector:
@@ -79,8 +79,10 @@ class MemoryInspector:
         )
 
 
-class InteractiveMemory(PortBoundController[InteractiveCommandPort]):
+class InteractiveMemory(InteractiveMemorySurface):
     """TUI mixin exposing memory metadata without fact operations."""
+
+    __slots__ = ()
 
     def _run_memory_status_command(self) -> None:
         lines = MemoryInspector.from_session(self.app.session).status()

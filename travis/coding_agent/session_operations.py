@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from travis.ai.stream_proxy import ProxyEventStream
 from travis.ai.types import AssistantMessage
 from travis.coding_agent.policy import argument_fingerprint
-from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
+from travis.coding_agent.session_surfaces import SessionOperationControllerSurface
 
 _EFFECT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$")
 
@@ -64,8 +64,10 @@ def _effect_name(value: object) -> str:
     return f"provider-{_hash_text(candidate)[:16]}"
 
 
-class SessionOperationController(SessionPortBoundController[SessionControllerPort]):
+class SessionOperationController(SessionOperationControllerSurface):
     """Observe session effects without owning execution or conversation state."""
+
+    __slots__ = ()
 
     def _initialize_session_operations(
         self,

@@ -15,8 +15,8 @@ from travis.tui.components import (
 from travis.tui.interactive import (
     user_message_to_component,
 )
-from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
 from travis.tui.interactive_shutdown import SESSION_COMMAND_SHUTDOWN_TIMEOUT_SECONDS
+from travis.tui.interactive_surfaces import InteractiveCommandDispatchSurface
 from travis.tui.motion import MotionState
 
 
@@ -219,8 +219,10 @@ def _parse_bash_command(prompt: str) -> tuple[str, bool] | None:
         return None
     return command, excluded
 
-class InteractiveCommandDispatcher(PortBoundController[InteractiveCommandPort]):
+class InteractiveCommandDispatcher(InteractiveCommandDispatchSurface):
     """Owns a focused interactive runtime concern."""
+
+    __slots__ = ()
 
     def run(self) -> int:
         self._run_loop_active = True

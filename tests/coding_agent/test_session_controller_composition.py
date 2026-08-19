@@ -4,16 +4,15 @@ from dataclasses import FrozenInstanceError, fields, is_dataclass
 
 import pytest
 
+from travis.ai.providers.faux import faux_model
+from travis.coding_agent.agent_session import AgentSession, _SessionRuntime
 from travis.coding_agent.session_controllers import (
     SESSION_CONTROLLER_PORT_ATTRIBUTES,
     SessionControllers,
 )
 from travis.coding_agent.session_state import SessionPresentationState, SessionTurnState
-from travis.ai.providers.faux import faux_model
-from travis.coding_agent.agent_session import AgentSession
-from travis.coding_agent.agent_session import _SessionRuntime
+from travis.controller_ports import ControllerBinding
 from travis.runtime_facade import RuntimeFacade
-
 
 SESSION_CONTROLLER_NAMES = (
     "events",
@@ -127,8 +126,28 @@ def test_session_controllers_do_not_retain_a_runtime_or_public_facade(tmp_path) 
         assert runtime not in (getattr(dependencies, field.name) for field in fields(dependencies))
 
     for name in SESSION_CONTROLLER_NAMES:
-        port = getattr(runtime.controllers, name).dependencies.port
-        assert port.declared_names == frozenset(SESSION_CONTROLLER_PORT_ATTRIBUTES[name])
+        dependencies = getattr(runtime.controllers, name).dependencies
+        binding_names = {
+            field.name
+            for field in fields(dependencies)
+            if isinstance(getattr(dependencies, field.name), ControllerBinding)
+        }
+        assert binding_names == set(SESSION_CONTROLLER_PORT_ATTRIBUTES[name])
+
+
+def test_session_controllers_receive_distinct_explicit_dependency_records(tmp_path) -> None:
+    runtime = AgentSession(cwd=str(tmp_path), model=faux_model())._runtime
+    dependencies = [
+        getattr(runtime.controllers, name).dependencies
+        for name in SESSION_CONTROLLER_NAMES
+    ]
+
+    assert len({type(record) for record in dependencies}) == len(dependencies)
+    assert all(is_dataclass(record) for record in dependencies)
+    assert all(not hasattr(record, "port") for record in dependencies)
+    assert all(not hasattr(controller, "__dict__") for controller in (
+        getattr(runtime.controllers, name) for name in SESSION_CONTROLLER_NAMES
+    ))
 
 
 def test_declared_session_state_records_are_real_controller_dependencies(tmp_path) -> None:

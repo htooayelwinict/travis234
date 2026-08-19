@@ -7,11 +7,13 @@ from travis.ai.providers.params import (
     remove_generation_param,
     replace_generation_param,
 )
-from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
+from travis.coding_agent.session_surfaces import SessionGenerationControllerSurface
 
 
-class SessionGenerationParams(SessionPortBoundController[SessionControllerPort]):
+class SessionGenerationParams(SessionGenerationControllerSurface):
     """Own the active session's immutable override-only parameter snapshot."""
+
+    __slots__ = ()
 
     @property
     def generation_param_overrides(self) -> GenerationParams:

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import threading
 import uuid
+from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable
+from typing import Protocol
 
 from travis.agent.types import AbortSignal
 from travis.coding_agent.agent_session import BashResult
+from travis.coding_agent.artifacts import ArtifactRegistry
 from travis.coding_agent.processes.service import ProcessSessionService, ProcessTransportFactory
 from travis.coding_agent.processes.types import (
     ProcessLaunchRequest,
@@ -16,9 +19,6 @@ from travis.coding_agent.processes.types import (
     ProcessState,
     ProcessWaitCancelledError,
 )
-
-if TYPE_CHECKING:
-    from travis.coding_agent.agent_session import AgentSession
 
 UserCommandResolver = Callable[[str, "UserCommandBinding", AbortSignal], "ResolvedUserCommand"]
 CustomUserCommandRunner = Callable[[AbortSignal, Callable[[str], None]], BashResult]
@@ -28,9 +28,31 @@ class UserCommandLimitError(RuntimeError):
     pass
 
 
+class UserCommandExtensionPort(Protocol):
+    def emit_user_bash(self, event: dict[str, object]) -> object: ...
+
+
+class UserCommandSessionPort(Protocol):
+    @property
+    def extension_runner(self) -> UserCommandExtensionPort: ...
+
+    @property
+    def cwd(self) -> str: ...
+
+    @property
+    def _artifacts(self) -> ArtifactRegistry: ...
+
+    def record_bash_result(
+        self,
+        command: str,
+        result: BashResult,
+        options: dict[str, object] | None = None,
+    ) -> None: ...
+
+
 @dataclass(frozen=True)
 class UserCommandBinding:
-    session: "AgentSession" = field(repr=False, compare=False)
+    session: UserCommandSessionPort = field(repr=False, compare=False)
     session_id: str | None
     session_path: str | None
     exclude_from_context: bool
@@ -58,15 +80,15 @@ class ResolvedUserCommand:
             raise ValueError("ResolvedUserCommand requires exactly one execution variant")
 
     @classmethod
-    def immediate(cls, result: BashResult) -> "ResolvedUserCommand":
+    def immediate(cls, result: BashResult) -> ResolvedUserCommand:
         return cls(result=result)
 
     @classmethod
-    def managed(cls, request: ProcessLaunchRequest) -> "ResolvedUserCommand":
+    def managed(cls, request: ProcessLaunchRequest) -> ResolvedUserCommand:
         return cls(managed_request=request)
 
     @classmethod
-    def custom(cls, runner: CustomUserCommandRunner) -> "ResolvedUserCommand":
+    def custom(cls, runner: CustomUserCommandRunner) -> ResolvedUserCommand:
         return cls(custom_runner=runner)
 
 
@@ -192,10 +214,8 @@ class UserCommandController:
             process_id = state.process_id
         state.signal.abort()
         if process_id is not None:
-            try:
+            with suppress(Exception):
                 self._service.terminate(state.owner, process_id, wait_ms=0)
-            except Exception:
-                pass
         return True
 
     def close(self) -> None:
@@ -207,10 +227,8 @@ class UserCommandController:
         for state in states:
             state.signal.abort()
             if state.process_id is not None:
-                try:
+                with suppress(Exception):
                     self._service.terminate(state.owner, state.process_id, wait_ms=0)
-                except Exception:
-                    pass
         for state in states:
             thread = state.thread
             if thread is not None and thread is not threading.current_thread():
@@ -296,26 +314,20 @@ class UserCommandController:
     def _emit_output(self, state: _UserCommandState, text: str) -> None:
         if not text:
             return
-        try:
+        with suppress(BaseException):
             self._on_output(state.handle.command_id, text)
-        except BaseException:
-            pass
 
     def _finalize_result(self, state: _UserCommandState, result: BashResult) -> None:
         if not self._claim_done(state):
             return
-        try:
+        with suppress(BaseException):
             self._on_complete(state.handle, result)
-        except BaseException:
-            pass
 
     def _finalize_error(self, state: _UserCommandState, message: str) -> None:
         if not self._claim_done(state):
             return
-        try:
+        with suppress(BaseException):
             self._on_error(state.handle, message)
-        except BaseException:
-            pass
 
     def _claim_done(self, state: _UserCommandState) -> bool:
         with self._lock:
@@ -350,4 +362,6 @@ __all__ = [
     "UserCommandHandle",
     "UserCommandInspection",
     "UserCommandLimitError",
+    "UserCommandExtensionPort",
+    "UserCommandSessionPort",
 ]

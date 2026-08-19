@@ -13,7 +13,7 @@ from travis.agent.types import (
 from travis.ai.types import (
     TextContent,
 )
-from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
+from travis.coding_agent.session_surfaces import SessionSubagentTraceControllerSurface
 from travis.coding_agent.session_types import (
     _MODEL_SUBAGENT_TIMEOUT_SECONDS_DEFAULT,
     _MODEL_SUBAGENT_TIMEOUT_SECONDS_MAX,
@@ -384,13 +384,15 @@ def _subagent_changed_files(task: SubagentTask, tool_trace: list[dict[str, objec
     return changed
 
 
-class SessionSubagentTraceController(SessionPortBoundController[SessionControllerPort]):
+class SessionSubagentTraceController(SessionSubagentTraceControllerSurface):
     """Owns a focused AgentSession runtime concern."""
+
+    __slots__ = ()
 
     def _subagent_tool_trace_listener(
         self,
         task: SubagentTask,
-        child: SessionControllerPort,
+        child: object,
         tool_trace: list[dict[str, object]],
         trace_by_call_id: dict[str, dict[str, object]],
     ) -> Callable[[object], None]:
@@ -485,7 +487,7 @@ class SessionSubagentTraceController(SessionPortBoundController[SessionControlle
     def _reconcile_subagent_tool_results_from_messages(
         self,
         task: SubagentTask,
-        child: SessionControllerPort,
+        child: object,
         messages: list[AgentMessage],
         tool_trace: list[dict[str, object]],
         trace_by_call_id: dict[str, dict[str, object]],
@@ -508,7 +510,7 @@ class SessionSubagentTraceController(SessionPortBoundController[SessionControlle
     def _subagent_after_tool_call_tracer(
         self,
         task: SubagentTask,
-        child: SessionControllerPort,
+        child: object,
         tool_trace: list[dict[str, object]],
         trace_by_call_id: dict[str, dict[str, object]],
         original_after_tool_call,
@@ -539,7 +541,7 @@ class SessionSubagentTraceController(SessionPortBoundController[SessionControlle
     def _record_subagent_tool_end(
         self,
         task: SubagentTask,
-        child: SessionControllerPort,
+        child: object,
         tool_trace: list[dict[str, object]],
         trace_by_call_id: dict[str, dict[str, object]],
         *,
