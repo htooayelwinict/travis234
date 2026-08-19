@@ -158,7 +158,8 @@ Baseline commands and summarized outcomes:
 - Real clean coverage command:
   `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. uv run --locked --all-extras --dev --with "./packages/travis234-mcp-adapter" coverage run -m pytest -q -p no:cacheprovider tests`
   — 2,686 passed in 588.94s (597.36s wall time).
-- Measured coverage after combining the single parallel-safe data file:
+- Measured coverage from this 2,686-test pre-correction run after combining the
+  single parallel-safe data file:
   37,412 / 44,559 statements = 83.96%; 10,369 / 15,132 branches = 68.52%.
   The independent checker passed the approved 83.0% statement and 68.0% branch
   floors without changing exclusions or lowering either floor.
@@ -238,10 +239,10 @@ Baseline commands and summarized outcomes:
   that the project lock remains unchanged, so the adapter and MCP graph used by coverage
   was not governed by the committed root lock.
 - Correction commits:
-  - `d3f99f4a838d02fb80dc10b374d3dc23adffef53` — add the root `coverage-test`
+  - `d3f99f4d610bea09c10bafc6d1f9b6aed9e50b95` — add the root `coverage-test`
     dependency group, map `travis234-mcp-adapter` through `[tool.uv.sources]`, update
     the committed root lock, and sync/run that group under `--locked` in source CI.
-  - `b31fb938dbdb5e261235bb18b6e6960ff7744ff9` — require the adapter lock to remain
+  - `b31fb93021c81fc17b89969f259c15191bd9c82e` — require the adapter lock to remain
     current for its editable root host and refresh its single root-host group metadata
     row. No adapter package or dependency version changed.
 - Primary RED command:
@@ -266,9 +267,11 @@ Baseline commands and summarized outcomes:
   — 30 passed in 8.89s (11.48s wall).
 - Clean current-commit coverage command:
   `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. uv run --locked --all-extras --dev --group coverage-test coverage run -m pytest -q -p no:cacheprovider tests`
-  — 2,688 passed in 595.04s (598.02s wall). The independent checker passed
-  83.96% statement coverage and 68.53% branch coverage against the unchanged
-  83.0% statement and 68.0% branch floors.
+  — 2,688 passed in 595.04s (598.02s wall). In this distinct post-correction,
+  fully locked run, the independent checker passed 83.96% statement coverage and
+  68.53% branch coverage against the unchanged 83.0% statement and 68.0% branch
+  floors; the earlier 68.52% entry belongs to the separate 2,686-test
+  pre-correction run recorded in Task 0.5.
 - Final root checkpoint:
   `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. /Users/htooayelwin/orca/travis234/.venv/bin/python -m pytest -q -p no:cacheprovider tests`
   — 2,688 passed in 409.27s (410.99s wall).
