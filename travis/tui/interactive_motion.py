@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from travis.tui.interactive_services import InteractiveMotionPort, PortBoundController
+
 from travis.tui.motion import MotionState
 
 
-class InteractiveMotion:
+class InteractiveMotion(PortBoundController[InteractiveMotionPort]):
     """Own the presentation-only motion surface for interactive mode."""
 
     def set_extension_status(

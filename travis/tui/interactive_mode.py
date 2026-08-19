@@ -105,12 +105,10 @@ def _terminal_color_mode() -> str:
     return "truecolor"
 
 class _InteractiveRuntime(
-    InteractiveCommandDispatcher,
     InteractiveExtensions,
     InteractiveLsp,
     InteractiveModelAuth,
     InteractiveMemory,
-    InteractiveMotion,
     InteractiveOperations,
     InteractiveParams,
     InteractiveProcessCommands,
@@ -118,11 +116,134 @@ class _InteractiveRuntime(
     InteractiveSessionCommands,
     InteractiveShutdown,
     InteractiveTurnController,
-    InteractiveView,
 ):
     """Internal TUI runtime assembled from focused behavior owners."""
 
     MAX_WIDGET_LINES = 10
+
+    def init(self, *args, **kwargs):
+        return self.controllers.view.init(*args, **kwargs)
+
+    def _populate_existing_history(self, *args, **kwargs):
+        return self.controllers.view._populate_existing_history(*args, **kwargs)
+
+    def _custom_message_renderers(self, *args, **kwargs):
+        return self.controllers.view._custom_message_renderers(*args, **kwargs)
+
+    def create_base_autocomplete_provider(self, *args, **kwargs):
+        return self.controllers.view.create_base_autocomplete_provider(*args, **kwargs)
+
+    def setup_autocomplete_provider(self, *args, **kwargs):
+        return self.controllers.view.setup_autocomplete_provider(*args, **kwargs)
+
+    def add_autocomplete_provider(self, *args, **kwargs):
+        return self.controllers.view.add_autocomplete_provider(*args, **kwargs)
+
+    def get_autocomplete_suggestions(self, *args, **kwargs):
+        return self.controllers.view.get_autocomplete_suggestions(*args, **kwargs)
+
+    def _handle_session_event(self, *args, **kwargs):
+        return self.controllers.view._handle_session_event(*args, **kwargs)
+
+    def _render_subagent_lifecycle_event(self, *args, **kwargs):
+        return self.controllers.view._render_subagent_lifecycle_event(*args, **kwargs)
+
+    def _render_subagent_tool_event(self, *args, **kwargs):
+        return self.controllers.view._render_subagent_tool_event(*args, **kwargs)
+
+    def _handle_footer_branch_change(self, *args, **kwargs):
+        return self.controllers.view._handle_footer_branch_change(*args, **kwargs)
+
+    def _render_auto_compaction_notice(self, *args, **kwargs):
+        return self.controllers.view._render_auto_compaction_notice(*args, **kwargs)
+
+    def _refresh_footer(self, *args, **kwargs):
+        return self.controllers.view._refresh_footer(*args, **kwargs)
+
+    def set_hidden_thinking_label(self, *args, **kwargs):
+        return self.controllers.view.set_hidden_thinking_label(*args, **kwargs)
+
+    def set_terminal_title(self, *args, **kwargs):
+        return self.controllers.view.set_terminal_title(*args, **kwargs)
+
+    def set_editor_text(self, *args, **kwargs):
+        return self.controllers.view.set_editor_text(*args, **kwargs)
+
+    def get_editor_text(self, *args, **kwargs):
+        return self.controllers.view.get_editor_text(*args, **kwargs)
+
+    def paste_to_editor(self, *args, **kwargs):
+        return self.controllers.view.paste_to_editor(*args, **kwargs)
+
+    def set_extension_footer(self, *args, **kwargs):
+        return self.controllers.view.set_extension_footer(*args, **kwargs)
+
+    def set_extension_header(self, *args, **kwargs):
+        return self.controllers.view.set_extension_header(*args, **kwargs)
+
+    def set_extension_widget(self, *args, **kwargs):
+        return self.controllers.view.set_extension_widget(*args, **kwargs)
+
+    def _render_widgets(self, *args, **kwargs):
+        return self.controllers.view._render_widgets(*args, **kwargs)
+
+    def _render_widget_container(self, *args, **kwargs):
+        return self.controllers.view._render_widget_container(*args, **kwargs)
+
+    def prompt_extension_input(self, *args, **kwargs):
+        return self.controllers.view.prompt_extension_input(*args, **kwargs)
+
+    def prompt_extension_editor(self, *args, **kwargs):
+        return self.controllers.view.prompt_extension_editor(*args, **kwargs)
+
+    def prompt_extension_select(self, *args, **kwargs):
+        return self.controllers.view.prompt_extension_select(*args, **kwargs)
+
+    def _prompt_tui_theme_select(self, *args, **kwargs):
+        return self.controllers.view._prompt_tui_theme_select(*args, **kwargs)
+
+    def _prompt_tui_value(self, *args, **kwargs):
+        return self.controllers.view._prompt_tui_value(*args, **kwargs)
+
+    def prompt_extension_confirm(self, *args, **kwargs):
+        return self.controllers.view.prompt_extension_confirm(*args, **kwargs)
+
+    def prompt_extension_custom(self, *args, **kwargs):
+        return self.controllers.view.prompt_extension_custom(*args, **kwargs)
+
+    def add_terminal_input_listener(self, *args, **kwargs):
+        return self.controllers.view.add_terminal_input_listener(*args, **kwargs)
+
+    def _dispatch_terminal_input(self, *args, **kwargs):
+        return self.controllers.view._dispatch_terminal_input(*args, **kwargs)
+
+    def set_extension_status(self, *args, **kwargs):
+        return self.controllers.motion.set_extension_status(*args, **kwargs)
+
+    def _set_motion_signal(self, *args, **kwargs):
+        return self.controllers.motion._set_motion_signal(*args, **kwargs)
+
+    def _clear_motion_signal(self, *args, **kwargs):
+        return self.controllers.motion._clear_motion_signal(*args, **kwargs)
+
+    def _refresh_extension_motion_signal(self, *args, **kwargs):
+        return self.controllers.motion._refresh_extension_motion_signal(*args, **kwargs)
+
+    def set_working_message(self, *args, **kwargs):
+        return self.controllers.motion.set_working_message(*args, **kwargs)
+
+    def set_working_visible(self, *args, **kwargs):
+        return self.controllers.motion.set_working_visible(*args, **kwargs)
+
+    def set_working_indicator(self, *args, **kwargs):
+        return self.controllers.motion.set_working_indicator(*args, **kwargs)
+
+    def run(self, *args, **kwargs):
+        return self.controllers.command_dispatch.run(*args, **kwargs)
+
+    def _run_motion_command(self, *args, **kwargs):
+        return self.controllers.command_dispatch._run_motion_command(*args, **kwargs)
+
     def __init__(
         self,
         app,
@@ -293,11 +414,9 @@ class _InteractiveRuntime(
                 before_rebind=lambda _session: self._reset_extension_ui(),
                 on_rebound=lambda _session: self.tui.post(self._rebind_session_ui),
             )
-        self.setup_autocomplete_provider()
-        self._theme_render_ready = True
         self.controllers = InteractiveControllers(
-            command_dispatch=self,
-            view=self,
+            command_dispatch=InteractiveCommandDispatcher(self),
+            view=InteractiveView(self),
             model_auth=self,
             params=self,
             processes=self,
@@ -309,8 +428,10 @@ class _InteractiveRuntime(
             extensions=self,
             turns=self,
             shutdown=self,
-            motion=self,
+            motion=InteractiveMotion(self),
         )
+        self.setup_autocomplete_provider()
+        self._theme_render_ready = True
 
     def _ensure_builtin_themes(self) -> None:
         existing = {theme.name for theme in self.theme_registry.list()}

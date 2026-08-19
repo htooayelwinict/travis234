@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
+
 import inspect
 import json
 import os
@@ -177,6 +179,7 @@ _NOT_MEMORY_COMMAND = object()
 _INVALID_MEMORY_COMMAND = object()
 _NOT_OPERATIONS_COMMAND = object()
 _INVALID_OPERATIONS_COMMAND = object()
+_NO_COMMAND_MATCH = object()
 
 
 def _parse_motion_command(prompt: str) -> bool | None | object:
@@ -191,6 +194,53 @@ def _parse_motion_command(prompt: str) -> bool | None | object:
     return _NOT_MOTION_COMMAND
 
 
+@dataclass(frozen=True, slots=True)
+class CommandBinding:
+    name: str
+    classifier: Callable[[str], object]
+    handler_key: str
+
+
+def _match_predicate(predicate: Callable[[str], bool], prompt: str) -> object:
+    return True if predicate(prompt) else _NO_COMMAND_MATCH
+
+
+def _match_parser(parser: Callable[[str], object], no_match: object, prompt: str) -> object:
+    result = parser(prompt)
+    return _NO_COMMAND_MATCH if result is no_match else result
+
+
+BUILTIN_COMMAND_BINDINGS: tuple[CommandBinding, ...] = (
+    CommandBinding("motion", lambda prompt: _match_parser(_parse_motion_command, _NOT_MOTION_COMMAND, prompt), "motion"),
+    CommandBinding("help", lambda prompt: _match_predicate(_is_help_command, prompt), "help"),
+    CommandBinding("session", lambda prompt: _match_parser(_parse_session_command, None, prompt), "session"),
+    CommandBinding("memory", lambda prompt: _match_parser(_parse_memory_command, _NOT_MEMORY_COMMAND, prompt), "memory"),
+    CommandBinding(
+        "operations",
+        lambda prompt: _match_parser(_parse_operations_command, _NOT_OPERATIONS_COMMAND, prompt),
+        "operations",
+    ),
+    CommandBinding("processes", lambda prompt: _match_predicate(_is_processes_command, prompt), "processes"),
+    CommandBinding("lsp", lambda prompt: _match_predicate(_is_lsp_status_command, prompt), "lsp"),
+    CommandBinding("agents", lambda prompt: _match_parser(_parse_agents_command, None, prompt), "agents"),
+    CommandBinding("reload", lambda prompt: _match_predicate(_is_reload_command, prompt), "reload"),
+    CommandBinding("trust", lambda prompt: _match_predicate(_is_trust_command, prompt), "trust"),
+    CommandBinding("bash", lambda prompt: _match_parser(_parse_bash_command, None, prompt), "bash"),
+    CommandBinding("compact", lambda prompt: _match_predicate(_is_manual_compression_command, prompt), "compact"),
+    CommandBinding("auth", lambda prompt: _match_parser(_parse_auth_command, None, prompt), "auth"),
+    CommandBinding("model", lambda prompt: _match_parser(_parse_model_command, None, prompt), "model"),
+    CommandBinding("params", lambda prompt: _match_parser(_parse_params_command, None, prompt), "params"),
+)
+
+
+def classify_builtin_command(prompt: str) -> tuple[CommandBinding, object] | None:
+    for binding in BUILTIN_COMMAND_BINDINGS:
+        parsed = binding.classifier(prompt)
+        if parsed is not _NO_COMMAND_MATCH:
+            return binding, parsed
+    return None
+
+
 def _is_openrouter_model(model) -> bool:
     return getattr(model, "provider", "") == "openrouter" or "openrouter.ai" in str(getattr(model, "base_url", ""))
 
@@ -203,7 +253,7 @@ def _parse_bash_command(prompt: str) -> tuple[str, bool] | None:
         return None
     return command, excluded
 
-class InteractiveCommandDispatcher:
+class InteractiveCommandDispatcher(PortBoundController[InteractiveCommandPort]):
     """Owns a focused interactive runtime concern."""
 
     def run(self) -> int:
@@ -468,7 +518,10 @@ class InteractiveCommandDispatcher:
         self.tui.request_render()
 
 __all__ = (
+    'BUILTIN_COMMAND_BINDINGS',
+    'CommandBinding',
     'InteractiveCommandDispatcher',
+    'classify_builtin_command',
     '_is_command_like_slash_prompt',
     '_is_help_command',
     '_is_manual_compression_command',

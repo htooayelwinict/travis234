@@ -58,5 +58,22 @@ def test_interactive_runtime_owns_the_typed_controller_bundle(tmp_path) -> None:
     runtime = InteractiveMode(app)._runtime
 
     assert isinstance(runtime.controllers, InteractiveControllers)
-    assert runtime.controllers.view is runtime
+    assert type(runtime.controllers.view).__name__ == "InteractiveView"
     assert runtime.controllers.shutdown is runtime
+
+
+def test_view_motion_and_dispatch_are_owned_collaborators(tmp_path) -> None:
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=FakeTerminal(), enable_tui=True)
+    runtime = InteractiveMode(app)._runtime
+
+    assert runtime.controllers.view is not runtime
+    assert runtime.controllers.motion is not runtime
+    assert runtime.controllers.command_dispatch is not runtime
+    assert all(
+        owner not in type(runtime).__bases__
+        for owner in (
+            type(runtime.controllers.view),
+            type(runtime.controllers.motion),
+            type(runtime.controllers.command_dispatch),
+        )
+    )

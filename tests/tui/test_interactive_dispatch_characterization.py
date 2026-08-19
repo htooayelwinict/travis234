@@ -18,11 +18,33 @@ from travis.tui.interactive_mode import (
     _parse_session_command,
 )
 from travis.tui.interactive_command_dispatcher import (
+    BUILTIN_COMMAND_BINDINGS,
     _INVALID_MEMORY_COMMAND,
     _INVALID_OPERATIONS_COMMAND,
     _NOT_MEMORY_COMMAND,
     _NOT_OPERATIONS_COMMAND,
 )
+
+
+def test_builtin_command_registry_preserves_dispatch_precedence() -> None:
+    assert tuple(binding.name for binding in BUILTIN_COMMAND_BINDINGS) == (
+        "motion",
+        "help",
+        "session",
+        "memory",
+        "operations",
+        "processes",
+        "lsp",
+        "agents",
+        "reload",
+        "trust",
+        "bash",
+        "compact",
+        "auth",
+        "model",
+        "params",
+    )
+    assert all(binding.handler_key for binding in BUILTIN_COMMAND_BINDINGS)
 
 
 @pytest.mark.parametrize(

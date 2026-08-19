@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from travis.tui.interactive_services import InteractiveViewPort, PortBoundController
+
 import json
 import os
 import queue
@@ -62,7 +64,7 @@ def _short_status_text(text: str, *, limit: int) -> str:
         return value
     return value[: max(0, limit - 3)].rstrip() + "..."
 
-class InteractiveView:
+class InteractiveView(PortBoundController[InteractiveViewPort]):
     """Owns a focused interactive runtime concern."""
 
     def init(self) -> None:

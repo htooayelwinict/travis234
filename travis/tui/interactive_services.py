@@ -4,7 +4,32 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from types import MethodType
+from typing import Generic, Protocol, TypeVar
+
+
+ControllerPortT = TypeVar("ControllerPortT")
+
+
+class PortBoundController(Generic[ControllerPortT]):
+    """Bind legacy-shaped method bodies to an explicit structural port.
+
+    This small bridge lets a controller retain its characterized method body while
+    ownership moves off the runtime.  The controller stores only the injected port;
+    it does not inherit from, import, or dynamically inspect either public facade.
+    """
+
+    __slots__ = ("_port",)
+
+    def __init__(self, port: ControllerPortT) -> None:
+        object.__setattr__(self, "_port", port)
+
+    def __getattribute__(self, name: str) -> object:
+        attribute = object.__getattribute__(self, name)
+        if isinstance(attribute, MethodType) and attribute.__self__ is self:
+            port = object.__getattribute__(self, "_port")
+            return attribute.__func__.__get__(port, type(port))
+        return attribute
 
 
 class InteractiveRenderPort(Protocol):
@@ -54,6 +79,35 @@ class InteractiveThemePort(Protocol):
     def role(self, name: str) -> object: ...
 
 
+class InteractiveViewPort(Protocol):
+    """View-facing state and render services supplied by the composition root."""
+
+    app: object
+    tui: object
+    history: object
+    status: object
+    theme_context: object
+
+
+class InteractiveMotionPort(Protocol):
+    """Motion-facing status state supplied by the composition root."""
+
+    tui: object
+    status: object
+    motion_controller: object
+    extension_statuses: dict[str, str]
+    extension_status_states: dict[str, str]
+
+
+class InteractiveCommandPort(Protocol):
+    """Command-loop state and named handlers supplied by the composition root."""
+
+    app: object
+    tui: object
+    history: object
+    status: object
+
+
 @dataclass(frozen=True, slots=True)
 class InteractiveServices:
     render: InteractiveRenderPort
@@ -67,11 +121,15 @@ class InteractiveServices:
 
 __all__ = [
     "InteractiveHistoryPort",
+    "InteractiveCommandPort",
+    "InteractiveMotionPort",
     "InteractiveOwnerThreadPort",
+    "PortBoundController",
     "InteractiveRenderPort",
     "InteractiveServices",
     "InteractiveSessionBindingPort",
     "InteractiveStatusPort",
     "InteractiveTerminalInputPort",
     "InteractiveThemePort",
+    "InteractiveViewPort",
 ]
