@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
+
 from typing import Mapping
 
 from travis.tui.components import Text
@@ -37,7 +39,7 @@ def format_lsp_status(status: Mapping[str, object]) -> str:
     return "\n".join(lines)
 
 
-class InteractiveLsp:
+class InteractiveLsp(PortBoundController[InteractiveCommandPort]):
     """Owns the bounded, local-only `/lsp status` view."""
 
     def _run_lsp_status_command(self) -> None:

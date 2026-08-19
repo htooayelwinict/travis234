@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
+
 import hashlib
 
 from travis.coding_agent.operations import OperationSnapshot, OperationStore
@@ -110,7 +112,7 @@ def _summary_line(snapshot: OperationSnapshot) -> str:
     )
 
 
-class InteractiveOperations:
+class InteractiveOperations(PortBoundController[InteractiveCommandPort]):
     """TUI mixin that exposes operation metadata without mutations."""
 
     def _run_operations_command(self, operation_id: str | None) -> None:

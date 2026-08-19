@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
+
 import time
 
 from travis.coding_agent.memory import MemorySettings, MemoryStore
@@ -78,7 +80,7 @@ class MemoryInspector:
         )
 
 
-class InteractiveMemory:
+class InteractiveMemory(PortBoundController[InteractiveCommandPort]):
     """TUI mixin exposing memory metadata without fact operations."""
 
     def _run_memory_status_command(self) -> None:

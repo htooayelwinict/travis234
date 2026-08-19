@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
+
 import inspect
 import json
 import os
@@ -51,7 +53,7 @@ from travis.tui.motion import MotionState
 
 from travis.tui.interactive_view import _short_status_text
 
-class InteractiveProcessCommands:
+class InteractiveProcessCommands(PortBoundController[InteractiveCommandPort]):
     """Owns a focused interactive runtime concern."""
 
     def _run_processes_command(self) -> None:
