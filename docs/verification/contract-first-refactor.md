@@ -308,3 +308,154 @@ Baseline commands and summarized outcomes:
 - Remaining risks: source CI has still not run on a remote GitHub runner; live-provider
   and public-repository evidence remain blocked/pending by policy; clean coverage remains
   materially slow. No container was built, and Phase 1 has not started.
+
+## Phase 1 — Explicit contracts and composition shell
+
+### Task 1.1 — Supported façade inventory
+
+- Commit: `9c3b7921d246e192a9c8cffb2ec62c4710488ae7`.
+- RED command and expected failure:
+  `uv run --locked --all-extras --dev pytest -q -p no:cacheprovider tests/test_runtime_facade_contract.py tests/architecture/test_refactor_contracts.py tests/coding_agent/test_session_owner_boundaries.py tests/tui/test_interactive_owner_boundaries.py`
+  — collection failed as expected because `session_contracts` and
+  `interactive_contracts` did not exist.
+- Focused GREEN command: the same command — 16 passed in 1.23s at the final Phase 1
+  source commit. The contract modules expose immutable supported-member inventories and
+  narrow structural ports without importing either concrete façade or composition root.
+- Phase suite command: completed; see Task 1.6.
+- Installed-wheel TUI scenario: completed; see Task 1.6.
+- Protected-loop SHA-256:
+  `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`.
+- Notes/remaining risks: private dynamic forwarding remains covered by existing
+  compatibility tests and was not promoted into the supported public inventory.
+
+### Task 1.2 — Typed session dependency composition
+
+- Commit: `ae8a927a48e7c30e9fdd1eb1da3dd1ae777f78a8`.
+- RED command and expected failure:
+  `uv run --locked --all-extras --dev pytest -q -p no:cacheprovider tests/coding_agent/test_session_composition.py`
+  — collection failed as expected because `_build_session_dependencies` and the typed
+  dependency record were absent.
+- Focused GREEN command:
+  `uv run --locked --all-extras --dev pytest -q -p no:cacheprovider tests/coding_agent/test_session_composition.py tests/test_coding_resources_and_services.py tests/test_app_integration.py tests/test_cli_runtime_controls.py`
+  — 134 passed in 16.17s at the final Phase 1 source commit.
+- Phase suite command: completed; see Task 1.6.
+- Installed-wheel TUI scenario: completed; see Task 1.6.
+- Protected-loop SHA-256:
+  `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`.
+- Notes/remaining risks: the public factory still accepts and returns the exact legacy
+  camelCase mapping; only the internal construction boundary uses the frozen, slotted
+  record.
+
+### Task 1.3 — Structural session factory boundary
+
+- Commit: `6f38bb6fe6f4cafe3c01df2e6192b9cf97a4e10a`.
+- RED command and expected failure:
+  `uv run --locked --all-extras --dev pytest -q -p no:cacheprovider tests/architecture/test_refactor_contracts.py tests/test_app_integration.py -k session_factory`
+  — 2 failed as expected because the service/runtime owners still imported the
+  concrete session façade and an injected factory was not used.
+- Focused GREEN command:
+  `uv run --locked --all-extras --dev pytest -q -p no:cacheprovider tests/architecture/test_refactor_contracts.py tests/test_app_integration.py tests/test_session_parity.py tests/test_session_commands.py`
+  — 62 passed in 7.38s at the final Phase 1 source commit. Both clean-interpreter import
+  orders also printed `ok`.
+- Qualification correction: the first repository checkpoint exposed one stale test
+  that monkeypatched the deliberately removed concrete module symbol. Commit
+  `94f5553934b08ddb8dad5fedfd262ebd7b28402a` changed that existing failure regression
+  to use the injected `sessionFactory` seam; its focused selector passed 4 tests with
+  48 deselected in 0.53s before the full rerun.
+- Phase suite command: completed; see Task 1.6.
+- Installed-wheel TUI scenario: completed; see Task 1.6.
+- Protected-loop SHA-256:
+  `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`.
+- Notes/remaining risks: normal construction still resolves and returns the concrete
+  `AgentSession` through a late leaf factory; no module-level service locator was added.
+
+### Task 1.4 — Single bootstrap option normalization boundary
+
+- Commit: `356f5cc8a85b1b38104dae246957e9164693fd91`.
+- RED command and expected failure:
+  `uv run --locked --all-extras --dev pytest -q -p no:cacheprovider tests/coding_agent/test_session_options.py`
+  — collection failed as expected because `SessionBootstrapOptions` did not exist. A
+  subsequent explicit-`None` regression failed before provided-key tracking was added.
+- Focused GREEN command:
+  `uv run --locked --all-extras --dev pytest -q -p no:cacheprovider tests/coding_agent/test_session_options.py tests/coding_agent/test_session_composition.py tests/test_cli_runtime_controls.py tests/test_coding_resources_and_services.py`
+  — 159 passed in 8.34s at the final Phase 1 source commit.
+- Phase suite command: completed; see Task 1.6.
+- Installed-wheel TUI scenario: completed; see Task 1.6.
+- Protected-loop SHA-256:
+  `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`.
+- Notes/remaining risks: all 34 supported snake/camel aliases normalize once; unknown
+  compatibility keys remain in a read-only extras mapping and the safe representation
+  omits values.
+
+### Task 1.5 — Resolvable public annotations
+
+- Commit: `c4f16ed56953eea3f94ee4407cf136b06960b857`.
+- RED command and expected failure:
+  `uv run --locked --all-extras --dev pytest -q -p no:cacheprovider tests/architecture/test_public_type_hints.py`
+  — after strengthening the clean-interpreter walker to include public class members,
+  it failed on unresolved `CodingApp` and `AgentSession` annotations in `AgentHarness`.
+  The monotonic quality-scope selector also failed until every Phase 1 owner was added.
+- Focused GREEN command:
+  `uv run --locked --all-extras --dev pytest -q -p no:cacheprovider tests/architecture/test_public_type_hints.py tests/architecture/test_refactor_contracts.py tests/architecture/test_quality_configuration.py`
+  — 11 passed in 2.06s at the final Phase 1 source commit.
+- Static GREEN gates: full scoped `pyright` reported 0 errors, 0 warnings, and 0
+  informations; the migrated-owner Ruff rules `E4,E7,E9,F,I,UP,B,SIM` passed.
+- Phase suite command: completed; see Task 1.6.
+- Installed-wheel TUI scenario: completed; see Task 1.6.
+- Protected-loop SHA-256:
+  `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`.
+- Notes/remaining risks: Pyright remains intentionally incremental, but its include
+  scope is monotonic and now owns every Phase 1 module and focused contract test.
+
+### Task 1.6 — Phase 1 qualification and installed-wheel TUI
+
+- First root checkpoint:
+  `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. /Users/htooayelwin/orca/travis234/.venv/bin/python -m pytest -q -p no:cacheprovider tests`
+  — 1 failed and 2,776 passed in 324.02s. The sole stale-factory test was corrected in
+  `94f5553934b08ddb8dad5fedfd262ebd7b28402a` as described under Task 1.3.
+- Final root checkpoint: the same command — 2,777 passed in 321.17s.
+- Final Phase 1 owner slice:
+  `uv run --locked --all-extras --dev pytest -q -p no:cacheprovider tests/architecture tests/coding_agent tests/tui/test_interactive_owner_boundaries.py tests/tui/test_interactive_dispatch_characterization.py tests/tui/test_interactive_shutdown_characterization.py tests/test_runtime_facade_contract.py tests/test_coding_resources_and_services.py tests/test_app_integration.py tests/test_session_parity.py tests/test_session_commands.py tests/test_cli.py tests/test_cli_runtime_controls.py tests/test_operation_coordinator.py`
+  — 358 passed in 30.79s.
+- Adapter checkpoint:
+  `uv run --project packages/travis234-mcp-adapter --locked --group source-test pytest -q -p no:cacheprovider packages/travis234-mcp-adapter/tests`
+  — 125 passed in 23.21s.
+- npm launcher: 24 passed in 0.89s. npm dry-pack passed with the expected 11-file
+  inventory.
+- Static gates: full scoped Pyright reported 0 errors, 0 warnings, and 0 informations;
+  the Phase 1 migrated-owner Ruff rules passed.
+- Package qualification:
+  `uv build --out-dir <task-root>/root .` and
+  `uv build --out-dir <task-root>/adapter packages/travis234-mcp-adapter` produced both
+  wheel and source distributions; locked Twine validation passed all four artifacts.
+  The exact root wheel installed into a fresh Python 3.13.13 environment, and an import
+  check from outside the repository resolved `travis` from that environment's
+  `site-packages`.
+- Installed-wheel qualification used the actual installed `travis234` console entry,
+  real attached PTYs, isolated task-owned `TRAVIS234_CODING_AGENT_DIR` state,
+  `--offline`, and a keyless in-memory faux provider supplied by a task-owned global
+  extension. No dotenv, credential, live provider, user state, or project extension was
+  used:
+  1. **PASS — startup/help:** the installed console rendered the complete CLI help,
+     then the native TUI started at Idle and exposed the expected command inventory.
+  2. **PASS — normal prompt:** the faux provider returned `PHASE1_CONTRACTS_OK` and the
+     TUI returned to Idle.
+  3. **PASS — `/login` discovery:** the authentication-method picker displayed
+     subscription and API-key choices; a blank selection cancelled without collecting
+     or storing a credential and returned to Idle.
+  4. **PASS — `/coordination --plan`:** the exact no-goal invocation produced the
+     preserved `A coordination goal is required` validation error and returned to Idle.
+  5. **PASS — new/resume/fork:** `/new` created and switched to a fresh session,
+     `/resume` selected and restored the original prompt transcript, and `/fork`
+     selected that user entry and switched to a new branch with the prompt preloaded.
+  6. **PASS — clean shutdown:** after clearing the preloaded fork editor, `/exit`
+     returned 0, rendered `status: Exiting`, restored cursor and bracketed-paste terminal
+     modes, and left no task-owned console process.
+- Protected-loop SHA-256:
+  `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`.
+- Protected-loop diff from `7838749452b567940bd5b69a715b6184b8f9f13e`: empty.
+- Generated build, install, extension, and TUI state remain only under the task-owned
+  temporary root and are removed after the final checks. No container was built because
+  the approved master plan reserves container qualification for Phase 5.
+- Remaining risks: remote CI has not run; live-provider and comprehensive 21-prompt
+  evidence remain deferred to their approved later gate. Phase 2 has not started.
