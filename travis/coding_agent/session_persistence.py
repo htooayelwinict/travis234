@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
+
 import json
 import os
 import re
@@ -173,7 +175,7 @@ def _get_user_message_text(message: UserMessage) -> str:
         return content
     return "".join(block.text for block in content if isinstance(block, TextContent))
 
-class SessionPersistence:
+class SessionPersistence(SessionPortBoundController[SessionControllerPort]):
     """Owns a focused AgentSession runtime concern."""
 
     def compact(self, focus: str | None = None, summarizer=None, deep: bool = False):
