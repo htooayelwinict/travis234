@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Mapping, cast
 
 from travis.coding_agent.auth_storage import AuthStorage
 from travis.coding_agent.model_registry import ModelRegistry
 from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.session_catalog import SessionCatalog
+from travis.coding_agent.session_contracts import SessionFactory
 from travis.coding_agent.settings_manager import SettingsManager
 
 
@@ -27,6 +28,7 @@ class SessionDependencies:
     session_id: str
     operation_runtime: object | None
     diagnostics: tuple[Mapping[str, object], ...]
+    session_factory: SessionFactory | None = None
 
     def __post_init__(self) -> None:
         if self.model_registry.auth_storage is not self.auth_storage:
@@ -37,7 +39,7 @@ class SessionDependencies:
     def to_legacy_mapping(self) -> dict[str, object]:
         """Return the supported camelCase service dictionary shape."""
 
-        return {
+        services: dict[str, object] = {
             "cwd": self.cwd,
             "agentDir": self.agent_dir,
             "settingsManager": self.settings_manager,
@@ -50,6 +52,9 @@ class SessionDependencies:
             "operationRuntime": self.operation_runtime,
             "diagnostics": [dict(item) for item in self.diagnostics],
         }
+        if self.session_factory is not None:
+            services["sessionFactory"] = self.session_factory
+        return services
 
     @classmethod
     def from_legacy_mapping(
@@ -81,6 +86,9 @@ class SessionDependencies:
             if not isinstance(item, Mapping):
                 raise TypeError("diagnostics must contain mappings")
             diagnostics.append(dict(item))
+        session_factory = services.get("sessionFactory") or services.get("session_factory")
+        if session_factory is not None and not callable(session_factory):
+            raise TypeError("sessionFactory must be callable")
         return cls(
             cwd=str(services["cwd"]),
             agent_dir=str(services["agentDir"]),
@@ -93,6 +101,7 @@ class SessionDependencies:
             session_id=str(services.get("sessionId") or ""),
             operation_runtime=services.get("operationRuntime"),
             diagnostics=tuple(diagnostics),
+            session_factory=cast(SessionFactory | None, session_factory),
         )
 
 

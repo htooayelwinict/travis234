@@ -20,6 +20,11 @@ FORBIDDEN_CONTRACT_IMPORTS = {
     "travis.coding_agent.agent_session",
     "travis.tui.interactive_mode",
 }
+SESSION_FACTORY_MODULES = (
+    ROOT / "travis/coding_agent/agent_session_services.py",
+    ROOT / "travis/coding_agent/agent_session_runtime.py",
+    ROOT / "travis/coding_agent/session_contracts.py",
+)
 
 
 def _imported_modules(path: Path) -> set[str]:
@@ -51,6 +56,11 @@ def test_contract_inventories_are_immutable_and_public_only() -> None:
 def test_contract_modules_do_not_import_facades_or_composition_roots() -> None:
     for path in CONTRACT_MODULES:
         assert _imported_modules(path).isdisjoint(FORBIDDEN_CONTRACT_IMPORTS)
+
+
+def test_session_factory_modules_do_not_import_concrete_agent_session() -> None:
+    for path in SESSION_FACTORY_MODULES:
+        assert "travis.coding_agent.agent_session" not in _imported_modules(path)
 
 
 def test_session_runtime_public_descriptors_are_recorded() -> None:

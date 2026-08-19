@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from travis.coding_agent.extensions import ExtensionRunner
+
 
 AGENT_SESSION_PUBLIC_MEMBERS: frozenset[str] = frozenset(
     {
@@ -124,8 +126,29 @@ class SessionFactory(Protocol):
     def __call__(self, **kwargs: object) -> SessionLifecyclePort: ...
 
 
+class SessionRuntimePort(SessionLifecyclePort, Protocol):
+    """Session operations required by the replacement runtime host."""
+
+    cwd: str
+
+    @property
+    def extension_runner(self) -> ExtensionRunner: ...
+
+    @property
+    def session_path(self) -> str | None: ...
+
+    def create_branched_session(self, leaf_id: str, path: str | None = None) -> str: ...
+
+    def emit_deferred_session_start(self) -> None: ...
+
+    def get_session_entry(self, entry_id: str) -> dict[str, object] | None: ...
+
+    def get_session_leaf_id(self) -> str | None: ...
+
+
 __all__ = [
     "AGENT_SESSION_PUBLIC_MEMBERS",
     "SessionFactory",
     "SessionLifecyclePort",
+    "SessionRuntimePort",
 ]

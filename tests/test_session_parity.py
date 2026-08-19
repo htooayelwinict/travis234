@@ -10,6 +10,7 @@ from travis.coding_agent.agent_session_runtime import (
     AgentSessionRuntime,
     CreateAgentSessionRuntimeResult,
     InvalidSessionImportError,
+    create_agent_session_runtime,
 )
 from travis.coding_agent.session_catalog import SessionCatalog
 from travis.coding_agent.session_store import SessionStore
@@ -57,6 +58,43 @@ def _runtime(
         {"cwd": str(tmp_path), "agentDir": str(tmp_path / ".travis234")},
         create_runtime,
     )
+
+
+class _StructuralSession:
+    def __init__(self, cwd: str) -> None:
+        self.cwd = cwd
+        self.session_path = None
+        self.extension_runner = ExtensionRunner()
+        self.disposed = False
+
+    def dispose(self) -> None:
+        self.disposed = True
+
+    def shutdown(self, *args: object, **kwargs: object) -> None:
+        return None
+
+    def create_branched_session(self, leaf_id: str, path: str | None = None) -> str:
+        raise AssertionError("not used by construction")
+
+    def emit_deferred_session_start(self) -> None:
+        return None
+
+    def get_session_entry(self, entry_id: str) -> dict[str, object] | None:
+        return None
+
+    def get_session_leaf_id(self) -> str | None:
+        return None
+
+
+def test_runtime_session_factory_accepts_structural_session(tmp_path: Path) -> None:
+    session = _StructuralSession(str(tmp_path))
+
+    runtime = create_agent_session_runtime(
+        lambda _options: session,
+        {"cwd": str(tmp_path)},
+    )
+
+    assert runtime.session is session
 
 
 def test_session_tree_reports_stable_depth_first_structure_and_active_branch(tmp_path: Path) -> None:

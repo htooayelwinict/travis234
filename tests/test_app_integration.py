@@ -44,6 +44,76 @@ def _python_command(source: str) -> str:
     return f"{shlex.quote(sys.executable)} -c {shlex.quote(source)}"
 
 
+def test_session_factory_is_injected_through_initial_and_replacement_construction(
+    tmp_path: Path,
+) -> None:
+    from travis.coding_agent.agent_session import AgentSession
+    from travis.coding_agent.agent_session_runtime import (
+        AgentSessionRuntime,
+        CreateAgentSessionRuntimeResult,
+    )
+    from travis.coding_agent.agent_session_services import (
+        create_agent_session_from_services,
+        create_agent_session_services,
+    )
+
+    created: list[AgentSession] = []
+
+    def session_factory(**kwargs: object) -> AgentSession:
+        session = AgentSession(**kwargs)
+        created.append(session)
+        return session
+
+    agent_dir = tmp_path / "agent"
+    base_options: dict[str, object] = {
+        "cwd": str(tmp_path),
+        "agentDir": str(agent_dir),
+        "sessionFactory": session_factory,
+    }
+    services = create_agent_session_services(base_options)
+    first = create_agent_session_from_services(
+        {"services": services, "model": faux_model()}
+    )
+
+    def create_runtime(options: dict[str, object]) -> CreateAgentSessionRuntimeResult:
+        replacement_services = create_agent_session_services(
+            {
+                **base_options,
+                "cwd": options["cwd"],
+                "sessionPath": options["session_path"],
+            }
+        )
+        replacement = create_agent_session_from_services(
+            {"services": replacement_services, "model": faux_model()}
+        )
+        return CreateAgentSessionRuntimeResult(
+            session=replacement.session,
+            services=replacement_services,
+        )
+
+    runtime = AgentSessionRuntime(first.session, services, create_runtime)
+    try:
+        runtime.new_session()
+        assert created == [first.session, runtime.session]
+        assert services["sessionFactory"] is session_factory
+    finally:
+        runtime.dispose()
+
+
+def test_default_session_factory_still_returns_agent_session(tmp_path: Path) -> None:
+    from travis.coding_agent.agent_session import AgentSession
+    from travis.coding_agent.agent_session_services import create_agent_session
+
+    result = create_agent_session(
+        {"cwd": str(tmp_path), "agentDir": str(tmp_path / "agent"), "model": faux_model()}
+    )
+
+    try:
+        assert isinstance(result.session, AgentSession)
+    finally:
+        result.session.dispose()
+
+
 def test_coding_app_owns_managed_process_service_and_closes_it_idempotently(tmp_path: Path) -> None:
     app = CodingApp(cwd=str(tmp_path), model=faux_model(), enable_tui=False)
     service = app.process_service

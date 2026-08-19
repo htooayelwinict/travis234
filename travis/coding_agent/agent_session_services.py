@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -11,7 +12,6 @@ from urllib.parse import urlparse
 from travis.agent.types import AgentMessage
 from travis.ai.model_resolver import find_initial_model
 from travis.ai.types import Context, ImageContent, Message, Model, SimpleStreamOptions, TextContent
-from travis.coding_agent.agent_session import AgentSession, default_convert_to_llm
 from travis.coding_agent.artifact_manifest import ArtifactManifest
 from travis.coding_agent.artifact_store import ArtifactLimits, DurableArtifactStore
 from travis.coding_agent.artifacts import ArtifactRegistry
@@ -24,14 +24,16 @@ from travis.coding_agent.operations import OperationRuntime
 from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.session_catalog import SessionCatalog
 from travis.coding_agent.session_composition import SessionDependencies
+from travis.coding_agent.session_contracts import SessionLifecyclePort
 from travis.coding_agent.session_store import SessionContextSnapshot, SessionStore
+from travis.coding_agent.session_types import default_convert_to_llm
 from travis.coding_agent.settings_manager import SettingsManager
 from travis.coding_agent.tools import create_all_tool_definitions
 
 
 @dataclass
 class CreateAgentSessionResult:
-    session: AgentSession
+    session: SessionLifecyclePort
     extensions_result: dict[str, object]
     model_fallback_message: str | None = None
 
@@ -143,6 +145,7 @@ def _build_session_dependencies(options: Mapping[str, object]) -> SessionDepende
             "operationRuntime", options.get("operation_runtime")
         ),
         diagnostics=tuple(diagnostics),
+        session_factory=options.get("sessionFactory", options.get("session_factory")),
     )
 
 
@@ -261,7 +264,8 @@ def create_agent_session_from_services(options: dict[str, Any]) -> CreateAgentSe
             raw_services["operationRuntime"] = operation_runtime
             raw_services["diagnostics"] = [dict(item) for item in diagnostics]
     try:
-        session = AgentSession(
+        session_factory = services.session_factory or _default_session_factory
+        session = session_factory(
             cwd=services.cwd,
             agent_dir=services.agent_dir,
             model=model,
@@ -385,7 +389,18 @@ def _has_session_entry_type(session_path: str | None, entry_type: str) -> bool:
     return any(entry.get("type") == entry_type for entry in store.entries)
 
 
-def _record_initial_session_state(session: AgentSession, model: Model, thinking_level: str, fresh_session: bool) -> None:
+def _default_session_factory(**kwargs: object) -> SessionLifecyclePort:
+    module = importlib.import_module("travis.coding_agent.agent_session")
+    factory = getattr(module, "AgentSession")
+    return factory(**kwargs)
+
+
+def _record_initial_session_state(
+    session: SessionLifecyclePort,
+    model: Model,
+    thinking_level: str,
+    fresh_session: bool,
+) -> None:
     store = getattr(session, "_session_store", None)
     if store is None:
         return

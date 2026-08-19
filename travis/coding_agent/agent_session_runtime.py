@@ -8,31 +8,34 @@ import shutil
 import stat
 import tempfile
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from travis.agent.async_utils import run_sync
-from travis.coding_agent.agent_session import AgentSession
 from travis.coding_agent.extensions import emit_session_shutdown_event
 from travis.coding_agent.object_utils import call_optional as _call_optional
 from travis.coding_agent.session_catalog import SessionCatalog
+from travis.coding_agent.session_contracts import SessionRuntimePort
 from travis.coding_agent.session_store import serialized_content_text
 
 
 @dataclass
 class CreateAgentSessionRuntimeResult:
-    session: AgentSession
+    session: SessionRuntimePort
     services: dict[str, Any] = field(default_factory=dict)
     diagnostics: list[Any] = field(default_factory=list)
     model_fallback_message: str | None = None
 
 
 
-CreateAgentSessionRuntimeFactory = Callable[[dict[str, Any]], CreateAgentSessionRuntimeResult | AgentSession | dict[str, Any]]
+CreateAgentSessionRuntimeFactory = Callable[
+    [dict[str, Any]],
+    CreateAgentSessionRuntimeResult | SessionRuntimePort | dict[str, Any],
+]
 AgentSessionRuntimeDiagnostic = dict[str, Any]
-RebindSession = Callable[[AgentSession], object]
+RebindSession = Callable[[SessionRuntimePort], object]
 
 
 @dataclass(frozen=True)
@@ -69,7 +72,7 @@ class AgentSessionRuntime:
 
     def __init__(
         self,
-        session: AgentSession,
+        session: SessionRuntimePort,
         services: dict[str, Any],
         create_runtime: CreateAgentSessionRuntimeFactory,
         diagnostics: list[Any] | None = None,
@@ -84,7 +87,7 @@ class AgentSessionRuntime:
         self._before_session_invalidate: Callable[[], object] | None = None
 
     @property
-    def session(self) -> AgentSession:
+    def session(self) -> SessionRuntimePort:
         return self._session
 
     @property
@@ -191,12 +194,13 @@ class AgentSessionRuntime:
 
         selected_text: str | None = None
         if position == "at":
-            target_leaf_id = selected_entry["id"]
+            target_leaf_id = cast(str, selected_entry["id"])
         elif position == "before":
-            if selected_entry.get("type") != "message" or selected_entry.get("message", {}).get("role") != "user":
+            message = cast(Mapping[str, object], selected_entry.get("message", {}))
+            if selected_entry.get("type") != "message" or message.get("role") != "user":
                 raise ValueError("Invalid entry ID for forking")
-            target_leaf_id = selected_entry.get("parentId")
-            selected_text = serialized_content_text(selected_entry.get("message", {}).get("content"))
+            target_leaf_id = cast(str | None, selected_entry.get("parentId"))
+            selected_text = serialized_content_text(message.get("content"))
         else:
             raise ValueError("position must be 'before' or 'at'")
 
@@ -356,7 +360,10 @@ class AgentSessionRuntime:
             self._before_session_invalidate()
         _dispose_session(self._session)
 
-    def _apply(self, raw_result: CreateAgentSessionRuntimeResult | AgentSession | dict[str, Any]) -> None:
+    def _apply(
+        self,
+        raw_result: CreateAgentSessionRuntimeResult | SessionRuntimePort | dict[str, Any],
+    ) -> None:
         result = _coerce_result(raw_result)
         self._session = result.session
         self._services = {**self._services, **result.services}
@@ -365,11 +372,11 @@ class AgentSessionRuntime:
 
     def _activate_replacement(
         self,
-        raw_result: CreateAgentSessionRuntimeResult | AgentSession | dict[str, Any],
+        raw_result: CreateAgentSessionRuntimeResult | SessionRuntimePort | dict[str, Any],
         *,
         reason: str,
         target_session_file: str,
-        with_session: Callable[[AgentSession], object] | None,
+        with_session: Callable[[SessionRuntimePort], object] | None,
     ) -> None:
         result = _coerce_result(raw_result)
         try:
@@ -381,7 +388,10 @@ class AgentSessionRuntime:
         self._finish_session_replacement(with_session)
         self._session.emit_deferred_session_start()
 
-    def _finish_session_replacement(self, with_session: Callable[[AgentSession], object] | None = None) -> None:
+    def _finish_session_replacement(
+        self,
+        with_session: Callable[[SessionRuntimePort], object] | None = None,
+    ) -> None:
         if self._rebind_session:
             self._rebind_session(self._session)
         if with_session:
@@ -408,11 +418,11 @@ class AgentSessionRuntime:
         ).workspace_directory(self.cwd)
 
 
-def _coerce_result(raw_result: CreateAgentSessionRuntimeResult | AgentSession | dict[str, Any]) -> CreateAgentSessionRuntimeResult:
+def _coerce_result(
+    raw_result: CreateAgentSessionRuntimeResult | SessionRuntimePort | dict[str, Any],
+) -> CreateAgentSessionRuntimeResult:
     if isinstance(raw_result, CreateAgentSessionRuntimeResult):
         return raw_result
-    if isinstance(raw_result, AgentSession):
-        return CreateAgentSessionRuntimeResult(session=raw_result)
     if isinstance(raw_result, dict):
         return CreateAgentSessionRuntimeResult(
             session=raw_result["session"],
@@ -420,16 +430,29 @@ def _coerce_result(raw_result: CreateAgentSessionRuntimeResult | AgentSession | 
             diagnostics=list(raw_result.get("diagnostics") or []),
             model_fallback_message=raw_result.get("model_fallback_message") or raw_result.get("modelFallbackMessage"),
         )
+    required_members = (
+        "create_branched_session",
+        "dispose",
+        "emit_deferred_session_start",
+        "extension_runner",
+        "get_session_entry",
+        "get_session_leaf_id",
+        "session_path",
+        "shutdown",
+    )
+    if all(hasattr(raw_result, name) for name in required_members):
+        return CreateAgentSessionRuntimeResult(session=raw_result)
     raise TypeError(f"Unsupported runtime result: {type(raw_result).__name__}")
 
 
-def _dispose_session(session: AgentSession) -> None:
+def _dispose_session(session: SessionRuntimePort) -> None:
     first_error: BaseException | None = None
     language_services = getattr(session, "_language_services", None)
     close_language_services = getattr(language_services, "close", None)
     if callable(close_language_services):
         try:
-            run_sync(close_language_services())
+            close = cast(Callable[[], Coroutine[Any, Any, None]], close_language_services)
+            run_sync(close())
         except BaseException as error:  # noqa: BLE001 - session cleanup must continue.
             first_error = error
     try:
