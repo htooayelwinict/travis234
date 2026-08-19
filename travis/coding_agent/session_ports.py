@@ -15,7 +15,9 @@ class SessionControllerPort(Protocol):
     model_registry: object
     settings_manager: object
 
-    def __getattribute__[AttributeT](self, name: str) -> AttributeT: ...
+    def __getattribute__[AttributeT](
+        self, name: str
+    ) -> AttributeT: ...  # pyright: ignore[reportInvalidTypeVarUse] - structural port avoids Any.
 
 
 class SessionPortBoundController[SessionControllerPortT](BoundController[SessionControllerPortT]):

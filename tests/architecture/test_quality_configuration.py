@@ -131,6 +131,31 @@ def test_pyright_scope_is_explicit_monotonic_and_not_broadly_suppressed() -> Non
     )
 
 
+def test_migrated_owners_pass_pyright_without_diagnostics() -> None:
+    result = subprocess.run(
+        [
+            "uv",
+            "run",
+            "--locked",
+            "--all-extras",
+            "--dev",
+            "pyright",
+            "--outputjson",
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    report = json.loads(result.stdout)
+    summary = report["summary"]
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert summary["errorCount"] == 0, result.stdout
+    assert summary["warningCount"] == 0, result.stdout
+    assert summary["informationCount"] == 0, result.stdout
+
+
 def test_ruff_runs_fatal_rules_repository_wide_without_blanket_ignores() -> None:
     assert RUFF_CONFIG.is_file()
     config = _load_toml(RUFF_CONFIG)

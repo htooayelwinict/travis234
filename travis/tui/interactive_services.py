@@ -98,7 +98,9 @@ class InteractiveThemePort(Protocol):
 
 
 class InteractiveDynamicPort(Protocol):
-    def __getattribute__[AttributeT](self, name: str) -> AttributeT: ...
+    def __getattribute__[AttributeT](
+        self, name: str
+    ) -> AttributeT: ...  # pyright: ignore[reportInvalidTypeVarUse] - dynamic boundary avoids Any.
 
 
 class InteractiveViewPort(Protocol):
@@ -110,7 +112,9 @@ class InteractiveViewPort(Protocol):
     status: InteractiveStatusPort
     theme_context: InteractiveThemePort
 
-    def __getattribute__[AttributeT](self, name: str) -> AttributeT: ...
+    def __getattribute__[AttributeT](
+        self, name: str
+    ) -> AttributeT: ...  # pyright: ignore[reportInvalidTypeVarUse] - view port avoids Any.
 
 
 class InteractiveMotionPort(Protocol):
@@ -122,7 +126,9 @@ class InteractiveMotionPort(Protocol):
     extension_statuses: dict[str, str]
     extension_status_states: dict[str, str]
 
-    def __getattribute__[AttributeT](self, name: str) -> AttributeT: ...
+    def __getattribute__[AttributeT](
+        self, name: str
+    ) -> AttributeT: ...  # pyright: ignore[reportInvalidTypeVarUse] - motion port avoids Any.
 
 
 class InteractiveCommandPort(Protocol):
@@ -133,7 +139,9 @@ class InteractiveCommandPort(Protocol):
     history: InteractiveHistoryPort
     status: InteractiveStatusPort
 
-    def __getattribute__[AttributeT](self, name: str) -> AttributeT: ...
+    def __getattribute__[AttributeT](
+        self, name: str
+    ) -> AttributeT: ...  # pyright: ignore[reportInvalidTypeVarUse] - command port avoids Any.
 
 
 @dataclass(frozen=True, slots=True)

@@ -237,7 +237,9 @@ from travis.runtime_facade import RuntimeFacade
 class _SessionRuntime:
     """Internal runtime assembled from focused behavior owners."""
 
-    def __getattribute__[AttributeT](self, name: str) -> AttributeT:
+    def __getattribute__[AttributeT](
+        self, name: str
+    ) -> AttributeT:  # pyright: ignore[reportInvalidTypeVarUse] - facade bridge avoids Any.
         return cast(AttributeT, object.__getattribute__(self, name))
 
     def __init__(

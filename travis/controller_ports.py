@@ -14,7 +14,9 @@ class BoundController[ControllerPortT]:
     def __init__(self, port: ControllerPortT) -> None:
         object.__setattr__(self, "_port", port)
 
-    def __getattribute__[AttributeT](self, name: str) -> AttributeT:
+    def __getattribute__[AttributeT](
+        self, name: str
+    ) -> AttributeT:  # pyright: ignore[reportInvalidTypeVarUse] - dynamic binding avoids Any.
         attribute = object.__getattribute__(self, name)
         if isinstance(attribute, MethodType) and attribute.__self__ is self:
             try:

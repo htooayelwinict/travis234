@@ -244,8 +244,11 @@ def _terminal_color_mode() -> str:
 class _InteractiveRuntime:
     """Internal TUI runtime assembled from focused behavior owners."""
 
-    def __getattribute__[AttributeT](self, name: str) -> AttributeT:
-        return cast(AttributeT, object.__getattribute__(self, name))
+    def __getattribute__[AttributeT](
+        self, name: str
+    ) -> AttributeT:  # pyright: ignore[reportInvalidTypeVarUse] - facade bridge avoids Any.
+        attribute = object.__getattribute__(self, name)
+        return cast(AttributeT, attribute)
 
     MAX_WIDGET_LINES = 10
 
