@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import MappingProxyType
+from typing import Any, get_args, get_type_hints
 
 import pytest
 
@@ -22,6 +23,24 @@ EXPECTED_TRANSPORT_FACTS = {
 }
 
 
+def _contains_any(annotation: object) -> bool:
+    return annotation is Any or any(_contains_any(argument) for argument in get_args(annotation))
+
+
+def test_transport_registry_annotations_do_not_erase_the_boundary_to_any() -> None:
+    from travis.ai.providers import transport_registry
+
+    module_hints = get_type_hints(transport_registry)
+    assert "DEFAULT_TRANSPORT_REGISTRY" in module_hints
+    annotations = {
+        *module_hints.values(),
+        *get_type_hints(transport_registry._build_registry).values(),
+        *get_type_hints(transport_registry.get_transport).values(),
+    }
+
+    assert not any(_contains_any(annotation) for annotation in annotations)
+
+
 def test_default_transport_registry_is_immutable_complete_and_deterministic() -> None:
     from travis.ai.providers.provider_modes import CANONICAL_API_MODES
     from travis.ai.providers.transport_registry import DEFAULT_TRANSPORT_REGISTRY
@@ -32,10 +51,12 @@ def test_default_transport_registry_is_immutable_complete_and_deterministic() ->
 
 
 def test_registry_preserves_canonical_transport_class_and_endpoint_facts() -> None:
+    from travis.ai.providers.transport_families.unsupported import UnsupportedTransport
     from travis.ai.providers.transport_registry import get_transport
 
     for mode, (class_name, api_mode, endpoint_path) in EXPECTED_TRANSPORT_FACTS.items():
         transport = get_transport(mode)
+        assert not isinstance(transport, UnsupportedTransport)
         assert type(transport).__name__ == class_name
         assert transport.api == mode
         assert transport.api_mode == api_mode
@@ -64,9 +85,10 @@ def test_unknown_mode_returns_owned_unsupported_transport_with_normalized_value(
 
 def test_registry_builder_rejects_duplicate_modes() -> None:
     from travis.ai.providers.transport_registry import _build_registry
+    from travis.ai.providers.transports import ChatCompletionsTransport
 
-    first = object()
-    second = object()
+    first = ChatCompletionsTransport()
+    second = ChatCompletionsTransport()
 
     with pytest.raises(ValueError, match="duplicate transport mode: duplicate"):
         _build_registry((("duplicate", first), ("duplicate", second)))
