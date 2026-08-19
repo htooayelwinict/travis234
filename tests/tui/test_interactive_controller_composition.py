@@ -9,6 +9,8 @@ from travis.tui.interactive_state import InteractiveLifecycleState, InteractiveS
 from tests._support_tui import CodingApp, FakeTerminal, faux_model
 from travis.tui.interactive_mode import InteractiveMode
 from travis.tui.interactive_mode import _InteractiveRuntime
+from travis.tui.interactive_services import InteractiveServices
+from travis.runtime_facade import RuntimeFacade
 
 
 INTERACTIVE_CONTROLLER_NAMES = (
@@ -123,3 +125,85 @@ def test_interactive_runtime_is_plain_composition_after_lifecycle_extraction(tmp
     assert runtime.controllers.extensions is not runtime
     assert runtime.controllers.turns is not runtime
     assert runtime.controllers.shutdown is not runtime
+
+
+def test_interactive_controller_methods_remain_bound_to_the_controller(tmp_path) -> None:
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=FakeTerminal(), enable_tui=True)
+    runtime = InteractiveMode(app)._runtime
+
+    assert runtime.controllers.command_dispatch.run.__self__ is runtime.controllers.command_dispatch
+    assert runtime.run.__self__ is runtime.controllers.command_dispatch
+    assert runtime.controllers.view.init.__self__ is runtime.controllers.view
+
+
+def test_interactive_controllers_do_not_retain_a_runtime_or_public_facade(tmp_path) -> None:
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=FakeTerminal(), enable_tui=True)
+    facade = InteractiveMode(app)
+    runtime = facade._runtime
+
+    for controller in tuple(getattr(runtime.controllers, name) for name in INTERACTIVE_CONTROLLER_NAMES):
+        retained = [
+            value
+            for cls in type(controller).__mro__
+            for slot in getattr(cls, "__slots__", ())
+            if isinstance(slot, str) and hasattr(controller, slot)
+            for value in (object.__getattribute__(controller, slot),)
+        ]
+        assert runtime not in retained
+        assert not any(isinstance(value, RuntimeFacade) for value in retained)
+
+
+def test_declared_interactive_state_and_services_are_real_controller_dependencies(tmp_path) -> None:
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=FakeTerminal(), enable_tui=True)
+    runtime = InteractiveMode(app)._runtime
+
+    assert isinstance(runtime.state, InteractiveState)
+    assert isinstance(runtime.lifecycle, InteractiveLifecycleState)
+    assert isinstance(runtime.services, InteractiveServices)
+    assert runtime.controllers.view.dependencies.state is runtime.state
+    assert runtime.controllers.shutdown.dependencies.lifecycle is runtime.lifecycle
+
+
+class _RebindRecorder:
+    def __init__(self, binding: object, *, fail_on: object | None = None) -> None:
+        self.binding = binding
+        self.fail_on = fail_on
+        self.calls: list[object] = []
+
+    def rebind_session(self, binding: object) -> None:
+        self.calls.append(binding)
+        if binding is self.fail_on:
+            raise RuntimeError("third rebind failed")
+        self.binding = binding
+
+
+def test_interactive_session_rebind_rolls_back_earlier_controllers() -> None:
+    old_binding = object()
+    new_binding = object()
+    first = _RebindRecorder(old_binding)
+    second = _RebindRecorder(old_binding)
+    third = _RebindRecorder(old_binding, fail_on=new_binding)
+    controllers = InteractiveControllers(
+        command_dispatch=object(),
+        view=first,
+        model_auth=object(),
+        params=second,
+        processes=third,
+        lsp=object(),
+        memory=object(),
+        operations=object(),
+        subagents=object(),
+        sessions=object(),
+        extensions=object(),
+        turns=object(),
+        shutdown=object(),
+        motion=object(),
+    )
+
+    with pytest.raises(RuntimeError, match="third rebind failed"):
+        controllers.rebind_session(new_binding)
+
+    assert first.binding is old_binding
+    assert second.binding is old_binding
+    assert first.calls == [new_binding, old_binding]
+    assert second.calls == [new_binding, old_binding]

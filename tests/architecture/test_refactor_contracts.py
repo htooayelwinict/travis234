@@ -23,6 +23,13 @@ CONTRACT_MODULES = (
     ROOT / "travis/tui/interactive_contracts.py",
     ROOT / "travis/tui/interactive_services.py",
 )
+COMPOSITION_MODULES = (
+    ROOT / "travis/controller_ports.py",
+    ROOT / "travis/coding_agent/agent_session.py",
+    ROOT / "travis/coding_agent/session_ports.py",
+    ROOT / "travis/tui/interactive_mode.py",
+    ROOT / "travis/tui/interactive_services.py",
+)
 FORBIDDEN_CONTRACT_IMPORTS = {
     "travis.app",
     "travis.coding_agent.agent_session",
@@ -137,6 +144,23 @@ def test_collaborator_contracts_do_not_expose_generic_runtime_escape_hatches() -
             for node in ast.walk(tree)
         )
         assert "state: object" not in source
+
+
+def test_controller_composition_has_no_generic_method_rebinding_bridge() -> None:
+    offenders: list[str] = []
+    for path in COMPOSITION_MODULES:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "types" and any(
+                alias.name == "MethodType" for alias in node.names
+            ):
+                offenders.append(f"{path.relative_to(ROOT)}:{node.lineno}: imports MethodType")
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "__getattribute__":
+                offenders.append(
+                    f"{path.relative_to(ROOT)}:{node.lineno}: defines generic __getattribute__"
+                )
+
+    assert offenders == []
 
 
 def test_session_factory_modules_do_not_import_concrete_agent_session() -> None:

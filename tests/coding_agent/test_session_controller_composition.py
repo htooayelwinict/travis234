@@ -9,6 +9,7 @@ from travis.coding_agent.session_state import SessionPresentationState, SessionT
 from travis.ai.providers.faux import faux_model
 from travis.coding_agent.agent_session import AgentSession
 from travis.coding_agent.agent_session import _SessionRuntime
+from travis.runtime_facade import RuntimeFacade
 
 
 SESSION_CONTROLLER_NAMES = (
@@ -94,3 +95,36 @@ def test_session_runtime_is_plain_composition_after_turn_extraction(tmp_path) ->
 
     assert _SessionRuntime.__bases__ == (object,)
     assert runtime.controllers.turns is not runtime
+
+
+def test_session_controller_methods_remain_bound_to_the_controller(tmp_path) -> None:
+    runtime = AgentSession(cwd=str(tmp_path), model=faux_model())._runtime
+
+    assert runtime.controllers.turns.prompt.__self__ is runtime.controllers.turns
+    assert runtime.prompt.__self__ is runtime.controllers.turns
+    assert runtime.controllers.models.set_model.__self__ is runtime.controllers.models
+
+
+def test_session_controllers_do_not_retain_a_runtime_or_public_facade(tmp_path) -> None:
+    facade = AgentSession(cwd=str(tmp_path), model=faux_model())
+    runtime = facade._runtime
+
+    for controller in tuple(getattr(runtime.controllers, name) for name in SESSION_CONTROLLER_NAMES):
+        retained = [
+            value
+            for cls in type(controller).__mro__
+            for slot in getattr(cls, "__slots__", ())
+            if isinstance(slot, str) and hasattr(controller, slot)
+            for value in (object.__getattribute__(controller, slot),)
+        ]
+        assert runtime not in retained
+        assert not any(isinstance(value, RuntimeFacade) for value in retained)
+
+
+def test_declared_session_state_records_are_real_controller_dependencies(tmp_path) -> None:
+    runtime = AgentSession(cwd=str(tmp_path), model=faux_model())._runtime
+
+    assert isinstance(runtime.turn_state, SessionTurnState)
+    assert isinstance(runtime.presentation_state, SessionPresentationState)
+    assert runtime.controllers.turns.dependencies.turn_state is runtime.turn_state
+    assert runtime.controllers.models.dependencies.presentation_state is runtime.presentation_state
