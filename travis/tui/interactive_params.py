@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
+
 from dataclasses import replace
 
 from travis.ai.providers.capabilities import ProviderParamWarning, build_generation_payload
@@ -51,7 +53,7 @@ def _params_argument_completions(argument_text: str) -> list[dict[str, str]]:
     ]
 
 
-class InteractiveParams:
+class InteractiveParams(PortBoundController[InteractiveCommandPort]):
     """Own `/params` grammar, display, mutation, and capability state."""
 
     def _session_generation_param_overrides(self) -> GenerationParams:

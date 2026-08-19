@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
+
 import inspect
 import json
 import os
@@ -114,7 +116,7 @@ def _match_oauth_provider(providers: list[dict[str, str]], query: str) -> dict[s
             return provider
     return None
 
-class InteractiveModelAuth:
+class InteractiveModelAuth(PortBoundController[InteractiveCommandPort]):
     """Owns a focused interactive runtime concern."""
 
     def _get_model_candidates(self, *, fetch_remote: bool = False, query: str | None = None):

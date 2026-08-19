@@ -76,6 +76,7 @@ from travis.tui.footer_data import _ExtensionFooterDataProvider
 from travis.tui.interactive_shutdown import InputFn
 from travis.tui.interactive_tool_approval import InteractiveToolApprovalBroker
 from travis.tui.interactive_controllers import InteractiveControllers
+from travis.tui.interactive_services import install_controller_delegates
 
 
 def _builtin_theme_records() -> list[Theme]:
@@ -107,10 +108,8 @@ def _terminal_color_mode() -> str:
 class _InteractiveRuntime(
     InteractiveExtensions,
     InteractiveLsp,
-    InteractiveModelAuth,
     InteractiveMemory,
     InteractiveOperations,
-    InteractiveParams,
     InteractiveProcessCommands,
     InteractiveSubagents,
     InteractiveSessionCommands,
@@ -120,129 +119,6 @@ class _InteractiveRuntime(
     """Internal TUI runtime assembled from focused behavior owners."""
 
     MAX_WIDGET_LINES = 10
-
-    def init(self, *args, **kwargs):
-        return self.controllers.view.init(*args, **kwargs)
-
-    def _populate_existing_history(self, *args, **kwargs):
-        return self.controllers.view._populate_existing_history(*args, **kwargs)
-
-    def _custom_message_renderers(self, *args, **kwargs):
-        return self.controllers.view._custom_message_renderers(*args, **kwargs)
-
-    def create_base_autocomplete_provider(self, *args, **kwargs):
-        return self.controllers.view.create_base_autocomplete_provider(*args, **kwargs)
-
-    def setup_autocomplete_provider(self, *args, **kwargs):
-        return self.controllers.view.setup_autocomplete_provider(*args, **kwargs)
-
-    def add_autocomplete_provider(self, *args, **kwargs):
-        return self.controllers.view.add_autocomplete_provider(*args, **kwargs)
-
-    def get_autocomplete_suggestions(self, *args, **kwargs):
-        return self.controllers.view.get_autocomplete_suggestions(*args, **kwargs)
-
-    def _handle_session_event(self, *args, **kwargs):
-        return self.controllers.view._handle_session_event(*args, **kwargs)
-
-    def _render_subagent_lifecycle_event(self, *args, **kwargs):
-        return self.controllers.view._render_subagent_lifecycle_event(*args, **kwargs)
-
-    def _render_subagent_tool_event(self, *args, **kwargs):
-        return self.controllers.view._render_subagent_tool_event(*args, **kwargs)
-
-    def _handle_footer_branch_change(self, *args, **kwargs):
-        return self.controllers.view._handle_footer_branch_change(*args, **kwargs)
-
-    def _render_auto_compaction_notice(self, *args, **kwargs):
-        return self.controllers.view._render_auto_compaction_notice(*args, **kwargs)
-
-    def _refresh_footer(self, *args, **kwargs):
-        return self.controllers.view._refresh_footer(*args, **kwargs)
-
-    def set_hidden_thinking_label(self, *args, **kwargs):
-        return self.controllers.view.set_hidden_thinking_label(*args, **kwargs)
-
-    def set_terminal_title(self, *args, **kwargs):
-        return self.controllers.view.set_terminal_title(*args, **kwargs)
-
-    def set_editor_text(self, *args, **kwargs):
-        return self.controllers.view.set_editor_text(*args, **kwargs)
-
-    def get_editor_text(self, *args, **kwargs):
-        return self.controllers.view.get_editor_text(*args, **kwargs)
-
-    def paste_to_editor(self, *args, **kwargs):
-        return self.controllers.view.paste_to_editor(*args, **kwargs)
-
-    def set_extension_footer(self, *args, **kwargs):
-        return self.controllers.view.set_extension_footer(*args, **kwargs)
-
-    def set_extension_header(self, *args, **kwargs):
-        return self.controllers.view.set_extension_header(*args, **kwargs)
-
-    def set_extension_widget(self, *args, **kwargs):
-        return self.controllers.view.set_extension_widget(*args, **kwargs)
-
-    def _render_widgets(self, *args, **kwargs):
-        return self.controllers.view._render_widgets(*args, **kwargs)
-
-    def _render_widget_container(self, *args, **kwargs):
-        return self.controllers.view._render_widget_container(*args, **kwargs)
-
-    def prompt_extension_input(self, *args, **kwargs):
-        return self.controllers.view.prompt_extension_input(*args, **kwargs)
-
-    def prompt_extension_editor(self, *args, **kwargs):
-        return self.controllers.view.prompt_extension_editor(*args, **kwargs)
-
-    def prompt_extension_select(self, *args, **kwargs):
-        return self.controllers.view.prompt_extension_select(*args, **kwargs)
-
-    def _prompt_tui_theme_select(self, *args, **kwargs):
-        return self.controllers.view._prompt_tui_theme_select(*args, **kwargs)
-
-    def _prompt_tui_value(self, *args, **kwargs):
-        return self.controllers.view._prompt_tui_value(*args, **kwargs)
-
-    def prompt_extension_confirm(self, *args, **kwargs):
-        return self.controllers.view.prompt_extension_confirm(*args, **kwargs)
-
-    def prompt_extension_custom(self, *args, **kwargs):
-        return self.controllers.view.prompt_extension_custom(*args, **kwargs)
-
-    def add_terminal_input_listener(self, *args, **kwargs):
-        return self.controllers.view.add_terminal_input_listener(*args, **kwargs)
-
-    def _dispatch_terminal_input(self, *args, **kwargs):
-        return self.controllers.view._dispatch_terminal_input(*args, **kwargs)
-
-    def set_extension_status(self, *args, **kwargs):
-        return self.controllers.motion.set_extension_status(*args, **kwargs)
-
-    def _set_motion_signal(self, *args, **kwargs):
-        return self.controllers.motion._set_motion_signal(*args, **kwargs)
-
-    def _clear_motion_signal(self, *args, **kwargs):
-        return self.controllers.motion._clear_motion_signal(*args, **kwargs)
-
-    def _refresh_extension_motion_signal(self, *args, **kwargs):
-        return self.controllers.motion._refresh_extension_motion_signal(*args, **kwargs)
-
-    def set_working_message(self, *args, **kwargs):
-        return self.controllers.motion.set_working_message(*args, **kwargs)
-
-    def set_working_visible(self, *args, **kwargs):
-        return self.controllers.motion.set_working_visible(*args, **kwargs)
-
-    def set_working_indicator(self, *args, **kwargs):
-        return self.controllers.motion.set_working_indicator(*args, **kwargs)
-
-    def run(self, *args, **kwargs):
-        return self.controllers.command_dispatch.run(*args, **kwargs)
-
-    def _run_motion_command(self, *args, **kwargs):
-        return self.controllers.command_dispatch._run_motion_command(*args, **kwargs)
 
     def __init__(
         self,
@@ -255,6 +131,22 @@ class _InteractiveRuntime(
         open_resume_picker: bool = False,
     ) -> None:
         self.app = app
+        self.controllers = InteractiveControllers(
+            command_dispatch=InteractiveCommandDispatcher(self),
+            view=InteractiveView(self),
+            model_auth=InteractiveModelAuth(self),
+            params=InteractiveParams(self),
+            processes=self,
+            lsp=self,
+            memory=self,
+            operations=self,
+            subagents=self,
+            sessions=self,
+            extensions=self,
+            turns=self,
+            shutdown=self,
+            motion=InteractiveMotion(self),
+        )
         self.startup_generation_params = generation_params or GenerationParams()
         self.generation_params = self.startup_generation_params
         self.generation_param_warnings = list(generation_param_warnings or [])
@@ -414,22 +306,6 @@ class _InteractiveRuntime(
                 before_rebind=lambda _session: self._reset_extension_ui(),
                 on_rebound=lambda _session: self.tui.post(self._rebind_session_ui),
             )
-        self.controllers = InteractiveControllers(
-            command_dispatch=InteractiveCommandDispatcher(self),
-            view=InteractiveView(self),
-            model_auth=self,
-            params=self,
-            processes=self,
-            lsp=self,
-            memory=self,
-            operations=self,
-            subagents=self,
-            sessions=self,
-            extensions=self,
-            turns=self,
-            shutdown=self,
-            motion=InteractiveMotion(self),
-        )
         self.setup_autocomplete_provider()
         self._theme_render_ready = True
 
@@ -458,6 +334,97 @@ class _InteractiveRuntime(
                 ),
             ]
         )
+
+
+install_controller_delegates(
+    _InteractiveRuntime,
+    {
+        "command_dispatch": ("run", "_run_motion_command"),
+        "model_auth": (
+            "_get_model_candidates",
+            "_update_available_provider_count",
+            "_run_auth_command",
+            "_run_model_command",
+            "_complete_model_command",
+            "_show_model_list",
+            "_cycle_model",
+            "_switch_model",
+            "_show_model_switched",
+            "_trace_model_picker_ready",
+            "_emit_pending_model_picker_trace",
+            "_run_login",
+            "_run_oauth_login",
+            "_run_api_key_login",
+            "_run_logout",
+            "_select_oauth_provider",
+            "_api_key_provider_options",
+            "_oauth_provider_options",
+            "_stored_auth_provider_options",
+            "_oauth_login_callbacks",
+            "_show_oauth_auth",
+            "_show_oauth_device_code",
+            "_show_oauth_select",
+            "_show_status",
+        ),
+        "motion": (
+            "set_extension_status",
+            "_set_motion_signal",
+            "_clear_motion_signal",
+            "_refresh_extension_motion_signal",
+            "set_working_message",
+            "set_working_visible",
+            "set_working_indicator",
+        ),
+        "params": (
+            "_session_generation_param_overrides",
+            "_effective_generation_params",
+            "_refresh_generation_param_state",
+            "_stream_with_session_generation_params",
+            "_run_params_command",
+            "_show_params",
+            "_set_session_param",
+            "_reset_generation_param",
+            "_reset_all_generation_params",
+            "_effective_param_display",
+            "_reject_active_param_write",
+            "_show_unknown_param",
+        ),
+        "view": (
+            "init",
+            "_populate_existing_history",
+            "_custom_message_renderers",
+            "create_base_autocomplete_provider",
+            "setup_autocomplete_provider",
+            "add_autocomplete_provider",
+            "get_autocomplete_suggestions",
+            "_handle_session_event",
+            "_render_subagent_lifecycle_event",
+            "_render_subagent_tool_event",
+            "_handle_footer_branch_change",
+            "_render_auto_compaction_notice",
+            "_refresh_footer",
+            "set_hidden_thinking_label",
+            "set_terminal_title",
+            "set_editor_text",
+            "get_editor_text",
+            "paste_to_editor",
+            "set_extension_footer",
+            "set_extension_header",
+            "set_extension_widget",
+            "_render_widgets",
+            "_render_widget_container",
+            "prompt_extension_input",
+            "prompt_extension_editor",
+            "prompt_extension_select",
+            "_prompt_tui_theme_select",
+            "_prompt_tui_value",
+            "prompt_extension_confirm",
+            "prompt_extension_custom",
+            "add_terminal_input_listener",
+            "_dispatch_terminal_input",
+        ),
+    },
+)
 
 
 class InteractiveMode(RuntimeFacade):

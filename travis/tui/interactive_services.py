@@ -11,6 +11,37 @@ from typing import Generic, Protocol, TypeVar
 ControllerPortT = TypeVar("ControllerPortT")
 
 
+class ControllerDelegate:
+    """Descriptor that exposes one named method from an owned controller."""
+
+    __slots__ = ("controller_name", "method_name")
+
+    def __init__(self, controller_name: str, method_name: str) -> None:
+        self.controller_name = controller_name
+        self.method_name = method_name
+
+    def __get__(self, instance: object, owner: type[object]) -> object:
+        if instance is None:
+            return self
+        controllers = object.__getattribute__(instance, "controllers")
+        controller = object.__getattribute__(controllers, self.controller_name)
+        return getattr(controller, self.method_name)
+
+    def __call__(self, *args: object, **kwargs: object) -> object:
+        raise TypeError("controller delegates must be bound to a runtime instance")
+
+
+def install_controller_delegates(
+    owner: type[object],
+    methods: dict[str, tuple[str, ...]],
+) -> None:
+    for controller_name, names in methods.items():
+        for name in names:
+            if name in owner.__dict__:
+                raise ValueError(f"delegate would replace explicit runtime member: {name}")
+            setattr(owner, name, ControllerDelegate(controller_name, name))
+
+
 class PortBoundController(Generic[ControllerPortT]):
     """Bind legacy-shaped method bodies to an explicit structural port.
 
@@ -27,7 +58,10 @@ class PortBoundController(Generic[ControllerPortT]):
     def __getattribute__(self, name: str) -> object:
         attribute = object.__getattribute__(self, name)
         if isinstance(attribute, MethodType) and attribute.__self__ is self:
-            port = object.__getattribute__(self, "_port")
+            try:
+                port = object.__getattribute__(self, "_port")
+            except AttributeError:
+                return attribute
             return attribute.__func__.__get__(port, type(port))
         return attribute
 
@@ -121,10 +155,12 @@ class InteractiveServices:
 
 __all__ = [
     "InteractiveHistoryPort",
+    "ControllerDelegate",
     "InteractiveCommandPort",
     "InteractiveMotionPort",
     "InteractiveOwnerThreadPort",
     "PortBoundController",
+    "install_controller_delegates",
     "InteractiveRenderPort",
     "InteractiveServices",
     "InteractiveSessionBindingPort",
