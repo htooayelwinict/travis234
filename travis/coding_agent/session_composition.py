@@ -25,7 +25,7 @@ class SessionDependencies:
     auth_storage: AuthStorage
     model_registry: ModelRegistry
     session_catalog: SessionCatalog
-    session_path: str
+    session_path: str | None
     session_id: str
     operation_runtime: object | None
     diagnostics: tuple[Mapping[str, object], ...]
@@ -66,17 +66,20 @@ class SessionDependencies:
 
         settings_manager = services.get("settingsManager")
         resource_loader = services.get("resourceLoader")
-        auth_storage = services.get("authStorage")
         model_registry = services.get("modelRegistry")
         session_catalog = services.get("sessionCatalog")
         if not isinstance(settings_manager, SettingsManager):
             raise TypeError("settingsManager must be a SettingsManager")
         if not isinstance(resource_loader, DefaultResourceLoader):
             raise TypeError("resourceLoader must be a DefaultResourceLoader")
-        if not isinstance(auth_storage, AuthStorage):
-            raise TypeError("authStorage must be an AuthStorage")
         if not isinstance(model_registry, ModelRegistry):
             raise TypeError("modelRegistry must be a ModelRegistry")
+        if "authStorage" in services:
+            auth_storage = services["authStorage"]
+            if not isinstance(auth_storage, AuthStorage):
+                raise TypeError("authStorage must be an AuthStorage")
+        else:
+            auth_storage = model_registry.auth_storage
         if not isinstance(session_catalog, SessionCatalog):
             raise TypeError("sessionCatalog must be a SessionCatalog")
         raw_diagnostics = services.get("diagnostics") or ()
@@ -90,6 +93,7 @@ class SessionDependencies:
         session_factory = services.get("sessionFactory") or services.get("session_factory")
         if session_factory is not None and not callable(session_factory):
             raise TypeError("sessionFactory must be callable")
+        raw_session_path = services.get("sessionPath")
         return cls(
             cwd=str(services["cwd"]),
             agent_dir=str(services["agentDir"]),
@@ -98,7 +102,9 @@ class SessionDependencies:
             auth_storage=auth_storage,
             model_registry=model_registry,
             session_catalog=session_catalog,
-            session_path=str(services["sessionPath"]),
+            session_path=(
+                str(raw_session_path) if raw_session_path is not None else None
+            ),
             session_id=str(services.get("sessionId") or ""),
             operation_runtime=services.get("operationRuntime"),
             diagnostics=tuple(diagnostics),

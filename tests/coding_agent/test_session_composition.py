@@ -10,6 +10,7 @@ from travis.ai.providers.faux import faux_model
 from travis.coding_agent.agent_session_services import (
     _build_session_dependencies,
     create_agent_session_from_services,
+    create_agent_session_services,
 )
 from travis.coding_agent.auth_storage import AuthStorage
 from travis.coding_agent.model_registry import ModelRegistry
@@ -34,6 +35,7 @@ class _ComposedSessionView(Protocol):
     auth_storage: AuthStorage
     model_registry: ModelRegistry
     operation_runtime: object | None
+    session_path: str | None
 
 
 def _injected_dependencies(tmp_path: Path) -> tuple[dict[str, object], dict[str, object]]:
@@ -85,6 +87,7 @@ def test_build_session_dependencies_canonicalizes_paths_and_preserves_owners(tmp
     assert dependencies.model_registry.auth_storage is dependencies.auth_storage
     assert dependencies.session_catalog is owners["catalog"]
     assert dependencies.operation_runtime is owners["operation_runtime"]
+    assert dependencies.session_path is not None
     assert Path(dependencies.session_path).is_absolute()
     assert dependencies.session_id
     assert dependencies.diagnostics == ()
@@ -148,3 +151,57 @@ def test_create_agent_session_from_services_accepts_typed_dependencies(tmp_path:
         assert session.operation_runtime is dependencies.operation_runtime
     finally:
         result.session.dispose()
+
+
+@pytest.mark.parametrize(
+    "omitted_keys",
+    [
+        ("authStorage",),
+        ("sessionPath",),
+        ("authStorage", "sessionPath"),
+    ],
+)
+def test_create_agent_session_from_services_accepts_legacy_optional_owners(
+    tmp_path: Path,
+    omitted_keys: tuple[str, ...],
+) -> None:
+    services = create_agent_session_services(
+        {"cwd": str(tmp_path), "agentDir": str(tmp_path / "agent")}
+    )
+    assert isinstance(services["authStorage"], AuthStorage)
+    assert isinstance(services["sessionPath"], str)
+    model_registry = cast(ModelRegistry, services["modelRegistry"])
+    expected_session_path = cast(str, services["sessionPath"])
+    legacy_services = dict(services)
+    for key in omitted_keys:
+        legacy_services.pop(key)
+
+    result = create_agent_session_from_services(
+        {"services": legacy_services, "model": faux_model()}
+    )
+
+    try:
+        session = cast(_ComposedSessionView, result.session)
+        assert session.auth_storage is model_registry.auth_storage
+        assert session.model_registry is model_registry
+        assert session.session_path == (
+            None if "sessionPath" in omitted_keys else expected_session_path
+        )
+    finally:
+        result.session.dispose()
+
+
+def test_legacy_services_reject_explicitly_mismatched_auth_storage(
+    tmp_path: Path,
+) -> None:
+    services = create_agent_session_services(
+        {"cwd": str(tmp_path), "agentDir": str(tmp_path / "agent")}
+    )
+    services["authStorage"] = AuthStorage.create(
+        str(tmp_path / "other-agent" / "auth.json")
+    )
+
+    with pytest.raises(ValueError, match="modelRegistry and authStorage"):
+        create_agent_session_from_services(
+            {"services": services, "model": faux_model()}
+        )
