@@ -74,10 +74,12 @@ def test_extracted_transport_families_do_not_import_compatibility_module() -> No
     failures: list[str] = []
     for filename in (
         "anthropic.py",
+        "azure_responses.py",
         "bedrock.py",
         "chat_completions.py",
         "google.py",
         "mistral.py",
+        "responses.py",
     ):
         path = family_root / filename
         assert path.is_file(), f"missing transport family owner: {path.relative_to(ROOT)}"

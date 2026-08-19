@@ -140,3 +140,23 @@ def test_anthropic_transport_has_family_owner_and_compatibility_export() -> None
 
     assert AnthropicMessagesTransport.__module__ == "travis.ai.providers.transport_families.anthropic"
     assert transports.AnthropicMessagesTransport is AnthropicMessagesTransport
+
+
+def test_responses_transports_have_family_owners_and_compatibility_exports() -> None:
+    from travis.ai.providers import transports
+    from travis.ai.providers.transport_families.azure_responses import (
+        AzureOpenAIResponsesTransport,
+    )
+    from travis.ai.providers.transport_families.responses import (
+        CodexResponsesTransport,
+        OpenAIResponsesTransport,
+    )
+
+    assert CodexResponsesTransport.__module__ == "travis.ai.providers.transport_families.responses"
+    assert OpenAIResponsesTransport.__module__ == "travis.ai.providers.transport_families.responses"
+    assert AzureOpenAIResponsesTransport.__module__ == (
+        "travis.ai.providers.transport_families.azure_responses"
+    )
+    assert transports.CodexResponsesTransport is CodexResponsesTransport
+    assert transports.OpenAIResponsesTransport is OpenAIResponsesTransport
+    assert transports.AzureOpenAIResponsesTransport is AzureOpenAIResponsesTransport
