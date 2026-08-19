@@ -7,16 +7,18 @@ from types import MappingProxyType
 from typing import TypeAlias
 
 from travis.ai.providers.provider_modes import CANONICAL_API_MODES, normalize_api_mode
+from travis.ai.providers.transport_families.bedrock import BedrockConverseStreamTransport
 from travis.ai.providers.transport_families.chat_completions import ChatCompletionsTransport
+from travis.ai.providers.transport_families.google import (
+    GoogleGenerativeAITransport,
+    GoogleVertexTransport,
+)
 from travis.ai.providers.transport_families.mistral import MistralConversationsTransport
 from travis.ai.providers.transport_families.unsupported import UnsupportedTransport
 from travis.ai.providers.transports import (
     AnthropicMessagesTransport,
     AzureOpenAIResponsesTransport,
-    BedrockConverseStreamTransport,
     CodexResponsesTransport,
-    GoogleGenerativeAITransport,
-    GoogleVertexTransport,
     OpenAIResponsesTransport,
 )
 

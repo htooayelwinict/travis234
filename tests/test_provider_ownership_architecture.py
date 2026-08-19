@@ -72,7 +72,7 @@ def test_transport_registry_owns_mode_mapping_and_unsupported_family() -> None:
 def test_extracted_transport_families_do_not_import_compatibility_module() -> None:
     family_root = ROOT / "travis" / "ai" / "providers" / "transport_families"
     failures: list[str] = []
-    for filename in ("chat_completions.py", "mistral.py"):
+    for filename in ("bedrock.py", "chat_completions.py", "google.py", "mistral.py"):
         path = family_root / filename
         assert path.is_file(), f"missing transport family owner: {path.relative_to(ROOT)}"
         if "travis.ai.providers.transports" in _imported_modules(path):

@@ -116,3 +116,19 @@ def test_chat_and_mistral_transports_have_family_owners_and_compatibility_export
     assert MistralConversationsTransport.__module__ == "travis.ai.providers.transport_families.mistral"
     assert transports.ChatCompletionsTransport is ChatCompletionsTransport
     assert transports.MistralConversationsTransport is MistralConversationsTransport
+
+
+def test_google_and_bedrock_transports_have_family_owners_and_compatibility_exports() -> None:
+    from travis.ai.providers import transports
+    from travis.ai.providers.transport_families.bedrock import BedrockConverseStreamTransport
+    from travis.ai.providers.transport_families.google import (
+        GoogleGenerativeAITransport,
+        GoogleVertexTransport,
+    )
+
+    assert GoogleGenerativeAITransport.__module__ == "travis.ai.providers.transport_families.google"
+    assert GoogleVertexTransport.__module__ == "travis.ai.providers.transport_families.google"
+    assert BedrockConverseStreamTransport.__module__ == "travis.ai.providers.transport_families.bedrock"
+    assert transports.GoogleGenerativeAITransport is GoogleGenerativeAITransport
+    assert transports.GoogleVertexTransport is GoogleVertexTransport
+    assert transports.BedrockConverseStreamTransport is BedrockConverseStreamTransport
