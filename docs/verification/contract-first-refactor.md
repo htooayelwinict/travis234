@@ -413,7 +413,11 @@ Baseline commands and summarized outcomes:
   `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. /Users/htooayelwin/orca/travis234/.venv/bin/python -m pytest -q -p no:cacheprovider tests`
   — 1 failed and 2,776 passed in 324.02s. The sole stale-factory test was corrected in
   `94f5553934b08ddb8dad5fedfd262ebd7b28402a` as described under Task 1.3.
-- Final root checkpoint: the same command — 2,777 passed in 321.17s.
+- Final Phase 1 source checkpoint before the evidence commit: the same command —
+  2,777 passed in 321.17s.
+- Exact reviewed Phase 1 HEAD rerun after the evidence commit
+  `262a4d830d01cc8c3b78c9793e2d99625f37762a`: the same command — 2,777 passed in
+  353.10s.
 - Final Phase 1 owner slice:
   `uv run --locked --all-extras --dev pytest -q -p no:cacheprovider tests/architecture tests/coding_agent tests/tui/test_interactive_owner_boundaries.py tests/tui/test_interactive_dispatch_characterization.py tests/tui/test_interactive_shutdown_characterization.py tests/test_runtime_facade_contract.py tests/test_coding_resources_and_services.py tests/test_app_integration.py tests/test_session_parity.py tests/test_session_commands.py tests/test_cli.py tests/test_cli_runtime_controls.py tests/test_operation_coordinator.py`
   — 358 passed in 30.79s.
@@ -459,3 +463,47 @@ Baseline commands and summarized outcomes:
   the approved master plan reserves container qualification for Phase 5.
 - Remaining risks: remote CI has not run; live-provider and comprehensive 21-prompt
   evidence remain deferred to their approved later gate. Phase 2 has not started.
+
+### Phase 1 coordinator review corrections
+
+- Legacy service-mapping compatibility correction:
+  `cc5880aafc6c8bdc453228387b9fc8abbf72e167`. The public
+  `create_agent_session_from_services` regressions failed first for mappings that
+  omitted `authStorage`, `sessionPath`, or both (3 failed and 1 passed). The typed
+  dependency boundary now derives an omitted authentication owner from the existing
+  `ModelRegistry`, continues to reject an explicitly mismatched owner, and represents
+  an omitted session path as `None`; the exact normal wrapper mapping remains unchanged.
+  The focused composition/resource/application/CLI slice passed 138 tests in 15.22s.
+- Structural runtime-boundary correction:
+  `5608a9a57edd725c71afa20805cf838118b9478e`. The missing-`cwd` and six
+  non-callable-member regressions all failed first because `_coerce_result` accepted
+  the incomplete objects. Boundary validation now rejects missing data members and
+  missing or non-callable required methods while continuing to accept the valid
+  structural fake; the focused runtime/parity slice passed 69 tests in 6.88s.
+- The first root review checkpoint exposed two existing language-service test doubles
+  that did not implement the newly explicit runtime port: 2 failed and 2,786 passed in
+  301.78s. Commit `0c175b8743c6144b1d9132dc4b96c7e5ecc2f09d` completed only that fake's
+  protocol surface, after which its focused slice passed 69 tests in 6.50s.
+- Final correction qualification:
+  - both lock checks passed (84 root packages and 56 adapter packages);
+  - the expanded Phase 1 owner slice passed 369 tests in 27.20s;
+  - full scoped Pyright reported 0 errors, 0 warnings, and 0 informations, and the
+    migrated-owner Ruff gate passed;
+  - the final source checkpoint passed 2,788 tests in 345.08s;
+  - the locked adapter suite passed 125 tests in 16.27s;
+  - the npm launcher passed all 24 tests and dry-pack produced the expected 11-file
+    inventory;
+  - fresh root and adapter wheel/source builds completed, and locked Twine validation
+    passed all four artifacts.
+- The exact root wheel installed into a fresh Python 3.13.13 environment and resolved
+  `travis.coding_agent` from that environment's `site-packages`. Its actual installed
+  `travis234` console passed the real-PTY Phase 1 help/startup, keyless faux-provider
+  prompt (`PHASE1_REVIEW_OK`), cancelled `/login`, no-goal `/coordination --plan`,
+  `/new`, `/resume`, `/fork`, preloaded-editor clearing, and clean `/exit` scenarios.
+  Exit status was 0, `status: Exiting` rendered, terminal modes were restored, and no
+  task-owned console remained.
+- Protected-loop SHA-256 remains
+  `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`, and its diff
+  from `7838749452b567940bd5b69a715b6184b8f9f13e` remains empty. No credential,
+  container, provider, persistence-format, TUI-command, user-state, or protected-loop
+  change was made. Phase 2 has not started.
