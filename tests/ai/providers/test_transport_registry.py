@@ -132,3 +132,11 @@ def test_google_and_bedrock_transports_have_family_owners_and_compatibility_expo
     assert transports.GoogleGenerativeAITransport is GoogleGenerativeAITransport
     assert transports.GoogleVertexTransport is GoogleVertexTransport
     assert transports.BedrockConverseStreamTransport is BedrockConverseStreamTransport
+
+
+def test_anthropic_transport_has_family_owner_and_compatibility_export() -> None:
+    from travis.ai.providers import transports
+    from travis.ai.providers.transport_families.anthropic import AnthropicMessagesTransport
+
+    assert AnthropicMessagesTransport.__module__ == "travis.ai.providers.transport_families.anthropic"
+    assert transports.AnthropicMessagesTransport is AnthropicMessagesTransport

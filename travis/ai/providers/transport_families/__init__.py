@@ -1,5 +1,6 @@
 """Concrete provider transport families."""
 
+from travis.ai.providers.transport_families.anthropic import AnthropicMessagesTransport
 from travis.ai.providers.transport_families.bedrock import BedrockConverseStreamTransport
 from travis.ai.providers.transport_families.chat_completions import ChatCompletionsTransport
 from travis.ai.providers.transport_families.google import (
@@ -10,6 +11,7 @@ from travis.ai.providers.transport_families.mistral import MistralConversationsT
 from travis.ai.providers.transport_families.unsupported import UnsupportedTransport
 
 __all__ = [
+    "AnthropicMessagesTransport",
     "BedrockConverseStreamTransport",
     "ChatCompletionsTransport",
     "GoogleGenerativeAITransport",
