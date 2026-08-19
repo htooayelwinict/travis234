@@ -67,3 +67,15 @@ def test_transport_registry_owns_mode_mapping_and_unsupported_family() -> None:
     transports_text = (provider_root / "transports.py").read_text(encoding="utf-8")
     assert "_REGISTRY =" not in transports_text
     assert "_API_ALIASES =" not in transports_text
+
+
+def test_extracted_transport_families_do_not_import_compatibility_module() -> None:
+    family_root = ROOT / "travis" / "ai" / "providers" / "transport_families"
+    failures: list[str] = []
+    for filename in ("chat_completions.py", "mistral.py"):
+        path = family_root / filename
+        assert path.is_file(), f"missing transport family owner: {path.relative_to(ROOT)}"
+        if "travis.ai.providers.transports" in _imported_modules(path):
+            failures.append(filename)
+
+    assert failures == []

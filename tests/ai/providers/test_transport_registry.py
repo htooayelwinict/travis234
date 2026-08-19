@@ -103,3 +103,16 @@ def test_compatibility_surface_reexports_registry_function_and_unsupported_owner
     assert providers.get_transport is get_transport
     assert transports.UnsupportedTransport is UnsupportedTransport
     assert transports.get_transport("chat_completions") is get_transport("openai-completions")
+
+
+def test_chat_and_mistral_transports_have_family_owners_and_compatibility_exports() -> None:
+    from travis.ai.providers import transports
+    from travis.ai.providers.transport_families.chat_completions import ChatCompletionsTransport
+    from travis.ai.providers.transport_families.mistral import MistralConversationsTransport
+
+    assert ChatCompletionsTransport.__module__ == (
+        "travis.ai.providers.transport_families.chat_completions"
+    )
+    assert MistralConversationsTransport.__module__ == "travis.ai.providers.transport_families.mistral"
+    assert transports.ChatCompletionsTransport is ChatCompletionsTransport
+    assert transports.MistralConversationsTransport is MistralConversationsTransport
