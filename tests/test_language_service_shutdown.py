@@ -44,8 +44,20 @@ class _Session:
         if self.fail_dispose:
             raise RuntimeError("dispose failed")
 
+    def shutdown(self, *args: object, **kwargs: object) -> None:
+        return None
+
+    def create_branched_session(self, leaf_id: str, path: str | None = None) -> str:
+        raise AssertionError("not used by language-service shutdown tests")
+
     def emit_deferred_session_start(self) -> None:
         self.events.append(f"{self.name}:start")
+
+    def get_session_entry(self, entry_id: str) -> dict[str, object] | None:
+        return None
+
+    def get_session_leaf_id(self) -> str | None:
+        return None
 
 
 def test_runtime_dispose_closes_language_services_before_session() -> None:
