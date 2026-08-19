@@ -2109,6 +2109,20 @@ def test_create_agent_session_services_ports_travis234_provider_and_flag_diagnos
     assert runtime.get_flag("profile") == "debug"
     assert runtime.pending_provider_registrations == []
     assert services["diagnostics"] == [{"type": "error", "message": "Unknown option: --missing"}]
+    assert type(services) is dict
+    assert set(services) == {
+        "cwd",
+        "agentDir",
+        "settingsManager",
+        "resourceLoader",
+        "authStorage",
+        "modelRegistry",
+        "sessionCatalog",
+        "sessionPath",
+        "sessionId",
+        "operationRuntime",
+        "diagnostics",
+    }
 
 def test_create_agent_session_from_services_uses_loaded_extension_runtime(tmp_path: Path) -> None:
     from travis.coding_agent import ExtensionRunner, create_agent_session_from_services, create_agent_session_services

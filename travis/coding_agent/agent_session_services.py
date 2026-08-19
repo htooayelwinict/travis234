@@ -23,6 +23,7 @@ from travis.coding_agent.object_utils import first_defined as _first_defined
 from travis.coding_agent.operations import OperationRuntime
 from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.session_catalog import SessionCatalog
+from travis.coding_agent.session_composition import SessionDependencies
 from travis.coding_agent.session_store import SessionContextSnapshot, SessionStore
 from travis.coding_agent.settings_manager import SettingsManager
 from travis.coding_agent.tools import create_all_tool_definitions
@@ -55,7 +56,7 @@ def create_session_artifact_registry(
 
 
 
-def create_agent_session_services(options: dict[str, Any]) -> dict[str, Any]:
+def _build_session_dependencies(options: Mapping[str, object]) -> SessionDependencies:
     cwd = str(Path(str(options.get("cwd", "."))).expanduser().resolve())
     agent_dir = str(Path(str(options.get("agentDir", options.get("agent_dir", Path.home() / ".travis234" / "agent")))).expanduser().resolve())
     settings_manager = options.get("settingsManager") or options.get("settings_manager") or SettingsManager.create(
@@ -128,21 +129,25 @@ def create_agent_session_services(options: dict[str, Any]) -> dict[str, Any]:
                 options.get("extensionFlagValues") or options.get("extension_flag_values"),
             )
         )
-    return {
-        "cwd": cwd,
-        "agentDir": agent_dir,
-        "settingsManager": settings_manager,
-        "resourceLoader": resource_loader,
-        "authStorage": auth_storage,
-        "modelRegistry": model_registry,
-        "sessionCatalog": session_catalog,
-        "sessionPath": session_path,
-        "sessionId": session_id,
-        "operationRuntime": options.get(
+    return SessionDependencies(
+        cwd=cwd,
+        agent_dir=agent_dir,
+        settings_manager=settings_manager,
+        resource_loader=resource_loader,
+        auth_storage=auth_storage,
+        model_registry=model_registry,
+        session_catalog=session_catalog,
+        session_path=str(session_path),
+        session_id=str(session_id or ""),
+        operation_runtime=options.get(
             "operationRuntime", options.get("operation_runtime")
         ),
-        "diagnostics": diagnostics,
-    }
+        diagnostics=tuple(diagnostics),
+    )
+
+
+def create_agent_session_services(options: dict[str, Any]) -> dict[str, Any]:
+    return _build_session_dependencies(options).to_legacy_mapping()
 
 
 
@@ -166,29 +171,35 @@ def create_agent_session(options: Mapping[str, Any] | None = None, **kwargs: Any
 
 
 def create_agent_session_from_services(options: dict[str, Any]) -> CreateAgentSessionResult:
-    services = options["services"]
+    raw_services = options["services"]
+    if isinstance(raw_services, SessionDependencies):
+        services = raw_services
+    elif isinstance(raw_services, Mapping):
+        services = SessionDependencies.from_legacy_mapping(raw_services)
+    else:
+        raise TypeError("services must be SessionDependencies or a mapping")
     operation_runtime = options.get(
         "operationRuntime",
-        options.get("operation_runtime", services.get("operationRuntime")),
+        options.get("operation_runtime", services.operation_runtime),
     )
     owns_operation_runtime = False
     model: Model | None = options.get("model")
     model_fallback_message: str | None = None
     thinking_level = options.get("thinkingLevel", options.get("thinking_level"))
-    session_path = options.get("sessionPath", options.get("session_path", services.get("sessionPath")))
+    session_path = options.get("sessionPath", options.get("session_path", services.session_path))
     if session_path is not None:
         session_path = str(Path(str(session_path)).expanduser().resolve())
-    session_id = options.get("sessionId", options.get("session_id", services.get("sessionId")))
+    session_id = options.get("sessionId", options.get("session_id", services.session_id or None))
     fresh_session = _is_fresh_session_path(session_path)
-    existing_session = _load_existing_session_context(str(services["cwd"]), session_path, thinking_level or "off")
+    existing_session = _load_existing_session_context(services.cwd, session_path, thinking_level or "off")
     has_existing_session = bool(existing_session and existing_session.messages)
     has_thinking_entry = _has_session_entry_type(session_path, "thinking_level_change")
     if model is None and has_existing_session and existing_session and existing_session.model:
-        restored_model = services["modelRegistry"].find(
+        restored_model = services.model_registry.find(
             existing_session.model.get("provider", ""),
             existing_session.model.get("modelId", ""),
         )
-        if restored_model and services["modelRegistry"].has_configured_auth(restored_model):
+        if restored_model and services.model_registry.has_configured_auth(restored_model):
             model = restored_model
         else:
             model_fallback_message = (
@@ -196,11 +207,11 @@ def create_agent_session_from_services(options: dict[str, Any]) -> CreateAgentSe
                 f"{existing_session.model.get('provider', '')}/{existing_session.model.get('modelId', '')}"
             )
     if model is None:
-        settings_manager = services["settingsManager"]
+        settings_manager = services.settings_manager
         initial = find_initial_model(
             scoped_models=options.get("scopedModels", options.get("scoped_models")) or [],
             is_continuing=has_existing_session or bool(options.get("isContinuing", options.get("is_continuing", False))),
-            model_registry=services["modelRegistry"],
+            model_registry=services.model_registry,
             cli_provider=options.get("provider"),
             cli_model=options.get("modelId", options.get("model_id")),
             default_provider=_call_or_none(settings_manager, "getDefaultProvider", "get_default_provider"),
@@ -222,29 +233,37 @@ def create_agent_session_from_services(options: dict[str, Any]) -> CreateAgentSe
         raise RuntimeError(_format_no_models_available_message())
     if thinking_level is None and has_existing_session and existing_session:
         thinking_level = existing_session.thinking_level if has_thinking_entry else None
-    extensions_result = services["resourceLoader"].get_extensions()
+    extensions_result = services.resource_loader.get_extensions()
     runtime = extensions_result.get("runtime")
-    memory_settings = services["settingsManager"].get_memory_settings()
+    memory_settings = services.settings_manager.get_memory_settings()
     active_tool_names, allowed_tool_names = _resolve_tool_options(
         options,
         memory_enabled=memory_settings.enabled,
     )
-    provider_retry_settings = _provider_retry_settings(services["settingsManager"])
+    provider_retry_settings = _provider_retry_settings(services.settings_manager)
     if operation_runtime is None:
         operation_runtime = OperationRuntime.from_settings(
-            services["agentDir"],
-            services["settingsManager"].get_operation_settings(),
+            services.agent_dir,
+            services.settings_manager.get_operation_settings(),
             heartbeat_interval_seconds=None,
         )
-        services["operationRuntime"] = operation_runtime
         owns_operation_runtime = True
+        diagnostics = list(services.diagnostics)
         recovery_report = getattr(operation_runtime, "recovery_report", None)
         if recovery_report is not None and recovery_report.has_diagnostic:
-            services["diagnostics"].append(recovery_report.as_dict())
+            diagnostics.append(recovery_report.as_dict())
+        services = replace(
+            services,
+            operation_runtime=operation_runtime,
+            diagnostics=tuple(diagnostics),
+        )
+        if isinstance(raw_services, dict):
+            raw_services["operationRuntime"] = operation_runtime
+            raw_services["diagnostics"] = [dict(item) for item in diagnostics]
     try:
         session = AgentSession(
-            cwd=services["cwd"],
-            agent_dir=services.get("agentDir"),
+            cwd=services.cwd,
+            agent_dir=services.agent_dir,
             model=model,
             thinking_level=thinking_level or "off",
             scoped_models=options.get("scopedModels", options.get("scoped_models")),
@@ -254,10 +273,10 @@ def create_agent_session_from_services(options: dict[str, Any]) -> CreateAgentSe
                 "excludeTools", options.get("exclude_tools")
             ),
             transport=_call_or_none(
-                services["settingsManager"], "getTransport", "get_transport"
+                services.settings_manager, "getTransport", "get_transport"
             ),
             thinking_budgets=_call_or_none(
-                services["settingsManager"],
+                services.settings_manager,
                 "getThinkingBudgets",
                 "get_thinking_budgets",
             ),
@@ -267,18 +286,18 @@ def create_agent_session_from_services(options: dict[str, Any]) -> CreateAgentSe
             ),
             tool_definitions=_tool_definitions_for_sdk(services, options),
             convert_to_llm=_convert_to_llm_for_sdk(
-                services["settingsManager"],
+                services.settings_manager,
                 options.get("convertToLlm", options.get("convert_to_llm")),
             ),
-            resource_loader=services["resourceLoader"],
-            settings_manager=services["settingsManager"],
+            resource_loader=services.resource_loader,
+            settings_manager=services.settings_manager,
             extension_runner=runtime if isinstance(runtime, ExtensionRunner) else None,
             stream_fn=_stream_fn_for_sdk(
-                services["modelRegistry"],
-                services["settingsManager"],
+                services.model_registry,
+                services.settings_manager,
             ),
-            model_registry=services["modelRegistry"],
-            session_index=services["sessionCatalog"].index,
+            model_registry=services.model_registry,
+            session_index=services.session_catalog.index,
             session_path=session_path,
             parent_session_path=options.get(
                 "parentSession", options.get("parent_session_path")
@@ -310,7 +329,7 @@ def create_agent_session_from_services(options: dict[str, Any]) -> CreateAgentSe
     _record_initial_session_state(session, model, thinking_level or "off", fresh_session)
     return CreateAgentSessionResult(
         session=session,
-        extensions_result=services["resourceLoader"].get_extensions(),
+        extensions_result=services.resource_loader.get_extensions(),
         model_fallback_message=model_fallback_message,
     )
 
@@ -523,14 +542,17 @@ def _format_no_models_available_message() -> str:
     return "No models available. Check your installation or add models to models.json."
 
 
-def _tool_definitions_for_sdk(services: Mapping[str, Any], options: Mapping[str, Any]) -> list[object] | None:
+def _tool_definitions_for_sdk(
+    services: SessionDependencies,
+    options: Mapping[str, Any],
+) -> list[object] | None:
     custom_tools = options.get("customTools", options.get("custom_tools"))
     if custom_tools is None:
         return None
     return [
         *create_all_tool_definitions(
-            str(services["cwd"]),
-            _builtin_tool_options(services["settingsManager"]),
+            services.cwd,
+            _builtin_tool_options(services.settings_manager),
         ),
         *list(custom_tools),
     ]
