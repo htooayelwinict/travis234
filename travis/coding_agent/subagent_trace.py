@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
+
 import json
 import os
 import re
@@ -433,7 +435,7 @@ def _subagent_changed_files(task: SubagentTask, tool_trace: list[dict[str, objec
     return changed
 
 
-class SessionSubagentTraceController:
+class SessionSubagentTraceController(SessionPortBoundController[SessionControllerPort]):
     """Owns a focused AgentSession runtime concern."""
 
     def _subagent_tool_trace_listener(

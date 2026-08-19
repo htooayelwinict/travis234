@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
+
 import json
 import os
 import re
@@ -124,7 +126,7 @@ class _InternalSubagentControlHandle:
                 callback()
         return ControlResult(True, "cancellation_requested")
 
-class SessionSubagentController:
+class SessionSubagentController(SessionPortBoundController[SessionControllerPort]):
     """Owns a focused AgentSession runtime concern."""
 
     def _subagent_allowed_tools_for_role(self, role: str) -> tuple[str, ...]:
