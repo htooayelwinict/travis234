@@ -122,22 +122,17 @@ from travis.coding_agent.session_bash import SessionBashController
 from travis.coding_agent.session_policy_controller import SessionPolicyController
 from travis.coding_agent.session_operations import SessionOperationController
 from travis.coding_agent.session_controllers import SessionControllers
+from travis.coding_agent.session_ports import install_session_controller_delegates
 
 from travis.coding_agent.session_types import default_convert_to_llm
 
 class _SessionRuntime(
-        SessionEventController,
         SessionToolController,
         SessionExtensionController,
         SessionTurnController,
         SessionSubagentController,
         SessionSubagentTraceController,
-        SessionModelController,
-        SessionGenerationParams,
         SessionPersistence,
-        SessionBashController,
-        SessionPolicyController,
-        SessionOperationController,
 ):
     """Internal runtime assembled from focused behavior owners."""
 
@@ -194,6 +189,20 @@ class _SessionRuntime(
         operation_role: str | None = None,
         operation_task_id: str | None = None,
     ) -> None:
+        self.controllers = SessionControllers(
+            events=SessionEventController(self),
+            models=SessionModelController(self),
+            generation=SessionGenerationParams(self),
+            persistence=self,
+            bash=SessionBashController(self),
+            policy=SessionPolicyController(self),
+            operations=SessionOperationController(self),
+            tools=self,
+            extensions=self,
+            subagents=self,
+            subagent_trace=self,
+            turns=self,
+        )
         self.cwd = cwd
         self.model_registry = model_registry or ModelRegistry.create(AuthStorage.create())
         self.model_registry.ensure_model(model)
@@ -529,20 +538,101 @@ class _SessionRuntime(
         self.set_active_tools_by_name(initial_active_tool_names)
         if restored_context:
             self.agent.state.messages = restored_context.messages
-        self.controllers = SessionControllers(
-            events=self,
-            models=self,
-            generation=self,
-            persistence=self,
-            bash=self,
-            policy=self,
-            operations=self,
-            tools=self,
-            extensions=self,
-            subagents=self,
-            subagent_trace=self,
-            turns=self,
-        )
+
+
+install_session_controller_delegates(
+    _SessionRuntime,
+    {
+        "bash": (
+            "execute_bash",
+            "abort_bash",
+            "record_bash_result",
+            "_append_bash_message",
+            "_flush_pending_bash_messages",
+        ),
+        "events": (
+            "_emit_session_start_event",
+            "emit_deferred_session_start",
+            "subscribe",
+            "_handle_agent_event",
+            "_emit_extension_event",
+            "_will_retry_after_agent_end",
+            "_emit_queue_update",
+            "_emit_tool_policy_decision",
+            "_emit",
+        ),
+        "generation": (
+            "generation_param_overrides",
+            "set_generation_param_override",
+            "reset_generation_param_override",
+            "reset_generation_param_overrides",
+            "_publish_generation_param_overrides",
+            "_restore_generation_param_overrides",
+        ),
+        "models": (
+            "pending_message_count",
+            "has_pending_bash_messages",
+            "is_bash_running",
+            "get_steering_messages",
+            "get_follow_up_messages",
+            "is_streaming",
+            "state",
+            "model",
+            "thinking_level",
+            "scoped_models",
+            "retry_attempt",
+            "is_retrying",
+            "auto_retry_enabled",
+            "set_auto_retry_enabled",
+            "abort_retry",
+            "session_name",
+            "extension_runner",
+            "resource_loader",
+            "prompt_templates",
+            "has_extension_handlers",
+            "messages",
+            "steering_mode",
+            "follow_up_mode",
+            "set_steering_mode",
+            "set_follow_up_mode",
+            "set_session_name",
+            "rename_session",
+            "set_thinking_level",
+            "resolve_model_role",
+            "cycle_thinking_level",
+            "get_available_thinking_levels",
+            "supports_thinking",
+            "_get_thinking_level_for_model_switch",
+            "_clamp_thinking_level",
+            "set_model",
+            "with_model_overrides",
+            "set_scoped_models",
+            "cycle_model",
+            "_cycle_scoped_model",
+            "_cycle_available_model",
+        ),
+        "operations": (
+            "_initialize_session_operations",
+            "_operation_start_turn",
+            "_operation_finish_turn",
+            "_operation_continue",
+            "_operation_stream_fn",
+            "_operation_invoke_provider",
+            "_operation_observe_provider_stream",
+            "_operation_settle_provider",
+            "_operation_record_persisted_message",
+            "_operation_record_tools_settled",
+            "_operation_advance",
+        ),
+        "policy": (
+            "_before_tool_call",
+            "_after_tool_call",
+            "_journal_tool_intent",
+            "_settle_tool_effect",
+            "_disable_operation_journal",
+        ),
+    },
+)
 
 
 class AgentSession(RuntimeFacade):

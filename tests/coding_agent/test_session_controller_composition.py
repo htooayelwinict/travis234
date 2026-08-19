@@ -55,5 +55,20 @@ def test_session_runtime_owns_the_typed_controller_bundle(tmp_path) -> None:
     runtime = AgentSession(cwd=str(tmp_path), model=faux_model())._runtime
 
     assert isinstance(runtime.controllers, SessionControllers)
-    assert runtime.controllers.events is runtime
+    assert type(runtime.controllers.events).__name__ == "SessionEventController"
     assert runtime.controllers.turns is runtime
+
+
+def test_low_coupling_session_owners_are_owned_collaborators(tmp_path) -> None:
+    runtime = AgentSession(cwd=str(tmp_path), model=faux_model())._runtime
+    owners = (
+        runtime.controllers.events,
+        runtime.controllers.models,
+        runtime.controllers.generation,
+        runtime.controllers.bash,
+        runtime.controllers.policy,
+        runtime.controllers.operations,
+    )
+
+    assert all(owner is not runtime for owner in owners)
+    assert all(type(owner) not in type(runtime).__bases__ for owner in owners)
