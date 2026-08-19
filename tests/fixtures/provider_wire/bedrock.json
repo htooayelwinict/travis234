@@ -1,0 +1,288 @@
+{
+  "apiMode": "bedrock-converse-stream",
+  "endpointPath": "/model/anthropic.claude-sonnet-4-6/converse-stream",
+  "requestCases": [
+    {
+      "expectedBody": {
+        "additionalModelRequestFields": {
+          "output_config": {
+            "effort": "medium"
+          },
+          "thinking": {
+            "display": "summarized",
+            "type": "adaptive"
+          }
+        },
+        "inferenceConfig": {
+          "maxTokens": 4096,
+          "temperature": 0
+        },
+        "messages": [
+          {
+            "content": [
+              {
+                "text": "look"
+              },
+              {
+                "image": {
+                  "format": "png",
+                  "source": {
+                    "bytes": {
+                      "$base64": "aW1hZ2U="
+                    }
+                  }
+                }
+              },
+              {
+                "cachePoint": {
+                  "ttl": "1h",
+                  "type": "default"
+                }
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "system": [
+          {
+            "text": "policy"
+          },
+          {
+            "cachePoint": {
+              "ttl": "1h",
+              "type": "default"
+            }
+          }
+        ],
+        "toolConfig": {
+          "tools": [
+            {
+              "toolSpec": {
+                "description": "Read a file",
+                "inputSchema": {
+                  "json": {
+                    "properties": {
+                      "path": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "path"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "name": "read"
+              }
+            }
+          ]
+        }
+      },
+      "expectedHeaders": {
+        "Content-Type": "application/json"
+      },
+      "input": {
+        "context": {
+          "messages": [
+            {
+              "content": [
+                {
+                  "text": "look",
+                  "type": "text"
+                },
+                {
+                  "data": "aW1hZ2U=",
+                  "mimeType": "image/png",
+                  "type": "image"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "systemPrompt": "policy",
+          "tools": [
+            {
+              "description": "Read a file",
+              "name": "read",
+              "parameters": {
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path"
+                ],
+                "type": "object"
+              }
+            }
+          ]
+        },
+        "messages": [],
+        "model": {
+          "api": "bedrock-converse-stream",
+          "baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
+          "id": "anthropic.claude-sonnet-4-6",
+          "input": [
+            "text",
+            "image"
+          ],
+          "maxTokens": 64000,
+          "provider": "amazon-bedrock",
+          "reasoning": true
+        },
+        "options": {
+          "cacheRetention": "long",
+          "credentialKind": "none",
+          "maxTokens": 4096,
+          "reasoningConfig": {
+            "effort": "medium",
+            "enabled": true
+          },
+          "stream": true,
+          "temperature": 0
+        },
+        "profile": {
+          "apiMode": "bedrock_converse_stream",
+          "authType": "aws_sigv4",
+          "baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
+          "name": "amazon-bedrock"
+        },
+        "tools": []
+      },
+      "name": "native-image-cache-tools-and-adaptive-thinking"
+    }
+  ],
+  "responseCases": [
+    {
+      "expectedResponse": {
+        "content": "ok",
+        "finishReason": "stop",
+        "providerData": null,
+        "reasoning": null,
+        "toolCalls": null,
+        "usage": null
+      },
+      "input": {
+        "response": "ok"
+      },
+      "name": "provider-neutral-fallback-response"
+    }
+  ],
+  "schemaVersion": 1,
+  "streamCases": [
+    {
+      "expectedEvents": [
+        {
+          "type": "start"
+        },
+        {
+          "type": "toolcall_start"
+        },
+        {
+          "delta": "{\"path\":\"a.py\"}",
+          "type": "toolcall_delta"
+        },
+        {
+          "toolCall": {
+            "arguments": {
+              "path": "a.py"
+            },
+            "id": "call-1",
+            "name": "read",
+            "thoughtSignature": null
+          },
+          "type": "toolcall_end"
+        },
+        {
+          "message": {
+            "content": [
+              {
+                "arguments": {
+                  "path": "a.py"
+                },
+                "id": "call-1",
+                "name": "read",
+                "thoughtSignature": null,
+                "type": "toolCall"
+              }
+            ],
+            "errorMessage": null,
+            "responseId": null,
+            "responseModel": null,
+            "stopReason": "toolUse",
+            "usage": {
+              "cacheRead": 2,
+              "cacheWrite": 1,
+              "input": 9,
+              "output": 3,
+              "reasoning": 0,
+              "totalTokens": 15
+            }
+          },
+          "reason": "toolUse",
+          "type": "done"
+        }
+      ],
+      "input": {
+        "events": [
+          {
+            "messageStart": {
+              "role": "assistant"
+            }
+          },
+          {
+            "contentBlockStart": {
+              "contentBlockIndex": 0,
+              "start": {
+                "toolUse": {
+                  "name": "read",
+                  "toolUseId": "call-1"
+                }
+              }
+            }
+          },
+          {
+            "contentBlockDelta": {
+              "contentBlockIndex": 0,
+              "delta": {
+                "toolUse": {
+                  "input": "{\"path\":\"a.py\"}"
+                }
+              }
+            }
+          },
+          {
+            "contentBlockStop": {
+              "contentBlockIndex": 0
+            }
+          },
+          {
+            "messageStop": {
+              "stopReason": "tool_use"
+            }
+          },
+          {
+            "metadata": {
+              "usage": {
+                "cacheReadInputTokens": 2,
+                "cacheWriteInputTokens": 1,
+                "inputTokens": 12,
+                "outputTokens": 3,
+                "totalTokens": 15
+              }
+            }
+          }
+        ],
+        "model": {
+          "api": "bedrock-converse-stream",
+          "baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
+          "id": "anthropic.claude-sonnet-4-6",
+          "provider": "amazon-bedrock",
+          "reasoning": true
+        }
+      },
+      "name": "binary-tool-eventstream-and-usage"
+    }
+  ]
+}

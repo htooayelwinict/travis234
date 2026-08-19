@@ -1,0 +1,496 @@
+{
+  "apiMode": "openai-responses",
+  "endpointPath": "/v1/responses",
+  "requestCases": [
+    {
+      "expectedBody": {
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "input": [
+          {
+            "content": "policy",
+            "role": "developer"
+          },
+          {
+            "content": [
+              {
+                "text": "look",
+                "type": "input_text"
+              },
+              {
+                "detail": "auto",
+                "image_url": "data:image/png;base64,aW1hZ2U=",
+                "type": "input_image"
+              }
+            ],
+            "role": "user"
+          },
+          {
+            "encrypted_content": "opaque",
+            "id": "rs_1",
+            "summary": [],
+            "type": "reasoning"
+          },
+          {
+            "content": [
+              {
+                "annotations": [],
+                "text": "done",
+                "type": "output_text"
+              }
+            ],
+            "role": "assistant",
+            "status": "completed",
+            "type": "message"
+          },
+          {
+            "arguments": "{\"path\":\"a.py\"}",
+            "call_id": "call_1",
+            "id": "fc_1",
+            "name": "read",
+            "type": "function_call"
+          },
+          {
+            "call_id": "call_1",
+            "output": "ok",
+            "type": "function_call_output"
+          }
+        ],
+        "max_output_tokens": 2048,
+        "model": "gpt-5.4",
+        "prompt_cache_key": "<SESSION_ID>",
+        "prompt_cache_retention": "24h",
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        },
+        "service_tier": "priority",
+        "store": false,
+        "stream": true,
+        "temperature": 0.2,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "description": "Read a file",
+            "name": "read",
+            "parameters": {
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "type": "object"
+            },
+            "strict": false,
+            "type": "function"
+          }
+        ],
+        "top_p": 0.9
+      },
+      "expectedHeaders": {
+        "Authorization": "Bearer <API_KEY>",
+        "Content-Type": "application/json",
+        "session_id": "<SESSION_ID>",
+        "x-client-request-id": "<SESSION_ID>"
+      },
+      "input": {
+        "messages": [
+          {
+            "content": "policy",
+            "role": "developer"
+          },
+          {
+            "content": [
+              {
+                "text": "look",
+                "type": "text"
+              },
+              {
+                "image_url": {
+                  "url": "data:image/png;base64,aW1hZ2U="
+                },
+                "type": "image_url"
+              }
+            ],
+            "role": "user"
+          },
+          {
+            "codex_reasoning_items": [
+              {
+                "encrypted_content": "opaque",
+                "id": "rs_1",
+                "summary": [],
+                "type": "reasoning"
+              }
+            ],
+            "content": "done",
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "function": {
+                  "arguments": "{\"path\":\"a.py\"}",
+                  "name": "read"
+                },
+                "id": "call_1|fc_1",
+                "type": "function"
+              }
+            ]
+          },
+          {
+            "content": "ok",
+            "role": "tool",
+            "tool_call_id": "call_1|fc_1"
+          }
+        ],
+        "model": {
+          "api": "openai-responses",
+          "baseUrl": "https://api.openai.com/v1",
+          "id": "gpt-5.4",
+          "input": [
+            "text",
+            "image"
+          ],
+          "provider": "openai",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "high": "high",
+            "off": "none"
+          }
+        },
+        "options": {
+          "cacheRetention": "long",
+          "maxTokens": 2048,
+          "reasoningConfig": {
+            "effort": "high",
+            "enabled": true
+          },
+          "reasoningSummary": "auto",
+          "requestOverrides": {
+            "top_p": 0.9
+          },
+          "serviceTier": "priority",
+          "sessionId": "<SESSION_ID>",
+          "stream": true,
+          "temperature": 0.2,
+          "toolChoice": "auto"
+        },
+        "profile": {
+          "apiMode": "openai_responses",
+          "baseUrl": "https://api.openai.com/v1",
+          "name": "openai"
+        },
+        "tools": [
+          {
+            "function": {
+              "description": "Read a file",
+              "name": "read",
+              "parameters": {
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ]
+      },
+      "name": "developer-images-tools-reasoning-and-sampling"
+    },
+    {
+      "expectedBody": {
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "input": [
+          {
+            "content": "policy",
+            "role": "developer"
+          },
+          {
+            "content": [
+              {
+                "text": "work",
+                "type": "input_text"
+              }
+            ],
+            "role": "user"
+          },
+          {
+            "encrypted_content": "opaque",
+            "id": "rs_1",
+            "summary": [],
+            "type": "reasoning"
+          },
+          {
+            "content": [
+              {
+                "annotations": [],
+                "text": "working",
+                "type": "output_text"
+              }
+            ],
+            "id": "msg_1",
+            "phase": "commentary",
+            "role": "assistant",
+            "status": "completed",
+            "type": "message"
+          },
+          {
+            "arguments": "{\"names\":[\"write\"]}",
+            "call_id": "call_1",
+            "id": "fc_1",
+            "name": "load_tools",
+            "type": "function_call"
+          },
+          {
+            "call_id": "call_1",
+            "output": "loaded",
+            "type": "function_call_output"
+          },
+          {
+            "arguments": {
+              "limit": 1,
+              "query": "write"
+            },
+            "call_id": "travis_tool_load_1fdn2kn1k1zej3",
+            "execution": "client",
+            "status": "completed",
+            "type": "tool_search_call"
+          },
+          {
+            "call_id": "travis_tool_load_1fdn2kn1k1zej3",
+            "execution": "client",
+            "status": "completed",
+            "tools": [
+              {
+                "defer_loading": true,
+                "description": "Write",
+                "name": "write",
+                "parameters": {
+                  "type": "object"
+                },
+                "strict": false,
+                "type": "function"
+              }
+            ],
+            "type": "tool_search_output"
+          }
+        ],
+        "max_output_tokens": 32,
+        "model": "gpt-5.4",
+        "prompt_cache_key": "<SESSION_ID>",
+        "reasoning": {
+          "effort": "medium",
+          "summary": "auto"
+        },
+        "store": false,
+        "stream": true,
+        "tools": [
+          {
+            "description": "Load",
+            "name": "load_tools",
+            "parameters": {
+              "type": "object"
+            },
+            "strict": false,
+            "type": "function"
+          }
+        ]
+      },
+      "expectedHeaders": {
+        "Authorization": "Bearer <API_KEY>",
+        "Content-Type": "application/json",
+        "session_id": "<SESSION_ID>",
+        "x-client-request-id": "<SESSION_ID>"
+      },
+      "input": {
+        "context": {
+          "messages": [
+            {
+              "content": "work",
+              "role": "user"
+            },
+            {
+              "content": [
+                {
+                  "thinking": "",
+                  "thinkingSignature": "{\"type\":\"reasoning\",\"id\":\"rs_1\",\"summary\":[],\"encrypted_content\":\"opaque\"}",
+                  "type": "thinking"
+                },
+                {
+                  "text": "working",
+                  "textSignature": "{\"v\":1,\"id\":\"msg_1\",\"phase\":\"commentary\"}",
+                  "type": "text"
+                },
+                {
+                  "arguments": {
+                    "names": [
+                      "write"
+                    ]
+                  },
+                  "id": "call_1|fc_1",
+                  "name": "load_tools",
+                  "type": "toolCall"
+                }
+              ],
+              "role": "assistant",
+              "stopReason": "toolUse"
+            },
+            {
+              "addedToolNames": [
+                "write"
+              ],
+              "content": [
+                {
+                  "text": "loaded",
+                  "type": "text"
+                }
+              ],
+              "isError": false,
+              "role": "toolResult",
+              "toolCallId": "call_1|fc_1",
+              "toolName": "load_tools"
+            }
+          ],
+          "systemPrompt": "policy",
+          "tools": [
+            {
+              "description": "Load",
+              "name": "load_tools",
+              "parameters": {
+                "type": "object"
+              }
+            },
+            {
+              "description": "Write",
+              "name": "write",
+              "parameters": {
+                "type": "object"
+              }
+            }
+          ]
+        },
+        "messages": [],
+        "model": {
+          "api": "openai-responses",
+          "baseUrl": "https://api.openai.com/v1",
+          "compat": {
+            "supportsToolSearch": true
+          },
+          "id": "gpt-5.4",
+          "input": [
+            "text",
+            "image"
+          ],
+          "maxTokens": 128000,
+          "provider": "openai",
+          "reasoning": true
+        },
+        "options": {
+          "maxTokens": 32,
+          "reasoningConfig": {
+            "effort": "medium",
+            "enabled": true
+          },
+          "sessionId": "<SESSION_ID>",
+          "stream": true
+        },
+        "profile": {
+          "apiMode": "openai_responses",
+          "baseUrl": "https://api.openai.com/v1",
+          "name": "openai"
+        },
+        "tools": []
+      },
+      "name": "native-replay-and-deferred-tool-search"
+    }
+  ],
+  "responseCases": [
+    {
+      "expectedResponse": {
+        "content": "ok",
+        "finishReason": "stop",
+        "providerData": null,
+        "reasoning": null,
+        "toolCalls": null,
+        "usage": null
+      },
+      "input": {
+        "response": "ok"
+      },
+      "name": "provider-neutral-fallback-response"
+    }
+  ],
+  "schemaVersion": 1,
+  "streamCases": [
+    {
+      "expectedEvents": [
+        {
+          "type": "start"
+        },
+        {
+          "type": "text_start"
+        },
+        {
+          "delta": "done",
+          "type": "text_delta"
+        },
+        {
+          "content": "done",
+          "type": "text_end"
+        },
+        {
+          "message": {
+            "content": [
+              {
+                "text": "done",
+                "textSignature": "{\"v\":1,\"id\":\"msg_1\",\"phase\":\"final_answer\"}",
+                "type": "text"
+              }
+            ],
+            "errorMessage": null,
+            "responseId": "resp_1",
+            "responseModel": null,
+            "stopReason": "stop",
+            "usage": {
+              "cacheRead": 20,
+              "cacheWrite": 5,
+              "input": 75,
+              "output": 30,
+              "reasoning": 10,
+              "totalTokens": 130
+            }
+          },
+          "reason": "stop",
+          "type": "done"
+        }
+      ],
+      "input": {
+        "lines": [
+          "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_1\",\"role\":\"assistant\",\"status\":\"in_progress\",\"content\":[]}}",
+          "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"done\"}",
+          "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_1\",\"phase\":\"final_answer\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\",\"annotations\":[]}]}}",
+          "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":100,\"output_tokens\":30,\"total_tokens\":130,\"input_tokens_details\":{\"cached_tokens\":20,\"cache_write_tokens\":5},\"output_tokens_details\":{\"reasoning_tokens\":10}}}}"
+        ],
+        "model": {
+          "api": "openai-responses",
+          "baseUrl": "https://api.openai.com/v1",
+          "id": "gpt-5.4",
+          "provider": "openai",
+          "reasoning": true
+        }
+      },
+      "name": "signed-text-and-exact-usage"
+    }
+  ]
+}

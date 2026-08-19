@@ -1,0 +1,285 @@
+{
+  "apiMode": "openai-codex-responses",
+  "endpointPath": "/backend-api/codex/responses",
+  "requestCases": [
+    {
+      "expectedBody": {
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "input": [
+          {
+            "content": [
+              {
+                "text": "look",
+                "type": "input_text"
+              },
+              {
+                "detail": "auto",
+                "image_url": "data:image/png;base64,aW1hZ2U=",
+                "type": "input_image"
+              }
+            ],
+            "role": "user"
+          },
+          {
+            "encrypted_content": "opaque",
+            "id": "rs_1",
+            "summary": [],
+            "type": "reasoning"
+          },
+          {
+            "content": [
+              {
+                "annotations": [],
+                "text": "done",
+                "type": "output_text"
+              }
+            ],
+            "role": "assistant",
+            "status": "completed",
+            "type": "message"
+          },
+          {
+            "arguments": "{\"path\":\"a.py\"}",
+            "call_id": "call_1",
+            "id": "fc_1",
+            "name": "read",
+            "type": "function_call"
+          },
+          {
+            "call_id": "call_1",
+            "output": "ok",
+            "type": "function_call_output"
+          }
+        ],
+        "instructions": "policy",
+        "model": "gpt-5.4",
+        "parallel_tool_calls": true,
+        "prompt_cache_key": "<SESSION_ID>",
+        "reasoning": {
+          "effort": "high",
+          "summary": "detailed"
+        },
+        "service_tier": "priority",
+        "store": false,
+        "stream": true,
+        "text": {
+          "verbosity": "medium"
+        },
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "description": "Read a file",
+            "name": "read",
+            "parameters": {
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "type": "object"
+            },
+            "strict": null,
+            "type": "function"
+          }
+        ]
+      },
+      "expectedHeaders": {
+        "Authorization": "Bearer <API_KEY>",
+        "OpenAI-Beta": "responses=experimental",
+        "User-Agent": "<USER_AGENT>",
+        "accept": "text/event-stream",
+        "chatgpt-account-id": "<ACCOUNT_ID>",
+        "content-type": "application/json",
+        "originator": "travis234",
+        "session-id": "<SESSION_ID>",
+        "x-client-request-id": "<SESSION_ID>"
+      },
+      "input": {
+        "messages": [
+          {
+            "content": "policy",
+            "role": "developer"
+          },
+          {
+            "content": [
+              {
+                "text": "look",
+                "type": "text"
+              },
+              {
+                "image_url": {
+                  "url": "data:image/png;base64,aW1hZ2U="
+                },
+                "type": "image_url"
+              }
+            ],
+            "role": "user"
+          },
+          {
+            "codex_reasoning_items": [
+              {
+                "encrypted_content": "opaque",
+                "id": "rs_1",
+                "summary": [],
+                "type": "reasoning"
+              }
+            ],
+            "content": "done",
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "function": {
+                  "arguments": "{\"path\":\"a.py\"}",
+                  "name": "read"
+                },
+                "id": "call_1|fc_1",
+                "type": "function"
+              }
+            ]
+          },
+          {
+            "content": "ok",
+            "role": "tool",
+            "tool_call_id": "call_1|fc_1"
+          }
+        ],
+        "model": {
+          "api": "openai-codex-responses",
+          "baseUrl": "https://chatgpt.com/backend-api",
+          "id": "gpt-5.4",
+          "input": [
+            "text",
+            "image"
+          ],
+          "provider": "openai-codex",
+          "reasoning": true
+        },
+        "options": {
+          "reasoningConfig": {
+            "effort": "high",
+            "enabled": true
+          },
+          "reasoningSummary": "detailed",
+          "requestOverrides": {
+            "max_output_tokens": 99,
+            "temperature": 0.7,
+            "top_p": 0.9
+          },
+          "serviceTier": "priority",
+          "sessionId": "<SESSION_ID>",
+          "stream": true,
+          "textVerbosity": "medium"
+        },
+        "profile": {
+          "apiMode": "openai_codex_responses",
+          "baseUrl": "https://chatgpt.com/backend-api",
+          "name": "openai-codex"
+        },
+        "tools": [
+          {
+            "function": {
+              "description": "Read a file",
+              "name": "read",
+              "parameters": {
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ]
+      },
+      "name": "instructions-images-reasoning-tools-and-cache"
+    }
+  ],
+  "responseCases": [
+    {
+      "expectedResponse": {
+        "content": "ok",
+        "finishReason": "stop",
+        "providerData": null,
+        "reasoning": null,
+        "toolCalls": null,
+        "usage": null
+      },
+      "input": {
+        "response": "ok"
+      },
+      "name": "provider-neutral-fallback-response"
+    }
+  ],
+  "schemaVersion": 1,
+  "streamCases": [
+    {
+      "expectedEvents": [
+        {
+          "type": "start"
+        },
+        {
+          "type": "text_start"
+        },
+        {
+          "delta": "done",
+          "type": "text_delta"
+        },
+        {
+          "content": "done",
+          "type": "text_end"
+        },
+        {
+          "message": {
+            "content": [
+              {
+                "text": "done",
+                "textSignature": "{\"v\":1,\"id\":\"msg_1\",\"phase\":\"final_answer\"}",
+                "type": "text"
+              }
+            ],
+            "errorMessage": null,
+            "responseId": "resp_1",
+            "responseModel": null,
+            "stopReason": "stop",
+            "usage": {
+              "cacheRead": 20,
+              "cacheWrite": 5,
+              "input": 75,
+              "output": 30,
+              "reasoning": 10,
+              "totalTokens": 130
+            }
+          },
+          "reason": "stop",
+          "type": "done"
+        }
+      ],
+      "input": {
+        "lines": [
+          "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_1\",\"role\":\"assistant\",\"status\":\"in_progress\",\"content\":[]}}",
+          "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"done\"}",
+          "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_1\",\"phase\":\"final_answer\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\",\"annotations\":[]}]}}",
+          "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":100,\"output_tokens\":30,\"total_tokens\":130,\"input_tokens_details\":{\"cached_tokens\":20,\"cache_write_tokens\":5},\"output_tokens_details\":{\"reasoning_tokens\":10}}}}"
+        ],
+        "model": {
+          "api": "openai-codex-responses",
+          "baseUrl": "https://chatgpt.com/backend-api",
+          "id": "gpt-5.4",
+          "provider": "openai-codex",
+          "reasoning": true
+        }
+      },
+      "name": "signed-text-and-exact-usage"
+    }
+  ]
+}

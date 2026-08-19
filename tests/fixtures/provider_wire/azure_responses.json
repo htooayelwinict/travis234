@@ -1,0 +1,182 @@
+{
+  "apiMode": "azure-openai-responses",
+  "endpointPath": "/openai/v1/responses?api-version=2025-04-01-preview",
+  "requestCases": [
+    {
+      "expectedBody": {
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "input": [
+          {
+            "content": "policy",
+            "role": "developer"
+          },
+          {
+            "content": [
+              {
+                "text": "hello",
+                "type": "input_text"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "max_output_tokens": 2048,
+        "model": "corp-gpt-54",
+        "prompt_cache_key": "<SESSION_ID>",
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        },
+        "store": false,
+        "stream": true,
+        "temperature": 0.2,
+        "tools": [
+          {
+            "description": "Read a file",
+            "name": "read",
+            "parameters": {
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "type": "object"
+            },
+            "strict": false,
+            "type": "function"
+          }
+        ]
+      },
+      "expectedHeaders": {
+        "Content-Type": "application/json",
+        "api-key": "<API_KEY>"
+      },
+      "input": {
+        "messages": [
+          {
+            "content": "policy",
+            "role": "developer"
+          },
+          {
+            "content": "hello",
+            "role": "user"
+          }
+        ],
+        "model": {
+          "api": "azure-openai-responses",
+          "baseUrl": "https://corp-resource.cognitiveservices.azure.com/openai/v1/responses",
+          "id": "gpt-5.4",
+          "input": [
+            "text"
+          ],
+          "provider": "azure-openai-responses",
+          "reasoning": true
+        },
+        "options": {
+          "maxTokens": 2048,
+          "reasoningConfig": {
+            "effort": "high",
+            "enabled": true
+          },
+          "reasoningSummary": "auto",
+          "sessionId": "<SESSION_ID>",
+          "stream": true,
+          "temperature": 0.2,
+          "transportOptions": {
+            "azure_api_version": "2025-04-01-preview",
+            "azure_deployment_name": "corp-gpt-54"
+          }
+        },
+        "profile": {
+          "apiMode": "azure_openai_responses",
+          "baseUrl": "https://corp-resource.cognitiveservices.azure.com/openai/v1/responses",
+          "name": "azure-openai-responses"
+        },
+        "tools": [
+          {
+            "function": {
+              "description": "Read a file",
+              "name": "read",
+              "parameters": {
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ]
+      },
+      "name": "deployment-api-version-key-tools-and-reasoning"
+    }
+  ],
+  "responseCases": [
+    {
+      "expectedResponse": {
+        "content": "ok",
+        "finishReason": "stop",
+        "providerData": null,
+        "reasoning": null,
+        "toolCalls": null,
+        "usage": null
+      },
+      "input": {
+        "response": "ok"
+      },
+      "name": "provider-neutral-fallback-response"
+    }
+  ],
+  "schemaVersion": 1,
+  "streamCases": [
+    {
+      "expectedEvents": [
+        {
+          "type": "start"
+        },
+        {
+          "message": {
+            "content": [],
+            "errorMessage": "Response incomplete: content_filter",
+            "responseId": "resp_incomplete",
+            "responseModel": null,
+            "stopReason": "error",
+            "usage": {
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "input": 1,
+              "output": 1,
+              "reasoning": 0,
+              "totalTokens": 2
+            }
+          },
+          "reason": "error",
+          "type": "error"
+        }
+      ],
+      "input": {
+        "lines": [
+          "data: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp_incomplete\",\"status\":\"incomplete\",\"output\":[],\"incomplete_details\":{\"reason\":\"content_filter\"},\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}"
+        ],
+        "model": {
+          "api": "azure-openai-responses",
+          "baseUrl": "https://corp-resource.cognitiveservices.azure.com/openai/v1/responses",
+          "id": "gpt-5.4",
+          "provider": "azure-openai-responses",
+          "reasoning": true
+        }
+      },
+      "name": "incomplete-content-filter-error"
+    }
+  ]
+}

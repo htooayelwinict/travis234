@@ -1,0 +1,244 @@
+{
+  "apiMode": "mistral-conversations",
+  "endpointPath": "/v1/chat/completions",
+  "requestCases": [
+    {
+      "expectedBody": {
+        "max_tokens": 4096,
+        "messages": [
+          {
+            "content": "policy",
+            "role": "system"
+          },
+          {
+            "content": "work",
+            "role": "user"
+          },
+          {
+            "content": [
+              {
+                "text": "reason",
+                "type": "text"
+              }
+            ],
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "function": {
+                  "arguments": "{\"path\":\"a.py\"}",
+                  "name": "read"
+                },
+                "id": "7bhvht1e4",
+                "type": "function"
+              }
+            ]
+          },
+          {
+            "content": [
+              {
+                "text": "ok",
+                "type": "text"
+              }
+            ],
+            "name": "read",
+            "role": "tool",
+            "tool_call_id": "7bhvht1e4"
+          }
+        ],
+        "model": "magistral-medium-latest",
+        "prompt_cache_key": "<SESSION_ID>",
+        "prompt_mode": "reasoning",
+        "stream": true
+      },
+      "expectedHeaders": {
+        "Authorization": "Bearer <API_KEY>",
+        "Content-Type": "application/json",
+        "x-affinity": "<SESSION_ID>"
+      },
+      "input": {
+        "context": {
+          "messages": [
+            {
+              "content": "work",
+              "role": "user"
+            },
+            {
+              "api": "openai-responses",
+              "content": [
+                {
+                  "thinking": "reason",
+                  "type": "thinking"
+                },
+                {
+                  "arguments": {
+                    "path": "a.py"
+                  },
+                  "id": "foreign|tool-call:id-that-is-too-long",
+                  "name": "read",
+                  "type": "toolCall"
+                }
+              ],
+              "model": "gpt-5",
+              "provider": "openai",
+              "role": "assistant",
+              "stopReason": "toolUse"
+            },
+            {
+              "content": [
+                {
+                  "text": "ok",
+                  "type": "text"
+                }
+              ],
+              "isError": false,
+              "role": "toolResult",
+              "toolCallId": "foreign|tool-call:id-that-is-too-long",
+              "toolName": "read"
+            }
+          ],
+          "systemPrompt": "policy"
+        },
+        "messages": [],
+        "model": {
+          "api": "mistral-conversations",
+          "baseUrl": "https://api.mistral.ai/v1",
+          "id": "magistral-medium-latest",
+          "maxTokens": 32000,
+          "provider": "mistral",
+          "reasoning": true
+        },
+        "options": {
+          "cacheRetention": "short",
+          "maxTokens": 4096,
+          "reasoningConfig": {
+            "effort": "high",
+            "enabled": true
+          },
+          "sessionId": "<SESSION_ID>",
+          "stream": true
+        },
+        "profile": {
+          "apiMode": "mistral_conversations",
+          "baseUrl": "https://api.mistral.ai/v1",
+          "name": "mistral"
+        },
+        "tools": []
+      },
+      "name": "native-replay-normalizes-tool-identifiers"
+    }
+  ],
+  "responseCases": [
+    {
+      "expectedResponse": {
+        "content": "ok",
+        "finishReason": "stop",
+        "providerData": null,
+        "reasoning": null,
+        "toolCalls": null,
+        "usage": {
+          "cached_tokens": 0,
+          "completion_tokens": 1,
+          "prompt_tokens": 2,
+          "total_tokens": 3
+        }
+      },
+      "input": {
+        "response": {
+          "choices": [
+            {
+              "finish_reason": "stop",
+              "message": {
+                "content": "ok",
+                "tool_calls": null
+              }
+            }
+          ],
+          "usage": {
+            "cached_tokens": 0,
+            "completion_tokens": 1,
+            "prompt_tokens": 2,
+            "total_tokens": 3
+          }
+        },
+        "shape": "namespace"
+      },
+      "name": "chat-compatible-response-normalization"
+    }
+  ],
+  "schemaVersion": 1,
+  "streamCases": [
+    {
+      "expectedEvents": [
+        {
+          "type": "start"
+        },
+        {
+          "type": "thinking_start"
+        },
+        {
+          "delta": "reason",
+          "type": "thinking_delta"
+        },
+        {
+          "content": "reason",
+          "type": "thinking_end"
+        },
+        {
+          "type": "text_start"
+        },
+        {
+          "delta": "answer",
+          "type": "text_delta"
+        },
+        {
+          "content": "answer",
+          "type": "text_end"
+        },
+        {
+          "message": {
+            "content": [
+              {
+                "redacted": false,
+                "thinking": "reason",
+                "thinkingSignature": null,
+                "type": "thinking"
+              },
+              {
+                "text": "answer",
+                "textSignature": null,
+                "type": "text"
+              }
+            ],
+            "errorMessage": null,
+            "responseId": "resp-mistral",
+            "responseModel": null,
+            "stopReason": "stop",
+            "usage": {
+              "cacheRead": 2,
+              "cacheWrite": 0,
+              "input": 8,
+              "output": 4,
+              "reasoning": 0,
+              "totalTokens": 14
+            }
+          },
+          "reason": "stop",
+          "type": "done"
+        }
+      ],
+      "input": {
+        "lines": [
+          "data: {\"id\":\"resp-mistral\",\"choices\":[{\"delta\":{\"content\":[{\"type\":\"thinking\",\"thinking\":[{\"type\":\"text\",\"text\":\"reason\"}]},{\"type\":\"text\",\"text\":\"answer\"}]},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":4,\"total_tokens\":14,\"num_cached_tokens\":2}}"
+        ],
+        "model": {
+          "api": "mistral-conversations",
+          "baseUrl": "https://api.mistral.ai/v1",
+          "id": "magistral-medium-latest",
+          "provider": "mistral",
+          "reasoning": true
+        }
+      },
+      "name": "typed-thinking-and-usage"
+    }
+  ]
+}

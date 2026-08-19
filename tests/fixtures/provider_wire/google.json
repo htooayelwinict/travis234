@@ -1,0 +1,242 @@
+{
+  "apiMode": "google-generative-ai",
+  "endpointPath": "/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse",
+  "requestCases": [
+    {
+      "expectedBody": {
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "look"
+              },
+              {
+                "inlineData": {
+                  "data": "aW1hZ2U=",
+                  "mimeType": "image/png"
+                }
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "generationConfig": {
+          "maxOutputTokens": 2048,
+          "temperature": 0.1,
+          "thinkingConfig": {
+            "includeThoughts": true,
+            "thinkingBudget": 24576
+          }
+        },
+        "systemInstruction": {
+          "parts": [
+            {
+              "text": "policy"
+            }
+          ]
+        },
+        "toolConfig": {
+          "functionCallingConfig": {
+            "mode": "ANY"
+          }
+        },
+        "tools": [
+          {
+            "functionDeclarations": [
+              {
+                "description": "Read a file",
+                "name": "read",
+                "parametersJsonSchema": {
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ],
+                  "type": "object"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "expectedHeaders": {
+        "Content-Type": "application/json",
+        "x-goog-api-key": "<API_KEY>"
+      },
+      "input": {
+        "context": {
+          "messages": [
+            {
+              "content": [
+                {
+                  "text": "look",
+                  "type": "text"
+                },
+                {
+                  "data": "aW1hZ2U=",
+                  "mimeType": "image/png",
+                  "type": "image"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "systemPrompt": "policy",
+          "tools": [
+            {
+              "description": "Read a file",
+              "name": "read",
+              "parameters": {
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path"
+                ],
+                "type": "object"
+              }
+            }
+          ]
+        },
+        "messages": [],
+        "model": {
+          "api": "google-generative-ai",
+          "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+          "id": "gemini-2.5-flash",
+          "input": [
+            "text",
+            "image"
+          ],
+          "maxTokens": 65536,
+          "provider": "google",
+          "reasoning": true
+        },
+        "options": {
+          "maxTokens": 2048,
+          "reasoningConfig": {
+            "effort": "high",
+            "enabled": true
+          },
+          "stream": true,
+          "temperature": 0.1,
+          "toolChoice": "any"
+        },
+        "profile": {
+          "apiMode": "google_generative_ai",
+          "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+          "name": "google"
+        },
+        "tools": []
+      },
+      "name": "multimodal-tools-and-thinking-budget"
+    }
+  ],
+  "responseCases": [
+    {
+      "expectedResponse": {
+        "content": "ok",
+        "finishReason": "stop",
+        "providerData": null,
+        "reasoning": null,
+        "toolCalls": null,
+        "usage": null
+      },
+      "input": {
+        "response": "ok"
+      },
+      "name": "provider-neutral-fallback-response"
+    }
+  ],
+  "schemaVersion": 1,
+  "streamCases": [
+    {
+      "expectedEvents": [
+        {
+          "type": "start"
+        },
+        {
+          "type": "thinking_start"
+        },
+        {
+          "delta": "consider",
+          "type": "thinking_delta"
+        },
+        {
+          "content": "consider",
+          "type": "thinking_end"
+        },
+        {
+          "type": "toolcall_start"
+        },
+        {
+          "delta": "{\"path\":\"a.py\"}",
+          "type": "toolcall_delta"
+        },
+        {
+          "toolCall": {
+            "arguments": {
+              "path": "a.py"
+            },
+            "id": "<REQUEST_ID>",
+            "name": "read",
+            "thoughtSignature": "dG9vbA=="
+          },
+          "type": "toolcall_end"
+        },
+        {
+          "message": {
+            "content": [
+              {
+                "redacted": false,
+                "thinking": "consider",
+                "thinkingSignature": "c2ln",
+                "type": "thinking"
+              },
+              {
+                "arguments": {
+                  "path": "a.py"
+                },
+                "id": "<REQUEST_ID>",
+                "name": "read",
+                "thoughtSignature": "dG9vbA==",
+                "type": "toolCall"
+              }
+            ],
+            "errorMessage": null,
+            "responseId": "resp-google",
+            "responseModel": null,
+            "stopReason": "toolUse",
+            "usage": {
+              "cacheRead": 2,
+              "cacheWrite": 0,
+              "input": 10,
+              "output": 7,
+              "reasoning": 4,
+              "totalTokens": 19
+            }
+          },
+          "reason": "toolUse",
+          "type": "done"
+        }
+      ],
+      "input": {
+        "lines": [
+          "data: {\"responseId\":\"resp-google\",\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"consider\",\"thought\":true,\"thoughtSignature\":\"c2ln\"},{\"functionCall\":{\"name\":\"read\",\"args\":{\"path\":\"a.py\"}},\"thoughtSignature\":\"dG9vbA==\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":12,\"cachedContentTokenCount\":2,\"candidatesTokenCount\":3,\"thoughtsTokenCount\":4,\"totalTokenCount\":19}}"
+        ],
+        "model": {
+          "api": "google-generative-ai",
+          "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+          "id": "gemini-2.5-flash",
+          "provider": "google",
+          "reasoning": true
+        }
+      },
+      "name": "thought-tool-and-usage"
+    }
+  ]
+}

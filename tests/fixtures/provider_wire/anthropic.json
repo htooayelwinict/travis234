@@ -1,0 +1,495 @@
+{
+  "apiMode": "anthropic-messages",
+  "endpointPath": "/v1/messages",
+  "requestCases": [
+    {
+      "expectedBody": {
+        "max_tokens": 4096,
+        "messages": [
+          {
+            "content": [
+              {
+                "text": "look",
+                "type": "text"
+              },
+              {
+                "cache_control": {
+                  "ttl": "1h",
+                  "type": "ephemeral"
+                },
+                "source": {
+                  "data": "aW1hZ2U=",
+                  "media_type": "image/png",
+                  "type": "base64"
+                },
+                "type": "image"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": "claude-sonnet-4-6",
+        "output_config": {
+          "effort": "medium"
+        },
+        "stream": true,
+        "system": [
+          {
+            "cache_control": {
+              "ttl": "1h",
+              "type": "ephemeral"
+            },
+            "text": "policy",
+            "type": "text"
+          }
+        ],
+        "thinking": {
+          "display": "summarized",
+          "type": "adaptive"
+        },
+        "tool_choice": {
+          "type": "auto"
+        },
+        "tools": [
+          {
+            "cache_control": {
+              "ttl": "1h",
+              "type": "ephemeral"
+            },
+            "description": "Read a file",
+            "eager_input_streaming": true,
+            "input_schema": {
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "type": "object"
+            },
+            "name": "read"
+          }
+        ]
+      },
+      "expectedHeaders": {
+        "Content-Type": "application/json",
+        "anthropic-version": "2023-06-01",
+        "x-api-key": "<API_KEY>"
+      },
+      "input": {
+        "context": {
+          "messages": [
+            {
+              "content": [
+                {
+                  "text": "look",
+                  "type": "text"
+                },
+                {
+                  "data": "aW1hZ2U=",
+                  "mimeType": "image/png",
+                  "type": "image"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "systemPrompt": "policy",
+          "tools": [
+            {
+              "description": "Read a file",
+              "name": "read",
+              "parameters": {
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path"
+                ],
+                "type": "object"
+              }
+            }
+          ]
+        },
+        "messages": [],
+        "model": {
+          "api": "anthropic-messages",
+          "baseUrl": "https://api.anthropic.com",
+          "compat": {
+            "forceAdaptiveThinking": true
+          },
+          "id": "claude-sonnet-4-6",
+          "input": [
+            "text",
+            "image"
+          ],
+          "maxTokens": 128000,
+          "provider": "anthropic",
+          "reasoning": true
+        },
+        "options": {
+          "cacheRetention": "long",
+          "maxTokens": 4096,
+          "reasoningConfig": {
+            "effort": "medium",
+            "enabled": true
+          },
+          "sessionId": "<SESSION_ID>",
+          "stream": true,
+          "temperature": 0.7,
+          "toolChoice": "any"
+        },
+        "profile": {
+          "apiMode": "anthropic_messages",
+          "baseUrl": "https://api.anthropic.com",
+          "name": "anthropic"
+        },
+        "tools": []
+      },
+      "name": "adaptive-thinking-image-cache-and-tools"
+    },
+    {
+      "expectedBody": {
+        "max_tokens": 4096,
+        "messages": [
+          {
+            "content": [
+              {
+                "text": "look",
+                "type": "text"
+              },
+              {
+                "source": {
+                  "data": "aW1hZ2U=",
+                  "media_type": "image/png",
+                  "type": "base64"
+                },
+                "type": "image"
+              }
+            ],
+            "role": "user"
+          },
+          {
+            "content": [
+              {
+                "id": "call_1",
+                "input": {
+                  "path": "a.py"
+                },
+                "name": "Read",
+                "type": "tool_use"
+              }
+            ],
+            "role": "assistant"
+          },
+          {
+            "content": [
+              {
+                "content": "ok",
+                "is_error": false,
+                "tool_use_id": "call_1",
+                "type": "tool_result"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": "claude-sonnet-5",
+        "stream": true,
+        "system": [
+          {
+            "cache_control": {
+              "type": "ephemeral"
+            },
+            "text": "You are Claude Code, Anthropic's official CLI for Claude.",
+            "type": "text"
+          },
+          {
+            "cache_control": {
+              "type": "ephemeral"
+            },
+            "text": "policy",
+            "type": "text"
+          }
+        ],
+        "thinking": {
+          "type": "disabled"
+        },
+        "tool_choice": {
+          "type": "any"
+        },
+        "tools": [
+          {
+            "description": "Read a file",
+            "input_schema": {
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "type": "object"
+            },
+            "name": "read"
+          }
+        ]
+      },
+      "expectedHeaders": {
+        "Authorization": "Bearer <API_KEY>",
+        "Content-Type": "application/json",
+        "accept": "application/json",
+        "anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
+        "anthropic-dangerous-direct-browser-access": "true",
+        "anthropic-version": "2023-06-01",
+        "user-agent": "claude-cli/2.1.75",
+        "x-app": "cli"
+      },
+      "input": {
+        "messages": [
+          {
+            "content": "policy",
+            "role": "developer"
+          },
+          {
+            "content": [
+              {
+                "text": "look",
+                "type": "text"
+              },
+              {
+                "image_url": {
+                  "url": "data:image/png;base64,aW1hZ2U="
+                },
+                "type": "image_url"
+              }
+            ],
+            "role": "user"
+          },
+          {
+            "content": "",
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "function": {
+                  "arguments": "{\"path\":\"a.py\"}",
+                  "name": "read"
+                },
+                "id": "call_1",
+                "type": "function"
+              }
+            ]
+          },
+          {
+            "content": "ok",
+            "is_error": false,
+            "role": "tool",
+            "tool_call_id": "call_1"
+          }
+        ],
+        "model": {
+          "api": "anthropic-messages",
+          "baseUrl": "https://api.anthropic.com",
+          "compat": {
+            "supportsTemperature": false
+          },
+          "id": "claude-sonnet-5",
+          "maxTokens": 128000,
+          "provider": "anthropic",
+          "reasoning": true
+        },
+        "options": {
+          "credentialKind": "oauth",
+          "maxTokens": 4096,
+          "reasoningConfig": {
+            "effort": "off",
+            "enabled": false
+          },
+          "stream": true,
+          "toolChoice": "any"
+        },
+        "profile": {
+          "apiMode": "anthropic_messages",
+          "baseUrl": "https://api.anthropic.com",
+          "name": "anthropic"
+        },
+        "tools": [
+          {
+            "function": {
+              "description": "Read a file",
+              "name": "read",
+              "parameters": {
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ]
+      },
+      "name": "oauth-identity-image-tool-and-disabled-thinking"
+    }
+  ],
+  "responseCases": [
+    {
+      "expectedResponse": {
+        "content": "ok",
+        "finishReason": "stop",
+        "providerData": null,
+        "reasoning": null,
+        "toolCalls": null,
+        "usage": null
+      },
+      "input": {
+        "response": "ok"
+      },
+      "name": "provider-neutral-fallback-response"
+    }
+  ],
+  "schemaVersion": 1,
+  "streamCases": [
+    {
+      "expectedEvents": [
+        {
+          "type": "start"
+        },
+        {
+          "type": "thinking_start"
+        },
+        {
+          "delta": "plan",
+          "type": "thinking_delta"
+        },
+        {
+          "content": "plan",
+          "type": "thinking_end"
+        },
+        {
+          "type": "text_start"
+        },
+        {
+          "delta": "answer",
+          "type": "text_delta"
+        },
+        {
+          "content": "answer",
+          "type": "text_end"
+        },
+        {
+          "message": {
+            "content": [
+              {
+                "redacted": false,
+                "thinking": "plan",
+                "thinkingSignature": "sig",
+                "type": "thinking"
+              },
+              {
+                "text": "answer",
+                "textSignature": null,
+                "type": "text"
+              }
+            ],
+            "errorMessage": null,
+            "responseId": "msg_1",
+            "responseModel": null,
+            "stopReason": "stop",
+            "usage": {
+              "cacheRead": 2,
+              "cacheWrite": 0,
+              "input": 8,
+              "output": 4,
+              "reasoning": 0,
+              "totalTokens": 12
+            }
+          },
+          "reason": "stop",
+          "type": "done"
+        }
+      ],
+      "input": {
+        "lines": [
+          "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"usage\":{\"input_tokens\":8,\"cache_read_input_tokens\":2}}}",
+          "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"sig\"}}",
+          "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"plan\"}}",
+          "data: {\"type\":\"content_block_stop\",\"index\":0}",
+          "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}",
+          "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"answer\"}}",
+          "data: {\"type\":\"content_block_stop\",\"index\":1}",
+          "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":4}}",
+          "data: {\"type\":\"message_stop\"}"
+        ],
+        "model": {
+          "api": "anthropic-messages",
+          "baseUrl": "https://api.anthropic.com",
+          "id": "claude-sonnet-5",
+          "provider": "anthropic",
+          "reasoning": true
+        }
+      },
+      "name": "thinking-text-and-usage"
+    },
+    {
+      "expectedEvents": [
+        {
+          "type": "start"
+        },
+        {
+          "type": "thinking_start"
+        },
+        {
+          "message": {
+            "content": [
+              {
+                "redacted": false,
+                "thinking": "",
+                "thinkingSignature": "sig",
+                "type": "thinking"
+              }
+            ],
+            "errorMessage": "Anthropic stream ended before message_stop",
+            "responseId": "msg_1",
+            "responseModel": null,
+            "stopReason": "error",
+            "usage": {
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "input": 0,
+              "output": 0,
+              "reasoning": 0,
+              "totalTokens": 0
+            }
+          },
+          "reason": "error",
+          "type": "error"
+        }
+      ],
+      "input": {
+        "lines": [
+          "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"usage\":{\"input_tokens\":8,\"cache_read_input_tokens\":2}}}",
+          "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"sig\"}}"
+        ],
+        "model": {
+          "api": "anthropic-messages",
+          "baseUrl": "https://api.anthropic.com",
+          "id": "claude-sonnet-5",
+          "provider": "anthropic",
+          "reasoning": true
+        }
+      },
+      "name": "partial-stream-is-an-error"
+    }
+  ]
+}

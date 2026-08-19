@@ -1,0 +1,344 @@
+{
+  "apiMode": "openai-completions",
+  "endpointPath": "/v1/chat/completions",
+  "requestCases": [
+    {
+      "expectedBody": {
+        "max_completion_tokens": 1024,
+        "messages": [
+          {
+            "content": "policy",
+            "role": "developer"
+          },
+          {
+            "content": [
+              {
+                "text": "inspect",
+                "type": "text"
+              },
+              {
+                "image_url": {
+                  "url": "data:image/png;base64,aW1hZ2U="
+                },
+                "type": "image_url"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": "gpt-fixture",
+        "prompt_cache_key": "<SESSION_ID>",
+        "reasoning_effort": "high",
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "temperature": 0.2,
+        "tools": [
+          {
+            "function": {
+              "description": "Read a file",
+              "name": "read",
+              "parameters": {
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "top_p": 0.9
+      },
+      "expectedHeaders": {
+        "Authorization": "Bearer <API_KEY>",
+        "Content-Type": "application/json"
+      },
+      "input": {
+        "messages": [
+          {
+            "content": "policy",
+            "role": "developer"
+          },
+          {
+            "content": [
+              {
+                "text": "inspect",
+                "type": "text"
+              },
+              {
+                "image_url": {
+                  "url": "data:image/png;base64,aW1hZ2U="
+                },
+                "type": "image_url"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": {
+          "api": "openai-completions",
+          "baseUrl": "https://api.openai.com/v1",
+          "compat": {
+            "maxTokensField": "max_completion_tokens",
+            "supportsReasoningEffort": true,
+            "supportsStore": false,
+            "supportsUsageInStreaming": true
+          },
+          "id": "gpt-fixture",
+          "provider": "openai",
+          "reasoning": true
+        },
+        "options": {
+          "maxTokens": 1024,
+          "reasoningConfig": {
+            "effort": "high",
+            "enabled": true
+          },
+          "requestOverrides": {
+            "top_p": 0.9
+          },
+          "sessionId": "<SESSION_ID>",
+          "stream": true,
+          "temperature": 0.2
+        },
+        "profile": {
+          "apiMode": "chat_completions",
+          "baseUrl": "https://api.openai.com/v1",
+          "name": "openai"
+        },
+        "tools": [
+          {
+            "function": {
+              "description": "Read a file",
+              "name": "read",
+              "parameters": {
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ]
+      },
+      "name": "rich-tools-reasoning-cache"
+    },
+    {
+      "expectedBody": {
+        "messages": [
+          {
+            "content": "hello",
+            "role": "user"
+          }
+        ],
+        "model": "fixed-fixture",
+        "stream": true
+      },
+      "expectedHeaders": {
+        "Authorization": "Bearer <API_KEY>",
+        "Content-Type": "application/json"
+      },
+      "input": {
+        "messages": [
+          {
+            "content": "hello",
+            "role": "user"
+          }
+        ],
+        "model": {
+          "api": "openai-completions",
+          "baseUrl": "https://provider.example/v1",
+          "compat": {
+            "supportsStore": false,
+            "supportsUsageInStreaming": false
+          },
+          "id": "fixed-fixture",
+          "provider": "fixture"
+        },
+        "options": {
+          "omitMaxTokens": true,
+          "stream": true,
+          "temperature": 0.7
+        },
+        "profile": {
+          "apiMode": "chat_completions",
+          "baseUrl": "https://provider.example/v1",
+          "defaultMaxTokens": 2048,
+          "name": "fixture",
+          "omitTemperature": true
+        },
+        "tools": null
+      },
+      "name": "omitted-sampling-and-output-limit"
+    }
+  ],
+  "responseCases": [
+    {
+      "expectedResponse": {
+        "content": null,
+        "finishReason": "tool_calls",
+        "providerData": {
+          "reasoning_content": "consider",
+          "reasoning_details": [
+            {
+              "data": "opaque",
+              "type": "reasoning.encrypted"
+            }
+          ]
+        },
+        "reasoning": "consider",
+        "toolCalls": [
+          {
+            "arguments": "{\"path\":\"a.py\"}",
+            "id": "call_1",
+            "name": "read",
+            "providerData": {
+              "extra_content": {
+                "signature": "opaque"
+              }
+            }
+          }
+        ],
+        "usage": {
+          "cached_tokens": 2,
+          "completion_tokens": 3,
+          "prompt_tokens": 12,
+          "total_tokens": 15
+        }
+      },
+      "input": {
+        "response": {
+          "choices": [
+            {
+              "finish_reason": "tool_calls",
+              "message": {
+                "content": null,
+                "reasoning": null,
+                "reasoning_content": "consider",
+                "reasoning_details": [
+                  {
+                    "data": "opaque",
+                    "type": "reasoning.encrypted"
+                  }
+                ],
+                "tool_calls": [
+                  {
+                    "extra_content": {
+                      "signature": "opaque"
+                    },
+                    "function": {
+                      "arguments": "{\"path\":\"a.py\"}",
+                      "name": "read"
+                    },
+                    "id": "call_1"
+                  }
+                ]
+              }
+            }
+          ],
+          "usage": {
+            "cached_tokens": 2,
+            "completion_tokens": 3,
+            "prompt_tokens": 12,
+            "total_tokens": 15
+          }
+        },
+        "shape": "namespace"
+      },
+      "name": "tool-usage-and-reasoning-normalization"
+    }
+  ],
+  "schemaVersion": 1,
+  "streamCases": [
+    {
+      "expectedEvents": [
+        {
+          "type": "start"
+        },
+        {
+          "type": "thinking_start"
+        },
+        {
+          "delta": "plan",
+          "type": "thinking_delta"
+        },
+        {
+          "type": "text_start"
+        },
+        {
+          "delta": "answer",
+          "type": "text_delta"
+        },
+        {
+          "content": "plan",
+          "type": "thinking_end"
+        },
+        {
+          "content": "answer",
+          "type": "text_end"
+        },
+        {
+          "message": {
+            "content": [
+              {
+                "redacted": false,
+                "thinking": "plan",
+                "thinkingSignature": "reasoning_content",
+                "type": "thinking"
+              },
+              {
+                "text": "answer",
+                "textSignature": null,
+                "type": "text"
+              }
+            ],
+            "errorMessage": null,
+            "responseId": "resp-chat",
+            "responseModel": null,
+            "stopReason": "stop",
+            "usage": {
+              "cacheRead": 2,
+              "cacheWrite": 1,
+              "input": 7,
+              "output": 4,
+              "reasoning": 1,
+              "totalTokens": 14
+            }
+          },
+          "reason": "stop",
+          "type": "done"
+        }
+      ],
+      "input": {
+        "lines": [
+          "data: {\"id\":\"resp-chat\",\"choices\":[{\"delta\":{\"reasoning_content\":\"plan\"}}]}",
+          "data: {\"id\":\"resp-chat\",\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}",
+          "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":4,\"prompt_tokens_details\":{\"cached_tokens\":2,\"cache_write_tokens\":1},\"completion_tokens_details\":{\"reasoning_tokens\":1}}}",
+          "data: [DONE]"
+        ],
+        "model": {
+          "api": "openai-completions",
+          "baseUrl": "https://api.openai.com/v1",
+          "id": "gpt-fixture",
+          "provider": "openai",
+          "reasoning": true
+        },
+        "waitForUsageAfterFinish": true
+      },
+      "name": "thinking-text-and-final-usage"
+    }
+  ]
+}

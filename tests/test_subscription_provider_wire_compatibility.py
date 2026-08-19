@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from travis.ai.builtin_models import load_builtin_models
@@ -11,6 +13,11 @@ from travis.ai.providers.transports import (
     OpenAIResponsesTransport,
 )
 from travis.ai.types import Context, UserMessage
+
+from tests.ai.providers.wire_fixtures import load_wire_fixture, render_request_case
+
+
+WIRE_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "provider_wire"
 
 
 def test_codex_request_uses_native_context_system_prompt_as_instructions() -> None:
@@ -288,3 +295,30 @@ def test_claude_code_wire_guard_preserves_identity_and_travis_system_prompt() ->
     ]
     assert "temperature" not in body
     assert "top_p" not in body
+
+
+def test_anthropic_subscription_fixture_preserves_sanitized_oauth_identity() -> None:
+    fixture = load_wire_fixture(WIRE_FIXTURE_DIR / "anthropic.json")
+    case = next(case for case in fixture["requestCases"] if case["name"].startswith("oauth-identity"))
+
+    rendered = render_request_case(fixture, case)
+
+    assert rendered["headers"]["Authorization"] == "Bearer <API_KEY>"
+    assert rendered["headers"]["anthropic-beta"] == "claude-code-20250219,oauth-2025-04-20"
+    assert [block["text"] for block in rendered["body"]["system"]] == [
+        "You are Claude Code, Anthropic's official CLI for Claude.",
+        "policy",
+    ]
+
+
+def test_codex_subscription_fixture_preserves_account_session_and_instructions() -> None:
+    fixture = load_wire_fixture(WIRE_FIXTURE_DIR / "codex_responses.json")
+    case = fixture["requestCases"][0]
+
+    rendered = render_request_case(fixture, case)
+
+    assert rendered["headers"]["Authorization"] == "Bearer <API_KEY>"
+    assert rendered["headers"]["chatgpt-account-id"] == "<ACCOUNT_ID>"
+    assert rendered["headers"]["session-id"] == "<SESSION_ID>"
+    assert rendered["body"]["instructions"] == "policy"
+    assert all(item.get("role") != "developer" for item in rendered["body"]["input"])
