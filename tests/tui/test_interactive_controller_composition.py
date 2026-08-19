@@ -103,3 +103,12 @@ def test_process_and_inspection_owners_are_owned_collaborators(tmp_path) -> None
 
     assert all(owner is not runtime for owner in owners)
     assert all(type(owner) not in type(runtime).__bases__ for owner in owners)
+
+
+def test_subagent_and_session_owners_are_owned_collaborators(tmp_path) -> None:
+    app = CodingApp(cwd=str(tmp_path), model=faux_model(), terminal=FakeTerminal(), enable_tui=True)
+    runtime = InteractiveMode(app)._runtime
+    owners = (runtime.controllers.subagents, runtime.controllers.sessions)
+
+    assert all(owner is not runtime for owner in owners)
+    assert all(type(owner) not in type(runtime).__bases__ for owner in owners)

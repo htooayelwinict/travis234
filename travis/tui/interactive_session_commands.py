@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
+
 import inspect
 import json
 import os
@@ -55,7 +57,7 @@ from travis.tui.motion import MotionState
 from travis.tui.footer_data import _footer_usage_stats
 from travis.tui.interactive_extensions import _manual_compression_options
 
-class InteractiveSessionCommands:
+class InteractiveSessionCommands(PortBoundController[InteractiveCommandPort]):
     """Owns a focused interactive runtime concern."""
 
     def _command_executor(self) -> SessionCommandExecutor:

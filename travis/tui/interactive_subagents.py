@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
+
 import re
 
 from travis.coding_agent.subagent_supervision import SupervisorSnapshot
@@ -9,7 +11,7 @@ from travis.tui.components import StatusLine, Text
 from travis.tui.components.subagent_roster import SubagentRoster
 
 
-class InteractiveSubagents:
+class InteractiveSubagents(PortBoundController[InteractiveCommandPort]):
     def _current_subagent_snapshot(self) -> SupervisorSnapshot:
         supervisor = getattr(self.app.session, "subagents", None)
         snapshot = getattr(supervisor, "snapshot", None)
