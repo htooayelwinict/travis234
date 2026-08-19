@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
-
-from typing import Mapping
+from collections.abc import Mapping
 
 from travis.tui.components import Text
+from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
 
 
 def format_lsp_status(status: Mapping[str, object]) -> str:
-    configured = int(status.get("configured", 0))
-    active = int(status.get("active", 0))
+    configured = int(str(status.get("configured", 0)))
+    active = int(str(status.get("active", 0)))
     limits = status.get("limits")
     safe_limits = limits if isinstance(limits, Mapping) else {}
-    max_active = int(safe_limits.get("maxActiveServers", 0))
+    max_active = int(str(safe_limits.get("maxActiveServers", 0)))
     startup = safe_limits.get("startupSeconds", "?")
     request = safe_limits.get("requestSeconds", "?")
     restarts = safe_limits.get("maxRestarts", "?")
@@ -33,7 +32,7 @@ def format_lsp_status(status: Mapping[str, object]) -> str:
             state = "running" if raw.get("running") is True else "stopped"
             if raw.get("restartExhausted") is True:
                 state = "restart-exhausted"
-            generation = int(raw.get("generation", 0))
+            generation = int(str(raw.get("generation", 0)))
             encoding = str(raw.get("positionEncoding", "unknown"))[:20]
             lines.append(f"{name}: {state}, generation {generation}, {encoding}")
     return "\n".join(lines)

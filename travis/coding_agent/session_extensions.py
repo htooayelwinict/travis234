@@ -2,67 +2,41 @@
 
 from __future__ import annotations
 
-from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
-
-import json
-import os
-import re
 import subprocess
-import time
-from dataclasses import dataclass, replace
-from pathlib import Path
-from typing import Callable, Mapping, Optional
+from collections.abc import Callable
+from contextlib import suppress
+from dataclasses import replace
+from typing import cast
 
-from travis.agent.agent import Agent
 from travis.agent.types import (
-    AbortSignal, AfterToolCallResult, AgentContext, AgentLoopTurnUpdate,
-    AgentMessage, AgentTool, AgentToolResult, BeforeToolCallResult, MessageEndEvent, MessageStartEvent,
+    AbortSignal,
+    AgentMessage,
 )
-from travis.ai.model_resolver import ScopedModel
 from travis.ai.model_cost import cost_from_mapping
-from travis.ai.models import clamp_thinking_level, get_supported_thinking_levels
-from travis.ai.types import AssistantMessage, Cost, ImageContent, Message, Model, TextContent, UserMessage, now_ms
-from travis.ai.types import ToolCall, ToolResultMessage, Usage
-from travis.compaction.compressor import LEGACY_SUMMARY_PREFIX, SUMMARY_END_MARKER, SUMMARY_PREFIX, estimate_tokens
-from travis.compaction.timing import CompactionManager
-from travis.coding_agent.branch_summarization import generate_branch_summary
-from travis.coding_agent.artifacts import ArtifactRegistry
-from travis.coding_agent.compaction_adapter import SessionCompactionAdapter, compaction_summary_with_details
-from travis.coding_agent.compaction_coordinator import CompactionCoordinator, CompactionTransactionCoordinator
-from travis.coding_agent.config import get_packaged_context_paths
-from travis.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
-from travis.coding_agent.execution_backend import select_execution_backend
+from travis.ai.types import (
+    Cost,
+    ImageContent,
+    Message,
+    Model,
+    TextContent,
+)
 from travis.coding_agent.extension_host import ExtensionCommandContextProxy, call_extension_command
 from travis.coding_agent.extension_messages import send_extension_user_message
-from travis.coding_agent.mailbox import CodingTurnMailbox, MailboxKind
-from travis.coding_agent.message_utils import (
-    bash_execution_text as _bash_execution_to_text,
-    last_assistant_message as _last_assistant_message,
-    user_message_text as _text_from_user_message_content,
-)
+from travis.coding_agent.extensions import ExtensionErrorListener, ExtensionRunner, emit_session_shutdown_event
 from travis.coding_agent.object_utils import settings_value as _settings_value
-from travis.coding_agent.process_context import ProcessContextResolver
-from travis.coding_agent.processes.local import create_local_process_transport
-from travis.coding_agent.processes.service import ProcessSessionService
-from travis.coding_agent.processes.types import ProcessOwner
-from travis.coding_agent.resource_loader import DefaultResourceLoader
-from travis.coding_agent.session_index import SessionIndex
-from travis.coding_agent.session_store import (
-    BashExecutionMessage, BranchSummaryMessage, CustomMessage, SessionStore, deserialize_message,
-)
-from travis.coding_agent.settings_manager import SettingsManager
-from travis.coding_agent.source_info import SourceInfo, create_synthetic_source_info
-from travis.coding_agent.system_prompt import BuildSystemPromptOptions, build_system_prompt
-from travis.coding_agent.subagents import CallableSubagentBackend, CodexExecBackend, SubagentResult, SubagentSupervisor, SubagentTask
-from travis.coding_agent.tools import create_all_tool_definitions
-from travis.coding_agent.tools.bash import BashExecOptions, BashOperations, create_local_bash_operations, get_shell_env
-from travis.coding_agent.tools.output_spool import OutputSpool
-from travis.coding_agent.tools.process import PROCESS_ACTIONS, create_process_tool_definition, prepare_process_arguments
-from travis.coding_agent.tools.types import ToolContext, ToolDefinition, create_tool_definition_from_agent_tool, wrap_tool_definition
-
+from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
 from travis.coding_agent.session_types import ExtensionCommandContext, ExtensionCompactionResult
-from travis.coding_agent.subagent_trace import _message_content_text, _public_subagent_result_details
 from travis.coding_agent.skills import Skill, format_skill_invocation
+from travis.coding_agent.source_info import SourceInfo
+from travis.coding_agent.subagent_trace import _message_content_text, _public_subagent_result_details
+from travis.coding_agent.subagents import SubagentResult
+from travis.coding_agent.system_prompt import BuildSystemPromptOptions
+from travis.coding_agent.tools.bash import get_shell_env
+from travis.coding_agent.tools.types import (
+    ToolDefinition,
+)
+from travis.compaction.compressor import LEGACY_SUMMARY_PREFIX, SUMMARY_END_MARKER, SUMMARY_PREFIX, estimate_tokens
+
 
 def _extract_compaction_result_summary(messages: list[Message]) -> str:
     for message in messages:
@@ -248,7 +222,9 @@ class SessionExtensionController(SessionPortBoundController[SessionControllerPor
             self._extension_error_unsubscribe()
             self._extension_error_unsubscribe = None
         if self._extension_error_listener is not None:
-            self._extension_error_unsubscribe = self._extension_runner.on_error(self._extension_error_listener)
+            self._extension_error_unsubscribe = self._extension_runner.on_error(
+                cast(ExtensionErrorListener, self._extension_error_listener)
+            )
 
     def reload(self) -> None:
         previous_runner = self._extension_runner
@@ -282,10 +258,8 @@ class SessionExtensionController(SessionPortBoundController[SessionControllerPor
 
     def dispose(self) -> None:
         self._turn_mailbox.close()
-        try:
+        with suppress(Exception):
             self.agent.abort()
-        except Exception:
-            pass
         if self._extension_error_unsubscribe is not None:
             self._extension_error_unsubscribe()
             self._extension_error_unsubscribe = None
@@ -422,8 +396,8 @@ class SessionExtensionController(SessionPortBoundController[SessionControllerPor
             command_name = f"skill:{skill.name}"
             if self._extension_runner.get_registered_command(command_name) is not None:
                 continue
-            handler = lambda args, _ctx=None, selected=skill: self.prompt(
-                format_skill_invocation(selected, args), expand_prompt_templates=False)
+            def handler(args, _ctx=None, selected=skill):
+                return self.prompt(format_skill_invocation(selected, args), expand_prompt_templates=False)
             registration = {
                 "description": skill.description,
                 "sourceInfo": replace(skill.source_info, source="skill"),
@@ -479,7 +453,7 @@ class SessionExtensionController(SessionPortBoundController[SessionControllerPor
                 "customType": "subagent",
                 "content": self._format_subagent_result(result),
                 "display": True,
-                "details": _public_subagent_result_details(result),
+                "details": _public_subagent_result_details(cast(SubagentResult, result)),
             }
         )
 
@@ -559,11 +533,11 @@ class SessionExtensionController(SessionPortBoundController[SessionControllerPor
         )
 
     def _extension_spawn_subagent(self, role: str, goal: str, options: dict | None = None) -> dict:
-        return self._with_command_abort_signal(
+        return cast(dict, self._with_command_abort_signal(
             lambda signal: _public_subagent_result_details(
                 self._spawn_and_wait_for_subagent(role, goal, options, signal=signal)
             )
-        )
+        ))
 
     def _current_abort_signal(self) -> AbortSignal:
         if self.is_streaming or self._command_signal is not None:
@@ -636,8 +610,7 @@ class SessionExtensionController(SessionPortBoundController[SessionControllerPor
                 cwd=cwd,
                 env=env,
                 stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
                 text=True,
                 timeout=timeout / 1000 if isinstance(timeout, (int, float)) else None,
                 check=False,

@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
-
 import hashlib
 import re
 import sys
 import threading
-from typing import Mapping
+from collections.abc import Mapping
 
 from travis.ai.stream_proxy import ProxyEventStream
 from travis.ai.types import AssistantMessage
 from travis.coding_agent.policy import argument_fingerprint
-
+from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
 
 _EFFECT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$")
 

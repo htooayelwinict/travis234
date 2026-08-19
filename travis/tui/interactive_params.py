@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
-
 from dataclasses import replace
 
 from travis.ai.providers.capabilities import ProviderParamWarning, build_generation_payload
@@ -16,7 +14,7 @@ from travis.ai.providers.params import (
 )
 from travis.ai.providers.transports import get_transport
 from travis.ai.types import SimpleStreamOptions
-
+from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
 
 _PARAM_NAMES = ("thinking", *GENERATION_PARAM_FIELDS)
 
@@ -192,10 +190,7 @@ class InteractiveParams(PortBoundController[InteractiveCommandPort]):
             return
 
         self._refresh_generation_param_state()
-        if name == "thinking":
-            value_display = self.app.session.thinking_level
-        else:
-            value_display = self._effective_param_display(name)
+        value_display = self.app.session.thinking_level if name == "thinking" else self._effective_param_display(name)
         self._show_status(
             f"Session {name}={value_display}; applies to the next turn.",
             kind="model",

@@ -2,65 +2,36 @@
 
 from __future__ import annotations
 
-from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
-
-import inspect
-import json
-import os
-import queue
-import signal as signal_module
 import shlex
-import subprocess
-import threading
-import time
-from concurrent.futures import Future, TimeoutError as FutureTimeoutError
-from dataclasses import dataclass, replace
-from pathlib import Path
-from typing import Callable
+from collections.abc import Callable, Iterable
+from concurrent.futures import Future
+from typing import Protocol, cast
 
-from travis.ai.providers.capabilities import ProviderParamWarning
-from travis.ai.providers.params import GenerationParams, compact_generation_params_display
-from travis.compaction import estimate_tokens
-from travis.coding_agent.session_types import BashResult
-from travis.coding_agent.session_catalog import SessionInfo
-from travis.coding_agent.session_commands import SessionCommandExecutor
 from travis.coding_agent.extension_host import settle_extension_result
-from travis.coding_agent.processes.types import ProcessEvent, ProcessSnapshot, ProcessState
-from travis.coding_agent.tools.bash import BashExecOptions, get_shell_env
-from travis.coding_agent.tools.output_spool import OutputSpool
+from travis.coding_agent.session_commands import SessionCommandExecutor
 from travis.tui.components import (
-    CombinedAutocompleteProvider,
     Component,
     Container,
-    FooterComponent,
-    Input,
-    Spacer,
     StatusLine,
     Text,
 )
-from travis.tui.components.autocomplete import _call_autocomplete_method, _settle_autocomplete_result
 from travis.tui.interactive import (
     AssistantMessageComponent,
-    BashExecutionComponent,
-    message_to_component,
-    user_message_to_component,
 )
-from travis.tui.user_commands import (
-    ResolvedUserCommand,
-    UserCommandBinding,
-    UserCommandController,
-    UserCommandHandle,
-)
-from travis.tui.motion import MotionState
+from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
 from travis.tui.keybindings import get_keybindings
 from travis.tui.keys import matches_key
-
+from travis.tui.motion import MotionState
 
 _PACKAGE_COMMANDS = frozenset({"/install", "/remove", "/update", "/packages"})
 
 
+class _AutocompleteTriggerProvider(Protocol):
+    trigger_characters: list[str]
+
+
 class _ExtensionShortcutUI:
-    def __init__(self, mode: InteractiveMode) -> None:
+    def __init__(self, mode: InteractiveCommandPort) -> None:
         self._mode = mode
 
     def notify(self, message: str) -> None:
@@ -173,8 +144,9 @@ class _ExtensionShortcutUI:
         self._mode.add_autocomplete_provider(factory)
 
 def _dispose_extension_widget(component: Component | None) -> None:
-    if component is not None and callable(getattr(component, "dispose", None)):
-        component.dispose()
+    dispose = getattr(component, "dispose", None)
+    if callable(dispose):
+        dispose()
 
 
 def _autocomplete_trigger_characters(provider: object) -> list[str]:
@@ -191,10 +163,11 @@ def _set_autocomplete_trigger_characters(provider: object, value: list[str]) -> 
     if isinstance(provider, dict):
         provider["triggerCharacters"] = list(value)
         return
+    typed_provider = cast(_AutocompleteTriggerProvider, provider)
     if hasattr(provider, "triggerCharacters") or not hasattr(provider, "trigger_characters"):
-        setattr(provider, "triggerCharacters", list(value))
+        object.__setattr__(typed_provider, "triggerCharacters", list(value))
     else:
-        setattr(provider, "trigger_characters", list(value))
+        typed_provider.trigger_characters = list(value)
 
 def _coerce_extension_component(component: object) -> Component:
     if isinstance(component, Component):
@@ -296,7 +269,7 @@ class InteractiveExtensions(PortBoundController[InteractiveCommandPort]):
             self.tui.request_render()
 
         return {
-            "uiContext": _ExtensionShortcutUI(self),
+            "uiContext": _ExtensionShortcutUI(cast(InteractiveCommandPort, self)),
             "hasUI": True,
             "mode": "tui",
             "abortHandler": active_session.agent.abort,
@@ -528,7 +501,7 @@ class InteractiveExtensions(PortBoundController[InteractiveCommandPort]):
         parsed = parse_command(prompt)
         if parsed is None:
             return False
-        command, _args = parsed
+        command, _args = cast(tuple[object, object], parsed)
         source_info = getattr(command, "source_info", None)
         if getattr(source_info, "source", None) == "skill":
             return False
@@ -595,12 +568,12 @@ class InteractiveExtensions(PortBoundController[InteractiveCommandPort]):
         command_name = prompt[1:].partition(" ")[0]
         return any(
             getattr(template, "name", None) == command_name
-            for template in getattr(self.app.session, "prompt_templates", [])
+            for template in cast(Iterable[object], getattr(self.app.session, "prompt_templates", []))
         )
 
     def _extension_shortcut_context(self) -> dict[str, object]:
         return {
-            "ui": _ExtensionShortcutUI(self),
+            "ui": _ExtensionShortcutUI(cast(InteractiveCommandPort, self)),
             "mode": "tui",
             "hasUI": True,
             "cwd": str(self.app.cwd),

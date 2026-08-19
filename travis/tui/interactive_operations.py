@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
-
 import hashlib
 
 from travis.coding_agent.operations import OperationSnapshot, OperationStore
 from travis.tui.components import StatusLine, Text
-
+from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
 
 _UNKNOWN = ("Unknown operation.",)
 _UNAVAILABLE = ("Operation journal is unavailable.",)

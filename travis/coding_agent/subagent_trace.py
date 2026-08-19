@@ -2,92 +2,41 @@
 
 from __future__ import annotations
 
-from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
-
 import json
-import os
-import re
-import subprocess
 import time
-from dataclasses import dataclass
-from dataclasses import replace
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Callable, Mapping, Optional
 
-from travis.agent.agent import Agent
-from travis.agent.types import AbortSignal
-from travis.agent.types import AfterToolCallResult
-from travis.agent.types import AgentContext
-from travis.agent.types import AgentLoopTurnUpdate
-from travis.agent.types import AgentTool
-from travis.agent.types import AgentToolResult
-from travis.agent.types import AgentMessage
-from travis.agent.types import BeforeToolCallResult
-from travis.agent.types import MessageEndEvent, MessageStartEvent
-from travis.ai.model_resolver import ScopedModel
-from travis.ai.models import (
-    clamp_thinking_level,
-    get_supported_thinking_levels,
+from travis.agent.types import (
+    AgentMessage,
 )
-from travis.ai.types import AssistantMessage, Cost, ImageContent, Message, Model, TextContent, UserMessage, now_ms
-from travis.ai.types import ToolCall, ToolResultMessage, Usage
-from travis.compaction.compressor import LEGACY_SUMMARY_PREFIX, SUMMARY_END_MARKER, SUMMARY_PREFIX, estimate_tokens
-from travis.compaction.timing import CompactionManager
-from travis.coding_agent.branch_summarization import generate_branch_summary
-from travis.coding_agent.artifacts import ArtifactRegistry
-from travis.coding_agent.compaction_adapter import (
-    SessionCompactionAdapter,
-    compaction_summary_with_details,
+from travis.ai.types import (
+    TextContent,
 )
-from travis.coding_agent.compaction_coordinator import (
-    CompactionCoordinator,
-    CompactionTransactionCoordinator,
+from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
+from travis.coding_agent.session_types import (
+    _MODEL_SUBAGENT_TIMEOUT_SECONDS_DEFAULT,
+    _MODEL_SUBAGENT_TIMEOUT_SECONDS_MAX,
+    _SUBAGENT_EXPANSION_BUDGETS,
+    _SUBAGENT_RESULT_SUMMARY_LIMIT,
+    _SUBAGENT_TOOL_TRACE_DISPLAY_LIMIT,
+    _SUBAGENT_VISIBLE_SUMMARY_LIMIT,
+    _tool_result_text,
 )
-from travis.coding_agent.config import get_packaged_context_paths
-from travis.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
-from travis.coding_agent.execution_backend import select_execution_backend
-from travis.coding_agent.mailbox import CodingTurnMailbox, MailboxKind
-from travis.coding_agent.message_utils import (
-    bash_execution_text as _bash_execution_to_text,
-    last_assistant_message as _last_assistant_message,
-    user_message_text as _text_from_user_message_content,
-)
-from travis.coding_agent.object_utils import settings_value as _settings_value
-from travis.coding_agent.process_context import ProcessContextResolver
-from travis.coding_agent.processes.local import create_local_process_transport
-from travis.coding_agent.processes.service import ProcessSessionService
-from travis.coding_agent.processes.types import ProcessOwner
-from travis.coding_agent.resource_loader import DefaultResourceLoader
-from travis.coding_agent.session_index import SessionIndex
-from travis.coding_agent.session_store import (
-    BashExecutionMessage,
-    BranchSummaryMessage,
-    CustomMessage,
-    SessionStore,
-    deserialize_message,
-)
-from travis.coding_agent.settings_manager import SettingsManager
-from travis.coding_agent.source_info import SourceInfo, create_synthetic_source_info
-from travis.coding_agent.system_prompt import BuildSystemPromptOptions, build_system_prompt
 from travis.coding_agent.subagents import (
-    CallableSubagentBackend,
-    CodexExecBackend,
     SubagentResult,
-    SubagentSupervisor,
     SubagentTask,
 )
-from travis.coding_agent.tools import create_all_tool_definitions
-from travis.coding_agent.tools.bash import BashExecOptions, BashOperations, create_local_bash_operations, get_shell_env
-from travis.coding_agent.tools.output_spool import OutputSpool
-from travis.coding_agent.tools.process import PROCESS_ACTIONS, create_process_tool_definition, prepare_process_arguments
-from travis.coding_agent.tools.types import (
-    ToolContext,
-    ToolDefinition,
-    create_tool_definition_from_agent_tool,
-    wrap_tool_definition,
-)
 
-from travis.coding_agent.session_types import _MODEL_SUBAGENT_TIMEOUT_SECONDS_DEFAULT, _MODEL_SUBAGENT_TIMEOUT_SECONDS_MAX, _SUBAGENT_EXPANSION_BUDGETS, _SUBAGENT_RESULT_SUMMARY_LIMIT, _SUBAGENT_TOOL_TRACE_DISPLAY_LIMIT, _SUBAGENT_VISIBLE_SUMMARY_LIMIT, _tool_result_text
+
+def _safe_int(value: object, default: int = 0) -> int:
+    if isinstance(value, (bool, int, float, str)):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+    return default
+
 
 def _subagent_preview(value: object, *, limit: int = 160) -> str:
     if value is None:
@@ -355,7 +304,7 @@ def _message_content_text(content: object) -> str:
 def _reject_unexpected_args(args, allowed: set[str]) -> None:
     if not isinstance(args, Mapping):
         raise ValueError("tool arguments must be an object")
-    unexpected = sorted(str(key) for key in args.keys() if key not in allowed)
+    unexpected = sorted(str(key) for key in args if key not in allowed)
     if unexpected:
         raise ValueError(f"Unsupported argument(s): {', '.join(unexpected)}")
 
@@ -441,7 +390,7 @@ class SessionSubagentTraceController(SessionPortBoundController[SessionControlle
     def _subagent_tool_trace_listener(
         self,
         task: SubagentTask,
-        child: "AgentSession",
+        child: SessionControllerPort,
         tool_trace: list[dict[str, object]],
         trace_by_call_id: dict[str, dict[str, object]],
     ) -> Callable[[object], None]:
@@ -526,7 +475,7 @@ class SessionSubagentTraceController(SessionPortBoundController[SessionControlle
                     "status": status,
                     "resultPreview": _truncate_preview(result_preview),
                     "endedAtMs": ended,
-                    "elapsedMs": max(0, ended - int(entry.get("startedAtMs", ended) or ended)),
+                    "elapsedMs": max(0, ended - _safe_int(entry.get("startedAtMs", ended), ended)),
                 }
             )
             self._handle_subagent_event(_subagent_tool_event(task, "subagent_tool_end", entry))
@@ -536,7 +485,7 @@ class SessionSubagentTraceController(SessionPortBoundController[SessionControlle
     def _reconcile_subagent_tool_results_from_messages(
         self,
         task: SubagentTask,
-        child: "AgentSession",
+        child: SessionControllerPort,
         messages: list[AgentMessage],
         tool_trace: list[dict[str, object]],
         trace_by_call_id: dict[str, dict[str, object]],
@@ -559,7 +508,7 @@ class SessionSubagentTraceController(SessionPortBoundController[SessionControlle
     def _subagent_after_tool_call_tracer(
         self,
         task: SubagentTask,
-        child: "AgentSession",
+        child: SessionControllerPort,
         tool_trace: list[dict[str, object]],
         trace_by_call_id: dict[str, dict[str, object]],
         original_after_tool_call,
@@ -590,7 +539,7 @@ class SessionSubagentTraceController(SessionPortBoundController[SessionControlle
     def _record_subagent_tool_end(
         self,
         task: SubagentTask,
-        child: "AgentSession",
+        child: SessionControllerPort,
         tool_trace: list[dict[str, object]],
         trace_by_call_id: dict[str, dict[str, object]],
         *,
@@ -625,7 +574,7 @@ class SessionSubagentTraceController(SessionPortBoundController[SessionControlle
             }
             tool_trace.append(entry)
             trace_by_call_id[tool_call_id] = entry
-        elif int(entry.get("endedAtMs", 0) or 0) > 0:
+        elif _safe_int(entry.get("endedAtMs", 0)) > 0:
             return
         result_preview = _tool_result_text(content)
         status = "error" if is_error else "ok"
@@ -637,7 +586,7 @@ class SessionSubagentTraceController(SessionPortBoundController[SessionControlle
                 "argsPreview": entry.get("argsPreview") or _subagent_preview(args),
                 "resultPreview": _truncate_preview(result_preview),
                 "endedAtMs": ended,
-                "elapsedMs": max(0, ended - int(entry.get("startedAtMs", ended) or ended)),
+                "elapsedMs": max(0, ended - _safe_int(entry.get("startedAtMs", ended), ended)),
             }
         )
         self._handle_subagent_event(_subagent_tool_event(task, "subagent_tool_end", entry))
@@ -687,7 +636,11 @@ class SessionSubagentTraceController(SessionPortBoundController[SessionControlle
                 )
                 event = dict(event)
                 event["artifacts"] = artifact_ids
-                event["errors"] = [*list(event.get("errors") or []), *errors]
+                existing_errors = event.get("errors")
+                event["errors"] = [
+                    *(existing_errors if isinstance(existing_errors, list) else []),
+                    *errors,
+                ]
                 summary = event.get("child_summary")
                 if isinstance(summary, str):
                     event["child_summary"] = _replace_artifact_paths(summary, replacements)

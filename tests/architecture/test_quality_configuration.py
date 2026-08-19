@@ -10,14 +10,53 @@ ROOT = Path(__file__).resolve().parents[2]
 PYRIGHT_CONFIG = ROOT / "pyrightconfig.json"
 RUFF_CONFIG = ROOT / "ruff.toml"
 MIGRATED_OWNERS = (
+    "travis/ai/__init__.py",
+    "travis/controller_ports.py",
     "travis/runtime_facade.py",
     "travis/coding_agent/agent_harness.py",
+    "travis/coding_agent/agent_session.py",
     "travis/coding_agent/agent_session_runtime.py",
     "travis/coding_agent/agent_session_services.py",
+    "travis/coding_agent/session_bash.py",
     "travis/coding_agent/session_composition.py",
+    "travis/coding_agent/session_controllers.py",
     "travis/coding_agent/session_contracts.py",
+    "travis/coding_agent/session_events.py",
+    "travis/coding_agent/session_extensions.py",
+    "travis/coding_agent/session_generation_params.py",
+    "travis/coding_agent/session_models.py",
+    "travis/coding_agent/session_operations.py",
     "travis/coding_agent/session_options.py",
+    "travis/coding_agent/session_persistence.py",
+    "travis/coding_agent/session_policy_controller.py",
+    "travis/coding_agent/session_ports.py",
+    "travis/coding_agent/session_state.py",
+    "travis/coding_agent/session_subagents.py",
+    "travis/coding_agent/session_tooling.py",
+    "travis/coding_agent/session_turns.py",
+    "travis/coding_agent/subagent_trace.py",
+    "travis/tui/component.py",
+    "travis/tui/components/__init__.py",
+    "travis/tui/footer_data.py",
+    "travis/tui/interactive_command_dispatcher.py",
     "travis/tui/interactive_contracts.py",
+    "travis/tui/interactive_controllers.py",
+    "travis/tui/interactive_extensions.py",
+    "travis/tui/interactive_lsp.py",
+    "travis/tui/interactive_memory.py",
+    "travis/tui/interactive_mode.py",
+    "travis/tui/interactive_model_auth.py",
+    "travis/tui/interactive_motion.py",
+    "travis/tui/interactive_operations.py",
+    "travis/tui/interactive_params.py",
+    "travis/tui/interactive_process_commands.py",
+    "travis/tui/interactive_services.py",
+    "travis/tui/interactive_session_commands.py",
+    "travis/tui/interactive_shutdown.py",
+    "travis/tui/interactive_state.py",
+    "travis/tui/interactive_subagents.py",
+    "travis/tui/interactive_turn_controller.py",
+    "travis/tui/interactive_view.py",
     "tests/architecture/test_public_type_hints.py",
     "tests/architecture/test_refactor_contracts.py",
     "tests/coding_agent/test_session_composition.py",
@@ -27,11 +66,7 @@ MIGRATED_OWNERS = (
 )
 FATAL_RUFF_RULES = {"E9", "F63", "F7", "F82"}
 NORMAL_RUFF_RULES = "E4,E7,E9,F,I,UP,B,SIM"
-EXACT_F821_DEFERRALS = {
-    "travis/coding_agent/subagent_trace.py",
-    "travis/tui/footer_data.py",
-    "travis/tui/interactive_extensions.py",
-}
+EXACT_F821_DEFERRALS: set[str] = set()
 
 
 def _load_toml(path: Path) -> dict[str, object]:

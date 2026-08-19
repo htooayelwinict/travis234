@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
-
 import time
 
 from travis.coding_agent.memory import MemorySettings, MemoryStore
 from travis.tui.components import StatusLine, Text
+from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
 
 
 class MemoryInspector:
@@ -24,7 +23,7 @@ class MemoryInspector:
         self._project_key = project_key
 
     @classmethod
-    def from_session(cls, session: object) -> "MemoryInspector":
+    def from_session(cls, session: object) -> MemoryInspector:
         settings = getattr(session, "_memory_settings", MemorySettings())
         if not isinstance(settings, MemorySettings):
             settings = MemorySettings()

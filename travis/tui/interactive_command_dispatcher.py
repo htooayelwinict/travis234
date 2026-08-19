@@ -2,57 +2,23 @@
 
 from __future__ import annotations
 
-from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
-
-import inspect
-import json
-import os
 import queue
-import signal as signal_module
-import subprocess
-import threading
-import time
-from concurrent.futures import Future, TimeoutError as FutureTimeoutError
-from dataclasses import dataclass, replace
-from pathlib import Path
-from typing import Callable
+from collections.abc import Callable
+from dataclasses import dataclass
 
-from travis.ai.providers.capabilities import ProviderParamWarning
-from travis.ai.providers.params import GenerationParams, compact_generation_params_display
 from travis.compaction import estimate_tokens
-from travis.coding_agent.session_types import BashResult
-from travis.coding_agent.session_catalog import SessionInfo
-from travis.coding_agent.session_commands import SessionCommandExecutor
-from travis.coding_agent.processes.types import ProcessEvent, ProcessSnapshot, ProcessState
-from travis.coding_agent.tools.bash import BashExecOptions, get_shell_env
-from travis.coding_agent.tools.output_spool import OutputSpool
 from travis.tui.components import (
-    CombinedAutocompleteProvider,
-    Component,
-    Container,
     Editor,
-    FooterComponent,
-    Input,
-    Spacer,
     StatusLine,
     Text,
 )
-from travis.tui.components.autocomplete import _call_autocomplete_method, _settle_autocomplete_result
 from travis.tui.interactive import (
-    AssistantMessageComponent,
-    BashExecutionComponent,
-    message_to_component,
     user_message_to_component,
 )
-from travis.tui.user_commands import (
-    ResolvedUserCommand,
-    UserCommandBinding,
-    UserCommandController,
-    UserCommandHandle,
-)
-
+from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
 from travis.tui.interactive_shutdown import SESSION_COMMAND_SHUTDOWN_TIMEOUT_SECONDS
 from travis.tui.motion import MotionState
+
 
 def _is_manual_compression_command(prompt: str) -> bool:
     return prompt in {"/compress", "/compact"} or prompt.startswith("/compress ") or prompt.startswith("/compact ")
@@ -269,7 +235,11 @@ class InteractiveCommandDispatcher(PortBoundController[InteractiveCommandPort]):
                 submitted: list[str] = []
                 submitted_queue: queue.Queue[str] = queue.Queue()
 
-                def on_submit(value: str) -> None:
+                def on_submit(
+                    value: str,
+                    submitted: list[str] = submitted,
+                    submitted_queue: queue.Queue[str] = submitted_queue,
+                ) -> None:
                     submitted.append(value)
                     submitted_queue.put(value)
 

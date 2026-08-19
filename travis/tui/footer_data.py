@@ -2,51 +2,14 @@
 
 from __future__ import annotations
 
-import inspect
-import json
-import os
-import queue
-import signal as signal_module
 import subprocess
 import threading
-import time
-from concurrent.futures import Future, TimeoutError as FutureTimeoutError
-from dataclasses import dataclass, replace
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
-from travis.ai.providers.capabilities import ProviderParamWarning
-from travis.ai.providers.params import GenerationParams, compact_generation_params_display
-from travis.compaction import estimate_tokens
-from travis.coding_agent.session_types import BashResult
-from travis.coding_agent.session_catalog import SessionInfo
-from travis.coding_agent.session_commands import SessionCommandExecutor
-from travis.coding_agent.processes.types import ProcessEvent, ProcessSnapshot, ProcessState
-from travis.coding_agent.tools.bash import BashExecOptions, get_shell_env
-from travis.coding_agent.tools.output_spool import OutputSpool
-from travis.tui.components import (
-    CombinedAutocompleteProvider,
-    Component,
-    Container,
-    FooterComponent,
-    Input,
-    Spacer,
-    StatusLine,
-    Text,
-)
-from travis.tui.components.autocomplete import _call_autocomplete_method, _settle_autocomplete_result
-from travis.tui.interactive import (
-    AssistantMessageComponent,
-    BashExecutionComponent,
-    message_to_component,
-    user_message_to_component,
-)
-from travis.tui.user_commands import (
-    ResolvedUserCommand,
-    UserCommandBinding,
-    UserCommandController,
-    UserCommandHandle,
-)
+from travis.tui.interactive_services import InteractiveCommandPort
+
 
 def _footer_usage_stats(messages) -> dict[str, object]:
     total_input = 0
@@ -171,7 +134,7 @@ def _path_signature(path: Path) -> tuple[int, int] | None:
 
 
 class _ExtensionFooterDataProvider:
-    def __init__(self, mode: InteractiveMode) -> None:
+    def __init__(self, mode: InteractiveCommandPort) -> None:
         self._mode = mode
         self._cwd = str(mode.app.cwd)
         self._git_paths = _find_git_paths(self._cwd)

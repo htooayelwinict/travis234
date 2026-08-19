@@ -5,8 +5,3 @@ line-length = 120
 select = ["E9", "F63", "F7", "F82"]
 
 [lint.per-file-ignores]
-# CF-P1-session-facade-cycle: replace facade annotations with a leaf session contract.
-"travis/coding_agent/subagent_trace.py" = ["F821"]
-# CF-P2-tui-facade-cycle: replace facade annotations with explicit TUI owner contracts.
-"travis/tui/footer_data.py" = ["F821"]
-"travis/tui/interactive_extensions.py" = ["F821"]

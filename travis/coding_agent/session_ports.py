@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
 import inspect
-from types import MethodType
-from typing import Generic, Protocol, TypeVar
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from typing import Protocol
 
-
-SessionControllerPortT = TypeVar("SessionControllerPortT")
+from travis.controller_ports import BoundController
 
 
 class SessionControllerPort(Protocol):
@@ -17,24 +15,11 @@ class SessionControllerPort(Protocol):
     model_registry: object
     settings_manager: object
 
+    def __getattribute__[AttributeT](self, name: str) -> AttributeT: ...
 
-class SessionPortBoundController(Generic[SessionControllerPortT]):
+
+class SessionPortBoundController[SessionControllerPortT](BoundController[SessionControllerPortT]):
     """Bind a characterized session owner to its injected structural port."""
-
-    __slots__ = ("_port",)
-
-    def __init__(self, port: SessionControllerPortT) -> None:
-        object.__setattr__(self, "_port", port)
-
-    def __getattribute__(self, name: str) -> object:
-        attribute = object.__getattribute__(self, name)
-        if isinstance(attribute, MethodType) and attribute.__self__ is self:
-            try:
-                port = object.__getattribute__(self, "_port")
-            except AttributeError:
-                return attribute
-            return attribute.__func__.__get__(port, type(port))
-        return attribute
 
 
 class SessionControllerDelegate:

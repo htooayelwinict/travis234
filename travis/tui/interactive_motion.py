@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from travis.tui.interactive_services import InteractiveMotionPort, PortBoundController
-
 from travis.tui.motion import MotionState
 
 
@@ -65,9 +64,7 @@ class InteractiveMotion(PortBoundController[InteractiveMotionPort]):
         indicator: str | None = None
         if isinstance(options, dict):
             frames = options.get("frames")
-            if isinstance(frames, list) and frames:
-                indicator = str(frames[0])
-            elif isinstance(frames, tuple) and frames:
+            if isinstance(frames, list) and frames or isinstance(frames, tuple) and frames:
                 indicator = str(frames[0])
             elif frames == []:
                 indicator = ""

@@ -2,33 +2,23 @@
 
 from __future__ import annotations
 
-import inspect
-import json
 import os
-import queue
-import signal as signal_module
-import subprocess
 import threading
-import time
-from concurrent.futures import Future, TimeoutError as FutureTimeoutError
-from dataclasses import dataclass, replace
-from pathlib import Path
-from typing import Callable
+from collections.abc import Callable, Mapping
+from concurrent.futures import Future
+from typing import cast
 
 from travis.ai.providers.capabilities import ProviderParamWarning
-from travis.ai.providers.params import GenerationParams, compact_generation_params_display
-from travis.compaction import estimate_tokens
+from travis.ai.providers.params import GenerationParams
 from travis.coding_agent.agent_session import BashResult
 from travis.coding_agent.extension_host import ExtensionHostAdapter
-from travis.coding_agent.session_catalog import SessionInfo
+from travis.coding_agent.processes.types import ProcessState
 from travis.coding_agent.session_commands import SessionCommandExecutor
 from travis.coding_agent.source_info import SourceInfo
 from travis.coding_agent.themes import Theme, ThemeRegistry
-from travis.coding_agent.processes.types import ProcessEvent, ProcessSnapshot, ProcessState
-from travis.coding_agent.tools.bash import BashExecOptions, get_shell_env
-from travis.coding_agent.tools.output_spool import OutputSpool
+from travis.runtime_facade import RuntimeFacade
+from travis.tui.builtin_themes import BUILTIN_THEMES, resolve_builtin_theme
 from travis.tui.components import (
-    CombinedAutocompleteProvider,
     Component,
     Container,
     FooterComponent,
@@ -37,46 +27,189 @@ from travis.tui.components import (
     StatusLine,
     Text,
 )
-from travis.tui.components.autocomplete import _call_autocomplete_method, _settle_autocomplete_result
+from travis.tui.footer_data import (
+    _GIT_WATCH_DEBOUNCE_SECONDS,
+    _GIT_WATCH_POLL_SECONDS,
+    _UNSET_BRANCH,
+    _ExtensionFooterDataProvider,
+    _find_git_paths,
+    _footer_usage_stats,
+    _GitPaths,
+    _path_signature,
+    _resolve_branch_with_git_sync,
+    _resolve_git_branch_sync,
+)
 from travis.tui.interactive import (
-    AssistantMessageComponent,
     BashExecutionComponent,
-    message_to_component,
-    user_message_to_component,
 )
-from travis.tui.user_commands import (
-    ResolvedUserCommand,
-    UserCommandBinding,
-    UserCommandController,
-    UserCommandHandle,
+from travis.tui.interactive_command_dispatcher import (
+    BUILTIN_COMMAND_BINDINGS,
+    CommandBinding,
+    InteractiveCommandDispatcher,
+    _is_command_like_slash_prompt,
+    _is_help_command,
+    _is_lsp_status_command,
+    _is_manual_compression_command,
+    _is_openrouter_model,
+    _is_processes_command,
+    _is_prompt_level_skill_trigger,
+    _is_reload_command,
+    _is_trust_command,
+    _parse_agents_command,
+    _parse_auth_command,
+    _parse_bash_command,
+    _parse_memory_command,
+    _parse_model_command,
+    _parse_motion_command,
+    _parse_operations_command,
+    _parse_params_command,
+    _parse_session_command,
+    classify_builtin_command,
 )
-from travis.tui.builtin_themes import BUILTIN_THEMES, resolve_builtin_theme
+from travis.tui.interactive_controllers import InteractiveControllers
+from travis.tui.interactive_extensions import (
+    InteractiveExtensions,
+    _apply_hidden_thinking_label,
+    _autocomplete_trigger_characters,
+    _coerce_extension_component,
+    _create_extension_widget_component,
+    _dispose_extension_widget,
+    _extension_dialog_aborted,
+    _extension_dialog_label,
+    _extension_dialog_secret,
+    _ExtensionShortcutUI,
+    _manual_compression_focus,
+    _manual_compression_options,
+    _resolve_extension_select_choice,
+    _set_autocomplete_trigger_characters,
+)
+from travis.tui.interactive_lsp import InteractiveLsp, format_lsp_status
+from travis.tui.interactive_memory import InteractiveMemory, MemoryInspector
+from travis.tui.interactive_model_auth import (
+    InteractiveModelAuth,
+    _dedupe_models,
+    _filter_model_candidates,
+    _match_oauth_provider,
+    _model_label,
+    _resolve_model_query,
+)
+from travis.tui.interactive_motion import InteractiveMotion
+from travis.tui.interactive_operations import InteractiveOperations, OperationInspector
+from travis.tui.interactive_params import (
+    InteractiveParams,
+    _compact_generation_param_warnings,
+    _params_argument_completions,
+)
+from travis.tui.interactive_process_commands import InteractiveProcessCommands
+from travis.tui.interactive_services import (
+    InteractiveCommandPort,
+    InteractiveMotionPort,
+    InteractiveViewPort,
+    install_controller_delegates,
+)
+from travis.tui.interactive_session_commands import InteractiveSessionCommands
+from travis.tui.interactive_shutdown import (
+    _SIGINT_HANDLER_UNCHANGED,
+    ACTIVE_TURN_SHUTDOWN_TIMEOUT_SECONDS,
+    IDLE_CTRL_C_EXIT_WINDOW_SECONDS,
+    LATE_ABORT_GRACE_SECONDS,
+    OPENROUTER_MODEL_CACHE_TTL_SECONDS,
+    OPENROUTER_MODEL_PICKER_LIMIT,
+    SESSION_COMMAND_SHUTDOWN_TIMEOUT_SECONDS,
+    InputFn,
+    InteractiveShutdown,
+)
+from travis.tui.interactive_subagents import InteractiveSubagents
+from travis.tui.interactive_tool_approval import InteractiveToolApprovalBroker
+from travis.tui.interactive_turn_controller import InteractiveTurnController
+from travis.tui.interactive_view import InteractiveView, _short_status_text
 from travis.tui.motion import MotionController
 from travis.tui.theme import ThemeContext
 from travis.tui.theme_controller import ThemeController
+from travis.tui.user_commands import (
+    UserCommandController,
+    UserCommandHandle,
+)
 
-from travis.tui.interactive_command_dispatcher import *  # noqa: F403
-from travis.tui.interactive_extensions import *  # noqa: F403
-from travis.tui.interactive_lsp import *  # noqa: F403
-from travis.tui.interactive_memory import *  # noqa: F403
-from travis.tui.interactive_model_auth import *  # noqa: F403
-from travis.tui.interactive_motion import *  # noqa: F403
-from travis.tui.interactive_operations import *  # noqa: F403
-from travis.tui.interactive_params import *  # noqa: F403
-from travis.tui.interactive_process_commands import *  # noqa: F403
-from travis.tui.interactive_session_commands import *  # noqa: F403
-from travis.tui.interactive_shutdown import *  # noqa: F403
-from travis.tui.interactive_subagents import *  # noqa: F403
-from travis.tui.interactive_turn_controller import *  # noqa: F403
-from travis.tui.interactive_view import *  # noqa: F403
-from travis.tui.footer_data import *  # noqa: F403
-from travis.runtime_facade import RuntimeFacade
-
-from travis.tui.footer_data import _ExtensionFooterDataProvider
-from travis.tui.interactive_shutdown import InputFn
-from travis.tui.interactive_tool_approval import InteractiveToolApprovalBroker
-from travis.tui.interactive_controllers import InteractiveControllers
-from travis.tui.interactive_services import install_controller_delegates
+__all__ = (
+    "ACTIVE_TURN_SHUTDOWN_TIMEOUT_SECONDS",
+    "BUILTIN_COMMAND_BINDINGS",
+    "CommandBinding",
+    "IDLE_CTRL_C_EXIT_WINDOW_SECONDS",
+    "InputFn",
+    "InteractiveExtensions",
+    "InteractiveLsp",
+    "InteractiveMemory",
+    "InteractiveMode",
+    "InteractiveModelAuth",
+    "InteractiveMotion",
+    "InteractiveOperations",
+    "InteractiveParams",
+    "InteractiveProcessCommands",
+    "InteractiveSessionCommands",
+    "InteractiveShutdown",
+    "InteractiveSubagents",
+    "InteractiveTurnController",
+    "InteractiveView",
+    "LATE_ABORT_GRACE_SECONDS",
+    "MemoryInspector",
+    "OPENROUTER_MODEL_CACHE_TTL_SECONDS",
+    "OPENROUTER_MODEL_PICKER_LIMIT",
+    "OperationInspector",
+    "SESSION_COMMAND_SHUTDOWN_TIMEOUT_SECONDS",
+    "classify_builtin_command",
+    "format_lsp_status",
+    "_dedupe_models",
+    "_apply_hidden_thinking_label",
+    "_autocomplete_trigger_characters",
+    "_coerce_extension_component",
+    "_create_extension_widget_component",
+    "_dispose_extension_widget",
+    "_ExtensionFooterDataProvider",
+    "_ExtensionShortcutUI",
+    "_extension_dialog_aborted",
+    "_extension_dialog_label",
+    "_extension_dialog_secret",
+    "_find_git_paths",
+    "_footer_usage_stats",
+    "_GIT_WATCH_DEBOUNCE_SECONDS",
+    "_GIT_WATCH_POLL_SECONDS",
+    "_GitPaths",
+    "_is_command_like_slash_prompt",
+    "_is_help_command",
+    "_is_lsp_status_command",
+    "_is_manual_compression_command",
+    "_is_openrouter_model",
+    "_is_processes_command",
+    "_is_prompt_level_skill_trigger",
+    "_is_reload_command",
+    "_is_trust_command",
+    "_manual_compression_focus",
+    "_manual_compression_options",
+    "_match_oauth_provider",
+    "_model_label",
+    "_parse_agents_command",
+    "_parse_auth_command",
+    "_parse_bash_command",
+    "_parse_memory_command",
+    "_parse_model_command",
+    "_parse_motion_command",
+    "_parse_operations_command",
+    "_parse_params_command",
+    "_parse_session_command",
+    "_params_argument_completions",
+    "_path_signature",
+    "_resolve_branch_with_git_sync",
+    "_resolve_extension_select_choice",
+    "_resolve_git_branch_sync",
+    "_resolve_model_query",
+    "_set_autocomplete_trigger_characters",
+    "_short_status_text",
+    "_SIGINT_HANDLER_UNCHANGED",
+    "_UNSET_BRANCH",
+    "_compact_generation_param_warnings",
+    "_filter_model_candidates",
+)
 
 
 def _builtin_theme_records() -> list[Theme]:
@@ -85,8 +218,8 @@ def _builtin_theme_records() -> list[Theme]:
         records.append(
             Theme(
                 name=name,
-                colors=dict(definition["colors"]),
-                vars=dict(definition["vars"]),
+                colors=cast(dict[str, object], dict(cast(Mapping[str, object], definition["colors"]))),
+                vars=cast(dict[str, object], dict(cast(Mapping[str, object], definition["vars"]))),
                 source_path="",
                 source_info=SourceInfo(
                     path=f"builtin:{name}",
@@ -108,6 +241,9 @@ def _terminal_color_mode() -> str:
 class _InteractiveRuntime:
     """Internal TUI runtime assembled from focused behavior owners."""
 
+    def __getattribute__[AttributeT](self, name: str) -> AttributeT:
+        return cast(AttributeT, object.__getattribute__(self, name))
+
     MAX_WIDGET_LINES = 10
 
     def __init__(
@@ -121,21 +257,22 @@ class _InteractiveRuntime:
         open_resume_picker: bool = False,
     ) -> None:
         self.app = app
+        command_port = cast(InteractiveCommandPort, self)
         self.controllers = InteractiveControllers(
-            command_dispatch=InteractiveCommandDispatcher(self),
-            view=InteractiveView(self),
-            model_auth=InteractiveModelAuth(self),
-            params=InteractiveParams(self),
-            processes=InteractiveProcessCommands(self),
-            lsp=InteractiveLsp(self),
-            memory=InteractiveMemory(self),
-            operations=InteractiveOperations(self),
-            subagents=InteractiveSubagents(self),
-            sessions=InteractiveSessionCommands(self),
-            extensions=InteractiveExtensions(self),
-            turns=InteractiveTurnController(self),
-            shutdown=InteractiveShutdown(self),
-            motion=InteractiveMotion(self),
+            command_dispatch=InteractiveCommandDispatcher(command_port),
+            view=InteractiveView(cast(InteractiveViewPort, self)),
+            model_auth=InteractiveModelAuth(command_port),
+            params=InteractiveParams(command_port),
+            processes=InteractiveProcessCommands(command_port),
+            lsp=InteractiveLsp(command_port),
+            memory=InteractiveMemory(command_port),
+            operations=InteractiveOperations(command_port),
+            subagents=InteractiveSubagents(command_port),
+            sessions=InteractiveSessionCommands(command_port),
+            extensions=InteractiveExtensions(command_port),
+            turns=InteractiveTurnController(command_port),
+            shutdown=InteractiveShutdown(command_port),
+            motion=InteractiveMotion(cast(InteractiveMotionPort, self)),
         )
         self.startup_generation_params = generation_params or GenerationParams()
         self.generation_params = self.startup_generation_params
@@ -264,7 +401,7 @@ class _InteractiveRuntime:
             theme_context=self.theme_context,
         )
         self.footer_container = Container([self.footer])
-        self.footer_data_provider = _ExtensionFooterDataProvider(self)
+        self.footer_data_provider = _ExtensionFooterDataProvider(command_port)
         self.custom_footer: object | None = None
         if hasattr(app, "renderer") and hasattr(app.renderer, "set_output_container"):
             app.renderer.set_output_container(self.history)

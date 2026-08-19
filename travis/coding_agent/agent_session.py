@@ -2,66 +2,34 @@
 
 from __future__ import annotations
 
-import json
-import os
-import re
-import subprocess
 import threading
-import time
-from dataclasses import dataclass
-from dataclasses import replace
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Callable, Mapping, Optional
+from typing import cast
 
 from travis.agent.agent import Agent
-from travis.agent.types import AbortSignal
-from travis.agent.types import AfterToolCallResult
-from travis.agent.types import AgentContext
-from travis.agent.types import AgentLoopTurnUpdate
-from travis.agent.types import AgentTool
-from travis.agent.types import AgentToolResult
-from travis.agent.types import AgentMessage
-from travis.agent.types import BeforeToolCallResult
-from travis.agent.types import MessageEndEvent, MessageStartEvent
+from travis.agent.types import AbortSignal, AgentMessage, AgentTool, QueueMode, ThinkingLevel
 from travis.ai.model_resolver import ScopedModel
 from travis.ai.providers.params import GenerationParams
-from travis.ai.models import (
-    clamp_thinking_level,
-    get_supported_thinking_levels,
-)
-from travis.ai.types import AssistantMessage, Cost, ImageContent, Message, Model, TextContent, UserMessage, now_ms
-from travis.ai.types import ToolCall, ToolResultMessage, Usage
-from travis.compaction.compressor import LEGACY_SUMMARY_PREFIX, SUMMARY_END_MARKER, SUMMARY_PREFIX, estimate_tokens
-from travis.compaction.timing import CompactionManager
-from travis.coding_agent.branch_summarization import generate_branch_summary
-from travis.coding_agent.artifacts import ArtifactRegistry
+from travis.ai.types import AssistantMessage, Message, Model
+from travis.coding_agent.auth_storage import AuthStorage
+from travis.coding_agent.capabilities import WorkspaceCapability
 from travis.coding_agent.compaction_adapter import (
+    CompactionSessionState,
     SessionCompactionAdapter,
-    compaction_summary_with_details,
 )
 from travis.coding_agent.compaction_coordinator import (
     CompactionCoordinator,
     CompactionTransactionCoordinator,
 )
-from travis.coding_agent.capabilities import WorkspaceCapability
 from travis.coding_agent.config import get_agent_dir, get_packaged_context_paths
-from travis.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
+from travis.coding_agent.eval_trace import SecretRedactor
 from travis.coding_agent.execution_backend import select_execution_backend
-from travis.coding_agent.mailbox import CodingTurnMailbox, MailboxKind
+from travis.coding_agent.extensions import ExtensionRunner
 from travis.coding_agent.language_services.manager import LanguageServiceManager
 from travis.coding_agent.language_services.tool import create_lsp_tool_definition
-from travis.coding_agent.message_utils import (
-    bash_execution_text as _bash_execution_to_text,
-    last_assistant_message as _last_assistant_message,
-    user_message_text as _text_from_user_message_content,
-)
-from travis.coding_agent.object_utils import settings_value as _settings_value
-from travis.coding_agent.operations import NullOperationCoordinator
-from travis.coding_agent.process_context import ProcessContextResolver
-from travis.coding_agent.processes.local import create_local_process_transport
-from travis.coding_agent.processes.service import ProcessSessionService
-from travis.coding_agent.processes.types import ProcessOwner
-from travis.coding_agent.eval_trace import SecretRedactor
+from travis.coding_agent.language_services.types import LanguageServerConfig
+from travis.coding_agent.mailbox import CodingTurnMailbox
 from travis.coding_agent.memory import (
     MemorySettings,
     MemoryStore,
@@ -72,62 +40,202 @@ from travis.coding_agent.memory.tool import (
     MemoryToolRuntime,
     create_memory_tool_definition,
 )
-from travis.coding_agent.policy import ToolApprovalBroker, ToolPolicyEngine, ToolPolicySettings
-from travis.coding_agent.auth_storage import AuthStorage
 from travis.coding_agent.model_registry import ModelRegistry
 from travis.coding_agent.model_roles import ModelRole, ModelRoleRouter
+from travis.coding_agent.operations import NullOperationCoordinator, OperationRuntime
+from travis.coding_agent.policy import (
+    ToolApprovalBroker,
+    ToolEffect,
+    ToolPolicyEngine,
+    ToolPolicyMode,
+    ToolPolicySettings,
+)
+from travis.coding_agent.process_context import ProcessContextResolver
+from travis.coding_agent.processes.service import ProcessSessionService
+from travis.coding_agent.processes.types import ProcessOwner
 from travis.coding_agent.resource_loader import DefaultResourceLoader
+from travis.coding_agent.session_bash import SessionBashController
+from travis.coding_agent.session_controllers import SessionControllers
+from travis.coding_agent.session_events import SessionEventController
+from travis.coding_agent.session_extensions import SessionExtensionController
+from travis.coding_agent.session_generation_params import SessionGenerationParams
 from travis.coding_agent.session_index import SessionIndex
+from travis.coding_agent.session_models import SessionModelController
+from travis.coding_agent.session_operations import SessionOperationController
+from travis.coding_agent.session_persistence import SessionPersistence
+from travis.coding_agent.session_policy_controller import SessionPolicyController
+from travis.coding_agent.session_ports import SessionControllerPort, install_session_controller_delegates
 from travis.coding_agent.session_store import (
     BashExecutionMessage,
-    BranchSummaryMessage,
-    CustomMessage,
     SessionStore,
-    deserialize_message,
+)
+from travis.coding_agent.session_subagents import SessionSubagentController
+from travis.coding_agent.session_tooling import SessionToolController
+from travis.coding_agent.session_turns import SessionTurnController
+from travis.coding_agent.session_types import (
+    _BRANCH_SUMMARY_PREFIX as _BRANCH_SUMMARY_PREFIX,
+)
+from travis.coding_agent.session_types import (
+    _BRANCH_SUMMARY_SUFFIX as _BRANCH_SUMMARY_SUFFIX,
+)
+from travis.coding_agent.session_types import (
+    _CANCEL_SUBAGENT_SCHEMA as _CANCEL_SUBAGENT_SCHEMA,
+)
+from travis.coding_agent.session_types import (
+    _COMPACTION_SUMMARY_PREFIX as _COMPACTION_SUMMARY_PREFIX,
+)
+from travis.coding_agent.session_types import (
+    _COMPACTION_SUMMARY_SUFFIX as _COMPACTION_SUMMARY_SUFFIX,
+)
+from travis.coding_agent.session_types import (
+    _DEFAULT_ACTIVE_TOOL_NAMES as _DEFAULT_ACTIVE_TOOL_NAMES,
+)
+from travis.coding_agent.session_types import (
+    _DEFAULT_SUBAGENT_ALLOWED_TOOLS as _DEFAULT_SUBAGENT_ALLOWED_TOOLS,
+)
+from travis.coding_agent.session_types import (
+    _EXPAND_SUBAGENT_RESULT_SCHEMA as _EXPAND_SUBAGENT_RESULT_SCHEMA,
+)
+from travis.coding_agent.session_types import (
+    _LIST_SUBAGENTS_SCHEMA as _LIST_SUBAGENTS_SCHEMA,
+)
+from travis.coding_agent.session_types import (
+    _MALFORMED_STREAM_RECOVERY_PREFIX as _MALFORMED_STREAM_RECOVERY_PREFIX,
+)
+from travis.coding_agent.session_types import (
+    _MALFORMED_STREAMED_TOOL_ARGS_MARKER as _MALFORMED_STREAMED_TOOL_ARGS_MARKER,
+)
+from travis.coding_agent.session_types import (
+    _MALFORMED_STREAMED_TOOL_CALL_ARGUMENTS_CODE as _MALFORMED_STREAMED_TOOL_CALL_ARGUMENTS_CODE,
+)
+from travis.coding_agent.session_types import (
+    _MAX_PARTIAL_STREAM_CONTINUATIONS as _MAX_PARTIAL_STREAM_CONTINUATIONS,
+)
+from travis.coding_agent.session_types import (
+    _MODEL_SUBAGENT_SPAWN_LIMIT_PER_TURN as _MODEL_SUBAGENT_SPAWN_LIMIT_PER_TURN,
+)
+from travis.coding_agent.session_types import (
+    _MODEL_SUBAGENT_TIMEOUT_SECONDS_DEFAULT as _MODEL_SUBAGENT_TIMEOUT_SECONDS_DEFAULT,
+)
+from travis.coding_agent.session_types import (
+    _MODEL_SUBAGENT_TIMEOUT_SECONDS_MAX as _MODEL_SUBAGENT_TIMEOUT_SECONDS_MAX,
+)
+from travis.coding_agent.session_types import (
+    _NON_RETRYABLE_PROVIDER_LIMIT_MARKERS as _NON_RETRYABLE_PROVIDER_LIMIT_MARKERS,
+)
+from travis.coding_agent.session_types import (
+    _PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE as _PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE,
+)
+from travis.coding_agent.session_types import (
+    _PARTIAL_STREAM_STUB_ID as _PARTIAL_STREAM_STUB_ID,
+)
+from travis.coding_agent.session_types import (
+    _RETRYABLE_ERROR_MARKERS as _RETRYABLE_ERROR_MARKERS,
+)
+from travis.coding_agent.session_types import (
+    _SKILL_SUBAGENT_ALLOWED_TOOL_NAMES as _SKILL_SUBAGENT_ALLOWED_TOOL_NAMES,
+)
+from travis.coding_agent.session_types import (
+    _SPAWN_SUBAGENT_SCHEMA as _SPAWN_SUBAGENT_SCHEMA,
+)
+from travis.coding_agent.session_types import (
+    _SUBAGENT_EXPANSION_BUDGETS as _SUBAGENT_EXPANSION_BUDGETS,
+)
+from travis.coding_agent.session_types import (
+    _SUBAGENT_OPT_IN_TERMS as _SUBAGENT_OPT_IN_TERMS,
+)
+from travis.coding_agent.session_types import (
+    _SUBAGENT_OPT_OUT_TERMS as _SUBAGENT_OPT_OUT_TERMS,
+)
+from travis.coding_agent.session_types import (
+    _SUBAGENT_RESULT_SUMMARY_LIMIT as _SUBAGENT_RESULT_SUMMARY_LIMIT,
+)
+from travis.coding_agent.session_types import (
+    _SUBAGENT_TOOL_NAMES as _SUBAGENT_TOOL_NAMES,
+)
+from travis.coding_agent.session_types import (
+    _SUBAGENT_TOOL_TRACE_DISPLAY_LIMIT as _SUBAGENT_TOOL_TRACE_DISPLAY_LIMIT,
+)
+from travis.coding_agent.session_types import (
+    _SUBAGENT_VISIBLE_SUMMARY_LIMIT as _SUBAGENT_VISIBLE_SUMMARY_LIMIT,
+)
+from travis.coding_agent.session_types import (
+    _TASK_ID_SCHEMA as _TASK_ID_SCHEMA,
+)
+from travis.coding_agent.session_types import (
+    _THINKING_LEVELS as _THINKING_LEVELS,
+)
+from travis.coding_agent.session_types import (
+    AgentSettledEvent as AgentSettledEvent,
+)
+from travis.coding_agent.session_types import (
+    AutoRetryEndEvent as AutoRetryEndEvent,
+)
+from travis.coding_agent.session_types import (
+    AutoRetryStartEvent as AutoRetryStartEvent,
+)
+from travis.coding_agent.session_types import (
+    BashResult as BashResult,
+)
+from travis.coding_agent.session_types import (
+    CompactionResult as CompactionResult,
+)
+from travis.coding_agent.session_types import (
+    ExtensionCommandContext as ExtensionCommandContext,
+)
+from travis.coding_agent.session_types import (
+    ExtensionCompactionResult as ExtensionCompactionResult,
+)
+from travis.coding_agent.session_types import (
+    ModelCycleResult as ModelCycleResult,
+)
+from travis.coding_agent.session_types import (
+    QueueUpdateEvent as QueueUpdateEvent,
+)
+from travis.coding_agent.session_types import (
+    SessionInfoChangedEvent as SessionInfoChangedEvent,
+)
+from travis.coding_agent.session_types import (
+    ThinkingLevelChangedEvent as ThinkingLevelChangedEvent,
+)
+from travis.coding_agent.session_types import (
+    _prompt_rejects_subagent_tools as _prompt_rejects_subagent_tools,
+)
+from travis.coding_agent.session_types import (
+    _prompt_requests_subagent_tools as _prompt_requests_subagent_tools,
+)
+from travis.coding_agent.session_types import (
+    _tool_result_text as _tool_result_text,
+)
+from travis.coding_agent.session_types import (
+    default_convert_to_llm as default_convert_to_llm,
 )
 from travis.coding_agent.settings_manager import SettingsManager
 from travis.coding_agent.source_info import SourceInfo, create_synthetic_source_info
-from travis.coding_agent.system_prompt import BuildSystemPromptOptions, build_system_prompt
+from travis.coding_agent.subagent_trace import SessionSubagentTraceController
 from travis.coding_agent.subagents import (
     CallableSubagentBackend,
     CodexExecBackend,
     SubagentResult,
     SubagentSupervisor,
-    SubagentTask,
 )
 from travis.coding_agent.tools import create_all_tool_definitions
-from travis.coding_agent.tools.bash import BashExecOptions, BashOperations, create_local_bash_operations, get_shell_env
-from travis.coding_agent.tools.output_spool import OutputSpool
-from travis.coding_agent.tools.process import PROCESS_ACTIONS, create_process_tool_definition, prepare_process_arguments
+from travis.coding_agent.tools.process import create_process_tool_definition
 from travis.coding_agent.tools.types import (
     ToolContext,
     ToolDefinition,
     create_tool_definition_from_agent_tool,
     wrap_tool_definition,
 )
-
-from travis.coding_agent.session_types import *  # noqa: F403
+from travis.compaction.timing import CompactionManager
 from travis.runtime_facade import RuntimeFacade
 
-from travis.coding_agent.session_events import SessionEventController
-from travis.coding_agent.session_tooling import SessionToolController
-from travis.coding_agent.session_extensions import SessionExtensionController
-from travis.coding_agent.session_turns import SessionTurnController
-from travis.coding_agent.session_subagents import SessionSubagentController
-from travis.coding_agent.subagent_trace import SessionSubagentTraceController
-from travis.coding_agent.session_models import SessionModelController
-from travis.coding_agent.session_generation_params import SessionGenerationParams
-from travis.coding_agent.session_persistence import SessionPersistence
-from travis.coding_agent.session_bash import SessionBashController
-from travis.coding_agent.session_policy_controller import SessionPolicyController
-from travis.coding_agent.session_operations import SessionOperationController
-from travis.coding_agent.session_controllers import SessionControllers
-from travis.coding_agent.session_ports import install_session_controller_delegates
-
-from travis.coding_agent.session_types import default_convert_to_llm
 
 class _SessionRuntime:
     """Internal runtime assembled from focused behavior owners."""
+
+    def __getattribute__[AttributeT](self, name: str) -> AttributeT:
+        return cast(AttributeT, object.__getattribute__(self, name))
 
     def __init__(
         self,
@@ -140,14 +248,14 @@ class _SessionRuntime:
         allowed_tool_names: list[str] | None = None,
         excluded_tool_names: list[str] | None = None,
         additional_active_tool_names: list[str] | None = None,
-        convert_to_llm: Optional[Callable[[list[AgentMessage]], list[Message]]] = None,
+        convert_to_llm: Callable[[list[AgentMessage]], list[Message]] | None = None,
         custom_prompt: str | None = None,
         append_system_prompt: str | None = None,
         transform_context=None,
-        thinking_level: str = "off",
+        thinking_level: ThinkingLevel = "off",
         scoped_models: list[ScopedModel] | None = None,
-        steering_mode: str = "one-at-a-time",
-        follow_up_mode: str = "one-at-a-time",
+        steering_mode: QueueMode = "one-at-a-time",
+        follow_up_mode: QueueMode = "one-at-a-time",
         transport: str | None = None,
         thinking_budgets: dict[str, int] | None = None,
         max_retry_delay_ms: int | None = None,
@@ -166,7 +274,7 @@ class _SessionRuntime:
         resource_loader: DefaultResourceLoader | None = None,
         agent_dir: str | None = None,
         session_index: SessionIndex | None = None,
-        settings_manager: object | None = None,
+        settings_manager: SettingsManager | None = None,
         stream_fn=None,
         model_registry: ModelRegistry | None = None,
         process_service: ProcessSessionService | None = None,
@@ -177,24 +285,25 @@ class _SessionRuntime:
         tool_approval_broker: ToolApprovalBroker | None = None,
         tool_policy_event_sink: Callable[[dict[str, object]], None] | None = None,
         tool_policy_redactor: SecretRedactor | None = None,
-        operation_runtime: object | None = None,
+        operation_runtime: OperationRuntime | None = None,
         owns_operation_runtime: bool = False,
         operation_role: str | None = None,
         operation_task_id: str | None = None,
     ) -> None:
+        controller_port = cast(SessionControllerPort, self)
         self.controllers = SessionControllers(
-            events=SessionEventController(self),
-            models=SessionModelController(self),
-            generation=SessionGenerationParams(self),
-            persistence=SessionPersistence(self),
-            bash=SessionBashController(self),
-            policy=SessionPolicyController(self),
-            operations=SessionOperationController(self),
-            tools=SessionToolController(self),
-            extensions=SessionExtensionController(self),
-            subagents=SessionSubagentController(self),
-            subagent_trace=SessionSubagentTraceController(self),
-            turns=SessionTurnController(self),
+            events=SessionEventController(controller_port),
+            models=SessionModelController(controller_port),
+            generation=SessionGenerationParams(controller_port),
+            persistence=SessionPersistence(controller_port),
+            bash=SessionBashController(controller_port),
+            policy=SessionPolicyController(controller_port),
+            operations=SessionOperationController(controller_port),
+            tools=SessionToolController(controller_port),
+            extensions=SessionExtensionController(controller_port),
+            subagents=SessionSubagentController(controller_port),
+            subagent_trace=SessionSubagentTraceController(controller_port),
+            turns=SessionTurnController(controller_port),
         )
         self.cwd = cwd
         self.model_registry = model_registry or ModelRegistry.create(AuthStorage.create())
@@ -213,15 +322,16 @@ class _SessionRuntime:
         )
         self.settings_manager = settings_manager or SettingsManager.in_memory()
         tool_policy_getter = getattr(self.settings_manager, "get_tool_policy_settings", None)
-        tool_policy_raw = (
+        tool_policy_raw = cast(
+            dict[str, object],
             tool_policy_getter()
             if callable(tool_policy_getter)
-            else {"mode": "audit", "autoAllowEffects": ["read"]}
+            else {"mode": "audit", "autoAllowEffects": ["read"]},
         )
         self._tool_policy_engine = ToolPolicyEngine(
             ToolPolicySettings(
-                mode=tool_policy_raw["mode"],
-                auto_allow_effects=frozenset(tool_policy_raw["autoAllowEffects"]),
+                mode=cast(ToolPolicyMode, tool_policy_raw["mode"]),
+                auto_allow_effects=frozenset(cast(list[ToolEffect], tool_policy_raw["autoAllowEffects"])),
             ),
             broker=tool_approval_broker,
             redactor=tool_policy_redactor,
@@ -349,8 +459,9 @@ class _SessionRuntime:
             settings_manager=self.settings_manager,
         )
         memory_getter = getattr(self.settings_manager, "get_memory_settings", None)
-        self._memory_settings = (
-            memory_getter() if callable(memory_getter) else MemorySettings()
+        self._memory_settings = cast(
+            MemorySettings,
+            memory_getter() if callable(memory_getter) else MemorySettings(),
         )
         self._memory_project_key = project_key_for_path(cwd)
         memory_requested = (
@@ -385,8 +496,9 @@ class _SessionRuntime:
         )
         self._language_services: LanguageServiceManager | None = None
         language_server_getter = getattr(self.settings_manager, "get_language_server_configs", None)
-        language_server_configs = (
-            language_server_getter() if callable(language_server_getter) else []
+        language_server_configs = cast(
+            list[LanguageServerConfig],
+            language_server_getter() if callable(language_server_getter) else [],
         )
         if (
             tools is None
@@ -400,7 +512,7 @@ class _SessionRuntime:
         self._defer_agent_settled = bool(defer_agent_settled)
         restored_context = self._session_store.build_context(default_thinking_level=thinking_level) if self._session_store else None
         if restored_context:
-            thinking_level = restored_context.thinking_level
+            thinking_level = cast(ThinkingLevel, restored_context.thinking_level)
             self._session_name = restored_context.session_name
             self._generation_param_overrides = restored_context.generation_params
 
@@ -512,7 +624,7 @@ class _SessionRuntime:
         self._compaction_coordinator = CompactionCoordinator(self.agent)
         self._compaction_adapter = SessionCompactionAdapter(
             session_store=self._session_store,
-            state=self.agent.state,
+            state=cast(CompactionSessionState, self.agent.state),
             process_context=self._process_context,
             emit=self._emit,
             set_session_name=lambda value: setattr(self, "_session_name", value),
@@ -772,7 +884,7 @@ class AgentSession(RuntimeFacade):
 
     def __init__(self, *args, **kwargs) -> None:
         runtime = _SessionRuntime(*args, **kwargs)
-        runtime._session_factory = type(self)
+        object.__setattr__(runtime, "_session_factory", type(self))
         object.__setattr__(self, "_runtime", runtime)
 
     def dispose(self) -> None:
@@ -807,7 +919,7 @@ def create_agent_session(
     active_tool_names: list[str] | None = None,
     allowed_tool_names: list[str] | None = None,
     excluded_tool_names: list[str] | None = None,
-    convert_to_llm: Optional[Callable[[list[AgentMessage]], list[Message]]] = None,
+    convert_to_llm: Callable[[list[AgentMessage]], list[Message]] | None = None,
     extension_runner: ExtensionRunner | None = None,
     session_start_event: dict[str, object] | None = None,
     defer_session_start: bool = False,

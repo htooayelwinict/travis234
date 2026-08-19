@@ -2,95 +2,41 @@
 
 from __future__ import annotations
 
-from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
-
-import json
-import os
-import re
-import subprocess
-import time
-from dataclasses import dataclass
-from dataclasses import replace
 from pathlib import Path
-from typing import Callable, Mapping, Optional
 
-from travis.agent.agent import Agent
-from travis.agent.types import AbortSignal
-from travis.agent.types import AfterToolCallResult
-from travis.agent.types import AgentContext
-from travis.agent.types import AgentLoopTurnUpdate
-from travis.agent.types import AgentTool
-from travis.agent.types import AgentToolResult
-from travis.agent.types import AgentMessage
-from travis.agent.types import BeforeToolCallResult
-from travis.agent.types import MessageEndEvent, MessageStartEvent
-from travis.ai.model_resolver import ScopedModel
-from travis.ai.models import (
-    clamp_thinking_level,
-    get_supported_thinking_levels,
+from travis.agent.types import (
+    AgentMessage,
 )
 from travis.ai.context_estimate import (
     calculate_prompt_tokens,
     estimate_context_tokens,
     estimate_full_context_tokens,
 )
-from travis.ai.types import AssistantMessage, Context, Cost, ImageContent, Message, Model, TextContent, Tool, UserMessage, now_ms
-from travis.ai.types import ToolCall, ToolResultMessage, Usage
-from travis.compaction.compressor import LEGACY_SUMMARY_PREFIX, SUMMARY_END_MARKER, SUMMARY_PREFIX, estimate_tokens
-from travis.compaction.timing import CompactionManager
+from travis.ai.types import (
+    AssistantMessage,
+    Context,
+    ImageContent,
+    TextContent,
+    Tool,
+    ToolCall,
+    ToolResultMessage,
+    Usage,
+    UserMessage,
+)
 from travis.coding_agent.branch_summarization import generate_branch_summary
-from travis.coding_agent.artifacts import ArtifactRegistry
 from travis.coding_agent.compaction_adapter import (
     SessionCompactionAdapter,
-    compaction_summary_with_details,
 )
 from travis.coding_agent.compaction_coordinator import (
-    CompactionCoordinator,
     CompactionTransactionCoordinator,
 )
-from travis.coding_agent.config import get_packaged_context_paths
-from travis.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
-from travis.coding_agent.execution_backend import select_execution_backend
-from travis.coding_agent.mailbox import CodingTurnMailbox, MailboxKind
-from travis.coding_agent.message_utils import (
-    bash_execution_text as _bash_execution_to_text,
-    last_assistant_message as _last_assistant_message,
-    user_message_text as _text_from_user_message_content,
-)
-from travis.coding_agent.object_utils import settings_value as _settings_value
-from travis.coding_agent.process_context import ProcessContextResolver
-from travis.coding_agent.processes.local import create_local_process_transport
-from travis.coding_agent.processes.service import ProcessSessionService
-from travis.coding_agent.processes.types import ProcessOwner
-from travis.coding_agent.resource_loader import DefaultResourceLoader
-from travis.coding_agent.session_index import SessionIndex
+from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
 from travis.coding_agent.session_store import (
-    BashExecutionMessage,
-    BranchSummaryMessage,
-    CustomMessage,
     SessionStore,
     deserialize_message,
 )
-from travis.coding_agent.settings_manager import SettingsManager
-from travis.coding_agent.source_info import SourceInfo, create_synthetic_source_info
-from travis.coding_agent.system_prompt import BuildSystemPromptOptions, build_system_prompt
-from travis.coding_agent.subagents import (
-    CallableSubagentBackend,
-    CodexExecBackend,
-    SubagentResult,
-    SubagentSupervisor,
-    SubagentTask,
-)
-from travis.coding_agent.tools import create_all_tool_definitions
-from travis.coding_agent.tools.bash import BashExecOptions, BashOperations, create_local_bash_operations, get_shell_env
-from travis.coding_agent.tools.output_spool import OutputSpool
-from travis.coding_agent.tools.process import PROCESS_ACTIONS, create_process_tool_definition, prepare_process_arguments
-from travis.coding_agent.tools.types import (
-    ToolContext,
-    ToolDefinition,
-    create_tool_definition_from_agent_tool,
-    wrap_tool_definition,
-)
+from travis.compaction.timing import CompactionManager
+
 
 def _latest_compaction_entry(entries: list[dict]) -> dict | None:
     for entry in reversed(entries):
@@ -421,7 +367,7 @@ class SessionPersistence(SessionPortBoundController[SessionControllerPort]):
                 "fromExtension": from_extension if summary_text else None,
             }
         )
-        result = {"cancelled": False}
+        result: dict[str, object] = {"cancelled": False}
         if editor_text is not None:
             result["editorText"] = editor_text
         if summary_entry is not None:
@@ -577,11 +523,11 @@ def _branch_tool_call_ids(entries: list[dict]) -> set[str]:
         if isinstance(value, dict):
             for key, child in value.items():
                 normalized = key.replace("_", "").lower()
-                if normalized == "toolcallid" and isinstance(child, str) and child:
+                is_tool_call_identifier = normalized == "toolcallid" or (
+                    normalized == "id" and parent_key in {"toolcalls", "toolcall"}
+                )
+                if is_tool_call_identifier and isinstance(child, str) and child:
                     identifiers.add(child)
-                elif normalized == "id" and parent_key in {"toolcalls", "toolcall"}:
-                    if isinstance(child, str) and child:
-                        identifiers.add(child)
                 visit(child, normalized)
         elif isinstance(value, list):
             for child in value:

@@ -2,34 +2,15 @@
 
 from __future__ import annotations
 
-from travis.tui.interactive_services import InteractiveViewPort, PortBoundController
-
-import json
-import os
 import queue
-import signal as signal_module
-import subprocess
 import threading
-import time
-from concurrent.futures import Future, TimeoutError as FutureTimeoutError
-from dataclasses import dataclass, replace
-from pathlib import Path
-from typing import Callable
+from collections.abc import Callable
 
-from travis.ai.providers.capabilities import ProviderParamWarning
-from travis.ai.providers.params import GenerationParams, compact_generation_params_display
 from travis.compaction import estimate_tokens
-from travis.coding_agent.session_types import BashResult
-from travis.coding_agent.session_catalog import SessionInfo
-from travis.coding_agent.session_commands import SessionCommandExecutor
-from travis.coding_agent.processes.types import ProcessEvent, ProcessSnapshot, ProcessState
-from travis.coding_agent.tools.bash import BashExecOptions, get_shell_env
-from travis.coding_agent.tools.output_spool import OutputSpool
 from travis.tui.components import (
     CombinedAutocompleteProvider,
     Component,
     Container,
-    FooterComponent,
     Input,
     SelectItem,
     SelectList,
@@ -38,25 +19,28 @@ from travis.tui.components import (
     Text,
 )
 from travis.tui.components.autocomplete import _call_autocomplete_method, _settle_autocomplete_result
-from travis.tui.interactive import (
-    AssistantMessageComponent,
-    BashExecutionComponent,
-    message_to_component,
-    user_message_to_component,
-)
-from travis.tui.user_commands import (
-    ResolvedUserCommand,
-    UserCommandBinding,
-    UserCommandController,
-    UserCommandHandle,
-)
-
 from travis.tui.footer_data import _footer_usage_stats
+from travis.tui.interactive import (
+    message_to_component,
+)
 from travis.tui.interactive_custom_dialog import prompt_extension_custom as _prompt_extension_custom
-from travis.tui.interactive_extensions import _apply_hidden_thinking_label, _autocomplete_trigger_characters, _coerce_extension_component, _create_extension_widget_component, _dispose_extension_widget, _extension_dialog_aborted, _extension_dialog_label, _extension_dialog_secret, _resolve_extension_select_choice, _set_autocomplete_trigger_characters
-from travis.tui.motion import MotionState
+from travis.tui.interactive_extensions import (
+    _apply_hidden_thinking_label,
+    _autocomplete_trigger_characters,
+    _coerce_extension_component,
+    _create_extension_widget_component,
+    _dispose_extension_widget,
+    _extension_dialog_aborted,
+    _extension_dialog_label,
+    _extension_dialog_secret,
+    _resolve_extension_select_choice,
+    _set_autocomplete_trigger_characters,
+)
 from travis.tui.interactive_params import _params_argument_completions
 from travis.tui.interactive_prompt_input import prompt_tui_value
+from travis.tui.interactive_services import InteractiveViewPort, PortBoundController
+from travis.tui.motion import MotionState
+
 
 def _short_status_text(text: str, *, limit: int) -> str:
     value = str(text or "").replace("\n", " ").strip()
@@ -273,7 +257,9 @@ class InteractiveView(PortBoundController[InteractiveViewPort]):
             self._clear_motion_signal("retry")
             if not getattr(event, "success", False):
                 final_error = getattr(event, "final_error", getattr(event, "finalError", None)) or "Unknown error"
-                self.history.add(StatusLine(f"Retry failed after {event.attempt} attempts: {final_error}", kind="error"))
+                self.history.add(
+                    StatusLine(f"Retry failed after {getattr(event, 'attempt', 0)} attempts: {final_error}", kind="error")
+                )
             self.status.set_message("Thinking" if self._is_turn_active() else "Idle")
             self._refresh_footer()
             self.tui.request_render()

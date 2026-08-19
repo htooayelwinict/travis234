@@ -4,11 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from types import MethodType
-from typing import Generic, Protocol, TypeVar
+from typing import Protocol
 
-
-ControllerPortT = TypeVar("ControllerPortT")
+from travis.controller_ports import BoundController
 
 
 class ControllerDelegate:
@@ -42,7 +40,7 @@ def install_controller_delegates(
             setattr(owner, name, ControllerDelegate(controller_name, name))
 
 
-class PortBoundController(Generic[ControllerPortT]):
+class PortBoundController[ControllerPortT](BoundController[ControllerPortT]):
     """Bind legacy-shaped method bodies to an explicit structural port.
 
     This small bridge lets a controller retain its characterized method body while
@@ -50,20 +48,6 @@ class PortBoundController(Generic[ControllerPortT]):
     it does not inherit from, import, or dynamically inspect either public facade.
     """
 
-    __slots__ = ("_port",)
-
-    def __init__(self, port: ControllerPortT) -> None:
-        object.__setattr__(self, "_port", port)
-
-    def __getattribute__(self, name: str) -> object:
-        attribute = object.__getattribute__(self, name)
-        if isinstance(attribute, MethodType) and attribute.__self__ is self:
-            try:
-                port = object.__getattribute__(self, "_port")
-            except AttributeError:
-                return attribute
-            return attribute.__func__.__get__(port, type(port))
-        return attribute
 
 
 class InteractiveRenderPort(Protocol):
@@ -113,33 +97,43 @@ class InteractiveThemePort(Protocol):
     def role(self, name: str) -> object: ...
 
 
+class InteractiveDynamicPort(Protocol):
+    def __getattribute__[AttributeT](self, name: str) -> AttributeT: ...
+
+
 class InteractiveViewPort(Protocol):
     """View-facing state and render services supplied by the composition root."""
 
-    app: object
-    tui: object
-    history: object
-    status: object
-    theme_context: object
+    app: InteractiveDynamicPort
+    tui: InteractiveDynamicPort
+    history: InteractiveHistoryPort
+    status: InteractiveStatusPort
+    theme_context: InteractiveThemePort
+
+    def __getattribute__[AttributeT](self, name: str) -> AttributeT: ...
 
 
 class InteractiveMotionPort(Protocol):
     """Motion-facing status state supplied by the composition root."""
 
-    tui: object
-    status: object
-    motion_controller: object
+    tui: InteractiveDynamicPort
+    status: InteractiveStatusPort
+    motion_controller: InteractiveDynamicPort
     extension_statuses: dict[str, str]
     extension_status_states: dict[str, str]
+
+    def __getattribute__[AttributeT](self, name: str) -> AttributeT: ...
 
 
 class InteractiveCommandPort(Protocol):
     """Command-loop state and named handlers supplied by the composition root."""
 
-    app: object
-    tui: object
-    history: object
-    status: object
+    app: InteractiveDynamicPort
+    tui: InteractiveDynamicPort
+    history: InteractiveHistoryPort
+    status: InteractiveStatusPort
+
+    def __getattribute__[AttributeT](self, name: str) -> AttributeT: ...
 
 
 @dataclass(frozen=True, slots=True)

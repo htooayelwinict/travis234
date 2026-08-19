@@ -2,53 +2,14 @@
 
 from __future__ import annotations
 
-from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
-
-import inspect
-import json
-import os
-import queue
 import signal as signal_module
-import subprocess
 import threading
 import time
-from concurrent.futures import Future, TimeoutError as FutureTimeoutError
-from dataclasses import dataclass, replace
-from pathlib import Path
-from typing import Callable
+from collections.abc import Callable
+from concurrent.futures import TimeoutError as FutureTimeoutError
+from contextlib import suppress
 
-from travis.ai.providers.capabilities import ProviderParamWarning
-from travis.ai.providers.params import GenerationParams, compact_generation_params_display
-from travis.compaction import estimate_tokens
-from travis.coding_agent.session_types import BashResult
-from travis.coding_agent.session_catalog import SessionInfo
-from travis.coding_agent.session_commands import SessionCommandExecutor
-from travis.coding_agent.processes.types import ProcessEvent, ProcessSnapshot, ProcessState
-from travis.coding_agent.tools.bash import BashExecOptions, get_shell_env
-from travis.coding_agent.tools.output_spool import OutputSpool
-from travis.tui.components import (
-    CombinedAutocompleteProvider,
-    Component,
-    Container,
-    FooterComponent,
-    Input,
-    Spacer,
-    StatusLine,
-    Text,
-)
-from travis.tui.components.autocomplete import _call_autocomplete_method, _settle_autocomplete_result
-from travis.tui.interactive import (
-    AssistantMessageComponent,
-    BashExecutionComponent,
-    message_to_component,
-    user_message_to_component,
-)
-from travis.tui.user_commands import (
-    ResolvedUserCommand,
-    UserCommandBinding,
-    UserCommandController,
-    UserCommandHandle,
-)
+from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
 
 InputFn = Callable[[str], str]
 OPENROUTER_MODEL_CACHE_TTL_SECONDS = 300
@@ -80,10 +41,8 @@ class InteractiveShutdown(PortBoundController[InteractiveCommandPort]):
             return
         if threading.current_thread() is not threading.main_thread():
             return
-        try:
+        with suppress(AttributeError, OSError, ValueError):
             signal_module.signal(signal_module.SIGINT, previous_handler)
-        except (AttributeError, OSError, ValueError):
-            pass
 
     def _wait_for_active_turn(
         self,
@@ -132,10 +91,8 @@ class InteractiveShutdown(PortBoundController[InteractiveCommandPort]):
         if self._agent_abort_requested:
             return
         self._agent_abort_requested = True
-        try:
+        with suppress(BaseException):
             self.app.session.agent.abort()
-        except BaseException:
-            pass
 
     def _request_shutdown(self) -> None:
         self._shutdown_requested = True

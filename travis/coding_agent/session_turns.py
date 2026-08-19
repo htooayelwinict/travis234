@@ -2,104 +2,71 @@
 
 from __future__ import annotations
 
-from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
-
-import json
-import os
 import re
-import subprocess
 import time
-from pathlib import Path
-from typing import Callable, Mapping, Optional, Sequence
+from collections.abc import Callable, Sequence
+from typing import Protocol, cast
 
-from travis.agent.agent import Agent
 from travis.agent.async_utils import resolve
-from travis.agent.types import AbortSignal
-from travis.agent.types import AfterToolCallResult
-from travis.agent.types import AgentContext
-from travis.agent.types import AgentLoopTurnUpdate
-from travis.agent.types import AgentTool
-from travis.agent.types import AgentToolResult
-from travis.agent.types import AgentMessage
-from travis.agent.types import BeforeToolCallResult
-from travis.agent.types import MessageEndEvent, MessageStartEvent
+from travis.agent.types import (
+    AbortSignal,
+    AgentContext,
+    AgentLoopTurnUpdate,
+    AgentMessage,
+    MessageEndEvent,
+    MessageStartEvent,
+)
 from travis.ai.model_resolver import ScopedModel
-from travis.ai.models import (
-    clamp_thinking_level,
-    get_supported_thinking_levels,
+from travis.ai.types import (
+    AssistantMessage,
+    ImageContent,
+    TextContent,
+    UserMessage,
+    now_ms,
 )
-from travis.ai.types import AssistantMessage, Cost, ImageContent, Message, Model, TextContent, UserMessage, now_ms
-from travis.ai.types import ToolCall, ToolResultMessage, Usage
-from travis.compaction.compressor import LEGACY_SUMMARY_PREFIX, SUMMARY_END_MARKER, SUMMARY_PREFIX, estimate_tokens
-from travis.compaction.timing import CompactionManager
-from travis.coding_agent.branch_summarization import generate_branch_summary
-from travis.coding_agent.artifacts import ArtifactRegistry
-from travis.coding_agent.compaction_adapter import (
-    SessionCompactionAdapter,
-    compaction_summary_with_details,
-)
-from travis.coding_agent.compaction_coordinator import (
-    CompactionCoordinator,
-    CompactionTransactionCoordinator,
-)
-from travis.coding_agent.config import get_packaged_context_paths
 from travis.coding_agent.coordination import coordination_requires_orchestration_guard, coordination_turn_tool_names
-from travis.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
-from travis.coding_agent.execution_backend import select_execution_backend
-from travis.coding_agent.mailbox import CodingTurnMailbox, MailboxKind
+from travis.coding_agent.input_expansion import expand_user_input
+from travis.coding_agent.mailbox import MailboxKind
+from travis.coding_agent.message_utils import (
+    last_assistant_message as _last_assistant_message,
+)
 from travis.coding_agent.model_roles import (
     model_input_has_images,
     model_role_stream_options,
     pending_context_has_images,
 )
-from travis.coding_agent.message_utils import (
-    bash_execution_text as _bash_execution_to_text,
-    last_assistant_message as _last_assistant_message,
-    user_message_text as _text_from_user_message_content,
-)
-from travis.coding_agent.object_utils import settings_value as _settings_value
-from travis.coding_agent.processes.local import create_local_process_transport
-from travis.coding_agent.processes.service import ProcessSessionService
-from travis.coding_agent.processes.types import ProcessOwner
-from travis.coding_agent.resource_loader import DefaultResourceLoader
-from travis.coding_agent.session_index import SessionIndex
-from travis.coding_agent.session_store import (
-    BashExecutionMessage,
-    BranchSummaryMessage,
-    CustomMessage,
-    SessionStore,
-    deserialize_message,
-)
-from travis.coding_agent.settings_manager import SettingsManager
-from travis.coding_agent.source_info import SourceInfo, create_synthetic_source_info
-from travis.coding_agent.system_prompt import BuildSystemPromptOptions, build_system_prompt
-from travis.coding_agent.subagents import (
-    CallableSubagentBackend,
-    CodexExecBackend,
-    SubagentResult,
-    SubagentSupervisor,
-    SubagentTask,
-)
-from travis.coding_agent.tools import create_all_tool_definitions
-from travis.coding_agent.tools.bash import BashExecOptions, BashOperations, create_local_bash_operations, get_shell_env
-from travis.coding_agent.tools.output_spool import OutputSpool
-from travis.coding_agent.tools.process import PROCESS_ACTIONS, create_process_tool_definition, prepare_process_arguments
-from travis.coding_agent.tools.types import (
-    ToolContext,
-    ToolDefinition,
-    create_tool_definition_from_agent_tool,
-    wrap_tool_definition,
-)
-
+from travis.coding_agent.prompt_templates import expand_prompt_template
 from travis.coding_agent.session_persistence import _user_message
 from travis.coding_agent.session_policy_controller import (
     _is_internal_steering_user_message,
 )
-from travis.coding_agent.session_types import AgentSettledEvent, AutoRetryEndEvent, AutoRetryStartEvent, _MALFORMED_STREAMED_TOOL_ARGS_MARKER, _MALFORMED_STREAMED_TOOL_CALL_ARGUMENTS_CODE, _MALFORMED_STREAM_RECOVERY_PREFIX, _MAX_PARTIAL_STREAM_CONTINUATIONS, _NON_RETRYABLE_PROVIDER_LIMIT_MARKERS, _PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE, _PARTIAL_STREAM_STUB_ID, _RETRYABLE_ERROR_MARKERS, _SUBAGENT_TOOL_NAMES, _prompt_rejects_subagent_tools, _prompt_requests_subagent_tools
-from travis.coding_agent.prompt_templates import expand_prompt_template
-from travis.coding_agent.input_expansion import expand_user_input
+from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
+from travis.coding_agent.session_store import (
+    CustomMessage,
+)
+from travis.coding_agent.session_types import (
+    _MALFORMED_STREAM_RECOVERY_PREFIX,
+    _MALFORMED_STREAMED_TOOL_ARGS_MARKER,
+    _MALFORMED_STREAMED_TOOL_CALL_ARGUMENTS_CODE,
+    _MAX_PARTIAL_STREAM_CONTINUATIONS,
+    _NON_RETRYABLE_PROVIDER_LIMIT_MARKERS,
+    _PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE,
+    _PARTIAL_STREAM_STUB_ID,
+    _RETRYABLE_ERROR_MARKERS,
+    _SUBAGENT_TOOL_NAMES,
+    AgentSettledEvent,
+    AutoRetryEndEvent,
+    AutoRetryStartEvent,
+    _prompt_rejects_subagent_tools,
+    _prompt_requests_subagent_tools,
+)
 from travis.coding_agent.skills import format_skill_invocation
 from travis.coding_agent.subagent_trace import _message_content_text
+
+
+class _CodingQueueMessage(Protocol):
+    _coding_queue_id: str
+
 
 def _wait_for_retry_abort(signal: AbortSignal, delay_ms: int) -> bool:
     deadline = time.monotonic() + max(0, delay_ms) / 1000
@@ -323,7 +290,7 @@ class SessionTurnController(SessionPortBoundController[SessionControllerPort]):
         desired_active_tool_names = coordination_turn_tool_names(
             current_text,
             current_active_tool_names,
-            _SUBAGENT_TOOL_NAMES,
+            tuple(_SUBAGENT_TOOL_NAMES),
             rejects_subagents=_prompt_rejects_subagent_tools(current_text),
             requests_subagents=_prompt_requests_subagent_tools(current_text),
         )
@@ -382,7 +349,7 @@ class SessionTurnController(SessionPortBoundController[SessionControllerPort]):
     ) -> str:
         queued = self._turn_mailbox.enqueue(kind, text, images)
         if not self.agent.state.is_streaming:
-            self._flush_turn_mailbox_kind(kind)
+            self._flush_turn_mailbox_kind(cast(MailboxKind, kind))
         self._emit_queue_update()
         return queued.id
 
@@ -417,7 +384,7 @@ class SessionTurnController(SessionPortBoundController[SessionControllerPort]):
             sender = self.agent.follow_up
         for queued in self._turn_mailbox.drain(kind, mode=mode):
             message = _user_message(queued.text, list(queued.images))
-            setattr(message, "_coding_queue_id", queued.id)
+            cast(_CodingQueueMessage, message)._coding_queue_id = queued.id
             sender(message)
 
     def _restore_unacknowledged_turn_messages(self) -> None:

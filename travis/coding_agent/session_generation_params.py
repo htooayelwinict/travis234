@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
-
 from travis.ai.providers.params import (
     GenerationParams,
     remove_generation_param,
     replace_generation_param,
 )
+from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
 
 
 class SessionGenerationParams(SessionPortBoundController[SessionControllerPort]):

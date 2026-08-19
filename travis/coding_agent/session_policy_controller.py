@@ -7,12 +7,13 @@ the execution boundary.  This bridge only applies extension hook results.
 
 from __future__ import annotations
 
-from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
+from contextlib import suppress
 
 from travis.agent.types import AfterToolCallResult, BeforeToolCallResult
 from travis.coding_agent.coordination import coordination_direct_tmux_block_reason
 from travis.coding_agent.policy import argument_fingerprint
 from travis.coding_agent.policy.types import TOOL_EFFECT_ORDER
+from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
 from travis.coding_agent.session_types import _MALFORMED_STREAM_RECOVERY_PREFIX
 
 
@@ -141,10 +142,8 @@ class SessionPolicyController(SessionPortBoundController[SessionControllerPort])
                     self._operation_tool_effects.pop(call_id, None)
 
     def _disable_operation_journal(self) -> None:
-        try:
+        with suppress(Exception):
             self.operation_coordinator.disable("journal_unavailable")
-        except Exception:
-            pass
 
 
 __all__ = ("SessionPolicyController", "_is_internal_steering_user_message")

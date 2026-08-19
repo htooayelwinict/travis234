@@ -2,56 +2,29 @@
 
 from __future__ import annotations
 
-from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
+from collections.abc import Callable
+from typing import cast
 
-import inspect
-import json
-import os
-import queue
-import signal as signal_module
-import subprocess
-import threading
-import time
-from concurrent.futures import Future, TimeoutError as FutureTimeoutError
-from dataclasses import dataclass, replace
-from pathlib import Path
-from typing import Callable
-
-from travis.ai.providers.capabilities import ProviderParamWarning
-from travis.ai.providers.params import GenerationParams, compact_generation_params_display
-from travis.compaction import estimate_tokens
+from travis.coding_agent.processes.types import ProcessEvent, ProcessOwner, ProcessSnapshot, ProcessState
 from travis.coding_agent.session_types import BashResult
-from travis.coding_agent.session_catalog import SessionInfo
-from travis.coding_agent.session_commands import SessionCommandExecutor
-from travis.coding_agent.processes.types import ProcessEvent, ProcessSnapshot, ProcessState
 from travis.coding_agent.tools.bash import BashExecOptions, get_shell_env
 from travis.coding_agent.tools.output_spool import OutputSpool
 from travis.tui.components import (
-    CombinedAutocompleteProvider,
-    Component,
-    Container,
-    FooterComponent,
-    Input,
-    Spacer,
     StatusLine,
     Text,
 )
-from travis.tui.components.autocomplete import _call_autocomplete_method, _settle_autocomplete_result
 from travis.tui.interactive import (
-    AssistantMessageComponent,
     BashExecutionComponent,
-    message_to_component,
-    user_message_to_component,
 )
+from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
+from travis.tui.interactive_view import _short_status_text
+from travis.tui.motion import MotionState
 from travis.tui.user_commands import (
     ResolvedUserCommand,
     UserCommandBinding,
-    UserCommandController,
     UserCommandHandle,
 )
-from travis.tui.motion import MotionState
 
-from travis.tui.interactive_view import _short_status_text
 
 class InteractiveProcessCommands(PortBoundController[InteractiveCommandPort]):
     """Owns a focused interactive runtime concern."""
@@ -63,9 +36,12 @@ class InteractiveProcessCommands(PortBoundController[InteractiveCommandPort]):
             self.history.add(StatusLine("Managed process service is unavailable.", kind="error"))
             self.tui.request_render()
             return
-        rows: list[tuple[object, ProcessSnapshot]] = []
+        rows: list[tuple[ProcessOwner, ProcessSnapshot]] = []
         seen_process_ids: set[str] = set()
-        for owner in (owner_factory(origin="agent"), owner_factory(origin="user")):
+        for owner in (
+            cast(ProcessOwner, owner_factory(origin="agent")),
+            cast(ProcessOwner, owner_factory(origin="user")),
+        ):
             for snapshot in service.list(owner):
                 if snapshot.session_id in seen_process_ids:
                     continue

@@ -2,60 +2,25 @@
 
 from __future__ import annotations
 
-from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
-
-import inspect
-import json
-import os
-import queue
 import shlex
 import shutil
-import signal as signal_module
 import subprocess
-import threading
-import time
-from concurrent.futures import Future, TimeoutError as FutureTimeoutError
-from dataclasses import dataclass, replace
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
-from travis.ai.providers.capabilities import ProviderParamWarning
-from travis.ai.providers.params import GenerationParams, compact_generation_params_display
-from travis.compaction import estimate_tokens
-from travis.coding_agent.session_types import BashResult
+from travis.coding_agent.project_trust import ProjectTrustStore, get_project_trust_options
 from travis.coding_agent.session_catalog import SessionInfo
 from travis.coding_agent.session_commands import SessionCommandExecutor
-from travis.coding_agent.processes.types import ProcessEvent, ProcessSnapshot, ProcessState
-from travis.coding_agent.project_trust import ProjectTrustStore, get_project_trust_options
-from travis.coding_agent.tools.bash import BashExecOptions, get_shell_env
-from travis.coding_agent.tools.output_spool import OutputSpool
+from travis.compaction import estimate_tokens
 from travis.tui.components import (
-    CombinedAutocompleteProvider,
-    Component,
-    Container,
-    FooterComponent,
-    Input,
-    Spacer,
     StatusLine,
     Text,
 )
-from travis.tui.components.autocomplete import _call_autocomplete_method, _settle_autocomplete_result
-from travis.tui.interactive import (
-    AssistantMessageComponent,
-    BashExecutionComponent,
-    message_to_component,
-    user_message_to_component,
-)
-from travis.tui.user_commands import (
-    ResolvedUserCommand,
-    UserCommandBinding,
-    UserCommandController,
-    UserCommandHandle,
-)
-from travis.tui.motion import MotionState
-
 from travis.tui.footer_data import _footer_usage_stats
 from travis.tui.interactive_extensions import _manual_compression_options
+from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
+from travis.tui.motion import MotionState
+
 
 class InteractiveSessionCommands(PortBoundController[InteractiveCommandPort]):
     """Owns a focused interactive runtime concern."""
@@ -65,7 +30,7 @@ class InteractiveSessionCommands(PortBoundController[InteractiveCommandPort]):
             self._session_commands = SessionCommandExecutor(daemon=True)
         return self._session_commands
 
-    def _run_session_command(self, name: str, callback: Callable[[], object]):
+    def _run_session_command[ResultT](self, name: str, callback: Callable[[], ResultT]) -> ResultT:
         if name != "compact":
             turn_active = bool(
                 getattr(self.app.session, "is_streaming", False)

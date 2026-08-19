@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
-
 import re
+from collections.abc import Callable
+from typing import cast
 
 from travis.coding_agent.subagent_supervision import SupervisorSnapshot
+from travis.coding_agent.subagents import SubagentResult
 from travis.tui.components import StatusLine, Text
 from travis.tui.components.subagent_roster import SubagentRoster
+from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
 
 
 class InteractiveSubagents(PortBoundController[InteractiveCommandPort]):
@@ -16,7 +18,7 @@ class InteractiveSubagents(PortBoundController[InteractiveCommandPort]):
         supervisor = getattr(self.app.session, "subagents", None)
         snapshot = getattr(supervisor, "snapshot", None)
         if callable(snapshot):
-            return snapshot()
+            return cast(SupervisorSnapshot, snapshot())
         return SupervisorSnapshot(0, 0, 0, ())
 
     def _bind_subagent_supervisor(self) -> None:
@@ -25,10 +27,13 @@ class InteractiveSubagents(PortBoundController[InteractiveCommandPort]):
         subscribe = getattr(supervisor, "subscribe", None)
         if not callable(subscribe):
             return
-        self._unsubscribe_subagents = subscribe(
-            lambda snapshot: self.tui.dispatcher.post(
-                lambda: self._apply_subagent_snapshot(snapshot)
-            )
+        self._unsubscribe_subagents = cast(
+            Callable[[], None],
+            subscribe(
+                lambda snapshot: self.tui.dispatcher.post(
+                    lambda: self._apply_subagent_snapshot(snapshot)
+                )
+            ),
         )
 
     def _apply_subagent_snapshot(self, snapshot: SupervisorSnapshot) -> None:
@@ -103,6 +108,7 @@ class InteractiveSubagents(PortBoundController[InteractiveCommandPort]):
         prepare = getattr(self.app.session, "_prepare_public_subagent_result", None)
         if callable(prepare):
             result = prepare(result)
+        result = cast(SubagentResult, result)
         lines = [
             f"Agent {result.task_id}",
             f"role: {result.role}",

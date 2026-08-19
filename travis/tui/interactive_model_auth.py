@@ -2,51 +2,15 @@
 
 from __future__ import annotations
 
-from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
+from dataclasses import replace
 
-import inspect
-import json
-import os
-import queue
-import signal as signal_module
-import subprocess
-import threading
-from dataclasses import dataclass, replace
-from pathlib import Path
-from typing import Callable
-
-from travis.compaction import estimate_tokens
-from travis.coding_agent.session_types import BashResult
-from travis.coding_agent.session_catalog import SessionInfo
-from travis.coding_agent.session_commands import SessionCommandExecutor
-from travis.coding_agent.processes.types import ProcessEvent, ProcessSnapshot, ProcessState
-from travis.coding_agent.tools.bash import BashExecOptions, get_shell_env
-from travis.coding_agent.tools.output_spool import OutputSpool
 from travis.tui.components import (
-    CombinedAutocompleteProvider,
-    Component,
-    Container,
-    FooterComponent,
-    Input,
-    Spacer,
     StatusLine,
     Text,
 )
-from travis.tui.components.autocomplete import _call_autocomplete_method, _settle_autocomplete_result
-from travis.tui.interactive import (
-    AssistantMessageComponent,
-    BashExecutionComponent,
-    message_to_component,
-    user_message_to_component,
-)
-from travis.tui.user_commands import (
-    ResolvedUserCommand,
-    UserCommandBinding,
-    UserCommandController,
-    UserCommandHandle,
-)
-
+from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
 from travis.tui.interactive_shutdown import OPENROUTER_MODEL_PICKER_LIMIT
+
 
 def _dedupe_models(models) -> list:
     seen: set[tuple[str, str]] = set()
@@ -185,7 +149,7 @@ class InteractiveModelAuth(PortBoundController[InteractiveCommandPort]):
         selected = self.prompt_extension_select("Select model:", labels, kind="model")
         if selected is None:
             return
-        label_to_model = dict(zip(labels, candidates))
+        label_to_model = dict(zip(labels, candidates, strict=True))
         model = label_to_model.get(selected)
         if model is not None:
             self._switch_model(model)

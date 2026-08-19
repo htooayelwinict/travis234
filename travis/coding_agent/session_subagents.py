@@ -2,100 +2,64 @@
 
 from __future__ import annotations
 
-from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
-
 import json
-import os
 import re
 import stat
-import subprocess
 import time
-from dataclasses import dataclass
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable, Mapping, Optional
+from typing import cast
 
-from travis.agent.agent import Agent
-from travis.agent.types import AbortSignal
-from travis.agent.types import AfterToolCallResult
-from travis.agent.types import AgentContext
-from travis.agent.types import AgentLoopTurnUpdate
-from travis.agent.types import AgentTool
-from travis.agent.types import AgentToolResult
-from travis.agent.types import AgentMessage
-from travis.agent.types import BeforeToolCallResult
-from travis.agent.types import MessageEndEvent, MessageStartEvent
-from travis.ai.model_resolver import ScopedModel
-from travis.ai.models import (
-    clamp_thinking_level,
-    get_supported_thinking_levels,
+from travis.agent.types import (
+    AbortSignal,
+    AgentToolResult,
 )
-from travis.ai.types import AssistantMessage, Cost, ImageContent, Message, Model, TextContent, UserMessage, now_ms
-from travis.ai.types import ToolCall, ToolResultMessage, Usage
-from travis.compaction.compressor import LEGACY_SUMMARY_PREFIX, SUMMARY_END_MARKER, SUMMARY_PREFIX, estimate_tokens
-from travis.compaction.timing import CompactionManager
-from travis.coding_agent.branch_summarization import generate_branch_summary
-from travis.coding_agent.artifacts import ArtifactRegistry
+from travis.ai.types import (
+    TextContent,
+)
 from travis.coding_agent.artifact_store import ArtifactPromotionError
-from travis.coding_agent.compaction_adapter import (
-    SessionCompactionAdapter,
-    compaction_summary_with_details,
-)
-from travis.coding_agent.compaction_coordinator import (
-    CompactionCoordinator,
-    CompactionTransactionCoordinator,
-)
-from travis.coding_agent.config import get_packaged_context_paths
-from travis.coding_agent.extensions import ExtensionRunner, emit_session_shutdown_event
-from travis.coding_agent.execution_backend import select_execution_backend
-from travis.coding_agent.mailbox import CodingTurnMailbox, MailboxKind
-from travis.coding_agent.message_utils import (
-    bash_execution_text as _bash_execution_to_text,
-    last_assistant_message as _last_assistant_message,
-    user_message_text as _text_from_user_message_content,
-)
-from travis.coding_agent.object_utils import settings_value as _settings_value
-from travis.coding_agent.process_context import ProcessContextResolver
-from travis.coding_agent.processes.local import create_local_process_transport
-from travis.coding_agent.processes.service import ProcessSessionService
-from travis.coding_agent.processes.types import ProcessOwner
 from travis.coding_agent.policy.context import fixed_action_context, subagent_policy_context
 from travis.coding_agent.policy.types import ALL_TOOL_EFFECTS
-from travis.coding_agent.resource_loader import DefaultResourceLoader
+from travis.coding_agent.processes.types import ProcessOwner
+from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
+from travis.coding_agent.session_types import (
+    _CANCEL_SUBAGENT_SCHEMA,
+    _DEFAULT_SUBAGENT_ALLOWED_TOOLS,
+    _EXPAND_SUBAGENT_RESULT_SCHEMA,
+    _LIST_SUBAGENTS_SCHEMA,
+    _MODEL_SUBAGENT_SPAWN_LIMIT_PER_TURN,
+    _SKILL_SUBAGENT_ALLOWED_TOOL_NAMES,
+    _SPAWN_SUBAGENT_SCHEMA,
+    _SUBAGENT_RESULT_SUMMARY_LIMIT,
+    _TASK_ID_SCHEMA,
+)
 from travis.coding_agent.subagent_roles import resolve_agent_role, typed_role_prompt_guidelines
 from travis.coding_agent.subagent_supervision import ControlResult
-from travis.coding_agent.session_index import SessionIndex
-from travis.coding_agent.session_store import (
-    BashExecutionMessage,
-    BranchSummaryMessage,
-    CustomMessage,
-    SessionStore,
-    deserialize_message,
+from travis.coding_agent.subagent_trace import (
+    _coerce_subagent_timeout_seconds,
+    _expanded_subagent_result_details,
+    _format_subagent_expansion,
+    _model_subagent_timeout_seconds_arg,
+    _optional_timeout_arg,
+    _public_subagent_result_details,
+    _public_subagent_tool_trace,
+    _reject_unexpected_args,
+    _replace_artifact_paths,
+    _required_text_arg,
+    _subagent_changed_files,
+    _subagent_expansion_budget_arg,
+    _subagent_expansion_offset_arg,
+    _subagent_expansion_section_arg,
+    _task_id_arg,
 )
-from travis.coding_agent.settings_manager import SettingsManager
-from travis.coding_agent.source_info import SourceInfo, create_synthetic_source_info
-from travis.coding_agent.system_prompt import BuildSystemPromptOptions, build_system_prompt
 from travis.coding_agent.subagents import (
-    CallableSubagentBackend,
-    CodexExecBackend,
     CODING_SUBAGENT_TOOLS,
     SubagentResult,
-    SubagentSupervisor,
     SubagentTask,
 )
-from travis.coding_agent.tools import create_all_tool_definitions
-from travis.coding_agent.tools.bash import BashExecOptions, BashOperations, create_local_bash_operations, get_shell_env
-from travis.coding_agent.tools.output_spool import OutputSpool
-from travis.coding_agent.tools.process import PROCESS_ACTIONS, create_process_tool_definition, prepare_process_arguments
 from travis.coding_agent.tools.types import (
-    ToolContext,
     ToolDefinition,
-    create_tool_definition_from_agent_tool,
-    wrap_tool_definition,
 )
-
-from travis.coding_agent.session_types import _CANCEL_SUBAGENT_SCHEMA, _DEFAULT_SUBAGENT_ALLOWED_TOOLS, _EXPAND_SUBAGENT_RESULT_SCHEMA, _LIST_SUBAGENTS_SCHEMA, _MODEL_SUBAGENT_SPAWN_LIMIT_PER_TURN, _SKILL_SUBAGENT_ALLOWED_TOOL_NAMES, _SPAWN_SUBAGENT_SCHEMA, _SUBAGENT_RESULT_SUMMARY_LIMIT, _TASK_ID_SCHEMA
-from travis.coding_agent.subagent_trace import _coerce_subagent_timeout_seconds, _expanded_subagent_result_details, _format_subagent_expansion, _model_subagent_timeout_seconds_arg, _optional_timeout_arg, _public_subagent_result_details, _public_subagent_tool_trace, _reject_unexpected_args, _replace_artifact_paths, _required_text_arg, _subagent_changed_files, _subagent_expansion_budget_arg, _subagent_expansion_offset_arg, _subagent_expansion_section_arg, _task_id_arg
 
 
 def _merge_role_context(role_context: str, task_context: str) -> str:
@@ -135,7 +99,10 @@ class SessionSubagentController(SessionPortBoundController[SessionControllerPort
         for skill in self._resource_loader.get_skills()["skills"]:
             if getattr(skill, "name", None) != role:
                 continue
-            raw_allowed_tools = getattr(skill, "allowed_tools", None) or getattr(skill, "allowedTools", None) or ()
+            raw_allowed_tools = cast(
+                tuple[str, ...] | list[str],
+                getattr(skill, "allowed_tools", None) or getattr(skill, "allowedTools", None) or (),
+            )
             tools = tuple(dict.fromkeys(raw_allowed_tools))
             if tools and all(tool in _SKILL_SUBAGENT_ALLOWED_TOOL_NAMES for tool in tools):
                 return tools
@@ -407,7 +374,7 @@ class SessionSubagentController(SessionPortBoundController[SessionControllerPort
             )
             result = self._prepare_public_subagent_result(result)
             return self._subagent_tool_result(self._format_subagent_result(result), _public_subagent_result_details(result))
-        details = {
+        details: dict[str, object] = {
             "taskId": task_id,
             "role": task.role,
             "backend": task.backend,
@@ -472,7 +439,7 @@ class SessionSubagentController(SessionPortBoundController[SessionControllerPort
         existing = self.subagents.get_result(task_id)
         if existing is not None:
             existing = self._prepare_public_subagent_result(existing)
-            details = {
+            details: dict[str, object] = {
                 "taskId": existing.task_id,
                 "role": existing.role,
                 "backend": existing.backend,
