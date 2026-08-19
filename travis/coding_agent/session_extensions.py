@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
+
 import json
 import os
 import re
@@ -194,7 +196,7 @@ def _extension_resource_path(entry: dict[str, str]) -> dict[str, object]:
         },
     }
 
-class SessionExtensionController:
+class SessionExtensionController(SessionPortBoundController[SessionControllerPort]):
     """Owns a focused AgentSession runtime concern."""
 
     def bind_extensions(self, bindings: dict[str, object] | None = None) -> None:

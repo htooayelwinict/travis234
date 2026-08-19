@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
+
 import json
 import os
 import re
@@ -92,7 +94,7 @@ from travis.coding_agent.tools.types import (
 from travis.coding_agent.session_extensions import _extension_resource_path, _tool_info
 from travis.coding_agent.session_types import _DEFAULT_ACTIVE_TOOL_NAMES
 
-class SessionToolController:
+class SessionToolController(SessionPortBoundController[SessionControllerPort]):
     """Owns a focused AgentSession runtime concern."""
 
     def _default_subagent_log_dir(self, *, session_path: str | None, session_id: str | None) -> str:
