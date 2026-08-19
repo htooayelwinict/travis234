@@ -17,6 +17,7 @@ from travis.tui.interactive import (
     BashExecutionComponent,
 )
 from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
+from travis.tui.interactive_rebind import rebind_cached_session
 from travis.tui.interactive_view import _short_status_text
 from travis.tui.motion import MotionState
 from travis.tui.user_commands import (
@@ -28,6 +29,8 @@ from travis.tui.user_commands import (
 
 class InteractiveProcessCommands(PortBoundController[InteractiveCommandPort]):
     """Owns a focused interactive runtime concern."""
+
+    rebind_session = rebind_cached_session
 
     def _run_processes_command(self) -> None:
         service = getattr(self.app, "process_service", None)
@@ -164,6 +167,7 @@ class InteractiveProcessCommands(PortBoundController[InteractiveCommandPort]):
         self.tui.request_render()
 
     def _rebind_session_ui(self) -> None:
+        self.dependencies.port._rebind_controller_sessions(self.app.session)
         self.tool_approval_broker.bind_session(self.app.session)
         self._rebind_subagent_supervisor()
         if self._unsubscribe_session_events is not None:
@@ -331,7 +335,9 @@ class InteractiveProcessCommands(PortBoundController[InteractiveCommandPort]):
             self._set_motion_signal("user-bash", MotionState.TOOL)
         else:
             self._clear_motion_signal("user-bash")
-        self.status.set_message("Running bash" if has_user_commands else "Thinking" if self._is_turn_active() else "Idle")
+        self.status.set_message(
+            "Running bash" if has_user_commands else "Thinking" if self._is_turn_active() else "Idle"
+        )
         self._refresh_footer()
         self.tui.request_render()
 
@@ -371,7 +377,9 @@ class InteractiveProcessCommands(PortBoundController[InteractiveCommandPort]):
             self._set_motion_signal("user-bash", MotionState.TOOL)
         else:
             self._clear_motion_signal("user-bash")
-        self.status.set_message("Running bash" if has_user_commands else "Thinking" if self._is_turn_active() else "Idle")
+        self.status.set_message(
+            "Running bash" if has_user_commands else "Thinking" if self._is_turn_active() else "Idle"
+        )
         self._refresh_footer()
         self.tui.request_render()
 
@@ -394,6 +402,5 @@ class InteractiveProcessCommands(PortBoundController[InteractiveCommandPort]):
                 ),
             )
 
-__all__ = (
-    'InteractiveProcessCommands',
-)
+
+__all__ = ("InteractiveProcessCommands",)

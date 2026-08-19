@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError, fields
+from dataclasses import FrozenInstanceError, fields, is_dataclass
 
 import pytest
 
-from travis.coding_agent.session_controllers import SessionControllers
+from travis.coding_agent.session_controllers import (
+    SESSION_CONTROLLER_PORT_ATTRIBUTES,
+    SessionControllers,
+)
 from travis.coding_agent.session_state import SessionPresentationState, SessionTurnState
 from travis.ai.providers.faux import faux_model
 from travis.coding_agent.agent_session import AgentSession
@@ -119,6 +122,13 @@ def test_session_controllers_do_not_retain_a_runtime_or_public_facade(tmp_path) 
         ]
         assert runtime not in retained
         assert not any(isinstance(value, RuntimeFacade) for value in retained)
+        dependencies = controller.dependencies
+        assert is_dataclass(dependencies)
+        assert runtime not in (getattr(dependencies, field.name) for field in fields(dependencies))
+
+    for name in SESSION_CONTROLLER_NAMES:
+        port = getattr(runtime.controllers, name).dependencies.port
+        assert port.declared_names == frozenset(SESSION_CONTROLLER_PORT_ATTRIBUTES[name])
 
 
 def test_declared_session_state_records_are_real_controller_dependencies(tmp_path) -> None:
@@ -128,3 +138,7 @@ def test_declared_session_state_records_are_real_controller_dependencies(tmp_pat
     assert isinstance(runtime.presentation_state, SessionPresentationState)
     assert runtime.controllers.turns.dependencies.turn_state is runtime.turn_state
     assert runtime.controllers.models.dependencies.presentation_state is runtime.presentation_state
+    runtime._retry_attempt = 3
+    runtime._session_name = "contract-first"
+    assert runtime.turn_state.retry_attempt == 3
+    assert runtime.presentation_state.session_name == "contract-first"

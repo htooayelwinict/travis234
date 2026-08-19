@@ -269,7 +269,7 @@ class InteractiveExtensions(PortBoundController[InteractiveCommandPort]):
             self.tui.request_render()
 
         return {
-            "uiContext": _ExtensionShortcutUI(cast(InteractiveCommandPort, self)),
+            "uiContext": _ExtensionShortcutUI(self.dependencies.port),
             "hasUI": True,
             "mode": "tui",
             "abortHandler": active_session.agent.abort,
@@ -573,7 +573,7 @@ class InteractiveExtensions(PortBoundController[InteractiveCommandPort]):
 
     def _extension_shortcut_context(self) -> dict[str, object]:
         return {
-            "ui": _ExtensionShortcutUI(cast(InteractiveCommandPort, self)),
+            "ui": _ExtensionShortcutUI(self.dependencies.port),
             "mode": "tui",
             "hasUI": True,
             "cwd": str(self.app.cwd),

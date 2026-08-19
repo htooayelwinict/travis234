@@ -15,6 +15,7 @@ from travis.ai.providers.params import (
 from travis.ai.providers.transports import get_transport
 from travis.ai.types import SimpleStreamOptions
 from travis.tui.interactive_services import InteractiveCommandPort, PortBoundController
+from travis.tui.interactive_rebind import rebind_cached_session
 
 _PARAM_NAMES = ("thinking", *GENERATION_PARAM_FIELDS)
 
@@ -41,9 +42,7 @@ def _params_argument_completions(argument_text: str) -> list[dict[str, str]]:
             "value": name,
             "label": name,
             "description": (
-                "Change the durable session thinking level"
-                if name == "thinking"
-                else f"Show or change session {name}"
+                "Change the durable session thinking level" if name == "thinking" else f"Show or change session {name}"
             ),
         }
         for name in (*_PARAM_NAMES, "reset")
@@ -53,6 +52,8 @@ def _params_argument_completions(argument_text: str) -> list[dict[str, str]]:
 
 class InteractiveParams(PortBoundController[InteractiveCommandPort]):
     """Own `/params` grammar, display, mutation, and capability state."""
+
+    rebind_session = rebind_cached_session
 
     def _session_generation_param_overrides(self) -> GenerationParams:
         params = getattr(self.app.session, "generation_param_overrides", None)
@@ -68,11 +69,7 @@ class InteractiveParams(PortBoundController[InteractiveCommandPort]):
         self.generation_params = self._effective_generation_params()
         model = self.app.session.model
         get_active_tool_names = getattr(self.app.session, "get_active_tool_names", None)
-        tools_enabled = (
-            bool(get_active_tool_names())
-            if callable(get_active_tool_names)
-            else False
-        )
+        tools_enabled = bool(get_active_tool_names()) if callable(get_active_tool_names) else False
         api_mode = getattr(get_transport(model.api), "api_mode", model.api)
         try:
             payload = build_generation_payload(
@@ -141,16 +138,8 @@ class InteractiveParams(PortBoundController[InteractiveCommandPort]):
         if query:
             normalized = query.strip().lower()
             pieces = [thinking_display] if normalized in thinking_display.lower() else []
-            pieces.extend(
-                part
-                for part in params_display.split(", ")
-                if normalized in part.lower()
-            )
-            warning_pieces = [
-                part
-                for part in warning_display.split(", ")
-                if part and normalized in part.lower()
-            ]
+            pieces.extend(part for part in params_display.split(", ") if normalized in part.lower())
+            warning_pieces = [part for part in warning_display.split(", ") if part and normalized in part.lower()]
             if pieces:
                 display = ", ".join(pieces)
             elif warning_pieces:

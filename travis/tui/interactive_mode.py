@@ -68,8 +68,11 @@ from travis.tui.interactive_command_dispatcher import (
 )
 from travis.tui.interactive_controllers import (
     INTERACTIVE_CONTROLLER_DELEGATES,
+    INTERACTIVE_CONTROLLER_STATE_NAMES,
+    INTERACTIVE_DELEGATED_NAMES,
     InteractiveControllers,
 )
+from travis.tui.interactive_composition import compose_interactive_controllers
 from travis.tui.interactive_extensions import (
     InteractiveExtensions,
     _apply_hidden_thinking_label,
@@ -106,10 +109,11 @@ from travis.tui.interactive_params import (
 from travis.tui.interactive_process_commands import InteractiveProcessCommands
 from travis.tui.interactive_services import (
     InteractiveCommandPort,
-    InteractiveMotionPort,
-    InteractiveViewPort,
+    InteractiveCommandPortAdapter,
+    InteractiveSessionPortAdapter,
     install_controller_delegates,
 )
+from travis.tui.interactive_state import InteractiveLifecycleState, InteractiveState
 from travis.tui.interactive_session_commands import InteractiveSessionCommands
 from travis.tui.interactive_shutdown import (
     _SIGINT_HANDLER_UNCHANGED,
@@ -129,6 +133,7 @@ from travis.tui.interactive_view import InteractiveView, _short_status_text
 from travis.tui.motion import MotionController
 from travis.tui.theme import ThemeContext
 from travis.tui.theme_controller import ThemeController
+from travis.controller_ports import ControllerBindingRegistry, install_runtime_state_attributes
 from travis.tui.user_commands import (
     UserCommandController,
     UserCommandHandle,
@@ -244,11 +249,18 @@ def _terminal_color_mode() -> str:
 class _InteractiveRuntime:
     """Internal TUI runtime assembled from focused behavior owners."""
 
-    def __getattribute__[AttributeT](
-        self, name: str
-    ) -> AttributeT:  # pyright: ignore[reportInvalidTypeVarUse] - facade bridge avoids Any.
-        attribute = object.__getattribute__(self, name)
-        return cast(AttributeT, attribute)
+    _append_user_command_output: Callable
+    _bind_subagent_supervisor: Callable
+    _current_subagent_snapshot: Callable
+    _extension_bindings: Callable
+    _fail_user_command: Callable
+    _finish_user_command: Callable
+    _rebind_session_ui: Callable
+    _refresh_generation_param_state: Callable
+    _reset_extension_ui: Callable
+    _resolve_user_command: Callable
+    _startup_text: Callable
+    setup_autocomplete_provider: Callable
 
     MAX_WIDGET_LINES = 10
 
@@ -262,28 +274,31 @@ class _InteractiveRuntime:
         generation_param_warnings: list[ProviderParamWarning] | None = None,
         open_resume_picker: bool = False,
     ) -> None:
+        self._controller_bindings = ControllerBindingRegistry(INTERACTIVE_CONTROLLER_STATE_NAMES)
         self.app = app
-        command_port = cast(InteractiveCommandPort, self)
-        self.controllers = InteractiveControllers(
-            command_dispatch=InteractiveCommandDispatcher(command_port),
-            view=InteractiveView(cast(InteractiveViewPort, self)),
-            model_auth=InteractiveModelAuth(command_port),
-            params=InteractiveParams(command_port),
-            processes=InteractiveProcessCommands(command_port),
-            lsp=InteractiveLsp(command_port),
-            memory=InteractiveMemory(command_port),
-            operations=InteractiveOperations(command_port),
-            subagents=InteractiveSubagents(command_port),
-            sessions=InteractiveSessionCommands(command_port),
-            extensions=InteractiveExtensions(command_port),
-            turns=InteractiveTurnController(command_port),
-            shutdown=InteractiveShutdown(command_port),
-            motion=InteractiveMotion(cast(InteractiveMotionPort, self)),
+        command_port = InteractiveCommandPortAdapter(
+            self._controller_bindings.port(("app", "extension_statuses"))
         )
+        self.state = InteractiveState()
+        self.lifecycle = InteractiveLifecycleState()
+        for binding_name, state_name in (
+            ("editor_text", "editor_text"),
+            ("prompt_history", "prompt_history"),
+            ("active_editor", "active_editor"),
+            ("generation_params", "generation_params"),
+        ):
+            self._controller_bindings.bind_attribute(binding_name, self.state, state_name)
+        for binding_name, state_name in (
+            ("_shutdown_requested", "shutdown_requested"),
+            ("_run_loop_active", "run_loop_active"),
+            ("_turn_thread", "active_worker_thread"),
+            ("_queued_after_turn", "queued_after_turn"),
+            ("_agent_abort_requested", "agent_abort_requested"),
+        ):
+            self._controller_bindings.bind_attribute(binding_name, self.lifecycle, state_name)
         self.startup_generation_params = generation_params or GenerationParams()
         self.generation_params = self.startup_generation_params
         self.generation_param_warnings = list(generation_param_warnings or [])
-        self._refresh_generation_param_state()
         self._open_resume_picker = bool(open_resume_picker)
         self.tui = app.tui
         self.input_fn = input_fn or input
@@ -335,6 +350,20 @@ class _InteractiveRuntime:
             enabled=motion_enabled,
             static=color_mode == "none",
         )
+        self.services, self.controllers = compose_interactive_controllers(
+            self._controller_bindings,
+            app=self.app,
+            tui=self.tui,
+            history=self.history,
+            status=self.status,
+            theme=self.theme_context,
+            state=self.state,
+            lifecycle=self.lifecycle,
+        )
+        self.controllers.rebind_session(
+            InteractiveSessionPortAdapter(id(self.app.session))
+        )
+        self._refresh_generation_param_state()
         self.default_working_message = "Idle"
         self.default_hidden_thinking_label = ""
         self.hidden_thinking_label = self.default_hidden_thinking_label
@@ -442,33 +471,11 @@ class _InteractiveRuntime:
         self.setup_autocomplete_provider()
         self._theme_render_ready = True
 
-    def _ensure_builtin_themes(self) -> None:
-        existing = {theme.name for theme in self.theme_registry.list()}
-        missing = [theme for theme in self._builtin_theme_records if theme.name not in existing]
-        if missing:
-            self.theme_registry.register_many(missing)
-
-    def _reload_resource_themes(self) -> str | None:
-        resource_loader = getattr(self.app.session, "resource_loader", None)
-        discovered = (
-            resource_loader.get_themes().get("themes", [])
-            if resource_loader is not None
-            else []
-        )
-        resource_themes = [theme for theme in discovered if isinstance(theme, Theme)]
-        resource_names = {theme.name for theme in resource_themes}
-        return self.theme_registry.reload(
-            [
-                *resource_themes,
-                *(
-                    theme
-                    for theme in self._builtin_theme_records
-                    if theme.name not in resource_names
-                ),
-            ]
-        )
-
-
+install_runtime_state_attributes(
+    _InteractiveRuntime,
+    INTERACTIVE_CONTROLLER_STATE_NAMES,
+    INTERACTIVE_DELEGATED_NAMES,
+)
 install_controller_delegates(
     _InteractiveRuntime,
     INTERACTIVE_CONTROLLER_DELEGATES,

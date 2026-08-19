@@ -62,7 +62,12 @@ class InteractiveTurnController(PortBoundController[InteractiveCommandPort]):
 
     def _handle_sigint(self, _signum, _frame) -> None:
         has_user_command = self._user_commands is not None and bool(self._user_commands.list())
-        if has_user_command or self._is_turn_active() or self.app.session.is_streaming or self.app.session.is_bash_running:
+        if (
+            has_user_command
+            or self.dependencies.port._is_turn_active()
+            or self.app.session.is_streaming
+            or self.app.session.is_bash_running
+        ):
             self._last_idle_ctrl_c_at = 0.0
             self._handle_editor_escape()
             return
@@ -178,7 +183,7 @@ class InteractiveTurnController(PortBoundController[InteractiveCommandPort]):
         )
 
     def _handle_active_turn_prompt(self, prompt: str) -> bool:
-        if not self._is_turn_active():
+        if not self.dependencies.port._is_turn_active():
             return False
         if self._dispatch_extension_command(prompt):
             self._refresh_footer()
@@ -206,7 +211,7 @@ class InteractiveTurnController(PortBoundController[InteractiveCommandPort]):
             self.tui.request_render()
             return
 
-        if self._is_turn_active() or self.app.session.is_streaming:
+        if self.dependencies.port._is_turn_active() or self.app.session.is_streaming:
             if not self._agent_abort_requested:
                 self._agent_abort_requested = True
                 self._set_motion_signal("termination", MotionState.TERMINATING)

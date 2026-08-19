@@ -38,7 +38,12 @@ from travis.tui.interactive_extensions import (
 )
 from travis.tui.interactive_params import _params_argument_completions
 from travis.tui.interactive_prompt_input import prompt_tui_value
+from travis.tui.interactive_rebind import rebind_cached_session
 from travis.tui.interactive_services import InteractiveViewPort, PortBoundController
+from travis.tui.interactive_theme_helpers import (
+    ensure_view_builtin_themes,
+    reload_view_resource_themes,
+)
 from travis.tui.motion import MotionState
 
 
@@ -48,8 +53,14 @@ def _short_status_text(text: str, *, limit: int) -> str:
         return value
     return value[: max(0, limit - 3)].rstrip() + "..."
 
+
 class InteractiveView(PortBoundController[InteractiveViewPort]):
     """Owns a focused interactive runtime concern."""
+
+    MAX_WIDGET_LINES = 10
+    _ensure_builtin_themes = ensure_view_builtin_themes
+    _reload_resource_themes = reload_view_resource_themes
+    rebind_session = rebind_cached_session
 
     def init(self) -> None:
         if self._initialized:
@@ -191,10 +202,12 @@ class InteractiveView(PortBoundController[InteractiveViewPort]):
             name = str(getattr(template, "name", ""))
             if not name or name in command_names:
                 continue
-            commands.append({
-                "name": name,
-                "description": str(getattr(template, "description", "")),
-            })
+            commands.append(
+                {
+                    "name": name,
+                    "description": str(getattr(template, "description", "")),
+                }
+            )
             command_names.add(name)
         return CombinedAutocompleteProvider(commands, str(self.app.cwd))
 
@@ -258,7 +271,9 @@ class InteractiveView(PortBoundController[InteractiveViewPort]):
             if not getattr(event, "success", False):
                 final_error = getattr(event, "final_error", getattr(event, "finalError", None)) or "Unknown error"
                 self.history.add(
-                    StatusLine(f"Retry failed after {getattr(event, 'attempt', 0)} attempts: {final_error}", kind="error")
+                    StatusLine(
+                        f"Retry failed after {getattr(event, 'attempt', 0)} attempts: {final_error}", kind="error"
+                    )
                 )
             self.status.set_message("Thinking" if self._is_turn_active() else "Idle")
             self._refresh_footer()
@@ -309,9 +324,7 @@ class InteractiveView(PortBoundController[InteractiveViewPort]):
         event_type = str(get("type", "") or "")
         role = str(get("role", "subagent") or "subagent")
         tool = str(get("toolName", get("tool_name", "tool")) or "tool")
-        status = str(get("status", "") or "").strip() or (
-            "started" if event_type == "subagent_tool_start" else "ok"
-        )
+        status = str(get("status", "") or "").strip() or ("started" if event_type == "subagent_tool_start" else "ok")
         if status != "error":
             return
         args_preview = _short_status_text(str(get("argsPreview", get("args_preview", "")) or "").strip(), limit=80)
@@ -730,7 +743,8 @@ class InteractiveView(PortBoundController[InteractiveViewPort]):
                     return True, current
         return False, current
 
+
 __all__ = (
-    'InteractiveView',
-    '_short_status_text',
+    "InteractiveView",
+    "_short_status_text",
 )

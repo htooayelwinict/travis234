@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError, fields
+from dataclasses import FrozenInstanceError, fields, is_dataclass
 
 import pytest
 
-from travis.tui.interactive_controllers import InteractiveControllers
+from travis.tui.interactive_controllers import (
+    INTERACTIVE_CONTROLLER_PORT_ATTRIBUTES,
+    InteractiveControllers,
+)
 from travis.tui.interactive_state import InteractiveLifecycleState, InteractiveState
 from tests._support_tui import CodingApp, FakeTerminal, faux_model
 from travis.tui.interactive_mode import InteractiveMode
@@ -151,6 +154,13 @@ def test_interactive_controllers_do_not_retain_a_runtime_or_public_facade(tmp_pa
         ]
         assert runtime not in retained
         assert not any(isinstance(value, RuntimeFacade) for value in retained)
+        dependencies = controller.dependencies
+        assert is_dataclass(dependencies)
+        assert runtime not in (getattr(dependencies, field.name) for field in fields(dependencies))
+
+    for name in INTERACTIVE_CONTROLLER_NAMES:
+        port = getattr(runtime.controllers, name).dependencies.port
+        assert port.declared_names == frozenset(INTERACTIVE_CONTROLLER_PORT_ATTRIBUTES[name])
 
 
 def test_declared_interactive_state_and_services_are_real_controller_dependencies(tmp_path) -> None:
@@ -162,6 +172,11 @@ def test_declared_interactive_state_and_services_are_real_controller_dependencie
     assert isinstance(runtime.services, InteractiveServices)
     assert runtime.controllers.view.dependencies.state is runtime.state
     assert runtime.controllers.shutdown.dependencies.lifecycle is runtime.lifecycle
+    runtime.editor_text = "bound state"
+    runtime._shutdown_requested = True
+    assert runtime.state.editor_text == "bound state"
+    assert runtime.lifecycle.shutdown_requested is True
+    assert runtime.controllers.view.dependencies.services.history is runtime.history
 
 
 class _RebindRecorder:
@@ -170,11 +185,13 @@ class _RebindRecorder:
         self.fail_on = fail_on
         self.calls: list[object] = []
 
-    def rebind_session(self, binding: object) -> None:
+    def rebind_session(self, binding: object) -> object:
         self.calls.append(binding)
         if binding is self.fail_on:
             raise RuntimeError("third rebind failed")
+        previous = self.binding
         self.binding = binding
+        return previous
 
 
 def test_interactive_session_rebind_rolls_back_earlier_controllers() -> None:
