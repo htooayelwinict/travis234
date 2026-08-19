@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from travis.coding_agent.session_ports import SessionControllerPort, SessionPortBoundController
+
 import json
 import os
 import re
@@ -220,7 +222,7 @@ def _extract_malformed_stream_tool_names(error_message: str) -> str:
     )
     return match.group(1).strip() if match else ""
 
-class SessionTurnController:
+class SessionTurnController(SessionPortBoundController[SessionControllerPort]):
     """Owns a focused AgentSession runtime concern."""
 
     def prompt(

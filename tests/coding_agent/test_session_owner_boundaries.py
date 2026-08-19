@@ -20,16 +20,16 @@ def test_agent_session_composes_bounded_runtime_owners(tmp_path) -> None:
     session = AgentSession(cwd=str(tmp_path), model=faux_model())
     runtime = session._runtime
 
-    assert isinstance(runtime, SessionModelController)
-    assert isinstance(runtime, SessionBashController)
-    assert isinstance(runtime, SessionToolController)
-    assert isinstance(runtime, SessionPersistence)
-    assert isinstance(runtime, SessionExtensionController)
-    assert isinstance(runtime, SessionSubagentController)
-    assert isinstance(runtime, SessionSubagentTraceController)
-    assert isinstance(runtime, SessionTurnController)
-    assert isinstance(runtime, SessionPolicyController)
-    assert isinstance(runtime, SessionEventController)
+    assert isinstance(runtime.controllers.models, SessionModelController)
+    assert isinstance(runtime.controllers.bash, SessionBashController)
+    assert isinstance(runtime.controllers.tools, SessionToolController)
+    assert isinstance(runtime.controllers.persistence, SessionPersistence)
+    assert isinstance(runtime.controllers.extensions, SessionExtensionController)
+    assert isinstance(runtime.controllers.subagents, SessionSubagentController)
+    assert isinstance(runtime.controllers.subagent_trace, SessionSubagentTraceController)
+    assert isinstance(runtime.controllers.turns, SessionTurnController)
+    assert isinstance(runtime.controllers.policy, SessionPolicyController)
+    assert isinstance(runtime.controllers.events, SessionEventController)
 
 
 def test_agent_session_forwards_runtime_overrides(tmp_path) -> None:

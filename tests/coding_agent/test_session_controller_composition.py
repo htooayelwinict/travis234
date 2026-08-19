@@ -8,6 +8,7 @@ from travis.coding_agent.session_controllers import SessionControllers
 from travis.coding_agent.session_state import SessionPresentationState, SessionTurnState
 from travis.ai.providers.faux import faux_model
 from travis.coding_agent.agent_session import AgentSession
+from travis.coding_agent.agent_session import _SessionRuntime
 
 
 SESSION_CONTROLLER_NAMES = (
@@ -56,7 +57,7 @@ def test_session_runtime_owns_the_typed_controller_bundle(tmp_path) -> None:
 
     assert isinstance(runtime.controllers, SessionControllers)
     assert type(runtime.controllers.events).__name__ == "SessionEventController"
-    assert runtime.controllers.turns is runtime
+    assert type(runtime.controllers.turns).__name__ == "SessionTurnController"
 
 
 def test_low_coupling_session_owners_are_owned_collaborators(tmp_path) -> None:
@@ -86,3 +87,10 @@ def test_persistence_tool_extension_and_subagent_owners_are_collaborators(tmp_pa
 
     assert all(owner is not runtime for owner in owners)
     assert all(type(owner) not in type(runtime).__bases__ for owner in owners)
+
+
+def test_session_runtime_is_plain_composition_after_turn_extraction(tmp_path) -> None:
+    runtime = AgentSession(cwd=str(tmp_path), model=faux_model())._runtime
+
+    assert _SessionRuntime.__bases__ == (object,)
+    assert runtime.controllers.turns is not runtime

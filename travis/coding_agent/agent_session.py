@@ -126,9 +126,7 @@ from travis.coding_agent.session_ports import install_session_controller_delegat
 
 from travis.coding_agent.session_types import default_convert_to_llm
 
-class _SessionRuntime(
-        SessionTurnController,
-):
+class _SessionRuntime:
     """Internal runtime assembled from focused behavior owners."""
 
     def __init__(
@@ -196,7 +194,7 @@ class _SessionRuntime(
             extensions=SessionExtensionController(self),
             subagents=SessionSubagentController(self),
             subagent_trace=SessionSubagentTraceController(self),
-            turns=self,
+            turns=SessionTurnController(self),
         )
         self.cwd = cwd
         self.model_registry = model_registry or ModelRegistry.create(AuthStorage.create())
@@ -737,6 +735,33 @@ install_session_controller_delegates(
             "get_known_tool_names",
             "get_tool_definition",
             "set_active_tools_by_name",
+        ),
+        "turns": (
+            "prompt",
+            "_reset_model_subagent_turn_budget",
+            "continue_",
+            "emit_agent_settled",
+            "steer",
+            "follow_up",
+            "_queue_turn_input",
+            "_expand_user_references",
+            "_flush_turn_mailbox",
+            "_flush_turn_mailbox_kind",
+            "_restore_unacknowledged_turn_messages",
+            "send_custom_message",
+            "_apply_before_agent_start",
+            "_transform_context",
+            "_on_provider_payload",
+            "_on_provider_headers",
+            "_on_provider_response",
+            "_prepare_next_turn",
+            "_queue_partial_stream_continuation_if_needed",
+            "clear_queue",
+            "_run_agent_prompt",
+            "_prepare_retry",
+            "_is_retryable_error",
+            "_wait_for_retry_abort",
+            "_latest_user_message_text",
         ),
     },
 )
