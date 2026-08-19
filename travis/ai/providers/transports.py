@@ -24,6 +24,7 @@ from travis.ai.providers.responses_translation import (
     split_deferred_tools,
     short_hash,
 )
+from travis.ai.providers.transport_families.unsupported import UnsupportedTransport
 from travis.ai.types import AssistantMessage, Context, ImageContent, TextContent, ThinkingContent, ToolCall, ToolResultMessage
 
 
@@ -2276,51 +2277,9 @@ class AzureOpenAIResponsesTransport(OpenAIResponsesTransport):
         return body
 
 
-class UnsupportedTransport:
-    endpoint_path = "/unsupported"
-
-    def __init__(self, api_mode: str) -> None:
-        self.api_mode = api_mode
-
-    def convert_messages(self, messages: list[dict[str, Any]], **_kwargs: Any) -> list[dict[str, Any]]:
-        return messages
-
-    def convert_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return tools
-
-    def build_kwargs(self, **_kwargs: Any) -> dict[str, Any]:
-        raise NotImplementedError(f"{self.api_mode} transport is not supported by the travis HTTP provider")
-
-    def normalize_response(self, response: Any, **_kwargs: Any) -> NormalizedResponse:
-        return NormalizedResponse(content=str(response or ""), tool_calls=None, finish_reason="error")
-
-
-_REGISTRY = {
-    ChatCompletionsTransport.api: ChatCompletionsTransport(),
-    MistralConversationsTransport.api: MistralConversationsTransport(),
-    GoogleGenerativeAITransport.api: GoogleGenerativeAITransport(),
-    GoogleVertexTransport.api: GoogleVertexTransport(),
-    BedrockConverseStreamTransport.api: BedrockConverseStreamTransport(),
-    AnthropicMessagesTransport.api: AnthropicMessagesTransport(),
-    OpenAIResponsesTransport.api: OpenAIResponsesTransport(),
-    AzureOpenAIResponsesTransport.api: AzureOpenAIResponsesTransport(),
-    CodexResponsesTransport.api: CodexResponsesTransport(),
-}
-
-_API_ALIASES = {
-    "chat_completions": "openai-completions",
-    "mistral_conversations": "mistral-conversations",
-    "google_generative_ai": "google-generative-ai",
-    "google_vertex": "google-vertex",
-    "bedrock_converse_stream": "bedrock-converse-stream",
-    "anthropic_messages": "anthropic-messages",
-    "openai_responses": "openai-responses",
-    "azure_openai_responses": "azure-openai-responses",
-    "openai_codex_responses": "openai-codex-responses",
-    "bedrock_converse": "bedrock-converse-stream",
-}
-
-
 def get_transport(api_mode: str):
-    api = _API_ALIASES.get(api_mode, api_mode)
-    return _REGISTRY.get(api) or UnsupportedTransport(api)
+    """Compatibility wrapper for the registry-owned lookup function."""
+
+    from travis.ai.providers.transport_registry import get_transport as registry_get_transport
+
+    return registry_get_transport(api_mode)

@@ -54,3 +54,16 @@ def test_provider_consumers_do_not_access_registry_privates() -> None:
             if token in text:
                 failures.append(f"{relative}: {token}")
     assert failures == []
+
+
+def test_transport_registry_owns_mode_mapping_and_unsupported_family() -> None:
+    provider_root = ROOT / "travis" / "ai" / "providers"
+    registry = provider_root / "transport_registry.py"
+    unsupported = provider_root / "transport_families" / "unsupported.py"
+
+    assert registry.is_file()
+    assert unsupported.is_file()
+    assert "class UnsupportedTransport" in unsupported.read_text(encoding="utf-8")
+    transports_text = (provider_root / "transports.py").read_text(encoding="utf-8")
+    assert "_REGISTRY =" not in transports_text
+    assert "_API_ALIASES =" not in transports_text

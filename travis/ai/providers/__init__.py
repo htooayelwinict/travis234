@@ -21,7 +21,7 @@ from travis.ai.providers.catalog import (
     register_provider,
     tab_for_auth_type,
 )
-from travis.ai.providers.transports import get_transport
+from travis.ai.providers.transport_registry import get_transport
 
 __all__ = [
     "OMIT_TEMPERATURE",
