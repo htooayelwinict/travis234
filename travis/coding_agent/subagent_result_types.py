@@ -11,6 +11,34 @@ _STATUSES = {"queued", "running", "completed", "failed", "cancelled", "timeout"}
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
+def _validate_identifier(field_name: str, value: object) -> None:
+    if not isinstance(value, str) or not value.strip() or not _ID_PATTERN.fullmatch(value):
+        raise ValueError(f"Unsupported subagent {field_name}: {value}")
+
+
+def _validate_optional_string(field_name: str, value: object) -> None:
+    if value is not None and not isinstance(value, str):
+        raise ValueError(f"Subagent {field_name} must be a string when set")
+
+
+def _validate_timestamps(started_at_ms: object, ended_at_ms: object) -> None:
+    for value in (started_at_ms, ended_at_ms):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError("Subagent timestamps must be non-negative integers")
+    if started_at_ms and ended_at_ms and ended_at_ms < started_at_ms:
+        raise ValueError("Subagent ended_at_ms cannot be before started_at_ms")
+
+
+def _validate_string_list(field_name: str, value: object) -> None:
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ValueError(f"Subagent {field_name} must be a list of strings")
+
+
+def _validate_dict_list(field_name: str, value: object) -> None:
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise ValueError(f"Subagent {field_name} must be a list of dicts")
+
+
 @dataclass(frozen=True)
 class SubagentResult:
     task_id: str
@@ -37,36 +65,22 @@ class SubagentResult:
             ("backend", self.backend),
             ("role", self.role),
         ):
-            if not isinstance(value, str) or not value.strip() or not _ID_PATTERN.fullmatch(value):
-                raise ValueError(f"Unsupported subagent {field_name}: {value}")
+            _validate_identifier(field_name, value)
         if not isinstance(self.status, str) or self.status not in _STATUSES:
             raise ValueError(f"Unsupported subagent status: {self.status}")
         if not isinstance(self.summary, str) or not self.summary.strip():
             raise ValueError("Subagent summary is required")
         if not isinstance(self.final_response, str):
             raise ValueError("Subagent final_response must be a string")
-        if self.child_session_id is not None and not isinstance(self.child_session_id, str):
-            raise ValueError("Subagent child_session_id must be a string when set")
-        if self.raw_log_path is not None and not isinstance(self.raw_log_path, str):
-            raise ValueError("Subagent raw_log_path must be a string when set")
-        for field_name in ("started_at_ms", "ended_at_ms"):
-            value = getattr(self, field_name)
-            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-                raise ValueError("Subagent timestamps must be non-negative integers")
-        if self.started_at_ms and self.ended_at_ms and self.ended_at_ms < self.started_at_ms:
-            raise ValueError("Subagent ended_at_ms cannot be before started_at_ms")
+        _validate_optional_string("child_session_id", self.child_session_id)
+        _validate_optional_string("raw_log_path", self.raw_log_path)
+        _validate_timestamps(self.started_at_ms, self.ended_at_ms)
         for field_name in ("files_changed", "artifacts", "errors"):
-            value = getattr(self, field_name)
-            if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
-                raise ValueError(f"Subagent {field_name} must be a list of strings")
+            _validate_string_list(field_name, getattr(self, field_name))
         if not isinstance(self.usage, dict):
             raise ValueError("Subagent usage must be a dict")
-        if not isinstance(self.tool_trace, list) or any(not isinstance(item, dict) for item in self.tool_trace):
-            raise ValueError("Subagent tool_trace must be a list of dicts")
-        if not isinstance(self.validation_errors, list) or any(
-            not isinstance(item, str) for item in self.validation_errors
-        ):
-            raise ValueError("Subagent validation_errors must be a list of strings")
+        _validate_dict_list("tool_trace", self.tool_trace)
+        _validate_string_list("validation_errors", self.validation_errors)
 
     @property
     def duration_ms(self) -> int:
