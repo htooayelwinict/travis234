@@ -57,62 +57,87 @@ def validate_typed_task_fields(task: TypedTask) -> tuple[ToolEffect, ...] | None
     return effects
 
 
+def _parse_typed_result_envelope(text: str) -> tuple[object | None, bool, list[str]]:
+    if len(text.encode("utf-8")) > 256 * 1024:
+        return None, False, ["typed result envelope exceeds 256 KiB"]
+    try:
+        return json.loads(text), True, []
+    except json.JSONDecodeError:
+        return None, False, ["typed result envelope must be valid JSON"]
+
+
+def _typed_result_envelope_values(
+    task: TypedTask,
+    envelope: object,
+    fallback_summary: str,
+) -> tuple[object | None, str, list[str], list[str]]:
+    errors: list[str] = []
+    output: object | None = None
+    summary = fallback_summary
+    artifacts: list[str] = []
+    if not isinstance(envelope, dict):
+        return output, summary, artifacts, ["typed result envelope must be an object"]
+    unknown = sorted(set(envelope).difference({"summary", "output", "artifacts"}))
+    if unknown:
+        errors.append(f"typed result has unknown envelope keys: {', '.join(unknown)}")
+    raw_summary = envelope.get("summary")
+    if not isinstance(raw_summary, str):
+        errors.append("typed result summary must be a string")
+    else:
+        summary = raw_summary[:4096]
+    if "output" not in envelope:
+        errors.append("typed result output is required")
+    else:
+        output = envelope["output"]
+    raw_artifacts = envelope.get("artifacts", [])
+    if not isinstance(raw_artifacts, list) or any(not isinstance(item, str) for item in raw_artifacts):
+        errors.append("typed result artifacts must be a list of strings")
+    elif task.artifact_policy != "none":
+        artifacts = list(dict.fromkeys(raw_artifacts))[:256]
+    return output, summary, artifacts, errors
+
+
+def _typed_result_schema_errors(
+    schema: dict[str, object],
+    output: object | None,
+) -> list[str]:
+    validator = Draft202012Validator(schema)
+    errors: list[str] = []
+    for error in sorted(validator.iter_errors(output), key=lambda item: list(item.path))[:8]:
+        path = "$" + "".join(f"[{part}]" if isinstance(part, int) else f".{part}" for part in error.path)
+        errors.append(f"typed result schema mismatch at {path}: {error.message}"[:300])
+    return errors
+
+
+def _typed_result_semantic_errors(
+    role_definition_name: str | None,
+    output: object | None,
+) -> list[str]:
+    semantic_validator = _BUILTIN_RESULT_VALIDATORS.get(role_definition_name or "")
+    if semantic_validator is None:
+        return []
+    return [f"typed result semantic mismatch: {error}"[:300] for error in semantic_validator(output)[:8]]
+
+
 def settle_typed_result(task: TypedTask, result: TypedResult):
     if task.result_schema is None or result.status != "completed":
         return result
     text = result.final_response or result.summary
-    errors: list[str] = []
-    envelope: object | None = None
-    parsed = False
-    if len(text.encode("utf-8")) > 256 * 1024:
-        errors.append("typed result envelope exceeds 256 KiB")
-    else:
-        try:
-            envelope = json.loads(text)
-            parsed = True
-        except json.JSONDecodeError:
-            errors.append("typed result envelope must be valid JSON")
+    envelope, parsed, errors = _parse_typed_result_envelope(text)
     output: object | None = None
     summary = result.summary[:4096]
     artifacts: list[str] = []
     if parsed:
-        if not isinstance(envelope, dict):
-            errors.append("typed result envelope must be an object")
-        else:
-            unknown = sorted(set(envelope).difference({"summary", "output", "artifacts"}))
-            if unknown:
-                errors.append(f"typed result has unknown envelope keys: {', '.join(unknown)}")
-            raw_summary = envelope.get("summary")
-            if not isinstance(raw_summary, str):
-                errors.append("typed result summary must be a string")
-            else:
-                summary = raw_summary[:4096]
-            if "output" not in envelope:
-                errors.append("typed result output is required")
-            else:
-                output = envelope["output"]
-            raw_artifacts = envelope.get("artifacts", [])
-            if not isinstance(raw_artifacts, list) or any(
-                not isinstance(item, str) for item in raw_artifacts
-            ):
-                errors.append("typed result artifacts must be a list of strings")
-            elif task.artifact_policy != "none":
-                artifacts = list(dict.fromkeys(raw_artifacts))[:256]
+        output, summary, artifacts, envelope_errors = _typed_result_envelope_values(
+            task,
+            envelope,
+            summary,
+        )
+        errors.extend(envelope_errors)
     if not errors and parsed:
-        validator = Draft202012Validator(task.result_schema)
-        for error in sorted(validator.iter_errors(output), key=lambda item: list(item.path))[:8]:
-            path = "$" + "".join(
-                f"[{part}]" if isinstance(part, int) else f".{part}"
-                for part in error.path
-            )
-            errors.append(f"typed result schema mismatch at {path}: {error.message}"[:300])
+        errors.extend(_typed_result_schema_errors(task.result_schema, output))
     if not errors and parsed:
-        semantic_validator = _BUILTIN_RESULT_VALIDATORS.get(task.role_definition_name or "")
-        if semantic_validator is not None:
-            errors.extend(
-                f"typed result semantic mismatch: {error}"[:300]
-                for error in semantic_validator(output)[:8]
-            )
+        errors.extend(_typed_result_semantic_errors(task.role_definition_name, output))
     if errors:
         return replace(
             result,
