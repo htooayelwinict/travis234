@@ -329,6 +329,32 @@ def test_interactive_package_parser_reports_malformed_recognized_command(tmp_pat
         app.close()
 
 
+def test_interactive_package_commands_report_exact_usage_for_invalid_arity(tmp_path) -> None:
+    app = CodingApp(
+        cwd=str(tmp_path),
+        model=faux_model(),
+        terminal=FakeTerminal(columns=100, rows=30),
+        enable_tui=True,
+        agent_dir=str(tmp_path / "agent"),
+        project_trust_override=True,
+    )
+    mode = InteractiveMode(app, input_fn=lambda prompt: "/exit")
+
+    try:
+        assert mode._run_package_command("/packages extra") is True
+        assert mode._run_package_command("/install") is True
+        assert mode._run_package_command("/remove first second") is True
+        assert mode._run_package_command("/update first second") is True
+        history = strip_ansi("\n".join(mode.history.render(1_000)))
+        assert "Usage: /packages [--local]" in history
+        assert "Usage: /install <source> [--local]" in history
+        assert "Usage: /remove <source> [--local]" in history
+        assert "Usage: /update [source] [--local]" in history
+    finally:
+        mode.footer_data_provider.dispose()
+        app.close()
+
+
 def test_interactive_package_commands_confirm_mutate_and_refresh_resources(tmp_path) -> None:
     package = tmp_path / "package"
     prompts = package / "prompts"

@@ -26,6 +26,16 @@ from travis.tui.motion import MotionState
 _PACKAGE_COMMANDS = frozenset({"/install", "/remove", "/update", "/packages"})
 
 
+def _package_usage_error(action: str, arguments: list[str]) -> str | None:
+    if action == "packages" and arguments:
+        return "Usage: /packages [--local]"
+    if action in {"install", "remove"} and len(arguments) != 1:
+        return f"Usage: /{action} <source> [--local]"
+    if action == "update" and len(arguments) > 1:
+        return "Usage: /update [source] [--local]"
+    return None
+
+
 class _AutocompleteTriggerProvider(Protocol):
     trigger_characters: list[str]
 
@@ -393,10 +403,11 @@ class InteractiveExtensions(InteractiveExtensionSurface):
         scope = "project" if local else "global"
         manager = self.app.session.resource_loader.package_manager
 
+        usage_error = _package_usage_error(action, arguments)
+        if usage_error is not None:
+            self.history.add(StatusLine(usage_error, kind="error"))
+            return True
         if action == "packages":
-            if arguments:
-                self.history.add(StatusLine("Usage: /packages [--local]", kind="error"))
-                return True
             installed = manager.list_installed(scope=scope)
             if not installed:
                 self.history.add(StatusLine(f"No {scope} packages installed.", kind="warning"))
@@ -408,12 +419,6 @@ class InteractiveExtensions(InteractiveExtensionSurface):
             self.tui.request_render()
             return True
 
-        if action in {"install", "remove"} and len(arguments) != 1:
-            self.history.add(StatusLine(f"Usage: /{action} <source> [--local]", kind="error"))
-            return True
-        if action == "update" and len(arguments) > 1:
-            self.history.add(StatusLine("Usage: /update [source] [--local]", kind="error"))
-            return True
         source = arguments[0] if arguments else None
         title = f"{action.capitalize()} package"
         target = source or f"all {scope} packages"
