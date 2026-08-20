@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Buffer, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Protocol, SupportsIndex, SupportsInt, cast
+from typing import Protocol, SupportsIndex, SupportsInt
 
 from travis.agent.types import AgentMessage
 from travis.ai.types import AssistantMessage, TextContent, UserMessage, empty_usage, now_ms
@@ -218,12 +218,7 @@ class SessionCompactionAdapter:
         context_entry_ids = self._session_context_message_entry_ids()
         if first_kept_entry_id and first_kept_entry_id not in context_entry_ids:
             raise ValueError(f"Extension compaction returned unknown firstKeptEntryId: {first_kept_entry_id}")
-        tokens_before = int(
-            cast(
-                str | bytes | bytearray | SupportsInt | SupportsIndex,
-                compaction["tokensBefore"],
-            )
-        )
+        tokens_before = _extension_token_count(compaction["tokensBefore"])
         details = self._merge_process_details(compaction.get("details"), source_messages)
         entry_id = self._session_store.append_compaction(
             summary,
@@ -324,6 +319,15 @@ _PROCESS_STATUSES = frozenset(
         "unavailable",
     }
 )
+
+
+def _extension_token_count(value: object) -> int:
+    if isinstance(value, str | Buffer | SupportsInt | SupportsIndex):
+        return int(value)
+    raise TypeError(
+        "int() argument must be a string, a bytes-like object or a real number, "
+        f"not '{type(value).__name__}'"
+    )
 
 
 def merge_process_compaction_details(

@@ -11,7 +11,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypeGuard
 
 from travis.agent.types import AgentMessage
 from travis.ai.providers.params import (
@@ -825,55 +825,67 @@ def _context_messages_and_entry_ids(
 
 def serialize_message(message: _PersistedMessage) -> dict[str, Any]:
     role = getattr(message, "role", None)
-    if role == "bashExecution":
-        bash_message = cast(BashExecutionMessage, message)
+    if _is_bash_execution_message(message):
         return {
             "role": "bashExecution",
-            "command": bash_message.command,
-            "output": bash_message.output,
-            "exitCode": bash_message.exit_code,
-            "cancelled": bash_message.cancelled,
-            "truncated": bash_message.truncated,
-            "fullOutputPath": bash_message.full_output_path,
-            "timestamp": bash_message.timestamp,
-            "excludeFromContext": bash_message.exclude_from_context,
+            "command": message.command,
+            "output": message.output,
+            "exitCode": message.exit_code,
+            "cancelled": message.cancelled,
+            "truncated": message.truncated,
+            "fullOutputPath": message.full_output_path,
+            "timestamp": message.timestamp,
+            "excludeFromContext": message.exclude_from_context,
         }
-    if role == "user":
-        user_message = cast(UserMessage, message)
+    if _is_user_message(message):
         return {
             "role": "user",
-            "content": _serialize_content(user_message.content),
-            "timestamp": user_message.timestamp,
+            "content": _serialize_content(message.content),
+            "timestamp": message.timestamp,
         }
-    if role == "assistant":
-        assistant_message = cast(AssistantMessage, message)
+    if _is_assistant_message(message):
         return {
             "role": "assistant",
-            "content": [_serialize_block(block) for block in assistant_message.content],
-            "api": assistant_message.api,
-            "provider": assistant_message.provider,
-            "model": assistant_message.model,
-            "usage": _serialize_usage(assistant_message.usage),
-            "stopReason": assistant_message.stop_reason,
-            "responseModel": assistant_message.response_model,
-            "responseId": assistant_message.response_id,
-            "diagnostics": assistant_message.diagnostics,
-            "errorMessage": assistant_message.error_message,
-            "timestamp": assistant_message.timestamp,
+            "content": [_serialize_block(block) for block in message.content],
+            "api": message.api,
+            "provider": message.provider,
+            "model": message.model,
+            "usage": _serialize_usage(message.usage),
+            "stopReason": message.stop_reason,
+            "responseModel": message.response_model,
+            "responseId": message.response_id,
+            "diagnostics": message.diagnostics,
+            "errorMessage": message.error_message,
+            "timestamp": message.timestamp,
         }
-    if role == "toolResult":
-        tool_result = cast(ToolResultMessage, message)
+    if _is_tool_result_message(message):
         return {
             "role": "toolResult",
-            "toolCallId": tool_result.tool_call_id,
-            "toolName": tool_result.tool_name,
-            "content": [_serialize_block(block) for block in tool_result.content],
-            "isError": tool_result.is_error,
-            "details": tool_result.details,
-            "addedToolNames": tool_result.added_tool_names,
-            "timestamp": tool_result.timestamp,
+            "toolCallId": message.tool_call_id,
+            "toolName": message.tool_name,
+            "content": [_serialize_block(block) for block in message.content],
+            "isError": message.is_error,
+            "details": message.details,
+            "addedToolNames": message.added_tool_names,
+            "timestamp": message.timestamp,
         }
     raise TypeError(f"Unsupported session message role: {role}")
+
+
+def _is_bash_execution_message(message: _PersistedMessage) -> TypeGuard[BashExecutionMessage]:
+    return getattr(message, "role", None) == "bashExecution"
+
+
+def _is_user_message(message: _PersistedMessage) -> TypeGuard[UserMessage]:
+    return getattr(message, "role", None) == "user"
+
+
+def _is_assistant_message(message: _PersistedMessage) -> TypeGuard[AssistantMessage]:
+    return getattr(message, "role", None) == "assistant"
+
+
+def _is_tool_result_message(message: _PersistedMessage) -> TypeGuard[ToolResultMessage]:
+    return getattr(message, "role", None) == "toolResult"
 
 
 def deserialize_message(data: dict[str, Any]) -> _PersistedMessage:
@@ -909,10 +921,7 @@ def deserialize_message(data: dict[str, Any]) -> _PersistedMessage:
         return ToolResultMessage(
             tool_call_id=data.get("toolCallId", ""),
             tool_name=data.get("toolName", ""),
-            content=cast(
-                list[TextContent | ImageContent],
-                [_deserialize_block(block) for block in data.get("content", [])],
-            ),
+            content=[_deserialize_message_block(block) for block in data.get("content", [])],
             is_error=bool(data.get("isError", False)),
             details=data.get("details"),
             added_tool_names=data.get("addedToolNames"),
@@ -930,10 +939,7 @@ def _serialize_content(content) -> Any:
 def _deserialize_content(content) -> str | list[TextContent | ImageContent]:
     if isinstance(content, str):
         return content
-    return cast(
-        list[TextContent | ImageContent],
-        [_deserialize_block(block) for block in content or []],
-    )
+    return [_deserialize_message_block(block) for block in content or []]
 
 
 def _serialize_block(block) -> dict[str, Any]:
@@ -979,6 +985,13 @@ def _deserialize_block(data: dict[str, Any]):
             thought_signature=data.get("thoughtSignature"),
         )
     raise TypeError(f"Unsupported content block type: {block_type}")
+
+
+def _deserialize_message_block(data: dict[str, object]) -> TextContent | ImageContent:
+    block = _deserialize_block(data)
+    if isinstance(block, TextContent | ImageContent):
+        return block
+    raise TypeError(f"Unsupported content block type: {block.type}")
 
 
 def _serialize_usage(usage: Usage) -> dict[str, Any]:
