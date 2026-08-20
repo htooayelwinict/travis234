@@ -277,7 +277,7 @@ def _oversized_tests(root: Path) -> tuple[str, ...]:
     oversized = []
     for path in _python_files(root / "tests"):
         line_count = len(path.read_text(encoding="utf-8").splitlines())
-        if line_count > 2_500:
+        if line_count > 2_000:
             oversized.append(f"{path.relative_to(root).as_posix()}:{line_count}")
     return tuple(sorted(oversized))
 
