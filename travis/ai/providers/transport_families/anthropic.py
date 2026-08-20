@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from travis.ai.providers.base import OMIT_TEMPERATURE, NormalizedResponse, ProviderProfile
@@ -21,6 +21,7 @@ from travis.ai.types import (
     Model,
     TextContent,
     ThinkingContent,
+    Tool,
     ToolCall,
     ToolResultMessage,
     UserMessage,
@@ -560,6 +561,111 @@ def _anthropic_thinking_fields(
     }
 
 
+def _anthropic_native_tool_sets(
+    context: Context | None,
+    model: Model | None,
+    compat: Mapping[str, object],
+    normalize_tool_name: Callable[[str], str],
+) -> tuple[list[Tool], list[Tool], set[str]]:
+    if context is None or model is None:
+        return [], [], set()
+    supports_references = compat.get("supportsToolReferences")
+    if supports_references is None:
+        supports_references = _anthropic_default_supports_tool_references(model)
+    immediate_tools, deferred_by_name = split_deferred_tools(
+        context,
+        bool(supports_references),
+        normalize_tool_name,
+    )
+    deferred_tools = list(deferred_by_name.values())
+    if not immediate_tools and deferred_tools:
+        immediate_tools = deferred_tools
+        deferred_tools = []
+    deferred_tool_names = {
+        normalize_tool_name(tool.name) for tool in deferred_tools
+    }
+    return immediate_tools, deferred_tools, deferred_tool_names
+
+
+def _restore_oauth_tool_names(messages: list[dict[str, object]]) -> None:
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            name = block.get("name")
+            if isinstance(name, str):
+                block["name"] = _claude_code_tool_name(name)
+
+
+def _resolve_anthropic_max_tokens(
+    *,
+    omit_max_tokens: bool,
+    max_tokens: int | None,
+    profile: ProviderProfile,
+    model_id: str,
+    native_model: Model | None,
+    native_context: Context | None,
+) -> int:
+    if not omit_max_tokens:
+        return max_tokens if max_tokens is not None else profile.get_max_tokens(model_id) or 4096
+    native_ceiling = (
+        (native_model.max_tokens if native_model is not None else 0)
+        or profile.get_max_tokens(model_id)
+        or 4096
+    )
+    if native_context is None or native_model is None:
+        return native_ceiling
+    from travis.ai.context_estimate import clamp_max_tokens_to_context
+
+    return clamp_max_tokens_to_context(native_model, native_context, native_ceiling)
+
+
+def _anthropic_beta_features(
+    *,
+    native_context: Context | None,
+    thinking_enabled: bool,
+    supports_eager_input: bool,
+    force_adaptive: bool,
+) -> list[str]:
+    features: list[str] = []
+    if native_context is not None and native_context.tools and not supports_eager_input:
+        features.append("fine-grained-tool-streaming-2025-05-14")
+    if thinking_enabled and not force_adaptive:
+        features.append("interleaved-thinking-2025-05-14")
+    return features
+
+
+def _anthropic_request_headers(
+    *,
+    beta_features: list[str],
+    is_oauth: bool,
+    session_id: str | None,
+    send_session_affinity: bool,
+) -> dict[str, str] | None:
+    headers: dict[str, str] = {}
+    if beta_features:
+        headers = {
+            "accept": "application/json",
+            "anthropic-dangerous-direct-browser-access": "true",
+            "anthropic-beta": ",".join(beta_features),
+        }
+    if is_oauth:
+        oauth_betas = ["claude-code-20250219", "oauth-2025-04-20", *beta_features]
+        return {
+            "accept": "application/json",
+            "anthropic-dangerous-direct-browser-access": "true",
+            "anthropic-beta": ",".join(oauth_betas),
+            "user-agent": "claude-cli/2.1.75",
+            "x-app": "cli",
+        }
+    if session_id and send_session_affinity:
+        headers["x-session-affinity"] = session_id
+    return headers or None
+
+
 
 
 
@@ -664,7 +770,7 @@ class AnthropicMessagesTransport:
         tool_choice: Any | None = None,
         metadata: dict[str, Any] | None = None,
         context: Context | None = None,
-        target_model: Any = None,
+        target_model: Model | None = None,
         model_compat: dict[str, Any] | None = None,
         api_key: str | None = None,
         **_kwargs: Any,
@@ -678,26 +784,12 @@ class AnthropicMessagesTransport:
         )
         native_context = context
         native_model = target_model
-        immediate_tools: list[Any] = []
-        deferred_tools: list[Any] = []
-        if native_context is not None and native_model is not None:
-            supports_references = compat.get("supportsToolReferences")
-            if supports_references is None:
-                supports_references = _anthropic_default_supports_tool_references(native_model)
-            immediate_tools, deferred_by_name = split_deferred_tools(
-                native_context,
-                bool(supports_references),
-                normalize_tool_name,
-            )
-            deferred_tools = list(deferred_by_name.values())
-            if not immediate_tools and deferred_tools:
-                immediate_tools = deferred_tools
-                deferred_tools = []
-            deferred_tool_names = {
-                normalize_tool_name(tool.name) for tool in deferred_tools
-            }
-        else:
-            deferred_tool_names = set()
+        immediate_tools, deferred_tools, deferred_tool_names = _anthropic_native_tool_sets(
+            native_context,
+            native_model,
+            compat,
+            normalize_tool_name,
+        )
         converted_messages = (
             _anthropic_native_messages(
                 native_context,
@@ -711,22 +803,15 @@ class AnthropicMessagesTransport:
             else self.convert_messages(messages)
         )
         if is_oauth:
-            for message in converted_messages:
-                content = message.get("content") if isinstance(message, dict) else None
-                if not isinstance(content, list):
-                    continue
-                for block in content:
-                    if isinstance(block, dict) and block.get("type") == "tool_use" and isinstance(block.get("name"), str):
-                        block["name"] = _claude_code_tool_name(block["name"])
-        if omit_max_tokens:
-            native_ceiling = int(getattr(native_model, "max_tokens", 0) or 0) or profile.get_max_tokens(model) or 4096
-            if native_context is not None and native_model is not None:
-                from travis.ai.context_estimate import clamp_max_tokens_to_context
-
-                native_ceiling = clamp_max_tokens_to_context(native_model, native_context, native_ceiling)
-            resolved_max_tokens = native_ceiling
-        else:
-            resolved_max_tokens = max_tokens if max_tokens is not None else profile.get_max_tokens(model) or 4096
+            _restore_oauth_tool_names(converted_messages)
+        resolved_max_tokens = _resolve_anthropic_max_tokens(
+            omit_max_tokens=omit_max_tokens,
+            max_tokens=max_tokens,
+            profile=profile,
+            model_id=model,
+            native_model=native_model,
+            native_context=native_context,
+        )
         body: dict[str, Any] = {
             "model": model,
             "messages": converted_messages,
@@ -770,28 +855,20 @@ class AnthropicMessagesTransport:
                 force_adaptive=compat.get("forceAdaptiveThinking") is True,
             )
         )
-        beta_features: list[str] = []
-        if native_context is not None and native_context.tools and not supports_eager_input:
-            beta_features.append("fine-grained-tool-streaming-2025-05-14")
-        if thinking_enabled and compat.get("forceAdaptiveThinking") is not True:
-            beta_features.append("interleaved-thinking-2025-05-14")
-        if beta_features:
-            body["extra_headers"] = {
-                "accept": "application/json",
-                "anthropic-dangerous-direct-browser-access": "true",
-                "anthropic-beta": ",".join(beta_features),
-            }
-        if is_oauth:
-            oauth_betas = ["claude-code-20250219", "oauth-2025-04-20", *beta_features]
-            body["extra_headers"] = {
-                "accept": "application/json",
-                "anthropic-dangerous-direct-browser-access": "true",
-                "anthropic-beta": ",".join(oauth_betas),
-                "user-agent": "claude-cli/2.1.75",
-                "x-app": "cli",
-            }
-        elif session_id and compat.get("sendSessionAffinityHeaders") is True:
-            body.setdefault("extra_headers", {})["x-session-affinity"] = session_id
+        beta_features = _anthropic_beta_features(
+            native_context=native_context,
+            thinking_enabled=thinking_enabled,
+            supports_eager_input=supports_eager_input,
+            force_adaptive=compat.get("forceAdaptiveThinking") is True,
+        )
+        request_headers = _anthropic_request_headers(
+            beta_features=beta_features,
+            is_oauth=is_oauth,
+            session_id=session_id,
+            send_session_affinity=compat.get("sendSessionAffinityHeaders") is True,
+        )
+        if request_headers:
+            body["extra_headers"] = request_headers
         if isinstance(metadata, dict) and isinstance(metadata.get("user_id"), str):
             body["metadata"] = {"user_id": metadata["user_id"]}
         if tool_choice is not None:
