@@ -18,7 +18,7 @@ from typing import Callable
 from travis.agent.types import AgentTool, AgentToolResult
 from travis.ai.types import TextContent
 from travis.coding_agent.artifact_store import ArtifactPromotionError
-from travis.coding_agent.artifacts import ArtifactRegistry, artifact_read_instruction
+from travis.coding_agent.artifacts import ArtifactRef, ArtifactRegistry, artifact_read_instruction
 from travis.coding_agent.config import get_bin_dir
 from travis.coding_agent.execution_backend import ExecutionBackend, TrustedLocalBackend
 from travis.coding_agent.policy.context import shell_policy_context
@@ -31,6 +31,7 @@ from travis.coding_agent.tools.process import format_process_bash_handoff
 from travis.coding_agent.tools.truncate import (
     DEFAULT_MAX_BYTES,
     DEFAULT_MAX_LINES,
+    TruncationResult,
     format_size,
     truncation_to_details,
 )
@@ -539,76 +540,126 @@ def _execute_managed_bash(
     )
 
 
-def _managed_bash_result(
+@dataclass(frozen=True)
+class _ManagedBashArtifact:
+    path: Path
+    ref: ArtifactRef | None
+    unavailable: dict[str, str] | None
+
+
+def _store_managed_bash_artifact(
+    artifacts: ArtifactRegistry,
+    path: Path,
+    *,
+    borrowed: bool,
+    tool_call_id: str | None,
+) -> tuple[ArtifactRef | None, dict[str, str] | None]:
+    if not artifacts.is_durable:
+        return (
+            artifacts.register(
+                path,
+                kind="bash-output",
+                access="read",
+                remove_on_close=not borrowed,
+            ),
+            None,
+        )
+    artifact = None
+    unavailable = None
+    try:
+        artifact = artifacts.promote(
+            path,
+            kind="bash-output",
+            tool_call_id=tool_call_id,
+        )
+    except ArtifactPromotionError as error:
+        message = " ".join(str(error).split())[:240] or "Artifact storage is unavailable"
+        unavailable = {"code": error.code, "message": message}
+    except OSError:
+        unavailable = {
+            "code": "unavailable",
+            "message": "Artifact storage is unavailable",
+        }
+    if not borrowed:
+        path.unlink(missing_ok=True)
+    return artifact, unavailable
+
+
+def _prepare_managed_bash_artifact(
     service: ProcessSessionService,
     owner: ProcessOwner,
     snapshot: ProcessSnapshot,
-    signal,
     artifacts: ArtifactRegistry | None,
-    timeout: float | None,
-    *,
     tool_call_id: str | None,
+) -> _ManagedBashArtifact:
+    if snapshot.durable_output and snapshot.full_output_path is not None:
+        borrowed = True
+        path = Path(snapshot.full_output_path)
+    else:
+        borrowed = False
+        path = service.export_output(owner, snapshot.session_id, tempfile.gettempdir())
+    artifact = None
+    unavailable = None
+    if artifacts is not None:
+        artifact, unavailable = _store_managed_bash_artifact(
+            artifacts,
+            path,
+            borrowed=borrowed,
+            tool_call_id=tool_call_id,
+        )
+    return _ManagedBashArtifact(path=path, ref=artifact, unavailable=unavailable)
+
+
+def _managed_bash_artifact_notice(artifact: _ManagedBashArtifact) -> str:
+    if artifact.ref is not None:
+        return artifact_read_instruction(artifact.ref.id)
+    if artifact.unavailable is not None:
+        return f"Full output artifact unavailable ({artifact.unavailable['code']})"
+    return f"Full output: {artifact.path}"
+
+
+def _add_managed_bash_truncation(
+    service: ProcessSessionService,
+    owner: ProcessOwner,
+    snapshot: ProcessSnapshot,
+    tail: TruncationResult,
+    artifacts: ArtifactRegistry | None,
+    tool_call_id: str | None,
+    output: str,
+    details: dict[str, object],
+) -> str:
+    artifact = _prepare_managed_bash_artifact(
+        service,
+        owner,
+        snapshot,
+        artifacts,
+        tool_call_id,
+    )
+    details.update(
+        {
+            "truncation": truncation_to_details(tail),
+            "fullOutputPath": (None if artifacts is not None and artifacts.is_durable else str(artifact.path)),
+            "artifactId": artifact.ref.id if artifact.ref is not None else None,
+            "artifactUnavailable": artifact.unavailable,
+        }
+    )
+    start_line = tail.total_lines - tail.output_lines + 1
+    notice = _managed_bash_artifact_notice(artifact)
+    return _append_status(
+        output,
+        f"[Showing lines {start_line}-{tail.total_lines} of {tail.total_lines}. {notice}]",
+    )
+
+
+def _managed_bash_state_result(
+    snapshot: ProcessSnapshot,
+    signal: object | None,
+    timeout: float | None,
+    output: str,
+    details: dict[str, object],
+    *,
     input_open: bool,
 ) -> AgentToolResult:
-    details = snapshot.as_details()
-    tail = service.tail_snapshot(owner, snapshot.session_id) if snapshot.state.terminal else None
-    output = tail.content if tail is not None else snapshot.output
-    output = output or "(no output)"
-    if tail is not None and tail.truncated:
-        borrowed = snapshot.durable_output and snapshot.full_output_path is not None
-        exported = (
-            Path(snapshot.full_output_path)
-            if borrowed
-            else service.export_output(owner, snapshot.session_id, tempfile.gettempdir())
-        )
-        artifact = None
-        artifact_unavailable: dict[str, str] | None = None
-        if artifacts is not None:
-            if artifacts.is_durable:
-                try:
-                    artifact = artifacts.promote(
-                        exported,
-                        kind="bash-output",
-                        tool_call_id=tool_call_id,
-                    )
-                except ArtifactPromotionError as error:
-                    message = " ".join(str(error).split())[:240] or "Artifact storage is unavailable"
-                    artifact_unavailable = {"code": error.code, "message": message}
-                except OSError:
-                    artifact_unavailable = {
-                        "code": "unavailable",
-                        "message": "Artifact storage is unavailable",
-                    }
-                if not borrowed:
-                    exported.unlink(missing_ok=True)
-            else:
-                artifact = artifacts.register(
-                    exported,
-                    kind="bash-output",
-                    access="read",
-                    remove_on_close=not borrowed,
-                )
-        details.update(
-            {
-                "truncation": truncation_to_details(tail),
-                "fullOutputPath": (
-                    None if artifacts is not None and artifacts.is_durable else str(exported)
-                ),
-                "artifactId": artifact.id if artifact is not None else None,
-                "artifactUnavailable": artifact_unavailable,
-            }
-        )
-        start_line = tail.total_lines - tail.output_lines + 1
-        if artifact is not None:
-            full_output = artifact_read_instruction(artifact.id)
-        elif artifact_unavailable is not None:
-            full_output = f"Full output artifact unavailable ({artifact_unavailable['code']})"
-        else:
-            full_output = f"Full output: {exported}"
-        output = _append_status(
-            output,
-            f"[Showing lines {start_line}-{tail.total_lines} of {tail.total_lines}. {full_output}]",
-        )
     if snapshot.state is ProcessState.EXITED:
         if snapshot.exit_code not in (None, 0):
             raise RuntimeError(_append_status(output, f"Command exited with code {snapshot.exit_code}"))
@@ -632,6 +683,50 @@ def _managed_bash_result(
     return AgentToolResult(
         content=[TextContent(text=_append_status(snapshot.output, footer))],
         details=details,
+    )
+
+
+def _managed_bash_result(
+    service: ProcessSessionService,
+    owner: ProcessOwner,
+    snapshot: ProcessSnapshot,
+    signal,
+    artifacts: ArtifactRegistry | None,
+    timeout: float | None,
+    *,
+    tool_call_id: str | None,
+    input_open: bool,
+) -> AgentToolResult:
+    details = snapshot.as_details()
+    if not snapshot.state.terminal:
+        return _managed_bash_state_result(
+            snapshot,
+            signal,
+            timeout,
+            snapshot.output,
+            details,
+            input_open=input_open,
+        )
+    tail = service.tail_snapshot(owner, snapshot.session_id)
+    output = tail.content or "(no output)"
+    if tail.truncated:
+        output = _add_managed_bash_truncation(
+            service,
+            owner,
+            snapshot,
+            tail,
+            artifacts,
+            tool_call_id,
+            output,
+            details,
+        )
+    return _managed_bash_state_result(
+        snapshot,
+        signal,
+        timeout,
+        output,
+        details,
+        input_open=input_open,
     )
 
 
