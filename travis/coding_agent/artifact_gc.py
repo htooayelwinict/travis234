@@ -1,4 +1,8 @@
-"""Explicit fail-closed garbage collection for durable artifact objects."""
+"""Explicit fail-closed durable artifact maintenance.
+
+Ownership and nonautomatic retention policy are documented in
+``docs/architecture/artifact-retention.md``.
+"""
 
 from __future__ import annotations
 
