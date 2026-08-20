@@ -176,6 +176,138 @@ def resolve_model_scope(patterns: list[str], model_registry: object) -> list[Sco
     return scoped_models
 
 
+def _cli_provider_map(
+    available_models: list[Model],
+    cli_provider: str | None,
+) -> dict[str, str]:
+    provider_map = {model.provider.lower(): model.provider for model in available_models}
+    known_provider_profiles = {profile.name.lower(): profile.name for profile in list_provider_profiles()}
+    provider_map.update({key: value for key, value in known_provider_profiles.items() if key not in provider_map})
+    if cli_provider:
+        normalized_cli_provider = normalize_provider(cli_provider)
+        if get_provider_profile(normalized_cli_provider):
+            provider_map.setdefault(cli_provider.lower(), normalized_cli_provider)
+            provider_map.setdefault(normalized_cli_provider.lower(), normalized_cli_provider)
+    return provider_map
+
+
+def _infer_cli_provider(
+    cli_model: str,
+    provider_map: dict[str, str],
+) -> tuple[str | None, str, bool]:
+    slash_index = cli_model.find("/")
+    if slash_index == -1:
+        return None, cli_model, False
+    maybe_provider = cli_model[:slash_index]
+    canonical = provider_map.get(maybe_provider.lower())
+    if canonical is None:
+        normalized = normalize_provider(maybe_provider)
+        if get_provider_profile(normalized):
+            canonical = provider_map.get(normalized.lower()) or normalized
+    if canonical is None:
+        return None, cli_model, False
+    return canonical, cli_model[slash_index + 1 :], True
+
+
+def _find_available_model(reference: str, available_models: list[Model]) -> Model | None:
+    normalized_reference = reference.lower()
+    return next(
+        (
+            model
+            for model in available_models
+            if model.id.lower() == normalized_reference
+            or f"{model.provider}/{model.id}".lower() == normalized_reference
+        ),
+        None,
+    )
+
+
+def _authenticated_raw_model_override(
+    cli_model: str,
+    parsed_model: Model,
+    available_models: list[Model],
+    model_registry: object,
+) -> Model | None:
+    raw_exact_matches = [
+        model
+        for model in available_models
+        if model.id.lower() == cli_model.lower() and not _models_are_equal(model, parsed_model)
+    ]
+    if not raw_exact_matches or _registry_has_configured_auth(model_registry, parsed_model):
+        return None
+    authenticated_raw_matches = [
+        model for model in raw_exact_matches if _registry_has_configured_auth(model_registry, model)
+    ]
+    return authenticated_raw_matches[0] if len(authenticated_raw_matches) == 1 else None
+
+
+def _inferred_provider_fallback(
+    cli_model: str,
+    available_models: list[Model],
+) -> ResolveCliModelResult | None:
+    exact = _find_available_model(cli_model, available_models)
+    if exact is not None:
+        return ResolveCliModelResult(model=exact)
+    fallback = parse_model_pattern(
+        cli_model,
+        available_models,
+        allow_invalid_thinking_level_fallback=False,
+    )
+    if fallback.model is None:
+        return None
+    return ResolveCliModelResult(
+        model=fallback.model,
+        thinking_level=fallback.thinking_level,
+        warning=fallback.warning,
+    )
+
+
+def _fallback_pattern_and_thinking(
+    pattern: str,
+    cli_thinking: str | None,
+) -> tuple[str, str | None]:
+    if cli_thinking:
+        return pattern, None
+    last_colon = pattern.rfind(":")
+    if last_colon == -1:
+        return pattern, None
+    suffix = pattern[last_colon + 1 :]
+    if not _is_valid_thinking_level(suffix):
+        return pattern, None
+    return pattern[:last_colon], suffix
+
+
+def _custom_provider_model_result(
+    *,
+    provider: str,
+    pattern: str,
+    cli_thinking: str | None,
+    parsed_warning: str | None,
+    available_models: list[Model],
+) -> ResolveCliModelResult | None:
+    fallback_pattern, fallback_thinking = _fallback_pattern_and_thinking(pattern, cli_thinking)
+    fallback_model = _build_fallback_model(provider, fallback_pattern, available_models)
+    if fallback_model is None:
+        return None
+    requested_thinking = cli_thinking or fallback_thinking
+    model = (
+        replace(fallback_model, reasoning=True)
+        if requested_thinking and requested_thinking != DEFAULT_THINKING_LEVEL
+        else fallback_model
+    )
+    warning = (
+        f'{parsed_warning} Model "{fallback_pattern}" not found for provider "{provider}". '
+        "Using custom model id."
+        if parsed_warning
+        else f'Model "{fallback_pattern}" not found for provider "{provider}". Using custom model id.'
+    )
+    return ResolveCliModelResult(
+        model=model,
+        thinking_level=fallback_thinking,
+        warning=warning,
+    )
+
+
 def resolve_cli_model(
     *,
     cli_model: str | None = None,
@@ -187,14 +319,7 @@ def resolve_cli_model(
         return ResolveCliModelResult(model=None)
 
     available_models = _registry_get_all(model_registry)
-    provider_map = {model.provider.lower(): model.provider for model in available_models}
-    known_provider_profiles = {profile.name.lower(): profile.name for profile in list_provider_profiles()}
-    provider_map.update({key: value for key, value in known_provider_profiles.items() if key not in provider_map})
-    if cli_provider:
-        normalized_cli_provider = normalize_provider(cli_provider)
-        if get_provider_profile(normalized_cli_provider):
-            provider_map.setdefault(cli_provider.lower(), normalized_cli_provider)
-            provider_map.setdefault(normalized_cli_provider.lower(), normalized_cli_provider)
+    provider_map = _cli_provider_map(available_models, cli_provider)
     provider = provider_map.get(cli_provider.lower()) if cli_provider else None
     if cli_provider and not provider:
         return ResolveCliModelResult(
@@ -204,33 +329,12 @@ def resolve_cli_model(
 
     pattern = cli_model
     inferred_provider = False
-    if not provider:
-        slash_index = cli_model.find("/")
-        if slash_index != -1:
-            maybe_provider = cli_model[:slash_index]
-            canonical = provider_map.get(maybe_provider.lower())
-            if canonical is None:
-                normalized = normalize_provider(maybe_provider)
-                if get_provider_profile(normalized):
-                    canonical = provider_map.get(normalized.lower()) or normalized
-            if canonical:
-                provider = canonical
-                pattern = cli_model[slash_index + 1 :]
-                inferred_provider = True
-
-    if not provider:
-        lower = cli_model.lower()
-        exact = next(
-            (
-                model
-                for model in available_models
-                if model.id.lower() == lower or f"{model.provider}/{model.id}".lower() == lower
-            ),
-            None,
-        )
+    if provider is None:
+        provider, pattern, inferred_provider = _infer_cli_provider(cli_model, provider_map)
+    if provider is None:
+        exact = _find_available_model(cli_model, available_models)
         if exact is not None:
             return ResolveCliModelResult(model=exact)
-
     if cli_provider and provider:
         prefix = f"{provider}/"
         if cli_model.lower().startswith(prefix.lower()):
@@ -240,66 +344,34 @@ def resolve_cli_model(
     parsed = parse_model_pattern(pattern, candidates, allow_invalid_thinking_level_fallback=False)
     if parsed.model is not None:
         if inferred_provider:
-            raw_exact_matches = [
-                model
-                for model in available_models
-                if model.id.lower() == cli_model.lower() and not _models_are_equal(model, parsed.model)
-            ]
-            if raw_exact_matches and not _registry_has_configured_auth(model_registry, parsed.model):
-                authenticated_raw_matches = [
-                    model for model in raw_exact_matches if _registry_has_configured_auth(model_registry, model)
-                ]
-                if len(authenticated_raw_matches) == 1:
-                    return ResolveCliModelResult(model=authenticated_raw_matches[0])
-        return ResolveCliModelResult(model=parsed.model, thinking_level=parsed.thinking_level, warning=parsed.warning)
+            override = _authenticated_raw_model_override(
+                cli_model,
+                parsed.model,
+                available_models,
+                model_registry,
+            )
+            if override is not None:
+                return ResolveCliModelResult(model=override)
+        return ResolveCliModelResult(
+            model=parsed.model,
+            thinking_level=parsed.thinking_level,
+            warning=parsed.warning,
+        )
 
     if inferred_provider:
-        lower = cli_model.lower()
-        exact = next(
-            (
-                model
-                for model in available_models
-                if model.id.lower() == lower or f"{model.provider}/{model.id}".lower() == lower
-            ),
-            None,
-        )
-        if exact is not None:
-            return ResolveCliModelResult(model=exact)
-
-        fallback = parse_model_pattern(cli_model, available_models, allow_invalid_thinking_level_fallback=False)
-        if fallback.model is not None:
-            return ResolveCliModelResult(
-                model=fallback.model,
-                thinking_level=fallback.thinking_level,
-                warning=fallback.warning,
-            )
-
+        fallback = _inferred_provider_fallback(cli_model, available_models)
+        if fallback is not None:
+            return fallback
     if provider:
-        fallback_pattern = pattern
-        fallback_thinking: str | None = None
-        if not cli_thinking:
-            last_colon = pattern.rfind(":")
-            if last_colon != -1:
-                suffix = pattern[last_colon + 1 :]
-                if _is_valid_thinking_level(suffix):
-                    fallback_pattern = pattern[:last_colon]
-                    fallback_thinking = suffix
-
-        fallback_model = _build_fallback_model(provider, fallback_pattern, available_models)
-        if fallback_model is not None:
-            requested_thinking = cli_thinking or fallback_thinking
-            model = (
-                replace(fallback_model, reasoning=True)
-                if requested_thinking and requested_thinking != DEFAULT_THINKING_LEVEL
-                else fallback_model
-            )
-            warning = (
-                f'{parsed.warning} Model "{fallback_pattern}" not found for provider "{provider}". '
-                "Using custom model id."
-                if parsed.warning
-                else f'Model "{fallback_pattern}" not found for provider "{provider}". Using custom model id.'
-            )
-            return ResolveCliModelResult(model=model, thinking_level=fallback_thinking, warning=warning)
+        custom = _custom_provider_model_result(
+            provider=provider,
+            pattern=pattern,
+            cli_thinking=cli_thinking,
+            parsed_warning=parsed.warning,
+            available_models=available_models,
+        )
+        if custom is not None:
+            return custom
 
     display = f"{provider}/{pattern}" if provider else cli_model
     return ResolveCliModelResult(
