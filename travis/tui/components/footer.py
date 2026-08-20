@@ -177,31 +177,23 @@ class FooterComponent(Component):
     def set_theme_context(self, theme_context: object | None) -> None:
         self.theme_context = theme_context
 
-    def render(self, width: int) -> list[str]:
-        width = max(1, int(width))
-        formatted_cwd = format_cwd_for_footer(self.cwd, self.home or os.environ.get("HOME") or os.environ.get("USERPROFILE"))
-        cwd = f"{formatted_cwd} ({self.git_branch})" if self.git_branch else formatted_cwd
-        if self.session_name:
-            cwd = f"{cwd} • {self.session_name}"
+    def _context_metrics(self) -> tuple[int, float, str]:
         context_window = self.context_window or self.context_threshold or 0
         if self.context_percent_unknown:
             if self.context_estimate_rough and self.context_tokens is not None and context_window > 0:
                 context_percent = (self.context_tokens / context_window) * 100
-                context_percent_display = f"~{context_percent:.1f}"
-            else:
-                context_percent_display = "?"
-        elif self.context_percent is not None:
+                return context_window, context_percent, f"~{context_percent:.1f}"
+            return context_window, 0.0, "?"
+        if self.context_percent is not None:
             context_percent = self.context_percent
-            prefix = "~" if self.context_estimate_rough else ""
-            context_percent_display = f"{prefix}{context_percent:.1f}"
         elif self.context_tokens is not None and context_window > 0:
             context_percent = (self.context_tokens / context_window) * 100
-            prefix = "~" if self.context_estimate_rough else ""
-            context_percent_display = f"{prefix}{context_percent:.1f}"
         else:
             context_percent = 0.0
-            context_percent_display = f"{context_percent:.1f}"
-        auto_indicator = " (auto)" if self.auto_compact_enabled else ""
+        prefix = "~" if self.context_estimate_rough else ""
+        return context_window, context_percent, f"{prefix}{context_percent:.1f}"
+
+    def _detail_segments(self) -> list[tuple[int, int, str]]:
         detail_segments: list[tuple[int, int, str]] = []
         if self.total_input:
             detail_segments.append((3, 0, f"↑{_format_footer_tokens(self.total_input)}"))
@@ -220,55 +212,74 @@ class FooterComponent(Component):
             detail_segments.append((5, 6, f"${self.total_cost:.3f}{subscription_suffix}"))
         if self.compression_count:
             detail_segments.append((4, 7, f"C{self.compression_count}"))
-        percent_suffix = "" if context_percent_display == "?" else "%"
-        context_segment = f"{context_percent_display}{percent_suffix}/{_format_footer_tokens(context_window)}{auto_indicator}"
+        return detail_segments
+
+    @staticmethod
+    def _fit_stats_left(
+        detail_segments: list[tuple[int, int, str]],
+        context_segment: str,
+        width: int,
+    ) -> str:
         ordered_details = [text for _priority, _order, text in sorted(detail_segments, key=lambda item: item[1])]
         stats_left = " ".join([*ordered_details, context_segment])
-        if visible_width(stats_left) > width:
-            selected: list[tuple[int, str]] = []
-            for priority, order, text in sorted(detail_segments, key=lambda item: (item[0], item[1])):
-                candidate_details = [value for _index, value in sorted([*selected, (order, text)])]
-                candidate = " ".join([*candidate_details, context_segment])
-                if visible_width(candidate) <= width:
-                    selected.append((order, text))
-            selected_details = [text for _order, text in sorted(selected)]
-            stats_left = " ".join([*selected_details, context_segment])
-            if visible_width(stats_left) > width:
-                stats_left = truncate_to_width(context_segment, width, "")
+        if visible_width(stats_left) <= width:
+            return stats_left
+        selected: list[tuple[int, str]] = []
+        for priority, order, text in sorted(detail_segments, key=lambda item: (item[0], item[1])):
+            candidate_details = [value for _index, value in sorted([*selected, (order, text)])]
+            candidate = " ".join([*candidate_details, context_segment])
+            if visible_width(candidate) <= width:
+                selected.append((order, text))
+        selected_details = [text for _order, text in sorted(selected)]
+        stats_left = " ".join([*selected_details, context_segment])
+        return (
+            truncate_to_width(context_segment, width, "")
+            if visible_width(stats_left) > width
+            else stats_left
+        )
 
+    def _right_side(self, stats_left: str, width: int) -> str:
         right_side_without_provider = self.model
         if self.model_reasoning:
             right_side_without_provider = (
                 f"{self.model} • thinking off" if self.thinking_level == "off" else f"{self.model} • {self.thinking_level}"
             )
-        right_side = right_side_without_provider
         if self.available_provider_count > 1 and self.provider:
             candidate = f"({self.provider}) {right_side_without_provider}"
             if visible_width(stats_left) + 2 + visible_width(candidate) <= width:
-                right_side = candidate
+                return candidate
+        return right_side_without_provider
 
+    @staticmethod
+    def _compose_stats_line(stats_left: str, right_side: str, width: int) -> str:
         stats_left_width = visible_width(stats_left)
         right_side_width = visible_width(right_side)
         if stats_left_width + 2 + right_side_width <= width:
-            stats_line = stats_left + (" " * (width - stats_left_width - right_side_width)) + right_side
-        else:
-            available_for_right = width - stats_left_width - 2
-            if available_for_right > 0:
-                truncated_right = truncate_to_width(right_side, available_for_right, "")
-                stats_line = stats_left + (" " * max(0, width - stats_left_width - visible_width(truncated_right))) + truncated_right
-            else:
-                stats_line = stats_left
+            return stats_left + (" " * (width - stats_left_width - right_side_width)) + right_side
+        available_for_right = width - stats_left_width - 2
+        if available_for_right <= 0:
+            return stats_left
+        truncated_right = truncate_to_width(right_side, available_for_right, "")
+        return stats_left + (" " * max(0, width - stats_left_width - visible_width(truncated_right))) + truncated_right
 
-        lines = [truncate_to_width(cwd, width, "..."), truncate_to_width(stats_line, width, "")]
+    def _auxiliary_lines(self, width: int) -> tuple[list[str], str]:
         status_line = " ".join(
             _single_line(value)
             for _key, value in sorted(self.extension_statuses.items())
             if value and _single_line(value)
         )
-        if status_line:
-            lines.append(truncate_to_width(status_line, width, "..."))
+        lines = [truncate_to_width(status_line, width, "...")] if status_line else []
         if self.history_hint:
             lines.append(truncate_to_width(_single_line(self.history_hint), width, "..."))
+        return lines, status_line
+
+    def _apply_theme(
+        self,
+        lines: list[str],
+        *,
+        status_line: str,
+        context_percent: float,
+    ) -> list[str]:
         theme = getattr(self.theme_context, "theme", None)
         if theme is None:
             return lines
@@ -277,6 +288,27 @@ class FooterComponent(Component):
             context_role = "error"
         roles = ["accent", context_role, *(["muted"] if status_line else []), *(["dim"] if self.history_hint else [])]
         return [theme.fg(roles[index], line) for index, line in enumerate(lines)]
+
+    def render(self, width: int) -> list[str]:
+        width = max(1, int(width))
+        formatted_cwd = format_cwd_for_footer(self.cwd, self.home or os.environ.get("HOME") or os.environ.get("USERPROFILE"))
+        cwd = f"{formatted_cwd} ({self.git_branch})" if self.git_branch else formatted_cwd
+        if self.session_name:
+            cwd = f"{cwd} • {self.session_name}"
+        context_window, context_percent, context_percent_display = self._context_metrics()
+        auto_indicator = " (auto)" if self.auto_compact_enabled else ""
+        percent_suffix = "" if context_percent_display == "?" else "%"
+        context_segment = f"{context_percent_display}{percent_suffix}/{_format_footer_tokens(context_window)}{auto_indicator}"
+        stats_left = self._fit_stats_left(self._detail_segments(), context_segment, width)
+        stats_line = self._compose_stats_line(stats_left, self._right_side(stats_left, width), width)
+        lines = [truncate_to_width(cwd, width, "..."), truncate_to_width(stats_line, width, "")]
+        auxiliary_lines, status_line = self._auxiliary_lines(width)
+        lines.extend(auxiliary_lines)
+        return self._apply_theme(
+            lines,
+            status_line=status_line,
+            context_percent=context_percent,
+        )
 
 
 def _format_footer_tokens(count: int) -> str:
