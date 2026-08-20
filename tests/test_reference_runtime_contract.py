@@ -32,6 +32,7 @@ from travis.ai.providers.message_translation import convert_messages
 from travis.ai.providers.base import ProviderProfile
 from travis.ai.providers.catalog import get_provider_profile
 from travis.ai.providers.faux import create_faux_provider, faux_model, text_response_events
+from travis.ai.providers.params import GenerationParams
 from travis.ai.providers.provider_request import PreparedProviderRequest, prepare_provider_request
 from travis.ai.providers import travis_env as travis_env_module
 from travis.ai.providers import codex_runtime as codex_runtime_module
@@ -632,6 +633,130 @@ def test_negative_runtime_timeout_is_rejected_before_request_construction() -> N
             config,
             ProviderProfile(name="openrouter", base_url=model.base_url),
         )
+
+
+def test_generation_warning_precedes_payload_callback_and_replacement() -> None:
+    model = replace(
+        _openrouter_qwen_model(),
+        id="glm-5",
+        provider="zai",
+        base_url="https://api.z.ai/api/paas/v4",
+        compat=None,
+    )
+    config = ModelConfig(
+        enabled=True,
+        api_key="test-key",
+        model=model.id,
+        base_url=model.base_url,
+        timeout_seconds=60,
+        temperature=0,
+        top_p=None,
+        frequency_penalty=None,
+        presence_penalty=None,
+        seed=None,
+        provider=model.provider,
+    )
+    callback_order: list[str] = []
+    warning_fields: list[tuple[str, str]] = []
+
+    def on_generation_warning(warning) -> None:
+        callback_order.append("warning")
+        warning_fields.append((warning.param, warning.action))
+
+    def on_payload(_body, _model) -> dict[str, object]:
+        callback_order.append("payload")
+        return {"replacement": True}
+
+    request = prepare_provider_request(
+        model,
+        Context(messages=[UserMessage(content="hello")]),
+        SimpleNamespace(
+            generation_params=GenerationParams(provider_sort="price"),
+            on_generation_warning=on_generation_warning,
+            on_payload=on_payload,
+        ),
+        config,
+        ProviderProfile(name=model.provider, base_url=model.base_url),
+    )
+
+    assert callback_order == ["warning", "payload"]
+    assert warning_fields == [("provider_sort", "dropped")]
+    assert request.body == {"replacement": True}
+
+
+def test_non_mapping_payload_callback_result_retains_constructed_body() -> None:
+    model = _openrouter_qwen_model()
+    config = ModelConfig(
+        enabled=True,
+        api_key="test-key",
+        model=model.id,
+        base_url=model.base_url,
+        timeout_seconds=60,
+        temperature=0,
+        top_p=None,
+        frequency_penalty=None,
+        presence_penalty=None,
+        seed=None,
+        provider=model.provider,
+    )
+    observed_body: dict[str, object] = {}
+
+    def on_payload(body, _model) -> str:
+        observed_body.update(body)
+        return "ignored"
+
+    request = prepare_provider_request(
+        model,
+        Context(messages=[UserMessage(content="hello")]),
+        SimpleNamespace(on_payload=on_payload),
+        config,
+        ProviderProfile(name=model.provider, base_url=model.base_url),
+    )
+
+    assert observed_body
+    assert request.body == observed_body
+
+
+@pytest.mark.parametrize(
+    "placeholder_key",
+    ("gcp-vertex-credentials", "<vertex-managed-credentials>"),
+)
+def test_vertex_placeholder_api_keys_are_suppressed(
+    placeholder_key: str,
+) -> None:
+    model = Model(
+        id="gemini-3-flash-preview",
+        name="Gemini 3 Flash Preview",
+        api="google-vertex",
+        provider="google-vertex",
+        base_url="https://aiplatform.googleapis.com",
+        context_window=1_048_576,
+        max_tokens=65_536,
+    )
+    config = ModelConfig(
+        enabled=True,
+        api_key=placeholder_key,
+        model=model.id,
+        base_url=model.base_url,
+        timeout_seconds=60,
+        temperature=0,
+        top_p=None,
+        frequency_penalty=None,
+        presence_penalty=None,
+        seed=None,
+        provider=model.provider,
+    )
+
+    request = prepare_provider_request(
+        model,
+        Context(messages=[UserMessage(content="hello")]),
+        SimpleNamespace(project="test-project", location="us-central1"),
+        config,
+        ProviderProfile(name=model.provider, base_url=model.base_url),
+    )
+
+    assert "key=" not in request.url
+    assert "x-goog-api-key" not in {key.lower() for key in request.headers}
 
 
 def test_summary_request_can_use_provider_native_output_ceiling_without_wire_cap() -> None:
