@@ -194,6 +194,32 @@ class SessionTurnController(SessionTurnControllerSurface):
 
     __slots__ = ()
 
+    def _queue_streaming_prompt(
+        self,
+        current_text: str,
+        current_images: list[ImageContent] | None,
+        streaming_behavior: str | None,
+        preflight_result: Callable[[bool], None] | None,
+    ) -> list[AgentMessage]:
+        try:
+            if not streaming_behavior:
+                raise RuntimeError(
+                    "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message."
+                )
+            if streaming_behavior == "followUp" or streaming_behavior == "follow_up":
+                self._queue_turn_input("follow_up", current_text, current_images)
+            elif streaming_behavior == "steer":
+                self._queue_turn_input("steering", current_text, current_images)
+            else:
+                raise ValueError("streaming_behavior must be 'steer' or 'followUp'")
+        except Exception:
+            if preflight_result:
+                preflight_result(False)
+            raise
+        if preflight_result:
+            preflight_result(True)
+        return []
+
     def prompt(
         self,
         text: str,
@@ -260,24 +286,12 @@ class SessionTurnController(SessionTurnControllerSurface):
         )
 
         if self.is_streaming:
-            try:
-                if not streaming_behavior:
-                    raise RuntimeError(
-                        "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message."
-                    )
-                if streaming_behavior == "followUp" or streaming_behavior == "follow_up":
-                    self._queue_turn_input("follow_up", current_text, current_images)
-                elif streaming_behavior == "steer":
-                    self._queue_turn_input("steering", current_text, current_images)
-                else:
-                    raise ValueError("streaming_behavior must be 'steer' or 'followUp'")
-            except Exception:
-                if preflight_result:
-                    preflight_result(False)
-                raise
-            if preflight_result:
-                preflight_result(True)
-            return []
+            return self._queue_streaming_prompt(
+                current_text,
+                current_images,
+                streaming_behavior,
+                preflight_result,
+            )
 
         if preflight_result:
             preflight_result(True)
