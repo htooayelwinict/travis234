@@ -7,10 +7,11 @@ import os
 import tempfile
 import threading
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from travis.agent.types import AgentMessage
 from travis.ai.providers.params import (
@@ -31,8 +32,8 @@ from travis.ai.types import (
     empty_usage,
     now_ms,
 )
-from travis.coding_agent.session_lock import SessionFileLock
 from travis.coding_agent.session_index import SessionIndex
+from travis.coding_agent.session_lock import SessionFileLock
 
 CURRENT_SESSION_VERSION = 3
 
@@ -84,6 +85,9 @@ class BashExecutionMessage:
     timestamp: int
     exclude_from_context: bool | None = None
     role: str = "bashExecution"
+
+
+type _PersistedMessage = UserMessage | AssistantMessage | ToolResultMessage | BashExecutionMessage
 
 
 
@@ -249,10 +253,8 @@ class SessionStore:
                 os.fsync(handle.fileno())
             os.replace(temp_name, self.path)
         except BaseException:
-            try:
+            with suppress(OSError):
                 os.close(temp_fd)
-            except OSError:
-                pass
             Path(temp_name).unlink(missing_ok=True)
             raise
         return quarantine
@@ -333,7 +335,7 @@ class SessionStore:
         return nodes
 
 
-    def append_message(self, message: AgentMessage) -> str:
+    def append_message(self, message: _PersistedMessage) -> str:
         return self._append_entry({"type": "message", "message": serialize_message(message)}, durable=True)
 
     def append_thinking_level_change(self, thinking_level: str) -> str:
@@ -363,7 +365,7 @@ class SessionStore:
         *,
         parent_id: str | None = None,
     ) -> str:
-        entry = {
+        entry: dict[str, Any] = {
             "type": "compaction",
             "summary": summary,
             "firstKeptEntryId": first_kept_entry_id,
@@ -438,7 +440,7 @@ class SessionStore:
             raise ValueError(f"Entry {branch_from_id} not found")
         self.leaf_id = branch_from_id
         self._explicit_parent_selection = True
-        entry = {
+        entry: dict[str, Any] = {
             "type": "branch_summary",
             "fromId": branch_from_id or "root",
             "summary": summary,
@@ -821,56 +823,60 @@ def _context_messages_and_entry_ids(
     )
 
 
-def serialize_message(message: AgentMessage) -> dict[str, Any]:
+def serialize_message(message: _PersistedMessage) -> dict[str, Any]:
     role = getattr(message, "role", None)
     if role == "bashExecution":
+        bash_message = cast(BashExecutionMessage, message)
         return {
             "role": "bashExecution",
-            "command": message.command,
-            "output": message.output,
-            "exitCode": message.exit_code,
-            "cancelled": message.cancelled,
-            "truncated": message.truncated,
-            "fullOutputPath": message.full_output_path,
-            "timestamp": message.timestamp,
-            "excludeFromContext": message.exclude_from_context,
+            "command": bash_message.command,
+            "output": bash_message.output,
+            "exitCode": bash_message.exit_code,
+            "cancelled": bash_message.cancelled,
+            "truncated": bash_message.truncated,
+            "fullOutputPath": bash_message.full_output_path,
+            "timestamp": bash_message.timestamp,
+            "excludeFromContext": bash_message.exclude_from_context,
         }
     if role == "user":
+        user_message = cast(UserMessage, message)
         return {
             "role": "user",
-            "content": _serialize_content(message.content),
-            "timestamp": message.timestamp,
+            "content": _serialize_content(user_message.content),
+            "timestamp": user_message.timestamp,
         }
     if role == "assistant":
+        assistant_message = cast(AssistantMessage, message)
         return {
             "role": "assistant",
-            "content": [_serialize_block(block) for block in message.content],
-            "api": message.api,
-            "provider": message.provider,
-            "model": message.model,
-            "usage": _serialize_usage(message.usage),
-            "stopReason": message.stop_reason,
-            "responseModel": message.response_model,
-            "responseId": message.response_id,
-            "diagnostics": message.diagnostics,
-            "errorMessage": message.error_message,
-            "timestamp": message.timestamp,
+            "content": [_serialize_block(block) for block in assistant_message.content],
+            "api": assistant_message.api,
+            "provider": assistant_message.provider,
+            "model": assistant_message.model,
+            "usage": _serialize_usage(assistant_message.usage),
+            "stopReason": assistant_message.stop_reason,
+            "responseModel": assistant_message.response_model,
+            "responseId": assistant_message.response_id,
+            "diagnostics": assistant_message.diagnostics,
+            "errorMessage": assistant_message.error_message,
+            "timestamp": assistant_message.timestamp,
         }
     if role == "toolResult":
+        tool_result = cast(ToolResultMessage, message)
         return {
             "role": "toolResult",
-            "toolCallId": message.tool_call_id,
-            "toolName": message.tool_name,
-            "content": [_serialize_block(block) for block in message.content],
-            "isError": message.is_error,
-            "details": message.details,
-            "addedToolNames": message.added_tool_names,
-            "timestamp": message.timestamp,
+            "toolCallId": tool_result.tool_call_id,
+            "toolName": tool_result.tool_name,
+            "content": [_serialize_block(block) for block in tool_result.content],
+            "isError": tool_result.is_error,
+            "details": tool_result.details,
+            "addedToolNames": tool_result.added_tool_names,
+            "timestamp": tool_result.timestamp,
         }
     raise TypeError(f"Unsupported session message role: {role}")
 
 
-def deserialize_message(data: dict[str, Any]) -> AgentMessage:
+def deserialize_message(data: dict[str, Any]) -> _PersistedMessage:
     role = data.get("role")
     if role == "bashExecution":
         return BashExecutionMessage(
@@ -903,7 +909,10 @@ def deserialize_message(data: dict[str, Any]) -> AgentMessage:
         return ToolResultMessage(
             tool_call_id=data.get("toolCallId", ""),
             tool_name=data.get("toolName", ""),
-            content=[_deserialize_block(block) for block in data.get("content", [])],
+            content=cast(
+                list[TextContent | ImageContent],
+                [_deserialize_block(block) for block in data.get("content", [])],
+            ),
             is_error=bool(data.get("isError", False)),
             details=data.get("details"),
             added_tool_names=data.get("addedToolNames"),
@@ -921,7 +930,10 @@ def _serialize_content(content) -> Any:
 def _deserialize_content(content) -> str | list[TextContent | ImageContent]:
     if isinstance(content, str):
         return content
-    return [_deserialize_block(block) for block in content or []]
+    return cast(
+        list[TextContent | ImageContent],
+        [_deserialize_block(block) for block in content or []],
+    )
 
 
 def _serialize_block(block) -> dict[str, Any]:
@@ -1009,7 +1021,7 @@ def _deserialize_usage(data: dict[str, Any] | None) -> Usage:
 
 
 def _timestamp() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _timestamp_to_ms(value: str | None) -> int:

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Protocol
+from typing import Protocol, SupportsIndex, SupportsInt, cast
 
 from travis.agent.types import AgentMessage
 from travis.ai.types import AssistantMessage, TextContent, UserMessage, empty_usage, now_ms
+from travis.coding_agent.message_utils import bash_execution_text, branch_summary_text
+from travis.coding_agent.session_store import SessionStore
 from travis.compaction.compressor import (
     COMPRESSED_SUMMARY_METADATA_KEY,
     LEGACY_SUMMARY_PREFIX,
@@ -17,16 +19,19 @@ from travis.compaction.compressor import (
     SUMMARY_PREFIX,
     estimate_tokens,
 )
-from travis.coding_agent.message_utils import bash_execution_text, branch_summary_text
-
-if TYPE_CHECKING:
-    from travis.coding_agent.process_context import ProcessContextRecord
-    from travis.coding_agent.session_store import SessionStore
 
 
 class CompactionSessionState(Protocol):
     messages: list[AgentMessage]
     thinking_level: str
+
+
+class ProcessContextRecordPort(Protocol):
+    def as_compaction_details(self) -> dict[str, object]: ...
+
+
+class ProcessContextPort(Protocol):
+    def resolve(self, messages: Sequence[AgentMessage]) -> Sequence[ProcessContextRecordPort]: ...
 
 
 @dataclass
@@ -61,7 +66,7 @@ class SessionCompactionAdapter:
         *,
         session_store: SessionStore | None,
         state: CompactionSessionState,
-        process_context: object | None,
+        process_context: ProcessContextPort | None,
         emit: Callable[[object], None],
         set_session_name: Callable[[str | None], None],
     ) -> None:
@@ -213,7 +218,12 @@ class SessionCompactionAdapter:
         context_entry_ids = self._session_context_message_entry_ids()
         if first_kept_entry_id and first_kept_entry_id not in context_entry_ids:
             raise ValueError(f"Extension compaction returned unknown firstKeptEntryId: {first_kept_entry_id}")
-        tokens_before = int(compaction["tokensBefore"])
+        tokens_before = int(
+            cast(
+                str | bytes | bytearray | SupportsInt | SupportsIndex,
+                compaction["tokensBefore"],
+            )
+        )
         details = self._merge_process_details(compaction.get("details"), source_messages)
         entry_id = self._session_store.append_compaction(
             summary,
@@ -234,9 +244,12 @@ class SessionCompactionAdapter:
         self._set_session_name(snapshot.session_name)
         return snapshot.messages
 
-    def _merge_process_details(self, details: object, messages: Sequence[AgentMessage]):
-        resolver = getattr(self._process_context, "resolve", None)
-        records = resolver(list(messages)) if callable(resolver) else ()
+    def _merge_process_details(
+        self,
+        details: object,
+        messages: Sequence[AgentMessage],
+    ) -> dict[str, object] | None:
+        records = self._process_context.resolve(list(messages)) if self._process_context is not None else ()
         return merge_process_compaction_details(details, records)
 
     def _first_kept_entry_id(
@@ -315,7 +328,7 @@ _PROCESS_STATUSES = frozenset(
 
 def merge_process_compaction_details(
     details: object,
-    records: Sequence[ProcessContextRecord],
+    records: Sequence[ProcessContextRecordPort],
 ) -> dict[str, object] | None:
     merged = dict(details) if isinstance(details, Mapping) else {}
     serialized = [record.as_compaction_details() for record in records[:16]]
