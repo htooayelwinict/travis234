@@ -100,8 +100,120 @@ def _coerce_nonnegative_int(value: Any, *, default: int) -> int:
     return max(0, parsed)
 
 
+def _configure_app_models(
+    app: CodingApp,
+    *,
+    agent_dir: str,
+    model: Model,
+    compression_model: Model | None,
+    model_registry: ModelRegistry | None,
+    model_role_bindings: Mapping[ModelRole, ScopedModel] | None,
+    offline: bool,
+) -> None:
+    app.model_registry = model_registry or ModelRegistry.create(
+        AuthStorage.create(Path(agent_dir) / "auth.json"),
+        Path(agent_dir) / "models.json",
+    )
+    app.model_registry.set_offline(offline)
+    app.model_registry.ensure_model(model)
+    if compression_model is not None:
+        app.model_registry.ensure_model(compression_model)
+    app._model_role_bindings = {
+        role: ScopedModel(binding.model, binding.thinking_level)
+        for role, binding in (model_role_bindings or {}).items()
+    }
+    if compression_model is not None:
+        app._model_role_bindings["compression"] = ScopedModel(compression_model, "off")
+    for binding in app._model_role_bindings.values():
+        app.model_registry.ensure_model(binding.model)
+
+
+def _copy_optional_list[Item](values: list[Item] | None) -> list[Item] | None:
+    return list(values) if values is not None else None
+
+
+def _copy_list[Item](values: list[Item] | None) -> list[Item]:
+    return list(values) if values else []
+
+
+def _copy_extension_flag_values(
+    values: Mapping[str, bool | str] | None,
+) -> dict[str, bool | str]:
+    return dict(values) if values else {}
+
+
+def _apply_default_thinking_level(
+    settings_manager: SettingsManager,
+    thinking_level: ThinkingLevel,
+) -> None:
+    if thinking_level == "off":
+        return
+    set_default_thinking_level = getattr(
+        settings_manager,
+        "set_default_thinking_level",
+        None,
+    ) or getattr(settings_manager, "setDefaultThinkingLevel", None)
+    if callable(set_default_thinking_level):
+        set_default_thinking_level(thinking_level)
+
+
+def _create_default_app_summarizer(app: CodingApp) -> Callable[[str], str]:
+    return _model_summarizer(
+        lambda: app.session.model,
+        thinking_level=lambda: app.session.thinking_level,
+        complete_fn=lambda active_model, context, options: app.model_registry.stream_simple(
+            active_model,
+            context,
+            options,
+        ).result_sync(),
+    )
+
+
+def _initialize_app_session_runtime(
+    app: CodingApp,
+    *,
+    model: Model,
+    thinking_level: ThinkingLevel,
+    session_path: str | None,
+    session_id: str | None,
+) -> None:
+    app.operation_runtime = OperationRuntime.from_settings(
+        app._agent_dir,
+        app._settings_manager.get_operation_settings(),
+    )
+    try:
+        initial_session = app._create_session(
+            cwd=app.cwd,
+            fallback_model=model,
+            thinking_level=thinking_level,
+            session_path=session_path,
+            session_id=session_id,
+        )
+    except BaseException:
+        app.operation_runtime.close()
+        raise
+    app._bind_session(initial_session)
+    services = {
+        "cwd": app.cwd,
+        "agentDir": app._agent_dir,
+        "sessionCatalog": app.session_catalog,
+    }
+    app.session_runtime = AgentSessionRuntime(
+        app.session,
+        services,
+        app._create_runtime_session,
+    )
+    app.session_runtime.set_before_session_invalidate(app._unbind_session)
+    app.session_runtime.set_rebind_session(app._handle_session_rebound)
+
+
 class CodingApp:
     """End-to-end app: AgentSession + travis compaction (preflight) + tui rendering."""
+
+    model_registry: ModelRegistry
+    operation_runtime: OperationRuntime
+    session_runtime: AgentSessionRuntime
+    _model_role_bindings: dict[ModelRole, ScopedModel]
 
     def __init__(
         self,
@@ -110,7 +222,7 @@ class CodingApp:
         model: Model,
         terminal: Terminal | None = None,
         context_length: int | None = None,
-        summarizer=None,
+        summarizer: Callable[[str], str] | None = None,
         compression_model: Model | None = None,
         compression_api_key: str | None = None,
         compression_timeout_seconds: float | None = None,
@@ -143,50 +255,31 @@ class CodingApp:
         self.event_trace = event_trace
         self.conversation_log = conversation_log
         self._agent_dir = str(Path(agent_dir or get_agent_dir()).expanduser().resolve())
-        self.model_registry = model_registry or ModelRegistry.create(
-            AuthStorage.create(Path(self._agent_dir) / "auth.json"),
-            Path(self._agent_dir) / "models.json",
+        _configure_app_models(
+            self,
+            agent_dir=self._agent_dir,
+            model=model,
+            compression_model=compression_model,
+            model_registry=model_registry,
+            model_role_bindings=model_role_bindings,
+            offline=offline,
         )
-        self.model_registry.set_offline(offline)
-        self.model_registry.ensure_model(model)
-        if compression_model is not None:
-            self.model_registry.ensure_model(compression_model)
-        self._model_role_bindings = {
-            role: ScopedModel(binding.model, binding.thinking_level)
-            for role, binding in (model_role_bindings or {}).items()
-        }
-        if compression_model is not None:
-            self._model_role_bindings["compression"] = ScopedModel(
-                compression_model,
-                "off",
-            )
-        for binding in self._model_role_bindings.values():
-            self.model_registry.ensure_model(binding.model)
         self._settings_manager = settings_manager or SettingsManager.in_memory()
         self._project_trust_override = project_trust_override
         self._project_trust_context = project_trust_context or ProjectTrustContext(False, None)
-        self._allowed_tool_names = (
-            list(allowed_tool_names) if allowed_tool_names is not None else None
-        )
-        self._excluded_tool_names = list(excluded_tool_names or [])
-        self._additional_active_tool_names = list(additional_active_tool_names or [])
-        self._additional_extension_paths = list(additional_extension_paths or [])
-        self._additional_skill_paths = list(additional_skill_paths or [])
-        self._additional_prompt_template_paths = list(additional_prompt_template_paths or [])
-        self._additional_theme_paths = list(additional_theme_paths or [])
+        self._allowed_tool_names = _copy_optional_list(allowed_tool_names)
+        self._excluded_tool_names = _copy_list(excluded_tool_names)
+        self._additional_active_tool_names = _copy_list(additional_active_tool_names)
+        self._additional_extension_paths = _copy_list(additional_extension_paths)
+        self._additional_skill_paths = _copy_list(additional_skill_paths)
+        self._additional_prompt_template_paths = _copy_list(additional_prompt_template_paths)
+        self._additional_theme_paths = _copy_list(additional_theme_paths)
         self._initial_resource_loader = initial_resource_loader
-        self._extension_flag_values = dict(extension_flag_values or {})
+        self._extension_flag_values = _copy_extension_flag_values(extension_flag_values)
         self._offline = bool(offline)
-        if thinking_level != "off":
-            set_default_thinking_level = getattr(
-                self._settings_manager,
-                "set_default_thinking_level",
-                None,
-            ) or getattr(self._settings_manager, "setDefaultThinkingLevel", None)
-            if callable(set_default_thinking_level):
-                set_default_thinking_level(thinking_level)
+        _apply_default_thinking_level(self._settings_manager, thinking_level)
         self._retry_settings = _resolve_session_retry_settings(self._settings_manager)
-        self._scoped_models = list(scoped_models or [])
+        self._scoped_models = _copy_list(scoped_models)
         self._app_instance_id = uuid.uuid4().hex
         self.process_completion_store = ProcessCompletionStore(
             Path(self._agent_dir) / "process-results"
@@ -209,15 +302,7 @@ class CodingApp:
         self.terminal = terminal or ProcessTerminal()
         self.tui = TUI(self.terminal, render_interval=0.016)
         if summarizer is None:
-            summarizer = _model_summarizer(
-                lambda: self.session.model,
-                thinking_level=lambda: self.session.thinking_level,
-                complete_fn=lambda active_model, context, options: self.model_registry.stream_simple(
-                    active_model,
-                    context,
-                    options,
-                ).result_sync(),
-            )
+            summarizer = _create_default_app_summarizer(self)
         self._summarizer = summarizer
         self._compression_model = compression_model
         self._compression_api_key = compression_api_key
@@ -225,34 +310,13 @@ class CodingApp:
         self._compression_generation_params = compression_generation_params
         self._active_compression_model: Model | None = None
         self._compression_summarizer = None
-        self.operation_runtime = OperationRuntime.from_settings(
-            self._agent_dir,
-            self._settings_manager.get_operation_settings(),
+        _initialize_app_session_runtime(
+            self,
+            model=model,
+            thinking_level=thinking_level,
+            session_path=session_path,
+            session_id=session_id,
         )
-        try:
-            initial_session = self._create_session(
-                cwd=self.cwd,
-                fallback_model=model,
-                thinking_level=thinking_level,
-                session_path=session_path,
-                session_id=session_id,
-            )
-        except BaseException:
-            self.operation_runtime.close()
-            raise
-        self._bind_session(initial_session)
-        services = {
-            "cwd": self.cwd,
-            "agentDir": self._agent_dir,
-            "sessionCatalog": self.session_catalog,
-        }
-        self.session_runtime = AgentSessionRuntime(
-            self.session,
-            services,
-            self._create_runtime_session,
-        )
-        self.session_runtime.set_before_session_invalidate(self._unbind_session)
-        self.session_runtime.set_rebind_session(self._handle_session_rebound)
 
     def _create_session(
         self,
