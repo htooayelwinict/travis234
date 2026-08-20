@@ -247,6 +247,66 @@ class SessionPersistence(SessionPersistenceControllerSurface):
         self._session_name = snapshot.session_name
         self._restore_generation_param_overrides(snapshot.generation_params)
 
+    def _before_tree_navigation(
+        self,
+        preparation: dict,
+        *,
+        wants_summary: bool,
+        custom_instructions,
+        replace_instructions,
+        label,
+    ) -> tuple[bool, object, object, object, dict | None, bool]:
+        extension_summary: dict | None = None
+        from_extension = False
+        if not self._extension_runner.has_handlers("session_before_tree"):
+            return (
+                False,
+                custom_instructions,
+                replace_instructions,
+                label,
+                extension_summary,
+                from_extension,
+            )
+        before_result = self._extension_runner.emit(
+            {
+                "type": "session_before_tree",
+                "preparation": preparation,
+                "signal": self.agent.signal,
+            }
+        )
+        if not isinstance(before_result, dict):
+            return (
+                False,
+                custom_instructions,
+                replace_instructions,
+                label,
+                extension_summary,
+                from_extension,
+            )
+        if before_result.get("cancel"):
+            return True, custom_instructions, replace_instructions, label, None, False
+        if before_result.get("customInstructions") is not None:
+            custom_instructions = before_result["customInstructions"]
+        if before_result.get("replaceInstructions") is not None:
+            replace_instructions = before_result["replaceInstructions"]
+        if before_result.get("label") is not None:
+            label = before_result["label"]
+        summary_result = before_result.get("summary")
+        if wants_summary and isinstance(summary_result, dict) and summary_result.get("summary"):
+            extension_summary = summary_result
+            from_extension = True
+        elif wants_summary and isinstance(summary_result, str) and summary_result:
+            extension_summary = {"summary": summary_result}
+            from_extension = True
+        return (
+            False,
+            custom_instructions,
+            replace_instructions,
+            label,
+            extension_summary,
+            from_extension,
+        )
+
     def navigate_tree(self, target_id: str, options: dict | None = None) -> dict:
         if self._session_store is None:
             raise RuntimeError("No session store configured")
@@ -279,32 +339,22 @@ class SessionPersistence(SessionPersistenceControllerSurface):
             "label": label,
         }
 
-        extension_summary: dict | None = None
-        from_extension = False
-        if self._extension_runner.has_handlers("session_before_tree"):
-            before_result = self._extension_runner.emit(
-                {
-                    "type": "session_before_tree",
-                    "preparation": preparation,
-                    "signal": self.agent.signal,
-                }
-            )
-            if isinstance(before_result, dict):
-                if before_result.get("cancel"):
-                    return {"cancelled": True}
-                if before_result.get("customInstructions") is not None:
-                    custom_instructions = before_result["customInstructions"]
-                if before_result.get("replaceInstructions") is not None:
-                    replace_instructions = before_result["replaceInstructions"]
-                if before_result.get("label") is not None:
-                    label = before_result["label"]
-                summary_result = before_result.get("summary")
-                if wants_summary and isinstance(summary_result, dict) and summary_result.get("summary"):
-                    extension_summary = summary_result
-                    from_extension = True
-                elif wants_summary and isinstance(summary_result, str) and summary_result:
-                    extension_summary = {"summary": summary_result}
-                    from_extension = True
+        (
+            cancelled,
+            custom_instructions,
+            replace_instructions,
+            label,
+            extension_summary,
+            from_extension,
+        ) = self._before_tree_navigation(
+            preparation,
+            wants_summary=wants_summary,
+            custom_instructions=custom_instructions,
+            replace_instructions=replace_instructions,
+            label=label,
+        )
+        if cancelled:
+            return {"cancelled": True}
 
         summary_text: str | None = None
         summary_details = None
