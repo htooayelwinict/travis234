@@ -13,7 +13,7 @@ from typing import Any, cast
 
 import travis.app as app_module
 import travis.coding_agent.agent_session as agent_session_module
-from travis.ai.types import AssistantMessage, Model
+from travis.ai.types import AssistantMessage, Model, ThinkingLevel
 from travis.coding_agent.automation import serialize_machine_value
 from travis.coding_agent.config import get_agent_dir
 from travis.coding_agent.session_catalog import SessionCatalog
@@ -30,7 +30,7 @@ class AgentHarnessConfig:
     agent_dir: str | None = None
     persist_session: bool = True
     session_path: str | None = None
-    thinking_level: str = "off"
+    thinking_level: ThinkingLevel = "off"
     trust_override: bool | None = None
     offline: bool = False
     allowed_tools: tuple[str, ...] | None = None

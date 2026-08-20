@@ -11,7 +11,7 @@ import time
 import uuid
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal, TypeGuard
 
 from travis.ai.context_estimate import calculate_prompt_tokens, estimate_context_tokens
 from travis.ai.model_resolver import ScopedModel
@@ -475,6 +475,7 @@ class CodingApp:
     def _create_runtime_session(self, options: dict[str, object]) -> CreateAgentSessionRuntimeResult:
         current = self.session
         next_cwd = str(options.get("cwd") or self.cwd)
+        session_start_event = options.get("session_start_event")
         session = self._create_session(
             cwd=next_cwd,
             fallback_model=current.model,
@@ -484,8 +485,8 @@ class CodingApp:
                 str(options["parent_session_path"]) if options.get("parent_session_path") else None
             ),
             session_start_event=(
-                dict(cast(Mapping[str, object], options["session_start_event"]))
-                if isinstance(options.get("session_start_event"), Mapping)
+                dict(session_start_event)
+                if _is_session_start_event(session_start_event)
                 else None
             ),
             defer_session_start=bool(options.get("defer_session_start", False)),
@@ -500,10 +501,11 @@ class CodingApp:
         )
 
     def _handle_session_rebound(self, session: SessionRuntimePort) -> None:
-        rebound_session = cast(AgentSession, session)
-        self._bind_session(rebound_session)
+        if not isinstance(session, AgentSession):
+            raise TypeError(f"Unsupported application session: {type(session).__name__}")
+        self._bind_session(session)
         for listener in list(self._session_rebound_listeners):
-            listener(rebound_session)
+            listener(session)
 
     def subscribe_session_rebound(self, listener: Callable[[AgentSession], None]) -> Callable[[], None]:
         self._session_rebound_listeners.append(listener)
@@ -888,6 +890,10 @@ def _model_summarizer(
         return "\n".join(block.text for block in response.content if isinstance(block, TextContent))
 
     return summarize
+
+
+def _is_session_start_event(value: object) -> TypeGuard[Mapping[str, object]]:
+    return isinstance(value, Mapping) and all(isinstance(key, str) for key in value)
 
 
 def _model_route(model: Model) -> str:

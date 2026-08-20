@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, TypeGuard
 
 from travis.coding_agent.extensions import ExtensionRunner
 
@@ -146,9 +146,57 @@ class SessionRuntimePort(SessionLifecyclePort, Protocol):
     def get_session_leaf_id(self) -> str | None: ...
 
 
+_SESSION_RUNTIME_ATTRIBUTES = (
+    "cwd",
+    "extension_runner",
+    "session_path",
+)
+_SESSION_RUNTIME_METHODS = (
+    "create_branched_session",
+    "dispose",
+    "emit_deferred_session_start",
+    "get_session_entry",
+    "get_session_leaf_id",
+    "shutdown",
+)
+
+
+def is_session_runtime_port(session: object) -> TypeGuard[SessionRuntimePort]:
+    return all(hasattr(session, name) for name in _SESSION_RUNTIME_ATTRIBUTES) and all(
+        callable(getattr(session, name, None)) for name in _SESSION_RUNTIME_METHODS
+    )
+
+
+def validate_session_runtime_port(session: object) -> SessionRuntimePort:
+    if is_session_runtime_port(session):
+        return session
+
+    missing = [
+        name
+        for name in (*_SESSION_RUNTIME_ATTRIBUTES, *_SESSION_RUNTIME_METHODS)
+        if not hasattr(session, name)
+    ]
+    noncallable = [
+        name
+        for name in _SESSION_RUNTIME_METHODS
+        if hasattr(session, name) and not callable(getattr(session, name))
+    ]
+    details = []
+    if missing:
+        details.append(f"missing required members: {', '.join(missing)}")
+    if noncallable:
+        details.append(f"non-callable required members: {', '.join(noncallable)}")
+    raise TypeError(
+        f"Unsupported runtime result: {type(session).__name__} "
+        f"({'; '.join(details)})"
+    )
+
+
 __all__ = [
     "AGENT_SESSION_PUBLIC_MEMBERS",
     "SessionFactory",
     "SessionLifecyclePort",
     "SessionRuntimePort",
+    "is_session_runtime_port",
+    "validate_session_runtime_port",
 ]

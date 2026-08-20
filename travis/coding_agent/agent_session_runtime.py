@@ -18,7 +18,10 @@ from travis.agent.async_utils import run_sync
 from travis.coding_agent.extensions import emit_session_shutdown_event
 from travis.coding_agent.object_utils import call_optional as _call_optional
 from travis.coding_agent.session_catalog import SessionCatalog
-from travis.coding_agent.session_contracts import SessionRuntimePort
+from travis.coding_agent.session_contracts import (
+    SessionRuntimePort,
+    validate_session_runtime_port,
+)
 from travis.coding_agent.session_store import serialized_content_text
 
 
@@ -438,40 +441,7 @@ def _coerce_result(
 
 
 def _validate_runtime_session(session: object) -> SessionRuntimePort:
-    required_attributes = (
-        "cwd",
-        "extension_runner",
-        "session_path",
-    )
-    required_methods = (
-        "create_branched_session",
-        "dispose",
-        "emit_deferred_session_start",
-        "get_session_entry",
-        "get_session_leaf_id",
-        "shutdown",
-    )
-    missing = [
-        name
-        for name in (*required_attributes, *required_methods)
-        if not hasattr(session, name)
-    ]
-    noncallable = [
-        name
-        for name in required_methods
-        if hasattr(session, name) and not callable(getattr(session, name))
-    ]
-    if missing or noncallable:
-        details = []
-        if missing:
-            details.append(f"missing required members: {', '.join(missing)}")
-        if noncallable:
-            details.append(f"non-callable required members: {', '.join(noncallable)}")
-        raise TypeError(
-            f"Unsupported runtime result: {type(session).__name__} "
-            f"({'; '.join(details)})"
-        )
-    return cast(SessionRuntimePort, session)
+    return validate_session_runtime_port(session)
 
 
 def _dispose_session(session: SessionRuntimePort) -> None:

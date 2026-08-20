@@ -61,7 +61,10 @@ from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import ProcessOwner
 from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.session_bash import SessionBashController
-from travis.coding_agent.session_contracts import SessionRuntimePort
+from travis.coding_agent.session_contracts import (
+    SessionRuntimePort,
+    validate_session_runtime_port,
+)
 from travis.coding_agent.session_controllers import (
     SESSION_CONTROLLER_DELEGATES,
     SESSION_DELEGATED_NAMES,
@@ -807,7 +810,7 @@ class AgentSession(RuntimeFacade):
         object.__setattr__(self, "_runtime", runtime)
 
     def _session_runtime_port(self) -> SessionRuntimePort:
-        return cast(SessionRuntimePort, self._runtime)
+        return validate_session_runtime_port(self._runtime)
 
     @property
     def cwd(self) -> str:
