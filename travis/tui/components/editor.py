@@ -256,6 +256,146 @@ class Input(Component):
         self._exit_history_browsing()
         return True
 
+    def _handle_control_sequence(self, data: str, index: int) -> int | None:
+        if data.startswith("\x1b[200~", index):
+            end = data.find("\x1b[201~", index + 6)
+            if end == -1:
+                paste = data[index + 6 :]
+                next_index = len(data)
+            else:
+                paste = data[index + 6 : end]
+                next_index = end + 6
+            self._insert_paste(paste)
+            return next_index
+        mouse_match = re.match(
+            r"\x1b(?:\[<\d+;\d+;\d+[Mm]|\[\d+;\d+;\d+[Mm]|\[M...)",
+            data[index:],
+        )
+        if mouse_match:
+            return index + len(mouse_match.group(0))
+        leaked_mouse_match = _match_leaked_mouse_report_fragment(data, index)
+        if leaked_mouse_match:
+            return leaked_mouse_match.end()
+        if _is_possible_leaked_mouse_report_fragment_prefix(data[index:]):
+            self._pending_leaked_mouse_fragment = data[index:]
+            return -1
+        if data.startswith("\x1b[A", index):
+            if self._history:
+                self._navigate_history(-1)
+            else:
+                self.cursor = 0
+                self._last_action = None
+            return index + 3
+        if data.startswith("\x1b[B", index):
+            if self._history_index > -1:
+                self._navigate_history(1)
+            else:
+                self.cursor = len(self.value)
+                self._last_action = None
+            return index + 3
+        if data.startswith("\x1b[D", index):
+            self.cursor = _previous_grapheme_start(self.value, self.cursor)
+            return index + 3
+        if data.startswith("\x1b[C", index):
+            self.cursor = _next_grapheme_end(self.value, self.cursor)
+            self._last_action = None
+            return index + 3
+        word_left_match = re.match(r"\x1b\[1;[35](?::[123])?D", data[index:])
+        if word_left_match:
+            self._move_word_backward()
+            return index + len(word_left_match.group(0))
+        word_right_match = re.match(r"\x1b\[1;[35](?::[123])?C", data[index:])
+        if word_right_match:
+            self._move_word_forward()
+            return index + len(word_right_match.group(0))
+        if data.startswith("\x1b[3~", index):
+            self._delete_char_forward()
+            return index + 4
+        alt_delete_match = re.match(r"\x1b\[3;3(?::[123])?~", data[index:])
+        if alt_delete_match:
+            self._delete_word_forward()
+            return index + len(alt_delete_match.group(0))
+        if data.startswith(("\x1b[H", "\x1bOH", "\x1b[1~", "\x1b[7~"), index):
+            self.cursor = 0
+            self._last_action = None
+            return index + _matched_sequence_length(data, index, ("\x1b[H", "\x1bOH", "\x1b[1~", "\x1b[7~"))
+        if data.startswith(("\x1b[F", "\x1bOF", "\x1b[4~", "\x1b[8~"), index):
+            self.cursor = len(self.value)
+            self._last_action = None
+            return index + _matched_sequence_length(data, index, ("\x1b[F", "\x1bOF", "\x1b[4~", "\x1b[8~"))
+        if data.startswith("\x1bb", index):
+            self._move_word_backward()
+            return index + 2
+        if data.startswith("\x1bf", index):
+            self._move_word_forward()
+            return index + 2
+        if data.startswith("\x1b\x7f", index) or data.startswith("\x1b\b", index):
+            self._delete_word_backward()
+            return index + 2
+        if data.startswith("\x1by", index):
+            self._yank_pop()
+            return index + 2
+        if data.startswith("\x1bd", index):
+            self._delete_word_forward()
+            return index + 2
+        if data.startswith("\x1b[45;5u", index):
+            self._undo()
+            return index + 7
+        return None
+
+    def _handle_character(self, char: str) -> None:
+        if char == "\t":
+            self.apply_autocomplete(force=True)
+            self._last_action = None
+        elif char in ("\x1b", "\x03"):
+            self._notify_escape()
+            self._last_action = None
+        elif char in ("\r", "\n"):
+            submitted = self.value
+            if self.on_submit:
+                self.on_submit(submitted)
+            self.value = ""
+            self.cursor = 0
+            self._exit_history_browsing()
+            self._last_action = None
+        elif char == "\x01":
+            self.cursor = 0
+            self._last_action = None
+        elif char == "\x05":
+            self.cursor = len(self.value)
+            self._last_action = None
+        elif char == "\x02":
+            self.cursor = _previous_grapheme_start(self.value, self.cursor)
+            self._last_action = None
+        elif char == "\x06":
+            self.cursor = _next_grapheme_end(self.value, self.cursor)
+            self._last_action = None
+        elif char == "\x17":
+            self._delete_word_backward()
+        elif char == "\x04":
+            self._delete_char_forward()
+        elif char == "\x15":
+            self._delete_to_line_start()
+        elif char == "\x0b":
+            self._delete_to_line_end()
+        elif char == "\x19":
+            self._yank()
+        elif char in ("\x7f", "\b"):
+            if self.cursor > 0:
+                self._push_undo()
+                delete_from = _previous_grapheme_start(self.value, self.cursor)
+                self.value = self.value[:delete_from] + self.value[self.cursor :]
+                self.cursor = delete_from
+                self._exit_history_browsing()
+            self._last_action = None
+        elif char >= " ":
+            if char.isspace() or self._last_action != "type-word":
+                self._push_undo()
+            self.value = self.value[: self.cursor] + char + self.value[self.cursor :]
+            self.cursor += 1
+            self._exit_history_browsing()
+            self._last_action = "type-word"
+
     def handle_input(self, data: str) -> None:
         if self._pending_leaked_mouse_fragment:
             data = self._pending_leaked_mouse_fragment + data
@@ -263,138 +403,14 @@ class Input(Component):
 
         index = 0
         while index < len(data):
-            if data.startswith("\x1b[200~", index):
-                end = data.find("\x1b[201~", index + 6)
-                if end == -1:
-                    paste = data[index + 6 :]
-                    index = len(data)
-                else:
-                    paste = data[index + 6 : end]
-                    index = end + 6
-                self._insert_paste(paste)
-            elif mouse_match := re.match(
-                r"\x1b(?:\[<\d+;\d+;\d+[Mm]|\[\d+;\d+;\d+[Mm]|\[M...)",
-                data[index:],
-            ):
-                index += len(mouse_match.group(0))
-            elif leaked_mouse_match := _match_leaked_mouse_report_fragment(data, index):
-                index = leaked_mouse_match.end()
-            elif _is_possible_leaked_mouse_report_fragment_prefix(data[index:]):
-                self._pending_leaked_mouse_fragment = data[index:]
+            next_index = self._handle_control_sequence(data, index)
+            if next_index == -1:
                 break
-            elif data.startswith("\x1b[A", index):
-                if self._history:
-                    self._navigate_history(-1)
-                else:
-                    self.cursor = 0
-                    self._last_action = None
-                index += 3
-            elif data.startswith("\x1b[B", index):
-                if self._history_index > -1:
-                    self._navigate_history(1)
-                else:
-                    self.cursor = len(self.value)
-                    self._last_action = None
-                index += 3
-            elif data.startswith("\x1b[D", index):
-                self.cursor = _previous_grapheme_start(self.value, self.cursor)
-                index += 3
-            elif data.startswith("\x1b[C", index):
-                self.cursor = _next_grapheme_end(self.value, self.cursor)
-                self._last_action = None
-                index += 3
-            elif word_left_match := re.match(r"\x1b\[1;[35](?::[123])?D", data[index:]):
-                self._move_word_backward()
-                index += len(word_left_match.group(0))
-            elif word_right_match := re.match(r"\x1b\[1;[35](?::[123])?C", data[index:]):
-                self._move_word_forward()
-                index += len(word_right_match.group(0))
-            elif data.startswith("\x1b[3~", index):
-                self._delete_char_forward()
-                index += 4
-            elif alt_delete_match := re.match(r"\x1b\[3;3(?::[123])?~", data[index:]):
-                self._delete_word_forward()
-                index += len(alt_delete_match.group(0))
-            elif data.startswith(("\x1b[H", "\x1bOH", "\x1b[1~", "\x1b[7~"), index):
-                self.cursor = 0
-                self._last_action = None
-                index += _matched_sequence_length(data, index, ("\x1b[H", "\x1bOH", "\x1b[1~", "\x1b[7~"))
-            elif data.startswith(("\x1b[F", "\x1bOF", "\x1b[4~", "\x1b[8~"), index):
-                self.cursor = len(self.value)
-                self._last_action = None
-                index += _matched_sequence_length(data, index, ("\x1b[F", "\x1bOF", "\x1b[4~", "\x1b[8~"))
-            elif data.startswith("\x1bb", index):
-                self._move_word_backward()
-                index += 2
-            elif data.startswith("\x1bf", index):
-                self._move_word_forward()
-                index += 2
-            elif data.startswith("\x1b\x7f", index) or data.startswith("\x1b\b", index):
-                self._delete_word_backward()
-                index += 2
-            elif data.startswith("\x1by", index):
-                self._yank_pop()
-                index += 2
-            elif data.startswith("\x1bd", index):
-                self._delete_word_forward()
-                index += 2
-            elif data.startswith("\x1b[45;5u", index):
-                self._undo()
-                index += 7
-            else:
-                char = data[index]
-                if char == "\t":
-                    self.apply_autocomplete(force=True)
-                    self._last_action = None
-                elif char in ("\x1b", "\x03"):
-                    self._notify_escape()
-                    self._last_action = None
-                elif char in ("\r", "\n"):
-                    submitted = self.value
-                    if self.on_submit:
-                        self.on_submit(submitted)
-                    self.value = ""
-                    self.cursor = 0
-                    self._exit_history_browsing()
-                    self._last_action = None
-                elif char == "\x01":
-                    self.cursor = 0
-                    self._last_action = None
-                elif char == "\x05":
-                    self.cursor = len(self.value)
-                    self._last_action = None
-                elif char == "\x02":
-                    self.cursor = _previous_grapheme_start(self.value, self.cursor)
-                    self._last_action = None
-                elif char == "\x06":
-                    self.cursor = _next_grapheme_end(self.value, self.cursor)
-                    self._last_action = None
-                elif char == "\x17":
-                    self._delete_word_backward()
-                elif char == "\x04":
-                    self._delete_char_forward()
-                elif char == "\x15":
-                    self._delete_to_line_start()
-                elif char == "\x0b":
-                    self._delete_to_line_end()
-                elif char == "\x19":
-                    self._yank()
-                elif char in ("\x7f", "\b"):
-                    if self.cursor > 0:
-                        self._push_undo()
-                        delete_from = _previous_grapheme_start(self.value, self.cursor)
-                        self.value = self.value[:delete_from] + self.value[self.cursor :]
-                        self.cursor = delete_from
-                        self._exit_history_browsing()
-                    self._last_action = None
-                elif char >= " ":
-                    if char.isspace() or self._last_action != "type-word":
-                        self._push_undo()
-                    self.value = self.value[: self.cursor] + char + self.value[self.cursor :]
-                    self.cursor += 1
-                    self._exit_history_browsing()
-                    self._last_action = "type-word"
-                index += 1
+            if next_index is not None:
+                index = next_index
+                continue
+            self._handle_character(data[index])
+            index += 1
 
     def render(self, width: int) -> list[str]:
         prompt_width = visible_width(self.prompt)
