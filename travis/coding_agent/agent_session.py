@@ -7,6 +7,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import cast
 
+import travis.coding_agent.session_types as _session_types
 from travis.agent.agent import Agent
 from travis.agent.types import (
     AbortSignal,
@@ -102,54 +103,6 @@ from travis.coding_agent.session_store import (
 from travis.coding_agent.session_subagents import SessionSubagentController
 from travis.coding_agent.session_tooling import SessionToolController
 from travis.coding_agent.session_turns import SessionTurnController
-from travis.coding_agent.session_types import (
-    _BRANCH_SUMMARY_PREFIX as _BRANCH_SUMMARY_PREFIX,
-    _BRANCH_SUMMARY_SUFFIX as _BRANCH_SUMMARY_SUFFIX,
-    _CANCEL_SUBAGENT_SCHEMA as _CANCEL_SUBAGENT_SCHEMA,
-    _COMPACTION_SUMMARY_PREFIX as _COMPACTION_SUMMARY_PREFIX,
-    _COMPACTION_SUMMARY_SUFFIX as _COMPACTION_SUMMARY_SUFFIX,
-    _DEFAULT_ACTIVE_TOOL_NAMES as _DEFAULT_ACTIVE_TOOL_NAMES,
-    _DEFAULT_SUBAGENT_ALLOWED_TOOLS as _DEFAULT_SUBAGENT_ALLOWED_TOOLS,
-    _EXPAND_SUBAGENT_RESULT_SCHEMA as _EXPAND_SUBAGENT_RESULT_SCHEMA,
-    _LIST_SUBAGENTS_SCHEMA as _LIST_SUBAGENTS_SCHEMA,
-    _MALFORMED_STREAM_RECOVERY_PREFIX as _MALFORMED_STREAM_RECOVERY_PREFIX,
-    _MALFORMED_STREAMED_TOOL_ARGS_MARKER as _MALFORMED_STREAMED_TOOL_ARGS_MARKER,
-    _MALFORMED_STREAMED_TOOL_CALL_ARGUMENTS_CODE as _MALFORMED_STREAMED_TOOL_CALL_ARGUMENTS_CODE,
-    _MAX_PARTIAL_STREAM_CONTINUATIONS as _MAX_PARTIAL_STREAM_CONTINUATIONS,
-    _MODEL_SUBAGENT_SPAWN_LIMIT_PER_TURN as _MODEL_SUBAGENT_SPAWN_LIMIT_PER_TURN,
-    _MODEL_SUBAGENT_TIMEOUT_SECONDS_DEFAULT as _MODEL_SUBAGENT_TIMEOUT_SECONDS_DEFAULT,
-    _MODEL_SUBAGENT_TIMEOUT_SECONDS_MAX as _MODEL_SUBAGENT_TIMEOUT_SECONDS_MAX,
-    _NON_RETRYABLE_PROVIDER_LIMIT_MARKERS as _NON_RETRYABLE_PROVIDER_LIMIT_MARKERS,
-    _PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE as _PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE,
-    _PARTIAL_STREAM_STUB_ID as _PARTIAL_STREAM_STUB_ID,
-    _RETRYABLE_ERROR_MARKERS as _RETRYABLE_ERROR_MARKERS,
-    _SKILL_SUBAGENT_ALLOWED_TOOL_NAMES as _SKILL_SUBAGENT_ALLOWED_TOOL_NAMES,
-    _SPAWN_SUBAGENT_SCHEMA as _SPAWN_SUBAGENT_SCHEMA,
-    _SUBAGENT_EXPANSION_BUDGETS as _SUBAGENT_EXPANSION_BUDGETS,
-    _SUBAGENT_OPT_IN_TERMS as _SUBAGENT_OPT_IN_TERMS,
-    _SUBAGENT_OPT_OUT_TERMS as _SUBAGENT_OPT_OUT_TERMS,
-    _SUBAGENT_RESULT_SUMMARY_LIMIT as _SUBAGENT_RESULT_SUMMARY_LIMIT,
-    _SUBAGENT_TOOL_NAMES as _SUBAGENT_TOOL_NAMES,
-    _SUBAGENT_TOOL_TRACE_DISPLAY_LIMIT as _SUBAGENT_TOOL_TRACE_DISPLAY_LIMIT,
-    _SUBAGENT_VISIBLE_SUMMARY_LIMIT as _SUBAGENT_VISIBLE_SUMMARY_LIMIT,
-    _TASK_ID_SCHEMA as _TASK_ID_SCHEMA,
-    _THINKING_LEVELS as _THINKING_LEVELS,
-    AgentSettledEvent as AgentSettledEvent,
-    AutoRetryEndEvent as AutoRetryEndEvent,
-    AutoRetryStartEvent as AutoRetryStartEvent,
-    BashResult as BashResult,
-    CompactionResult as CompactionResult,
-    ExtensionCommandContext as ExtensionCommandContext,
-    ExtensionCompactionResult as ExtensionCompactionResult,
-    ModelCycleResult as ModelCycleResult,
-    QueueUpdateEvent as QueueUpdateEvent,
-    SessionInfoChangedEvent as SessionInfoChangedEvent,
-    ThinkingLevelChangedEvent as ThinkingLevelChangedEvent,
-    _prompt_rejects_subagent_tools as _prompt_rejects_subagent_tools,
-    _prompt_requests_subagent_tools as _prompt_requests_subagent_tools,
-    _tool_result_text as _tool_result_text,
-    default_convert_to_llm as default_convert_to_llm,
-)
 from travis.coding_agent.settings_manager import SettingsManager
 from travis.coding_agent.source_info import SourceInfo, create_synthetic_source_info
 from travis.coding_agent.subagent_trace import SessionSubagentTraceController
@@ -174,6 +127,53 @@ from travis.controller_ports import (
     install_runtime_binding_attributes,
 )
 from travis.runtime_facade import RuntimeFacade
+
+_BRANCH_SUMMARY_PREFIX = _session_types._BRANCH_SUMMARY_PREFIX
+_BRANCH_SUMMARY_SUFFIX = _session_types._BRANCH_SUMMARY_SUFFIX
+_CANCEL_SUBAGENT_SCHEMA = _session_types._CANCEL_SUBAGENT_SCHEMA
+_COMPACTION_SUMMARY_PREFIX = _session_types._COMPACTION_SUMMARY_PREFIX
+_COMPACTION_SUMMARY_SUFFIX = _session_types._COMPACTION_SUMMARY_SUFFIX
+_DEFAULT_ACTIVE_TOOL_NAMES = _session_types._DEFAULT_ACTIVE_TOOL_NAMES
+_DEFAULT_SUBAGENT_ALLOWED_TOOLS = _session_types._DEFAULT_SUBAGENT_ALLOWED_TOOLS
+_EXPAND_SUBAGENT_RESULT_SCHEMA = _session_types._EXPAND_SUBAGENT_RESULT_SCHEMA
+_LIST_SUBAGENTS_SCHEMA = _session_types._LIST_SUBAGENTS_SCHEMA
+_MALFORMED_STREAM_RECOVERY_PREFIX = _session_types._MALFORMED_STREAM_RECOVERY_PREFIX
+_MALFORMED_STREAMED_TOOL_ARGS_MARKER = _session_types._MALFORMED_STREAMED_TOOL_ARGS_MARKER
+_MALFORMED_STREAMED_TOOL_CALL_ARGUMENTS_CODE = _session_types._MALFORMED_STREAMED_TOOL_CALL_ARGUMENTS_CODE
+_MAX_PARTIAL_STREAM_CONTINUATIONS = _session_types._MAX_PARTIAL_STREAM_CONTINUATIONS
+_MODEL_SUBAGENT_SPAWN_LIMIT_PER_TURN = _session_types._MODEL_SUBAGENT_SPAWN_LIMIT_PER_TURN
+_MODEL_SUBAGENT_TIMEOUT_SECONDS_DEFAULT = _session_types._MODEL_SUBAGENT_TIMEOUT_SECONDS_DEFAULT
+_MODEL_SUBAGENT_TIMEOUT_SECONDS_MAX = _session_types._MODEL_SUBAGENT_TIMEOUT_SECONDS_MAX
+_NON_RETRYABLE_PROVIDER_LIMIT_MARKERS = _session_types._NON_RETRYABLE_PROVIDER_LIMIT_MARKERS
+_PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE = _session_types._PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE
+_PARTIAL_STREAM_STUB_ID = _session_types._PARTIAL_STREAM_STUB_ID
+_RETRYABLE_ERROR_MARKERS = _session_types._RETRYABLE_ERROR_MARKERS
+_SKILL_SUBAGENT_ALLOWED_TOOL_NAMES = _session_types._SKILL_SUBAGENT_ALLOWED_TOOL_NAMES
+_SPAWN_SUBAGENT_SCHEMA = _session_types._SPAWN_SUBAGENT_SCHEMA
+_SUBAGENT_EXPANSION_BUDGETS = _session_types._SUBAGENT_EXPANSION_BUDGETS
+_SUBAGENT_OPT_IN_TERMS = _session_types._SUBAGENT_OPT_IN_TERMS
+_SUBAGENT_OPT_OUT_TERMS = _session_types._SUBAGENT_OPT_OUT_TERMS
+_SUBAGENT_RESULT_SUMMARY_LIMIT = _session_types._SUBAGENT_RESULT_SUMMARY_LIMIT
+_SUBAGENT_TOOL_NAMES = _session_types._SUBAGENT_TOOL_NAMES
+_SUBAGENT_TOOL_TRACE_DISPLAY_LIMIT = _session_types._SUBAGENT_TOOL_TRACE_DISPLAY_LIMIT
+_SUBAGENT_VISIBLE_SUMMARY_LIMIT = _session_types._SUBAGENT_VISIBLE_SUMMARY_LIMIT
+_TASK_ID_SCHEMA = _session_types._TASK_ID_SCHEMA
+_THINKING_LEVELS = _session_types._THINKING_LEVELS
+AgentSettledEvent = _session_types.AgentSettledEvent
+AutoRetryEndEvent = _session_types.AutoRetryEndEvent
+AutoRetryStartEvent = _session_types.AutoRetryStartEvent
+BashResult = _session_types.BashResult
+CompactionResult = _session_types.CompactionResult
+ExtensionCommandContext = _session_types.ExtensionCommandContext
+ExtensionCompactionResult = _session_types.ExtensionCompactionResult
+ModelCycleResult = _session_types.ModelCycleResult
+QueueUpdateEvent = _session_types.QueueUpdateEvent
+SessionInfoChangedEvent = _session_types.SessionInfoChangedEvent
+ThinkingLevelChangedEvent = _session_types.ThinkingLevelChangedEvent
+_prompt_rejects_subagent_tools = _session_types._prompt_rejects_subagent_tools
+_prompt_requests_subagent_tools = _session_types._prompt_requests_subagent_tools
+_tool_result_text = _session_types._tool_result_text
+default_convert_to_llm = _session_types.default_convert_to_llm
 
 
 class _SessionRuntime:
