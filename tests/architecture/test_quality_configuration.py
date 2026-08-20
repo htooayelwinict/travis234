@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import re
 import subprocess
 import tomllib
 from pathlib import Path
@@ -11,12 +12,17 @@ PYRIGHT_CONFIG = ROOT / "pyrightconfig.json"
 RUFF_CONFIG = ROOT / "ruff.toml"
 MIGRATED_OWNERS = (
     "travis/ai/__init__.py",
+    "travis/ai/models.py",
+    "travis/ai/providers/__init__.py",
     "travis/controller_ports.py",
     "travis/runtime_facade.py",
+    "travis/app.py",
     "travis/coding_agent/agent_harness.py",
     "travis/coding_agent/agent_session.py",
     "travis/coding_agent/agent_session_runtime.py",
     "travis/coding_agent/agent_session_services.py",
+    "travis/coding_agent/compaction_adapter.py",
+    "travis/coding_agent/eval_trace.py",
     "travis/coding_agent/session_bash.py",
     "travis/coding_agent/session_composition.py",
     "travis/coding_agent/session_controllers.py",
@@ -31,6 +37,7 @@ MIGRATED_OWNERS = (
     "travis/coding_agent/session_policy_controller.py",
     "travis/coding_agent/session_ports.py",
     "travis/coding_agent/session_state.py",
+    "travis/coding_agent/session_store.py",
     "travis/coding_agent/session_subagents.py",
     "travis/coding_agent/session_surfaces.py",
     "travis/coding_agent/session_tooling.py",
@@ -60,10 +67,13 @@ MIGRATED_OWNERS = (
     "travis/tui/interactive_state.py",
     "travis/tui/interactive_subagents.py",
     "travis/tui/interactive_surfaces.py",
+    "travis/tui/interactive_theme_helpers.py",
     "travis/tui/interactive_turn_controller.py",
     "travis/tui/interactive_view.py",
+    "travis/tui/user_commands.py",
     "tests/architecture/test_public_type_hints.py",
     "tests/architecture/test_refactor_contracts.py",
+    "tests/architecture/test_static_analysis_boundaries.py",
     "tests/coding_agent/test_session_composition.py",
     "tests/coding_agent/test_session_options.py",
     "tests/test_runtime_facade_contract.py",
@@ -206,3 +216,17 @@ def test_migrated_owners_pass_normal_ruff_rules() -> None:
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_migrated_owners_reject_broad_inline_suppressions() -> None:
+    violations: list[str] = []
+    for relative_path in MIGRATED_OWNERS:
+        source = (ROOT / relative_path).read_text(encoding="utf-8")
+        for line_number, line in enumerate(source.splitlines(), start=1):
+            stripped = line.lstrip()
+            if stripped.startswith(("# type: ignore", "# pyright: ignore")):
+                violations.append(f"{relative_path}:{line_number}: file-wide type ignore")
+            if re.search(r"#\s*noqa(?!:)", line, flags=re.IGNORECASE):
+                violations.append(f"{relative_path}:{line_number}: unqualified noqa")
+
+    assert violations == []
