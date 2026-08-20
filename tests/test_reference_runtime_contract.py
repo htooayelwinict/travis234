@@ -574,7 +574,14 @@ def test_final_provider_headers_are_mutable_and_null_deletes_a_header() -> None:
     assert "X-Remove" not in request.headers
 
 
-def test_runtime_timeout_option_controls_provider_request_deadline() -> None:
+@pytest.mark.parametrize(
+    ("timeout_ms", "expected_seconds"),
+    ((250, 0.25), (0, None)),
+)
+def test_runtime_timeout_option_controls_provider_request_deadline(
+    timeout_ms: int,
+    expected_seconds: float | None,
+) -> None:
     model = _openrouter_qwen_model()
     config = ModelConfig(
         enabled=True,
@@ -593,12 +600,38 @@ def test_runtime_timeout_option_controls_provider_request_deadline() -> None:
     request = prepare_provider_request(
         model,
         Context(messages=[UserMessage(content="hello")]),
-        SimpleNamespace(timeout_ms=250),
+        SimpleNamespace(timeout_ms=timeout_ms),
         config,
         ProviderProfile(name="openrouter", base_url=model.base_url),
     )
 
-    assert request.timeout_seconds == 0.25
+    assert request.timeout_seconds == expected_seconds
+
+
+def test_negative_runtime_timeout_is_rejected_before_request_construction() -> None:
+    model = _openrouter_qwen_model()
+    config = ModelConfig(
+        enabled=True,
+        api_key="test-key",
+        model=model.id,
+        base_url=model.base_url,
+        timeout_seconds=60,
+        temperature=0,
+        top_p=None,
+        frequency_penalty=None,
+        presence_penalty=None,
+        seed=None,
+        provider="openrouter",
+    )
+
+    with pytest.raises(ValueError, match="Invalid timeout_ms: -1"):
+        prepare_provider_request(
+            model,
+            Context(messages=[UserMessage(content="hello")]),
+            SimpleNamespace(timeout_ms=-1),
+            config,
+            ProviderProfile(name="openrouter", base_url=model.base_url),
+        )
 
 
 def test_summary_request_can_use_provider_native_output_ceiling_without_wire_cap() -> None:
