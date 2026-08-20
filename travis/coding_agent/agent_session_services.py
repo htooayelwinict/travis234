@@ -181,11 +181,40 @@ def create_agent_session(options: Mapping[str, Any] | None = None, **kwargs: Any
 
 
 
-def create_agent_session_from_services(
-    raw_options: Mapping[str, object] | SessionBootstrapOptions,
-) -> CreateAgentSessionResult:
-    options = SessionBootstrapOptions.from_mapping(raw_options)
-    raw_services = options.services
+@dataclass(frozen=True, slots=True)
+class _NormalizedSessionServices:
+    services: SessionDependencies
+    mutable_legacy_services: dict[str, object] | None
+
+
+@dataclass(frozen=True, slots=True)
+class _SessionLocation:
+    session_path: str | None
+    session_id: object | None
+    fresh_session: bool
+    existing_session: SessionContextSnapshot | None
+    has_existing_session: bool
+    has_thinking_entry: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedSessionModel:
+    model: Model
+    thinking_level: str | None
+    fallback_message: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedOperationRuntime:
+    services: SessionDependencies
+    operation_runtime: object
+    owned_operation_runtime: OperationRuntime | None
+    owns_operation_runtime: bool
+
+
+def _normalize_required_session_services(
+    raw_services: object | None,
+) -> _NormalizedSessionServices:
     if raw_services is None:
         raise ValueError("services are required")
     if isinstance(raw_services, SessionDependencies):
@@ -194,15 +223,27 @@ def create_agent_session_from_services(
         services = SessionDependencies.from_legacy_mapping(raw_services)
     else:
         raise TypeError("services must be SessionDependencies or a mapping")
-    operation_runtime = (
-        options.operation_runtime
-        if options.was_provided("operation_runtime")
-        else services.operation_runtime
+    return _NormalizedSessionServices(
+        services=services,
+        mutable_legacy_services=(
+            raw_services if isinstance(raw_services, dict) else None
+        ),
     )
-    owns_operation_runtime = False
-    model = options.model
-    model_fallback_message: str | None = None
-    thinking_level = options.thinking_level
+
+
+def _selected_operation_runtime(
+    options: SessionBootstrapOptions,
+    services: SessionDependencies,
+) -> object | None:
+    if options.was_provided("operation_runtime"):
+        return options.operation_runtime
+    return services.operation_runtime
+
+
+def _resolve_session_location(
+    options: SessionBootstrapOptions,
+    services: SessionDependencies,
+) -> _SessionLocation:
     session_path = (
         options.session_path
         if options.was_provided("session_path")
@@ -216,31 +257,73 @@ def create_agent_session_from_services(
         else services.session_id or None
     )
     fresh_session = _is_fresh_session_path(session_path)
-    existing_session = _load_existing_session_context(services.cwd, session_path, thinking_level or "off")
-    has_existing_session = bool(existing_session and existing_session.messages)
-    has_thinking_entry = _has_session_entry_type(session_path, "thinking_level_change")
-    if model is None and has_existing_session and existing_session and existing_session.model:
+    existing_session = _load_existing_session_context(
+        services.cwd,
+        session_path,
+        options.thinking_level or "off",
+    )
+    return _SessionLocation(
+        session_path=session_path,
+        session_id=session_id,
+        fresh_session=fresh_session,
+        existing_session=existing_session,
+        has_existing_session=bool(existing_session and existing_session.messages),
+        has_thinking_entry=_has_session_entry_type(
+            session_path,
+            "thinking_level_change",
+        ),
+    )
+
+
+def _resolve_session_model(
+    options: SessionBootstrapOptions,
+    services: SessionDependencies,
+    location: _SessionLocation,
+) -> _ResolvedSessionModel:
+    model = options.model
+    fallback_message: str | None = None
+    thinking_level = options.thinking_level
+    existing_session = location.existing_session
+    if (
+        model is None
+        and location.has_existing_session
+        and existing_session is not None
+        and existing_session.model
+    ):
         restored_model = services.model_registry.find(
             existing_session.model.get("provider", ""),
             existing_session.model.get("modelId", ""),
         )
-        if restored_model and services.model_registry.has_configured_auth(restored_model):
+        if restored_model and services.model_registry.has_configured_auth(
+            restored_model
+        ):
             model = restored_model
         else:
-            model_fallback_message = (
+            fallback_message = (
                 f"Could not restore model "
-                f"{existing_session.model.get('provider', '')}/{existing_session.model.get('modelId', '')}"
+                f"{existing_session.model.get('provider', '')}/"
+                f"{existing_session.model.get('modelId', '')}"
             )
     if model is None:
         settings_manager = services.settings_manager
         initial = find_initial_model(
             scoped_models=options.scoped_models or [],
-            is_continuing=has_existing_session or bool(options.is_continuing),
+            is_continuing=(
+                location.has_existing_session or bool(options.is_continuing)
+            ),
             model_registry=services.model_registry,
             cli_provider=options.provider,
             cli_model=options.model_id,
-            default_provider=_call_or_none(settings_manager, "getDefaultProvider", "get_default_provider"),
-            default_model_id=_call_or_none(settings_manager, "getDefaultModel", "get_default_model"),
+            default_provider=_call_or_none(
+                settings_manager,
+                "getDefaultProvider",
+                "get_default_provider",
+            ),
+            default_model_id=_call_or_none(
+                settings_manager,
+                "getDefaultModel",
+                "get_default_model",
+            ),
             default_thinking_level=_call_or_none(
                 settings_manager,
                 "getDefaultThinkingLevel",
@@ -249,100 +332,216 @@ def create_agent_session_from_services(
         )
         model = initial.model
         if initial.fallback_message:
-            model_fallback_message = initial.fallback_message
-        elif model_fallback_message and model is not None:
-            model_fallback_message = f"{model_fallback_message}. Using {model.provider}/{model.id}"
-        if thinking_level is None and not has_existing_session:
+            fallback_message = initial.fallback_message
+        elif fallback_message and model is not None:
+            fallback_message = (
+                f"{fallback_message}. Using {model.provider}/{model.id}"
+            )
+        if thinking_level is None and not location.has_existing_session:
             thinking_level = initial.thinking_level
     if model is None:
         raise RuntimeError(_format_no_models_available_message())
-    if thinking_level is None and has_existing_session and existing_session:
-        thinking_level = existing_session.thinking_level if has_thinking_entry else None
-    extensions_result = services.resource_loader.get_extensions()
+    if (
+        thinking_level is None
+        and location.has_existing_session
+        and existing_session is not None
+    ):
+        thinking_level = (
+            existing_session.thinking_level
+            if location.has_thinking_entry
+            else None
+        )
+    return _ResolvedSessionModel(
+        model=model,
+        thinking_level=thinking_level,
+        fallback_message=fallback_message,
+    )
+
+
+def _resolve_operation_runtime(
+    services: SessionDependencies,
+    operation_runtime: object | None,
+    mutable_legacy_services: dict[str, object] | None,
+) -> _ResolvedOperationRuntime:
+    if operation_runtime is not None:
+        return _ResolvedOperationRuntime(
+            services=services,
+            operation_runtime=operation_runtime,
+            owned_operation_runtime=None,
+            owns_operation_runtime=False,
+        )
+    owned_operation_runtime = OperationRuntime.from_settings(
+        services.agent_dir,
+        services.settings_manager.get_operation_settings(),
+        heartbeat_interval_seconds=None,
+    )
+    diagnostics = list(services.diagnostics)
+    recovery_report = getattr(owned_operation_runtime, "recovery_report", None)
+    if recovery_report is not None and recovery_report.has_diagnostic:
+        diagnostics.append(recovery_report.as_dict())
+    services = replace(
+        services,
+        operation_runtime=owned_operation_runtime,
+        diagnostics=tuple(diagnostics),
+    )
+    if mutable_legacy_services is not None:
+        mutable_legacy_services["operationRuntime"] = owned_operation_runtime
+        mutable_legacy_services["diagnostics"] = [
+            dict(item) for item in diagnostics
+        ]
+    return _ResolvedOperationRuntime(
+        services=services,
+        operation_runtime=owned_operation_runtime,
+        owned_operation_runtime=owned_operation_runtime,
+        owns_operation_runtime=True,
+    )
+
+
+def _invoke_session_factory(
+    *,
+    services: SessionDependencies,
+    options: SessionBootstrapOptions,
+    resolved_model: _ResolvedSessionModel,
+    location: _SessionLocation,
+    active_tool_names: list[str] | None,
+    allowed_tool_names: list[str] | None,
+    provider_retry_settings: Mapping[str, object],
+    extension_runner: ExtensionRunner | None,
+    operation_runtime: object,
+    owns_operation_runtime: bool,
+) -> SessionLifecyclePort:
+    session_factory = services.session_factory or _default_session_factory
+    return session_factory(
+        cwd=services.cwd,
+        agent_dir=services.agent_dir,
+        model=resolved_model.model,
+        thinking_level=resolved_model.thinking_level or "off",
+        scoped_models=options.scoped_models,
+        active_tool_names=active_tool_names,
+        allowed_tool_names=allowed_tool_names,
+        excluded_tool_names=options.exclude_tools,
+        transport=_call_or_none(
+            services.settings_manager,
+            "getTransport",
+            "get_transport",
+        ),
+        thinking_budgets=_call_or_none(
+            services.settings_manager,
+            "getThinkingBudgets",
+            "get_thinking_budgets",
+        ),
+        max_retry_delay_ms=_first_defined(
+            provider_retry_settings.get("maxRetryDelayMs"),
+            provider_retry_settings.get("max_retry_delay_ms"),
+        ),
+        tool_definitions=_tool_definitions_for_sdk(services, options),
+        convert_to_llm=_convert_to_llm_for_sdk(
+            services.settings_manager,
+            options.convert_to_llm,
+        ),
+        resource_loader=services.resource_loader,
+        settings_manager=services.settings_manager,
+        extension_runner=extension_runner,
+        stream_fn=_stream_fn_for_sdk(
+            services.model_registry,
+            services.settings_manager,
+        ),
+        model_registry=services.model_registry,
+        session_index=services.session_catalog.index,
+        session_path=location.session_path,
+        parent_session_path=options.parent_session_path,
+        session_id=str(location.session_id) if location.session_id else None,
+        session_start_event=options.session_start_event,
+        defer_session_start=bool(options.defer_session_start),
+        model_role_bindings=options.model_role_bindings,
+        model_role_event_sink=options.model_role_event_sink,
+        operation_runtime=operation_runtime,
+        owns_operation_runtime=owns_operation_runtime,
+    )
+
+
+def _create_session_with_runtime_cleanup(
+    *,
+    runtime: _ResolvedOperationRuntime,
+    options: SessionBootstrapOptions,
+    resolved_model: _ResolvedSessionModel,
+    location: _SessionLocation,
+    active_tool_names: list[str] | None,
+    allowed_tool_names: list[str] | None,
+    provider_retry_settings: Mapping[str, object],
+    extension_runner: ExtensionRunner | None,
+) -> SessionLifecyclePort:
+    try:
+        return _invoke_session_factory(
+            services=runtime.services,
+            options=options,
+            resolved_model=resolved_model,
+            location=location,
+            active_tool_names=active_tool_names,
+            allowed_tool_names=allowed_tool_names,
+            provider_retry_settings=provider_retry_settings,
+            extension_runner=extension_runner,
+            operation_runtime=runtime.operation_runtime,
+            owns_operation_runtime=runtime.owns_operation_runtime,
+        )
+    except BaseException:
+        if runtime.owned_operation_runtime is not None:
+            runtime.owned_operation_runtime.close()
+        raise
+
+
+def create_agent_session_from_services(
+    raw_options: Mapping[str, object] | SessionBootstrapOptions,
+) -> CreateAgentSessionResult:
+    options = SessionBootstrapOptions.from_mapping(raw_options)
+    normalized = _normalize_required_session_services(options.services)
+    operation_runtime = _selected_operation_runtime(
+        options,
+        normalized.services,
+    )
+    location = _resolve_session_location(options, normalized.services)
+    resolved_model = _resolve_session_model(
+        options,
+        normalized.services,
+        location,
+    )
+    extensions_result = normalized.services.resource_loader.get_extensions()
     runtime = extensions_result.get("runtime")
-    memory_settings = services.settings_manager.get_memory_settings()
+    memory_settings = normalized.services.settings_manager.get_memory_settings()
     active_tool_names, allowed_tool_names = _resolve_tool_options(
         options,
         memory_enabled=memory_settings.enabled,
     )
-    provider_retry_settings = _provider_retry_settings(services.settings_manager)
-    owned_operation_runtime: OperationRuntime | None = None
-    if operation_runtime is None:
-        owned_operation_runtime = OperationRuntime.from_settings(
-            services.agent_dir,
-            services.settings_manager.get_operation_settings(),
-            heartbeat_interval_seconds=None,
-        )
-        operation_runtime = owned_operation_runtime
-        owns_operation_runtime = True
-        diagnostics = list(services.diagnostics)
-        recovery_report = getattr(operation_runtime, "recovery_report", None)
-        if recovery_report is not None and recovery_report.has_diagnostic:
-            diagnostics.append(recovery_report.as_dict())
-        services = replace(
-            services,
-            operation_runtime=operation_runtime,
-            diagnostics=tuple(diagnostics),
-        )
-        if isinstance(raw_services, dict):
-            raw_services["operationRuntime"] = operation_runtime
-            raw_services["diagnostics"] = [dict(item) for item in diagnostics]
-    try:
-        session_factory = services.session_factory or _default_session_factory
-        session = session_factory(
-            cwd=services.cwd,
-            agent_dir=services.agent_dir,
-            model=model,
-            thinking_level=thinking_level or "off",
-            scoped_models=options.scoped_models,
-            active_tool_names=active_tool_names,
-            allowed_tool_names=allowed_tool_names,
-            excluded_tool_names=options.exclude_tools,
-            transport=_call_or_none(
-                services.settings_manager, "getTransport", "get_transport"
-            ),
-            thinking_budgets=_call_or_none(
-                services.settings_manager,
-                "getThinkingBudgets",
-                "get_thinking_budgets",
-            ),
-            max_retry_delay_ms=_first_defined(
-                provider_retry_settings.get("maxRetryDelayMs"),
-                provider_retry_settings.get("max_retry_delay_ms"),
-            ),
-            tool_definitions=_tool_definitions_for_sdk(services, options),
-            convert_to_llm=_convert_to_llm_for_sdk(
-                services.settings_manager,
-                options.convert_to_llm,
-            ),
-            resource_loader=services.resource_loader,
-            settings_manager=services.settings_manager,
-            extension_runner=runtime if isinstance(runtime, ExtensionRunner) else None,
-            stream_fn=_stream_fn_for_sdk(
-                services.model_registry,
-                services.settings_manager,
-            ),
-            model_registry=services.model_registry,
-            session_index=services.session_catalog.index,
-            session_path=session_path,
-            parent_session_path=options.parent_session_path,
-            session_id=str(session_id) if session_id else None,
-            session_start_event=options.session_start_event,
-            defer_session_start=bool(options.defer_session_start),
-            model_role_bindings=options.model_role_bindings,
-            model_role_event_sink=options.model_role_event_sink,
-            operation_runtime=operation_runtime,
-            owns_operation_runtime=owns_operation_runtime,
-        )
-    except BaseException:
-        if owned_operation_runtime is not None:
-            owned_operation_runtime.close()
-        raise
-    _record_initial_session_state(session, model, thinking_level or "off", fresh_session)
+    provider_retry_settings = _provider_retry_settings(
+        normalized.services.settings_manager
+    )
+    resolved_runtime = _resolve_operation_runtime(
+        normalized.services,
+        operation_runtime,
+        normalized.mutable_legacy_services,
+    )
+    session = _create_session_with_runtime_cleanup(
+        runtime=resolved_runtime,
+        options=options,
+        resolved_model=resolved_model,
+        location=location,
+        active_tool_names=active_tool_names,
+        allowed_tool_names=allowed_tool_names,
+        provider_retry_settings=provider_retry_settings,
+        extension_runner=(
+            runtime if isinstance(runtime, ExtensionRunner) else None
+        ),
+    )
+    _record_initial_session_state(
+        session,
+        resolved_model.model,
+        resolved_model.thinking_level or "off",
+        location.fresh_session,
+    )
     return CreateAgentSessionResult(
         session=session,
-        extensions_result=services.resource_loader.get_extensions(),
-        model_fallback_message=model_fallback_message,
+        extensions_result=resolved_runtime.services.resource_loader.get_extensions(),
+        model_fallback_message=resolved_model.fallback_message,
     )
 
 
