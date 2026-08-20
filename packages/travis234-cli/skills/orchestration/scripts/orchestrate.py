@@ -3883,221 +3883,297 @@ def build_parser() -> JsonArgumentParser:
     return parser
 
 
+def _execute_run_or_task_command(
+    state: StateStore,
+    parsed: argparse.Namespace,
+) -> dict[str, object] | None:
+    command = parsed.command
+    if command == "run-create":
+        request = _read_private_request(
+            parsed.request_file,
+            consume=parsed.consume_request_file,
+        )
+        result = state.create_run(request, parsed.idempotency_key)
+        return envelope(
+            command,
+            result,
+            next_actions=("Create a Task in this Run before starting a Worker.",),
+        )
+    if command == "run-show":
+        return envelope(command, {"run": state.get_run(parsed.run_id)})
+    if command == "run-list":
+        return envelope(
+            command,
+            {"runs": state.list_runs(_bounded_limit(parsed.limit))},
+        )
+    if command == "task-create":
+        request = _read_private_request(
+            parsed.request_file,
+            consume=parsed.consume_request_file,
+        )
+        result = state.create_task(
+            parsed.run_id,
+            request,
+            parsed.idempotency_key,
+        )
+        return envelope(
+            command,
+            result,
+            next_actions=(
+                "Start a Worker only after confirming workspace ownership.",
+            ),
+        )
+    if command == "task-show":
+        return envelope(command, {"task": state.get_task(parsed.task_id)})
+    if command == "task-list":
+        return envelope(
+            command,
+            {"tasks": state.list_tasks(parsed.run_id, _bounded_limit(parsed.limit))},
+        )
+    return None
+
+
+def _execute_worker_command(
+    state: StateStore,
+    parsed: argparse.Namespace,
+) -> dict[str, object] | None:
+    command = parsed.command
+    if command == "worker-start":
+        request_json = _read_private_request(
+            parsed.request_file,
+            consume=parsed.consume_request_file,
+        )
+        request = worker_request_from_json(request_json, state)
+        worker = start_worker(
+            state,
+            parsed.task_id,
+            request,
+            parsed.idempotency_key,
+            max_workers=parsed.max_workers,
+        )
+        return envelope(
+            command,
+            {
+                "effect": worker.effect,
+                "taskId": parsed.task_id,
+                "worker": worker.to_dict(),
+            },
+            next_actions=(
+                "Start a Dispatch only after reviewing Worker ownership and readiness.",
+            ),
+        )
+    if command == "worker-show":
+        return envelope(
+            command,
+            {"worker": state.get_worker(parsed.worker_id).to_dict()},
+        )
+    if command == "worker-list":
+        workers = state.list_workers(
+            parsed.run_id,
+            _bounded_limit(parsed.limit),
+        )
+        return envelope(
+            command,
+            {"workers": [worker.to_dict() for worker in workers]},
+        )
+    return None
+
+
+def _execute_dispatch_command(
+    state: StateStore,
+    parsed: argparse.Namespace,
+) -> dict[str, object] | None:
+    command = parsed.command
+    if command == "dispatch-start":
+        request_json = _read_private_request(
+            parsed.request_file,
+            consume=parsed.consume_request_file,
+        )
+        request = dispatch_request_from_json(request_json, state)
+        dispatch = start_dispatch(
+            state,
+            parsed.task_id,
+            parsed.worker_id,
+            request,
+            parsed.idempotency_key,
+        )
+        receipt = dispatch_receipt(state, dispatch)
+        return envelope(
+            command,
+            {
+                "effect": dispatch.effect,
+                "dispatch": dispatch.to_dict(),
+                **receipt,
+            },
+            next_actions=(
+                (
+                    "Poll dispatch-wait briefly, then continue useful coordinator work."
+                    if receipt["monitoring"]
+                    else "Preserve the handoff identities; recover explicitly later if requested."
+                ),
+            ),
+        )
+    if command == "dispatch-show":
+        return envelope(command, show_dispatch(state, parsed.dispatch_id))
+    if command == "dispatch-wait":
+        return envelope(
+            command,
+            wait_dispatch(
+                state,
+                parsed.dispatch_id,
+                wait_seconds=parsed.wait_seconds,
+            ),
+        )
+    return None
+
+
+def _worker_capability() -> str:
+    capability = os.environ.get(ENV_DISPATCH_CAPABILITY)
+    if not isinstance(capability, str) or len(capability) < 32:
+        raise HelperError("capability_rejected", "Worker capability was rejected")
+    return capability
+
+
+def _execute_worker_report_command(
+    state: StateStore,
+    parsed: argparse.Namespace,
+) -> dict[str, object] | None:
+    command = parsed.command
+    if command in {"worker-complete", "worker-fail"}:
+        capability = _worker_capability()
+        request_json = _read_private_request(
+            parsed.request_file,
+            consume=parsed.consume_request_file,
+        )
+        expected_outcome = "succeeded" if command == "worker-complete" else "failed"
+        result = state.record_terminal(
+            parsed.dispatch_id,
+            capability,
+            request_json,
+            expected_outcome,
+            parsed.idempotency_key,
+        )
+        return envelope(
+            command,
+            result,
+            next_actions=("End the Worker turn after the terminal report.",),
+        )
+    if command == "message-send":
+        capability = _worker_capability()
+        request_json = _read_private_request(
+            parsed.request_file,
+            consume=parsed.consume_request_file,
+        )
+        result = state.send_worker_message(
+            parsed.dispatch_id,
+            capability,
+            request_json,
+            parsed.idempotency_key,
+        )
+        return envelope(
+            command,
+            result,
+            next_actions=("End the Worker turn after sending a blocking question.",),
+        )
+    return None
+
+
+def _execute_message_command(
+    state: StateStore,
+    parsed: argparse.Namespace,
+) -> dict[str, object] | None:
+    command = parsed.command
+    if command == "message-check":
+        return envelope(
+            command,
+            check_messages(
+                state,
+                parsed.run_id,
+                wait_seconds=parsed.wait_seconds,
+                limit=parsed.limit,
+            ),
+        )
+    if command == "message-ack":
+        return envelope(
+            command,
+            state.acknowledge_message(parsed.message_id, parsed.idempotency_key),
+        )
+    if command == "message-reply":
+        request_json = _read_private_request(
+            parsed.request_file,
+            consume=parsed.consume_request_file,
+        )
+        request = dispatch_request_from_json(request_json, state)
+        if request.parent_message_id is not None:
+            raise HelperError(
+                "invalid_request",
+                "Reply request cannot select another parent",
+            )
+        result = reply_to_message(
+            state,
+            parsed.message_id,
+            request,
+            parsed.idempotency_key,
+        )
+        return envelope(
+            command,
+            result,
+            next_actions=("Wait for the Worker to produce another durable Message.",),
+        )
+    return None
+
+
+def _execute_lifecycle_command(
+    state: StateStore,
+    parsed: argparse.Namespace,
+) -> dict[str, object] | None:
+    command = parsed.command
+    if command == "dispatch-cancel":
+        return envelope(
+            command,
+            cancel_dispatch(state, parsed.dispatch_id, parsed.idempotency_key),
+        )
+    if command == "dispatch-abandon":
+        return envelope(
+            command,
+            abandon_dispatch(state, parsed.dispatch_id, parsed.idempotency_key),
+        )
+    if command == "worker-retain":
+        return envelope(
+            command,
+            retain_worker(state, parsed.worker_id, parsed.idempotency_key),
+        )
+    if command == "worker-release":
+        return envelope(
+            command,
+            release_worker(state, parsed.worker_id, parsed.idempotency_key),
+        )
+    if command == "recover":
+        return envelope(
+            command,
+            recover_run(state, parsed.run_id, inspect_only=parsed.inspect_only),
+        )
+    return None
+
+
 def execute(arguments: Sequence[str]) -> dict[str, object]:
     if not arguments or any(argument in {"-h", "--help"} for argument in arguments):
         return guide()
     parsed = build_parser().parse_args(list(arguments))
-    command = parsed.command
-    if command == "guide":
+    if parsed.command == "guide":
         return guide()
     with StateStore.open() as state:
-        if command == "run-create":
-            request = _read_private_request(
-                parsed.request_file,
-                consume=parsed.consume_request_file,
-            )
-            result = state.create_run(request, parsed.idempotency_key)
-            return envelope(
-                command,
-                result,
-                next_actions=("Create a Task in this Run before starting a Worker.",),
-            )
-        if command == "run-show":
-            return envelope(command, {"run": state.get_run(parsed.run_id)})
-        if command == "run-list":
-            return envelope(command, {"runs": state.list_runs(_bounded_limit(parsed.limit))})
-        if command == "task-create":
-            request = _read_private_request(
-                parsed.request_file,
-                consume=parsed.consume_request_file,
-            )
-            result = state.create_task(parsed.run_id, request, parsed.idempotency_key)
-            return envelope(
-                command,
-                result,
-                next_actions=("Start a Worker only after confirming workspace ownership.",),
-            )
-        if command == "task-show":
-            return envelope(command, {"task": state.get_task(parsed.task_id)})
-        if command == "task-list":
-            return envelope(
-                command,
-                {"tasks": state.list_tasks(parsed.run_id, _bounded_limit(parsed.limit))},
-            )
-        if command == "worker-start":
-            request_json = _read_private_request(
-                parsed.request_file,
-                consume=parsed.consume_request_file,
-            )
-            request = worker_request_from_json(request_json, state)
-            worker = start_worker(
-                state,
-                parsed.task_id,
-                request,
-                parsed.idempotency_key,
-                max_workers=parsed.max_workers,
-            )
-            return envelope(
-                command,
-                {
-                    "effect": worker.effect,
-                    "taskId": parsed.task_id,
-                    "worker": worker.to_dict(),
-                },
-                next_actions=(
-                    "Start a Dispatch only after reviewing Worker ownership and readiness.",
-                ),
-            )
-        if command == "worker-show":
-            return envelope(command, {"worker": state.get_worker(parsed.worker_id).to_dict()})
-        if command == "worker-list":
-            return envelope(
-                command,
-                {
-                    "workers": [
-                        worker.to_dict()
-                        for worker in state.list_workers(
-                            parsed.run_id,
-                            _bounded_limit(parsed.limit),
-                        )
-                    ]
-                },
-            )
-        if command == "dispatch-start":
-            request_json = _read_private_request(
-                parsed.request_file,
-                consume=parsed.consume_request_file,
-            )
-            request = dispatch_request_from_json(request_json, state)
-            dispatch = start_dispatch(
-                state,
-                parsed.task_id,
-                parsed.worker_id,
-                request,
-                parsed.idempotency_key,
-            )
-            receipt = dispatch_receipt(state, dispatch)
-            return envelope(
-                command,
-                {
-                    "effect": dispatch.effect,
-                    "dispatch": dispatch.to_dict(),
-                    **receipt,
-                },
-                next_actions=(
-                    (
-                        "Poll dispatch-wait briefly, then continue useful coordinator work."
-                        if receipt["monitoring"]
-                        else "Preserve the handoff identities; recover explicitly later if requested."
-                    ),
-                ),
-            )
-        if command == "dispatch-show":
-            return envelope(command, show_dispatch(state, parsed.dispatch_id))
-        if command == "dispatch-wait":
-            return envelope(
-                command,
-                wait_dispatch(state, parsed.dispatch_id, wait_seconds=parsed.wait_seconds),
-            )
-        if command in {"worker-complete", "worker-fail"}:
-            capability = os.environ.get(ENV_DISPATCH_CAPABILITY)
-            if not isinstance(capability, str) or len(capability) < 32:
-                raise HelperError("capability_rejected", "Worker capability was rejected")
-            request_json = _read_private_request(
-                parsed.request_file,
-                consume=parsed.consume_request_file,
-            )
-            expected_outcome = "succeeded" if command == "worker-complete" else "failed"
-            result = state.record_terminal(
-                parsed.dispatch_id,
-                capability,
-                request_json,
-                expected_outcome,
-                parsed.idempotency_key,
-            )
-            return envelope(
-                command,
-                result,
-                next_actions=("End the Worker turn after the terminal report.",),
-            )
-        if command == "message-send":
-            capability = os.environ.get(ENV_DISPATCH_CAPABILITY)
-            if not isinstance(capability, str) or len(capability) < 32:
-                raise HelperError("capability_rejected", "Worker capability was rejected")
-            request_json = _read_private_request(
-                parsed.request_file,
-                consume=parsed.consume_request_file,
-            )
-            result = state.send_worker_message(
-                parsed.dispatch_id,
-                capability,
-                request_json,
-                parsed.idempotency_key,
-            )
-            return envelope(
-                command,
-                result,
-                next_actions=("End the Worker turn after sending a blocking question.",),
-            )
-        if command == "message-check":
-            return envelope(
-                command,
-                check_messages(
-                    state,
-                    parsed.run_id,
-                    wait_seconds=parsed.wait_seconds,
-                    limit=parsed.limit,
-                ),
-            )
-        if command == "message-ack":
-            return envelope(
-                command,
-                state.acknowledge_message(parsed.message_id, parsed.idempotency_key),
-            )
-        if command == "message-reply":
-            request_json = _read_private_request(
-                parsed.request_file,
-                consume=parsed.consume_request_file,
-            )
-            request = dispatch_request_from_json(request_json, state)
-            if request.parent_message_id is not None:
-                raise HelperError("invalid_request", "Reply request cannot select another parent")
-            result = reply_to_message(
-                state,
-                parsed.message_id,
-                request,
-                parsed.idempotency_key,
-            )
-            return envelope(
-                command,
-                result,
-                next_actions=("Wait for the Worker to produce another durable Message.",),
-            )
-        if command == "dispatch-cancel":
-            return envelope(
-                command,
-                cancel_dispatch(state, parsed.dispatch_id, parsed.idempotency_key),
-            )
-        if command == "dispatch-abandon":
-            return envelope(
-                command,
-                abandon_dispatch(state, parsed.dispatch_id, parsed.idempotency_key),
-            )
-        if command == "worker-retain":
-            return envelope(
-                command,
-                retain_worker(state, parsed.worker_id, parsed.idempotency_key),
-            )
-        if command == "worker-release":
-            return envelope(
-                command,
-                release_worker(state, parsed.worker_id, parsed.idempotency_key),
-            )
-        if command == "recover":
-            return envelope(
-                command,
-                recover_run(state, parsed.run_id, inspect_only=parsed.inspect_only),
-            )
+        for handler in (
+            _execute_run_or_task_command,
+            _execute_worker_command,
+            _execute_dispatch_command,
+            _execute_worker_report_command,
+            _execute_message_command,
+            _execute_lifecycle_command,
+        ):
+            result = handler(state, parsed)
+            if result is not None:
+                return result
     raise HelperError("invalid_arguments", "Command is not implemented")
 
 

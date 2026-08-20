@@ -32,12 +32,7 @@ def _triggers(workflow: dict) -> dict:
 
 
 def _run_commands(workflow: dict) -> list[str]:
-    return [
-        str(step["run"])
-        for job in workflow["jobs"].values()
-        for step in job.get("steps", [])
-        if "run" in step
-    ]
+    return [str(step["run"]) for job in workflow["jobs"].values() for step in job.get("steps", []) if "run" in step]
 
 
 def _package_name(requirement: str) -> str:
@@ -65,10 +60,8 @@ def test_source_ci_runs_locked_quality_root_adapter_npm_and_build_gates() -> Non
     assert "uv sync --locked --all-extras --dev" in joined
     assert "ruff check --select E9,F63,F7,F82 travis tests" in joined
     assert "uv run --locked --all-extras --dev pyright" in joined
-    assert (
-        "python scripts/check_python_complexity.py travis --max-complexity 25"
-        in joined
-    )
+    assert "python scripts/check_python_complexity.py travis --max-complexity 25" in joined
+    assert "python scripts/sync_packaged_resources.py --check" in joined
     assert "pytest -q -p no:cacheprovider tests" in joined
     assert "--project packages/travis234-mcp-adapter" in joined
     assert "packages/travis234-mcp-adapter/tests" in joined
@@ -98,9 +91,7 @@ def test_adapter_source_tests_lock_the_local_host_in_their_own_group() -> None:
 
     workflow, _source = _workflow()
     adapter_commands = "\n".join(
-        command
-        for command in _run_commands(workflow)
-        if "--project packages/travis234-mcp-adapter" in command
+        command for command in _run_commands(workflow) if "--project packages/travis234-mcp-adapter" in command
     )
     assert adapter_commands.count("--group source-test") == 2
     assert "--extra test" not in adapter_commands
@@ -147,7 +138,7 @@ def test_source_ci_runs_reproducible_statement_and_branch_coverage() -> None:
     evidence_index = joined.index("--record-automated-evidence")
 
     assert erase_index < run_index < combine_index < json_index < floor_index < evidence_index
-    assert "PYTHONDONTWRITEBYTECODE: \"1\"" in source
+    assert 'PYTHONDONTWRITEBYTECODE: "1"' in source
     assert "-q -p no:cacheprovider tests" in joined
     coverage_tokens = shlex.split(coverage_run)
     assert not (EPHEMERAL_UV_FLAGS & set(coverage_tokens))
@@ -178,9 +169,7 @@ def test_source_coverage_dependencies_are_owned_by_the_committed_root_lock() -> 
             for requirement in requirements
         ),
     ]
-    assert "travis234-mcp-adapter" not in {
-        _package_name(requirement) for requirement in published_requirements
-    }
+    assert "travis234-mcp-adapter" not in {_package_name(requirement) for requirement in published_requirements}
 
     coverage_requirements = [
         *published_requirements,
@@ -190,9 +179,7 @@ def test_source_coverage_dependencies_are_owned_by_the_committed_root_lock() -> 
     locked_names = {_package_name(package["name"]) for package in lock["package"]}
     assert {_package_name(requirement) for requirement in coverage_requirements} <= locked_names
 
-    locked_adapter = next(
-        package for package in lock["package"] if package["name"] == "travis234-mcp-adapter"
-    )
+    locked_adapter = next(package for package in lock["package"] if package["name"] == "travis234-mcp-adapter")
     locked_source = locked_adapter["source"]
     assert set(locked_source) == {"directory"}
     assert (ROOT / locked_source["directory"]).resolve() == ADAPTER_ROOT

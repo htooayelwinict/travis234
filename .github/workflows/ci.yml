@@ -39,6 +39,10 @@ jobs:
         run: >-
           uv run --locked --all-extras --dev
           python scripts/check_python_complexity.py travis --max-complexity 25
+      - name: Verify packaged resource mirrors
+        run: >-
+          uv run --locked --all-extras --dev
+          python scripts/sync_packaged_resources.py --check
       - name: Sync locked coverage environment
         run: uv sync --locked --all-extras --dev --group coverage-test
       - name: Run root tests with coverage

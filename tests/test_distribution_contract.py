@@ -7,6 +7,8 @@ import zipfile
 from email.parser import Parser
 from pathlib import Path
 
+from scripts.sync_packaged_resources import MANIFEST, canonical_resource_paths
+
 ROOT = Path(__file__).parents[1]
 
 
@@ -43,14 +45,10 @@ def test_release_versions_are_aligned() -> None:
     expected = "2.5.2"
     python_metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     adapter_metadata = tomllib.loads(
-        (ROOT / "packages/travis234-mcp-adapter/pyproject.toml").read_text(
-            encoding="utf-8"
-        )
+        (ROOT / "packages/travis234-mcp-adapter/pyproject.toml").read_text(encoding="utf-8")
     )
     workspace = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
-    npm_package = json.loads(
-        (ROOT / "packages/travis234-cli/package.json").read_text(encoding="utf-8")
-    )
+    npm_package = json.loads((ROOT / "packages/travis234-cli/package.json").read_text(encoding="utf-8"))
     config_source = (ROOT / "travis/coding_agent/config.py").read_text(encoding="utf-8")
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
@@ -67,9 +65,7 @@ def test_readme_explains_durable_orchestration_without_private_grammar() -> None
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "Every PyPI wheel includes four read-only fallback skills:" in readme
     assert "`coordination` for optional plain-language planning" in readme
-    section = readme.split("### Durable multi-Travis orchestration", 1)[1].split(
-        "## Managed processes", 1
-    )[0]
+    section = readme.split("### Durable multi-Travis orchestration", 1)[1].split("## Managed processes", 1)[0]
     normalized = " ".join(section.split())
     for value in (
         "ordinary language",
@@ -92,10 +88,13 @@ def test_readme_explains_durable_orchestration_without_private_grammar() -> None
 
 
 def test_release_locks_match_project_metadata() -> None:
-    assert _locked_project_version(
-        ROOT / "packages/travis234-mcp-adapter/uv.lock",
-        "travis234-mcp-adapter",
-    ) == "0.2.0"
+    assert (
+        _locked_project_version(
+            ROOT / "packages/travis234-mcp-adapter/uv.lock",
+            "travis234-mcp-adapter",
+        )
+        == "0.2.0"
+    )
 
 
 def test_retired_ghost_addon_has_no_active_product_surface() -> None:
@@ -151,51 +150,39 @@ def test_root_wheel_distribution_excludes_optional_mcp_packages(tmp_path: Path) 
     sdist = next(output.glob("*.tar.gz"))
     with tarfile.open(sdist, "r:gz") as archive:
         sdist_names = archive.getnames()
-    assert any(
-        name.endswith("/travis/resources/roles/coordination-planner.json")
-        for name in sdist_names
-    )
+    assert any(name.endswith("/travis/resources/roles/coordination-planner.json") for name in sdist_names)
 
 
 def test_packaged_builtin_skills_match_npm_distribution() -> None:
-    python_skills = ROOT / "travis" / "resources" / "skills"
-    npm_skills = ROOT / "packages" / "travis234-cli" / "skills"
+    source_root = ROOT / "travis/resources"
+    destination_root = ROOT / "packages/travis234-cli"
+    expected = {source for source, _destination in MANIFEST if source.startswith("skills/")}
 
-    python_files = {
-        path.relative_to(python_skills).as_posix(): path.read_bytes()
-        for path in python_skills.rglob("*")
-        if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
-    }
-    npm_files = {
-        path.relative_to(npm_skills).as_posix(): path.read_bytes()
-        for path in npm_skills.rglob("*")
-        if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
-    }
-    assert npm_files == python_files
+    assert {path for path in canonical_resource_paths(source_root) if path.startswith("skills/")} == expected
+    assert {path for path in canonical_resource_paths(destination_root) if path.startswith("skills/")} == expected
+    for source, destination in MANIFEST:
+        if source.startswith("skills/"):
+            assert (source_root / source).read_bytes() == (destination_root / destination).read_bytes()
     assert {
-        "coordination/SKILL.md",
-        "coordination/references/planning-contract.md",
-        "orchestration/SKILL.md",
-        "orchestration/references/protocol.md",
-        "orchestration/scripts/orchestrate.py",
-    } <= python_files.keys()
+        "skills/coordination/SKILL.md",
+        "skills/coordination/references/planning-contract.md",
+        "skills/orchestration/SKILL.md",
+        "skills/orchestration/references/protocol.md",
+        "skills/orchestration/scripts/orchestrate.py",
+    } <= expected
 
 
 def test_packaged_builtin_roles_match_npm_distribution() -> None:
-    python_roles = ROOT / "travis" / "resources" / "roles"
-    npm_roles = ROOT / "packages" / "travis234-cli" / "roles"
+    source_root = ROOT / "travis/resources"
+    destination_root = ROOT / "packages/travis234-cli"
+    expected = {source for source, _destination in MANIFEST if source.startswith("roles/")}
 
-    python_files = {
-        path.relative_to(python_roles).as_posix(): path.read_bytes()
-        for path in python_roles.rglob("*.json")
-    }
-    npm_files = {
-        path.relative_to(npm_roles).as_posix(): path.read_bytes()
-        for path in npm_roles.rglob("*.json")
-    }
-
-    assert npm_files == python_files
-    assert "coordination-planner.json" in python_files
+    assert {path for path in canonical_resource_paths(source_root) if path.startswith("roles/")} == expected
+    assert {path for path in canonical_resource_paths(destination_root) if path.startswith("roles/")} == expected
+    for source, destination in MANIFEST:
+        if source.startswith("roles/"):
+            assert (source_root / source).read_bytes() == (destination_root / destination).read_bytes()
+    assert "roles/coordination-planner.json" in expected
 
 
 def test_repository_has_one_sandbox_launcher_implementation() -> None:
