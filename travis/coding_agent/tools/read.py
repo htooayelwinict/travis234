@@ -19,6 +19,7 @@ from travis.coding_agent.tools.path_utils import format_path_relative_to_cwd, re
 from travis.coding_agent.tools.truncate import (
     DEFAULT_MAX_BYTES,
     DEFAULT_MAX_LINES,
+    TruncationResult,
     format_size,
     truncate_head,
     truncation_to_details,
@@ -138,6 +139,287 @@ def _prepare_read_arguments(
     return prepared
 
 
+@dataclass(frozen=True)
+class _ReadPagination:
+    path: str
+    offset: int | None
+    limit: int | None
+    byte_mode: bool
+    byte_offset: int | None
+    byte_limit: int | None
+    is_artifact: bool
+
+
+@dataclass(frozen=True)
+class _ReadLineSelection:
+    lines: list[str]
+    selected: str
+    start_line: int
+    start_line_display: int
+    user_limited_lines: int | None
+
+
+@dataclass(frozen=True)
+class _RenderedReadText:
+    output: str
+    details: dict[str, object] | None
+
+
+def _normalize_read_byte_range(
+    args: dict[str, object],
+    byte_mode: bool,
+) -> tuple[int | None, int | None]:
+    byte_offset = _number_arg(args.get("byte_offset")) if byte_mode else None
+    byte_limit = _number_arg(args.get("byte_limit")) if byte_mode else None
+    if not byte_mode:
+        return byte_offset, byte_limit
+    byte_offset = 0 if byte_offset is None else byte_offset
+    byte_limit = ARTIFACT_READ_BYTE_LIMIT if byte_limit is None else byte_limit
+    if byte_offset < 0:
+        raise ValueError("byte_offset must be non-negative")
+    if byte_limit <= 0 or byte_limit > ARTIFACT_READ_BYTE_LIMIT:
+        raise ValueError(f"byte_limit must be between 1 and {ARTIFACT_READ_BYTE_LIMIT}")
+    return byte_offset, byte_limit
+
+
+def _resolve_read_pagination(
+    args: dict[str, object],
+    path: str,
+    artifacts: ArtifactRegistry | None,
+) -> _ReadPagination:
+    offset = _number_arg(args.get("offset"))
+    limit = _number_arg(args.get("limit"))
+    byte_mode = "byte_offset" in args or "byte_limit" in args
+    line_mode = "offset" in args or "limit" in args
+    if byte_mode and line_mode:
+        raise ValueError("Cannot combine line pagination (offset/limit) with byte pagination (byte_offset/byte_limit)")
+    is_artifact = artifacts.is_readable_reference(path) if artifacts is not None else False
+    if is_artifact and line_mode:
+        raise ValueError(
+            f"Virtual artifacts require byte pagination. Retry read with path={path}, "
+            f"byte_offset=0, byte_limit={ARTIFACT_READ_BYTE_LIMIT}; do not use offset/limit."
+        )
+    if is_artifact and not byte_mode:
+        byte_mode = True
+    byte_offset, byte_limit = _normalize_read_byte_range(args, byte_mode)
+    return _ReadPagination(
+        path=path,
+        offset=offset,
+        limit=limit,
+        byte_mode=byte_mode,
+        byte_offset=byte_offset,
+        byte_limit=byte_limit,
+        is_artifact=is_artifact,
+    )
+
+
+def _read_durable_artifact(
+    artifacts: ArtifactRegistry | None,
+    pagination: _ReadPagination,
+) -> AgentToolResult | None:
+    if artifacts is None or not pagination.is_artifact or not pagination.byte_mode:
+        return None
+    resource_resolution = artifacts.resolve_resource_read(
+        pagination.path,
+        byte_offset=pagination.byte_offset or 0,
+        byte_limit=pagination.byte_limit or ARTIFACT_READ_BYTE_LIMIT,
+    )
+    if resource_resolution is not None:
+        if not resource_resolution.available:
+            raise ValueError(
+                f"Artifact {pagination.path} is unavailable ({resource_resolution.error_code or 'unavailable'})"
+            )
+        assert pagination.byte_offset is not None
+        return _render_durable_artifact_page(resource_resolution, pagination.byte_offset)
+    return None
+
+
+def _resolve_read_target(
+    cwd: str,
+    workspace: WorkspaceCapability,
+    artifacts: ArtifactRegistry | None,
+    pagination: _ReadPagination,
+) -> str:
+    artifact_path = (
+        artifacts.resolve_read(pagination.path) if artifacts is not None and pagination.is_artifact else None
+    )
+    if artifact_path is not None:
+        return str(artifact_path)
+    try:
+        absolute_path = str(workspace.resolve(pagination.path, access="read"))
+        absolute_path = resolve_read_path(absolute_path, cwd)
+        workspace.resolve(absolute_path, access="read")
+        return absolute_path
+    except CapabilityViolation:
+        raise
+
+
+def _image_note(
+    mime_type: str,
+    non_vision_note: str | None,
+) -> str:
+    note = f"Read image file [{mime_type}]"
+    if non_vision_note:
+        note += f"\n{non_vision_note}"
+    return note
+
+
+def _resized_image_result(
+    resized: ReadImageResizeResult,
+    non_vision_note: str | None,
+) -> AgentToolResult:
+    note = f"Read image file [{resized.mime_type}]"
+    dimension_note = _format_dimension_note(resized)
+    if dimension_note:
+        note += f"\n{dimension_note}"
+    if non_vision_note:
+        note += f"\n{non_vision_note}"
+    return AgentToolResult(
+        content=[
+            TextContent(text=note),
+            ImageContent(data=resized.data, mime_type=resized.mime_type),
+        ],
+        details=None,
+    )
+
+
+def _read_image_result(
+    operations: ReadOperations,
+    absolute_path: str,
+    mime_type: str,
+    auto_resize_images: bool,
+    image_resizer: ResizeImage,
+    signal: object | None,
+    ctx: ToolContext | None,
+) -> AgentToolResult:
+    data = operations.read_file(absolute_path)
+    _check_aborted(signal)
+    non_vision_note = _get_non_vision_image_note(ctx.model if ctx else None)
+    if not auto_resize_images:
+        return AgentToolResult(
+            content=[
+                TextContent(text=_image_note(mime_type, non_vision_note)),
+                ImageContent(data=base64.b64encode(data).decode("ascii"), mime_type=mime_type),
+            ],
+            details=None,
+        )
+    resized = image_resizer(data, mime_type)
+    _check_aborted(signal)
+    if resized:
+        return _resized_image_result(resized, non_vision_note)
+    text = f"Read image file [{mime_type}]\n[Image omitted: could not be resized below the inline image size limit.]"
+    if non_vision_note:
+        text += f"\n{non_vision_note}"
+    return AgentToolResult(content=[TextContent(text=text)], details=None)
+
+
+def _render_read_byte_page(
+    data: bytes,
+    byte_offset: int | None,
+    byte_limit: int | None,
+) -> AgentToolResult:
+    total_bytes = len(data)
+    assert byte_offset is not None and byte_limit is not None
+    if byte_offset > total_bytes:
+        raise ValueError(f"byte_offset {byte_offset} is beyond end of file ({total_bytes} bytes total)")
+    end_offset = min(total_bytes, byte_offset + byte_limit)
+    output = data[byte_offset:end_offset].decode("utf-8", errors="replace")
+    if end_offset < total_bytes:
+        output += (
+            f"\n\n[Showing bytes {byte_offset}-{end_offset - 1} of {total_bytes}. "
+            f"Use byte_offset={end_offset} to continue.]"
+        )
+    else:
+        output += f"\n\n[Showing bytes {byte_offset}-{end_offset - 1} of {total_bytes}. End of file.]"
+    return AgentToolResult(
+        content=[TextContent(text=output)],
+        details={
+            "byteRange": {
+                "start": byte_offset,
+                "endExclusive": end_offset,
+                "totalBytes": total_bytes,
+            }
+        },
+    )
+
+
+def _select_read_lines(
+    data: bytes,
+    offset: int | None,
+    limit: int | None,
+) -> _ReadLineSelection:
+    text_content = data.decode("utf-8", errors="replace")
+    all_lines = text_content.split("\n")
+    start_line = max(0, offset - 1) if offset else 0
+    start_line_display = start_line + 1
+    if start_line >= len(all_lines):
+        raise ValueError(f"Offset {offset} is beyond end of file ({len(all_lines)} lines total)")
+    user_limited_lines = None
+    if limit is not None:
+        end_line = min(start_line + limit, len(all_lines))
+        selected = "\n".join(all_lines[start_line:end_line])
+        user_limited_lines = end_line - start_line
+    else:
+        selected = "\n".join(all_lines[start_line:])
+    return _ReadLineSelection(
+        lines=all_lines,
+        selected=selected,
+        start_line=start_line,
+        start_line_display=start_line_display,
+        user_limited_lines=user_limited_lines,
+    )
+
+
+def _render_truncated_read_lines(
+    path: str,
+    selection: _ReadLineSelection,
+    truncation: TruncationResult,
+) -> _RenderedReadText:
+    if truncation.first_line_exceeds_limit:
+        first_size = format_size(len(selection.lines[selection.start_line].encode("utf-8")))
+        output = (
+            f"[Line {selection.start_line_display} is {first_size}, exceeds "
+            f"{format_size(DEFAULT_MAX_BYTES)} limit. Use bash: sed -n "
+            f"'{selection.start_line_display}p' {path} | head -c {DEFAULT_MAX_BYTES}]"
+        )
+        return _RenderedReadText(output, {"truncation": truncation_to_details(truncation)})
+    end_line_display = selection.start_line_display + truncation.output_lines - 1
+    next_offset = end_line_display + 1
+    output = truncation.content
+    if truncation.truncated_by == "lines":
+        output += (
+            f"\n\n[Showing lines {selection.start_line_display}-{end_line_display} "
+            f"of {len(selection.lines)}. Use offset={next_offset} to continue.]"
+        )
+    else:
+        output += (
+            f"\n\n[Showing lines {selection.start_line_display}-{end_line_display} "
+            f"of {len(selection.lines)} ({format_size(DEFAULT_MAX_BYTES)} limit). "
+            f"Use offset={next_offset} to continue.]"
+        )
+    return _RenderedReadText(output, {"truncation": truncation_to_details(truncation)})
+
+
+def _render_read_lines(
+    data: bytes,
+    path: str,
+    offset: int | None,
+    limit: int | None,
+) -> _RenderedReadText:
+    selection = _select_read_lines(data, offset, limit)
+    truncation = truncate_head(selection.selected)
+    if truncation.first_line_exceeds_limit or truncation.truncated:
+        return _render_truncated_read_lines(path, selection, truncation)
+    if selection.user_limited_lines is not None and selection.start_line + selection.user_limited_lines < len(
+        selection.lines
+    ):
+        remaining = len(selection.lines) - (selection.start_line + selection.user_limited_lines)
+        next_offset = selection.start_line + selection.user_limited_lines + 1
+        output = f"{truncation.content}\n\n[{remaining} more lines in file. Use offset={next_offset} to continue.]"
+        return _RenderedReadText(output, None)
+    return _RenderedReadText(truncation.content, None)
+
+
 def _execute_read(
     cwd: str,
     workspace: WorkspaceCapability,
@@ -153,173 +435,42 @@ def _execute_read(
 ):
     _check_aborted(signal)
     path = args["path"]
-    offset = _number_arg(args.get("offset"))
-    limit = _number_arg(args.get("limit"))
-    byte_mode = "byte_offset" in args or "byte_limit" in args
-    line_mode = "offset" in args or "limit" in args
-    if byte_mode and line_mode:
-        raise ValueError("Cannot combine line pagination (offset/limit) with byte pagination (byte_offset/byte_limit)")
-    is_artifact = artifacts.is_readable_reference(path) if artifacts is not None else False
-    if is_artifact and line_mode:
-        raise ValueError(
-            f"Virtual artifacts require byte pagination. Retry read with path={path}, "
-            f"byte_offset=0, byte_limit={ARTIFACT_READ_BYTE_LIMIT}; do not use offset/limit."
-        )
-    if is_artifact and not byte_mode:
-        byte_mode = True
-    byte_offset = _number_arg(args.get("byte_offset")) if byte_mode else None
-    byte_limit = _number_arg(args.get("byte_limit")) if byte_mode else None
-    if byte_mode:
-        byte_offset = 0 if byte_offset is None else byte_offset
-        byte_limit = ARTIFACT_READ_BYTE_LIMIT if byte_limit is None else byte_limit
-        if byte_offset < 0:
-            raise ValueError("byte_offset must be non-negative")
-        if byte_limit <= 0 or byte_limit > ARTIFACT_READ_BYTE_LIMIT:
-            raise ValueError(f"byte_limit must be between 1 and {ARTIFACT_READ_BYTE_LIMIT}")
-    resource_resolution = (
-        artifacts.resolve_resource_read(
-            path,
-            byte_offset=byte_offset or 0,
-            byte_limit=byte_limit or ARTIFACT_READ_BYTE_LIMIT,
-        )
-        if artifacts is not None and is_artifact and byte_mode
-        else None
-    )
-    if resource_resolution is not None:
-        if not resource_resolution.available:
-            raise ValueError(
-                f"Artifact {path} is unavailable ({resource_resolution.error_code or 'unavailable'})"
-            )
-        assert byte_offset is not None
-        return _render_durable_artifact_page(resource_resolution, byte_offset)
+    pagination = _resolve_read_pagination(args, path, artifacts)
+    durable_result = _read_durable_artifact(artifacts, pagination)
+    if durable_result is not None:
+        return durable_result
 
-    artifact_path = artifacts.resolve_read(path) if artifacts is not None and is_artifact else None
-    if artifact_path is not None:
-        absolute_path = str(artifact_path)
-    else:
-        try:
-            absolute_path = str(workspace.resolve(path, access="read"))
-            absolute_path = resolve_read_path(absolute_path, cwd)
-            workspace.resolve(absolute_path, access="read")
-        except CapabilityViolation:
-            raise
+    absolute_path = _resolve_read_target(cwd, workspace, artifacts, pagination)
     _check_aborted(signal)
     operations.access(absolute_path)
     _check_aborted(signal)
     mime_type = operations.detect_image_mime_type(absolute_path) if operations.detect_image_mime_type else None
     _check_aborted(signal)
     if mime_type:
-        data = operations.read_file(absolute_path)
-        _check_aborted(signal)
-        non_vision_note = _get_non_vision_image_note(ctx.model if ctx else None)
-        if auto_resize_images:
-            resized = image_resizer(data, mime_type)
-            _check_aborted(signal)
-            if not resized:
-                text = (
-                    f"Read image file [{mime_type}]\n"
-                    "[Image omitted: could not be resized below the inline image size limit.]"
-                )
-                if non_vision_note:
-                    text += f"\n{non_vision_note}"
-                return AgentToolResult(content=[TextContent(text=text)], details=None)
-            note = f"Read image file [{resized.mime_type}]"
-            dimension_note = _format_dimension_note(resized)
-            if dimension_note:
-                note += f"\n{dimension_note}"
-            if non_vision_note:
-                note += f"\n{non_vision_note}"
-            return AgentToolResult(
-                content=[
-                    TextContent(text=note),
-                    ImageContent(data=resized.data, mime_type=resized.mime_type),
-                ],
-                details=None,
-            )
-        note = f"Read image file [{mime_type}]"
-        if non_vision_note:
-            note += f"\n{non_vision_note}"
-        return AgentToolResult(
-            content=[
-                TextContent(text=note),
-                ImageContent(data=base64.b64encode(data).decode("ascii"), mime_type=mime_type),
-            ],
-            details=None,
+        return _read_image_result(
+            operations,
+            absolute_path,
+            mime_type,
+            auto_resize_images,
+            image_resizer,
+            signal,
+            ctx,
         )
     data = operations.read_file(absolute_path)
     _check_aborted(signal)
-    if byte_mode:
-        total_bytes = len(data)
-        assert byte_offset is not None and byte_limit is not None
-        if byte_offset > total_bytes:
-            raise ValueError(f"byte_offset {byte_offset} is beyond end of file ({total_bytes} bytes total)")
-        end_offset = min(total_bytes, byte_offset + byte_limit)
-        output = data[byte_offset:end_offset].decode("utf-8", errors="replace")
-        if end_offset < total_bytes:
-            output += (
-                f"\n\n[Showing bytes {byte_offset}-{end_offset - 1} of {total_bytes}. "
-                f"Use byte_offset={end_offset} to continue.]"
-            )
-        else:
-            output += f"\n\n[Showing bytes {byte_offset}-{end_offset - 1} of {total_bytes}. End of file.]"
-        return AgentToolResult(
-            content=[TextContent(text=output)],
-            details={
-                "byteRange": {
-                    "start": byte_offset,
-                    "endExclusive": end_offset,
-                    "totalBytes": total_bytes,
-                }
-            },
+    if pagination.byte_mode:
+        return _render_read_byte_page(
+            data,
+            pagination.byte_offset,
+            pagination.byte_limit,
         )
 
-    text_content = data.decode("utf-8", errors="replace")
-    all_lines = text_content.split("\n")
-    total_file_lines = len(all_lines)
-    start_line = max(0, offset - 1) if offset else 0
-    start_line_display = start_line + 1
-    if start_line >= len(all_lines):
-        raise ValueError(f"Offset {offset} is beyond end of file ({len(all_lines)} lines total)")
-
-    user_limited_lines = None
-    if limit is not None:
-        end_line = min(start_line + limit, len(all_lines))
-        selected = "\n".join(all_lines[start_line:end_line])
-        user_limited_lines = end_line - start_line
-    else:
-        selected = "\n".join(all_lines[start_line:])
-
-    truncation = truncate_head(selected)
-    if truncation.first_line_exceeds_limit:
-        first_size = format_size(len(all_lines[start_line].encode("utf-8")))
-        output = (
-            f"[Line {start_line_display} is {first_size}, exceeds {format_size(DEFAULT_MAX_BYTES)} limit. "
-            f"Use bash: sed -n '{start_line_display}p' {path} | head -c {DEFAULT_MAX_BYTES}]"
-        )
-        details = {"truncation": truncation_to_details(truncation)}
-    elif truncation.truncated:
-        end_line_display = start_line_display + truncation.output_lines - 1
-        next_offset = end_line_display + 1
-        output = truncation.content
-        if truncation.truncated_by == "lines":
-            output += f"\n\n[Showing lines {start_line_display}-{end_line_display} of {total_file_lines}. Use offset={next_offset} to continue.]"
-        else:
-            output += (
-                f"\n\n[Showing lines {start_line_display}-{end_line_display} of {total_file_lines} "
-                f"({format_size(DEFAULT_MAX_BYTES)} limit). Use offset={next_offset} to continue.]"
-            )
-        details = {"truncation": truncation_to_details(truncation)}
-    elif user_limited_lines is not None and start_line + user_limited_lines < len(all_lines):
-        remaining = len(all_lines) - (start_line + user_limited_lines)
-        next_offset = start_line + user_limited_lines + 1
-        output = f"{truncation.content}\n\n[{remaining} more lines in file. Use offset={next_offset} to continue.]"
-        details = None
-    else:
-        output = truncation.content
-        details = None
-
+    rendered = _render_read_lines(data, path, pagination.offset, pagination.limit)
     _check_aborted(signal)
-    return AgentToolResult(content=[TextContent(text=output)], details=details)
+    return AgentToolResult(
+        content=[TextContent(text=rendered.output)],
+        details=rendered.details,
+    )
 
 
 def _render_durable_artifact_page(resolution, byte_offset: int) -> AgentToolResult:
