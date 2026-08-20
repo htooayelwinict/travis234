@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-import threading
 import os
 import re
+import threading
+from collections.abc import Callable, Mapping, MutableMapping
 from dataclasses import replace
+from typing import Protocol
 from urllib.parse import urlsplit
 
 import httpx
@@ -26,6 +28,112 @@ from travis.ai.providers.streaming_json import _parse_streaming_json
 from travis.ai.types import Context, ErrorEvent, Model
 
 PROVIDER_API = "openai-completions"
+
+
+class _BedrockEventRegistry(Protocol):
+    def register(
+        self,
+        event_name: str,
+        callback: Callable[..., None],
+    ) -> object: ...
+
+
+class _BedrockClientMeta(Protocol):
+    @property
+    def events(self) -> _BedrockEventRegistry: ...
+
+
+class _BedrockHeaderClient(Protocol):
+    @property
+    def meta(self) -> _BedrockClientMeta: ...
+
+
+class _BedrockHttpRequest(Protocol):
+    headers: MutableMapping[str, str]
+
+
+def _bedrock_client_target(
+    options: object | None,
+    model: Model,
+    request_url: str,
+) -> tuple[str, str]:
+    region = str(
+        getattr(options, "region", None)
+        or os.environ.get("AWS_REGION")
+        or os.environ.get("AWS_DEFAULT_REGION")
+        or ""
+    ).strip()
+    if not region and model.id.startswith("arn:"):
+        arn_parts = model.id.split(":", 5)
+        if len(arn_parts) > 3:
+            region = arn_parts[3]
+    parsed_url = urlsplit(request_url)
+    if not region:
+        match = re.match(
+            r"^bedrock-runtime(?:-fips)?\.([a-z0-9-]+)\.amazonaws\.com(?:\.cn)?$",
+            parsed_url.hostname or "",
+        )
+        if match:
+            region = match.group(1)
+    region = region or "us-east-1"
+    return region, f"{parsed_url.scheme}://{parsed_url.netloc}"
+
+
+def _bedrock_boto_config(timeout_seconds: float | None) -> dict[str, object]:
+    config: dict[str, object] = {
+        "retries": {"max_attempts": 2, "mode": "standard"},
+    }
+    if timeout_seconds is not None:
+        config["connect_timeout"] = timeout_seconds
+        config["read_timeout"] = timeout_seconds
+    return config
+
+
+def _register_bedrock_custom_headers(
+    client: _BedrockHeaderClient,
+    headers: Mapping[str, str],
+) -> None:
+    custom_headers = {
+        key: value
+        for key, value in headers.items()
+        if key.lower() not in {"authorization", "content-type", "host"}
+        and not key.lower().startswith("x-amz-")
+    }
+    if not custom_headers:
+        return
+
+    def add_custom_headers(
+        http_request: _BedrockHttpRequest,
+        **_kwargs: object,
+    ) -> None:
+        for key, value in custom_headers.items():
+            http_request.headers[key] = value
+
+    client.meta.events.register(
+        "before-sign.bedrock-runtime.ConverseStream",
+        add_custom_headers,
+    )
+
+
+def _notify_bedrock_response(
+    options: object | None,
+    response: object,
+    model: Model,
+) -> None:
+    on_response = getattr(options, "on_response", None) if options is not None else None
+    metadata = response.get("ResponseMetadata") if isinstance(response, dict) else None
+    if not callable(on_response) or not isinstance(metadata, dict):
+        return
+    response_headers = metadata.get("HTTPHeaders")
+    settle_callback(
+        on_response(
+            {
+                "status": int(metadata.get("HTTPStatusCode") or 200),
+                "headers": dict(response_headers) if isinstance(response_headers, dict) else {},
+            },
+            model,
+        )
+    )
 
 
 class TravisProvider:
@@ -107,58 +215,17 @@ class TravisProvider:
         except ImportError as exc:  # pragma: no cover - package dependency guard
             raise RuntimeError("Bedrock support requires the boto3 runtime dependency") from exc
 
-        region = str(getattr(options, "region", None) or os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "").strip()
-        if not region and model.id.startswith("arn:"):
-            arn_parts = model.id.split(":", 5)
-            if len(arn_parts) > 3:
-                region = arn_parts[3]
-        parsed_url = urlsplit(request.url)
-        if not region:
-            match = re.match(r"^bedrock-runtime(?:-fips)?\.([a-z0-9-]+)\.amazonaws\.com(?:\.cn)?$", parsed_url.hostname or "")
-            if match:
-                region = match.group(1)
-        region = region or "us-east-1"
-        endpoint_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
-        boto_config: dict[str, object] = {
-            "retries": {"max_attempts": 2, "mode": "standard"},
-        }
-        if request.timeout_seconds is not None:
-            boto_config["connect_timeout"] = request.timeout_seconds
-            boto_config["read_timeout"] = request.timeout_seconds
+        region, endpoint_url = _bedrock_client_target(options, model, request.url)
         client = boto3.client(
             "bedrock-runtime",
             region_name=region,
             endpoint_url=endpoint_url,
-            config=Config(**boto_config),
+            config=Config(**_bedrock_boto_config(request.timeout_seconds)),
         )
-
-        custom_headers = {
-            key: value
-            for key, value in request.headers.items()
-            if key.lower() not in {"authorization", "content-type", "host"}
-            and not key.lower().startswith("x-amz-")
-        }
-        if custom_headers:
-            def add_custom_headers(http_request, **_kwargs):
-                for key, value in custom_headers.items():
-                    http_request.headers[key] = value
-
-            client.meta.events.register("before-sign.bedrock-runtime.ConverseStream", add_custom_headers)
+        _register_bedrock_custom_headers(client, request.headers)
 
         response = client.converse_stream(modelId=model.id, **dict(request.body))
-        on_response = getattr(options, "on_response", None) if options is not None else None
-        metadata = response.get("ResponseMetadata") if isinstance(response, dict) else None
-        if callable(on_response) and isinstance(metadata, dict):
-            response_headers = metadata.get("HTTPHeaders")
-            settle_callback(
-                on_response(
-                    {
-                        "status": int(metadata.get("HTTPStatusCode") or 200),
-                        "headers": dict(response_headers) if isinstance(response_headers, dict) else {},
-                    },
-                    model,
-                )
-            )
+        _notify_bedrock_response(options, response, model)
         event_stream = response.get("stream") if isinstance(response, dict) else None
         if event_stream is None:
             raise RuntimeError("Bedrock ConverseStream returned no event stream")
