@@ -45,68 +45,76 @@ class _AnsiCodeTracker:
                 index += 1
                 continue
 
-            if code in {38, 48}:
-                if index + 2 < len(parts) and parts[index + 1] == "5":
-                    color_code = ";".join(parts[index : index + 3])
-                    if code == 38:
-                        self.fg_color = color_code
-                    else:
-                        self.bg_color = color_code
-                    index += 3
-                    continue
-                if index + 4 < len(parts) and parts[index + 1] == "2":
-                    color_code = ";".join(parts[index : index + 5])
-                    if code == 38:
-                        self.fg_color = color_code
-                    else:
-                        self.bg_color = color_code
-                    index += 5
-                    continue
-
-            if code == 0:
-                self._reset()
-            elif code == 1:
-                self.bold = True
-            elif code == 2:
-                self.dim = True
-            elif code == 3:
-                self.italic = True
-            elif code == 4:
-                self.underline = True
-            elif code == 5:
-                self.blink = True
-            elif code == 7:
-                self.inverse = True
-            elif code == 8:
-                self.hidden = True
-            elif code == 9:
-                self.strikethrough = True
-            elif code == 21:
-                self.bold = False
-            elif code == 22:
-                self.bold = False
-                self.dim = False
-            elif code == 23:
-                self.italic = False
-            elif code == 24:
-                self.underline = False
-            elif code == 25:
-                self.blink = False
-            elif code == 27:
-                self.inverse = False
-            elif code == 28:
-                self.hidden = False
-            elif code == 29:
-                self.strikethrough = False
-            elif code == 39:
-                self.fg_color = None
-            elif code == 49:
-                self.bg_color = None
-            elif 30 <= code <= 37 or 90 <= code <= 97:
-                self.fg_color = str(code)
-            elif 40 <= code <= 47 or 100 <= code <= 107:
-                self.bg_color = str(code)
+            next_index = self._process_extended_color(parts, index, code)
+            if next_index is not None:
+                index = next_index
+                continue
+            self._process_style_code(code)
             index += 1
+
+    def _process_extended_color(self, parts: list[str], index: int, code: int) -> int | None:
+        if code not in {38, 48}:
+            return None
+        if index + 2 < len(parts) and parts[index + 1] == "5":
+            color_code = ";".join(parts[index : index + 3])
+            if code == 38:
+                self.fg_color = color_code
+            else:
+                self.bg_color = color_code
+            return index + 3
+        if index + 4 < len(parts) and parts[index + 1] == "2":
+            color_code = ";".join(parts[index : index + 5])
+            if code == 38:
+                self.fg_color = color_code
+            else:
+                self.bg_color = color_code
+            return index + 5
+        return None
+
+    def _process_style_code(self, code: int) -> None:
+        if code == 0:
+            self._reset()
+        elif code == 1:
+            self.bold = True
+        elif code == 2:
+            self.dim = True
+        elif code == 3:
+            self.italic = True
+        elif code == 4:
+            self.underline = True
+        elif code == 5:
+            self.blink = True
+        elif code == 7:
+            self.inverse = True
+        elif code == 8:
+            self.hidden = True
+        elif code == 9:
+            self.strikethrough = True
+        elif code == 21:
+            self.bold = False
+        elif code == 22:
+            self.bold = False
+            self.dim = False
+        elif code == 23:
+            self.italic = False
+        elif code == 24:
+            self.underline = False
+        elif code == 25:
+            self.blink = False
+        elif code == 27:
+            self.inverse = False
+        elif code == 28:
+            self.hidden = False
+        elif code == 29:
+            self.strikethrough = False
+        elif code == 39:
+            self.fg_color = None
+        elif code == 49:
+            self.bg_color = None
+        elif 30 <= code <= 37 or 90 <= code <= 97:
+            self.fg_color = str(code)
+        elif 40 <= code <= 47 or 100 <= code <= 107:
+            self.bg_color = str(code)
 
     def _reset(self) -> None:
         self.bold = False
