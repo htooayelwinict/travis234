@@ -694,13 +694,7 @@ class ExtensionRunner:
     def shutdown(self) -> object:
         return self._shutdown_handler()
 
-    def bind_core(
-        self,
-        actions: object | None = None,
-        context_actions: object | None = None,
-        provider_actions: object | None = None,
-    ) -> None:
-        actions = actions or {}
+    def _bind_session_actions(self, actions: object) -> None:
         self._send_message = _callable_action(actions, "sendMessage", "send_message") or (
             lambda message, options=None: []
         )
@@ -735,7 +729,7 @@ class ExtensionRunner:
             "set_thinking_level",
         ) or (lambda level: None)
 
-        context_actions = context_actions or {}
+    def _bind_context_actions(self, context_actions: object) -> None:
         self._get_model = _callable_action(context_actions, "getModel", "get_model") or (lambda: None)
         self._is_idle = _callable_action(context_actions, "isIdle", "is_idle") or (lambda: True)
         self._is_project_trusted = _callable_action(
@@ -767,6 +761,8 @@ class ExtensionRunner:
             "getSystemPromptOptions",
             "get_system_prompt_options",
         ) or (lambda: {"cwd": self._cwd})
+
+    def _bind_subagent_actions(self, actions: object) -> None:
         self._spawn_subagent = _callable_action(
             actions,
             "spawnSubagent",
@@ -788,13 +784,27 @@ class ExtensionRunner:
             "cancel_subagent",
         ) or (lambda task_id, reason=None: {"status": "failed", "errors": ["No subagent supervisor bound"]})
 
-        register_provider = _callable_action(provider_actions or {}, "registerProvider", "register_provider")
-        unregister_provider = _callable_action(provider_actions or {}, "unregisterProvider", "unregister_provider")
+    def _bind_provider_action_overrides(self, provider_actions: object) -> None:
+        register_provider = _callable_action(provider_actions, "registerProvider", "register_provider")
+        unregister_provider = _callable_action(provider_actions, "unregisterProvider", "unregister_provider")
         if register_provider is not None or unregister_provider is not None:
             self.bind_provider_actions(
                 register_provider or (lambda name, config: None),
                 unregister_provider or (lambda name: None),
             )
+
+    def bind_core(
+        self,
+        actions: object | None = None,
+        context_actions: object | None = None,
+        provider_actions: object | None = None,
+    ) -> None:
+        actions = actions or {}
+        self._bind_session_actions(actions)
+        context_actions = context_actions or {}
+        self._bind_context_actions(context_actions)
+        self._bind_subagent_actions(actions)
+        self._bind_provider_action_overrides(provider_actions or {})
         self._core_bound = True
 
 
