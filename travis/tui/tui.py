@@ -98,6 +98,28 @@ def _parse_size_value(value: object, reference_size: int) -> int | None:
     return None
 
 
+def _changed_line_range(
+    old_lines: list[str],
+    new_lines: list[str],
+) -> tuple[int, int, bool]:
+    first_changed = -1
+    last_changed = -1
+    for index in range(max(len(old_lines), len(new_lines))):
+        old = old_lines[index] if index < len(old_lines) else ""
+        new = new_lines[index] if index < len(new_lines) else ""
+        if old != new:
+            if first_changed == -1:
+                first_changed = index
+            last_changed = index
+
+    appended_lines = len(new_lines) > len(old_lines)
+    if appended_lines:
+        if first_changed == -1:
+            first_changed = len(old_lines)
+        last_changed = len(new_lines) - 1
+    return first_changed, last_changed, appended_lines
+
+
 @dataclass
 class RenderInfo:
     full: bool
@@ -581,23 +603,7 @@ class TUI(Container):
         previous_viewport_top: int,
     ) -> RenderInfo:
         old_lines = self.previous_lines
-        max_len = max(len(old_lines), len(new_lines))
-
-        first_changed = -1
-        last_changed = -1
-        for index in range(max_len):
-            old = old_lines[index] if index < len(old_lines) else ""
-            new = new_lines[index] if index < len(new_lines) else ""
-            if old != new:
-                if first_changed == -1:
-                    first_changed = index
-                last_changed = index
-
-        appended_lines = len(new_lines) > len(old_lines)
-        if appended_lines:
-            if first_changed == -1:
-                first_changed = len(old_lines)
-            last_changed = len(new_lines) - 1
+        first_changed, last_changed, appended_lines = _changed_line_range(old_lines, new_lines)
 
         if first_changed == -1:
             self._position_hardware_cursor(cursor_position, len(new_lines))
