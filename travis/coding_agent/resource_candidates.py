@@ -225,6 +225,59 @@ class DefaultResourceCapabilityProvider:
             candidate,
             candidate.close,
         )
+
+
+def _load_agents_files(request: ResourceContentRequest) -> tuple[dict[str, str], ...]:
+    agents_result = {
+        "agentsFiles": (
+            []
+            if request.no_context_files
+            else load_project_context_files(
+                cwd=request.cwd, agent_dir=request.agent_dir
+            )
+        )
+    }
+    if request.agents_files_override is not None:
+        agents_result = request.agents_files_override(agents_result)
+    return tuple(agents_result["agentsFiles"])
+
+
+def _resolve_system_prompt(request: ResourceContentRequest) -> str | None:
+    system_source = request.system_prompt_source or _discover_system_prompt_file(
+        request.cwd,
+        request.agent_dir,
+        project_trusted=request.project_trusted,
+    )
+    system_prompt = _resolve_prompt_input(system_source, cwd=request.cwd)
+    if request.system_prompt_override is not None:
+        system_prompt = request.system_prompt_override(system_prompt)
+    return system_prompt
+
+
+def _resolve_append_system_prompt(request: ResourceContentRequest) -> tuple[str, ...]:
+    append_sources = request.append_system_prompt_source
+    if append_sources is None:
+        discovered_append = _discover_append_system_prompt_file(
+            request.cwd,
+            request.agent_dir,
+            project_trusted=request.project_trusted,
+        )
+        append_sources = (discovered_append,) if discovered_append else ()
+    append_system_prompt = [
+        prompt
+        for prompt in (
+            _resolve_prompt_input(source, cwd=request.cwd)
+            for source in append_sources
+        )
+        if prompt is not None
+    ]
+    if request.append_system_prompt_override is not None:
+        append_system_prompt = request.append_system_prompt_override(
+            append_system_prompt
+        )
+    return tuple(append_system_prompt)
+
+
 def build_resource_content(
     request: ResourceContentRequest,
 ) -> ResourceContentCandidate:
@@ -301,53 +354,13 @@ def build_resource_content(
         if request.no_agent_roles and not role_paths
         else load_agent_roles(tuple(role_paths), metadata_by_path=metadata_by_path)
     )
-    agents_result = {
-        "agentsFiles": (
-            []
-            if request.no_context_files
-            else load_project_context_files(
-                cwd=request.cwd, agent_dir=request.agent_dir
-            )
-        )
-    }
-    if request.agents_files_override is not None:
-        agents_result = request.agents_files_override(agents_result)
-    agents_files = tuple(agents_result["agentsFiles"])
-    system_source = request.system_prompt_source or _discover_system_prompt_file(
-        request.cwd,
-        request.agent_dir,
-        project_trusted=request.project_trusted,
-    )
-    system_prompt = _resolve_prompt_input(system_source, cwd=request.cwd)
-    if request.system_prompt_override is not None:
-        system_prompt = request.system_prompt_override(system_prompt)
-    append_sources = request.append_system_prompt_source
-    if append_sources is None:
-        discovered_append = _discover_append_system_prompt_file(
-            request.cwd,
-            request.agent_dir,
-            project_trusted=request.project_trusted,
-        )
-        append_sources = (discovered_append,) if discovered_append else ()
-    append_system_prompt = [
-        prompt
-        for prompt in (
-            _resolve_prompt_input(source, cwd=request.cwd)
-            for source in append_sources
-        )
-        if prompt is not None
-    ]
-    if request.append_system_prompt_override is not None:
-        append_system_prompt = request.append_system_prompt_override(
-            append_system_prompt
-        )
     return ResourceContentCandidate(
         skills_result=skills_result,
         prompts_result=prompts_result,
         themes_result=themes_result,
-        agents_files=agents_files,
-        system_prompt=system_prompt,
-        append_system_prompt=tuple(append_system_prompt),
+        agents_files=_load_agents_files(request),
+        system_prompt=_resolve_system_prompt(request),
+        append_system_prompt=_resolve_append_system_prompt(request),
         package_diagnostics=tuple(request.resolved_paths.diagnostics),
         skill_paths=tuple(skill_paths),
         prompt_paths=tuple(prompt_paths),

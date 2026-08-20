@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -234,6 +235,63 @@ def test_content_build_does_not_mutate_previous_candidate(tmp_path: Path) -> Non
 
     assert first.prompts_result["prompts"][0].content == "Prompt v1"
     assert second.prompts_result["prompts"][0].content == "Prompt v2"
+
+
+def test_content_build_preserves_discovery_and_override_order(tmp_path: Path) -> None:
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    (agent_dir / "AGENTS.md").write_text("global context\n", encoding="utf-8")
+    (tmp_path / "AGENTS.md").write_text("project context\n", encoding="utf-8")
+    project_config = tmp_path / ".travis234"
+    project_config.mkdir()
+    (project_config / "SYSTEM.md").write_text("project system\n", encoding="utf-8")
+    (project_config / "APPEND_SYSTEM.md").write_text("project append\n", encoding="utf-8")
+    override_inputs: list[object] = []
+
+    def override_agents(value: dict[str, list[dict[str, str]]]) -> dict[str, list[dict[str, str]]]:
+        override_inputs.append(tuple(item["content"] for item in value["agentsFiles"]))
+        return {
+            "agentsFiles": [
+                *value["agentsFiles"],
+                {"path": "synthetic", "content": "extension context\n"},
+            ]
+        }
+
+    def override_system(value: str | None) -> str | None:
+        override_inputs.append(value)
+        return f"{value}extension system\n"
+
+    def override_append(value: list[str]) -> list[str]:
+        override_inputs.append(tuple(value))
+        return [*value, "extension append\n"]
+
+    request = replace(
+        content_request(tmp_path),
+        project_trusted=True,
+        no_context_files=False,
+        no_agent_roles=True,
+        agents_files_override=override_agents,
+        system_prompt_override=override_system,
+        append_system_prompt_override=override_append,
+    )
+
+    candidate = build_resource_content(request)
+
+    assert override_inputs == [
+        ("global context\n", "project context\n"),
+        "project system\n",
+        ("project append\n",),
+    ]
+    assert tuple(item["content"] for item in candidate.agents_files) == (
+        "global context\n",
+        "project context\n",
+        "extension context\n",
+    )
+    assert candidate.system_prompt == "project system\nextension system\n"
+    assert candidate.append_system_prompt == (
+        "project append\n",
+        "extension append\n",
+    )
 
 
 def test_extend_builds_skill_prompt_and_theme_as_one_candidate(
