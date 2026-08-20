@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import replace
 from collections.abc import Callable
-from typing import Any
+from dataclasses import replace
 
 from travis.ai.providers.openai_compat import OpenAICompat, resolve_openai_compat
 from travis.ai.types import (
@@ -94,84 +93,146 @@ def _transform_messages(
     transformed: list[Message] = []
 
     for message in image_aware_messages:
-        if message.role == "user":
-            transformed.append(message)
-            continue
-
-        if message.role == "toolResult":
+        if isinstance(message, AssistantMessage):
+            transformed.append(
+                _transform_assistant_message(
+                    message,
+                    model,
+                    tool_call_id_map,
+                    normalize_tool_call_id,
+                )
+            )
+        elif isinstance(message, ToolResultMessage):
             normalized_id = tool_call_id_map.get(message.tool_call_id)
             transformed.append(
                 replace(message, tool_call_id=normalized_id)
                 if normalized_id and normalized_id != message.tool_call_id
                 else message
             )
-            continue
+        else:
+            transformed.append(message)
+    return _repair_tool_result_history(transformed)
 
-        is_same_model = message.provider == model.provider and message.api == model.api and message.model == model.id
-        transformed_content: list[TextContent | ThinkingContent | ImageContent | ToolCall] = []
-        for block in message.content:
-            if isinstance(block, ThinkingContent):
-                if block.redacted:
-                    if is_same_model:
-                        transformed_content.append(block)
-                    continue
-                if is_same_model and block.thinking_signature:
-                    transformed_content.append(block)
-                    continue
-                if not block.thinking or not block.thinking.strip():
-                    continue
-                transformed_content.append(block if is_same_model else TextContent(text=block.thinking))
-                continue
 
-            if isinstance(block, TextContent):
-                transformed_content.append(block if is_same_model else TextContent(text=block.text))
-                continue
+def _transform_assistant_message(
+    message: AssistantMessage,
+    model: Model,
+    tool_call_id_map: dict[str, str],
+    normalize_tool_call_id: Callable[[str, Model, AssistantMessage], str] | None,
+) -> AssistantMessage:
+    is_same_model = (
+        message.provider == model.provider
+        and message.api == model.api
+        and message.model == model.id
+    )
+    content: list[TextContent | ThinkingContent | ImageContent | ToolCall] = []
+    for block in message.content:
+        transformed = _transform_assistant_block(
+            block,
+            message,
+            model,
+            is_same_model,
+            tool_call_id_map,
+            normalize_tool_call_id,
+        )
+        if transformed is not None:
+            content.append(transformed)
+    return replace(message, content=content)
 
-            if isinstance(block, ToolCall):
-                transformed_tool_call = block
-                if not is_same_model and block.thought_signature:
-                    transformed_tool_call = replace(block, thought_signature=None)
-                if not is_same_model:
-                    normalized_id = (
-                        normalize_tool_call_id(block.id, model, message)
-                        if normalize_tool_call_id is not None
-                        else _normalize_tool_call_id(block.id, model)
-                    )
-                    if normalized_id != block.id:
-                        tool_call_id_map[block.id] = normalized_id
-                        transformed_tool_call = replace(transformed_tool_call, id=normalized_id)
-                transformed_content.append(transformed_tool_call)
-                continue
 
-            transformed_content.append(block)
+def _transform_assistant_block(
+    block: TextContent | ThinkingContent | ImageContent | ToolCall,
+    message: AssistantMessage,
+    model: Model,
+    is_same_model: bool,
+    tool_call_id_map: dict[str, str],
+    normalize_tool_call_id: Callable[[str, Model, AssistantMessage], str] | None,
+) -> TextContent | ThinkingContent | ImageContent | ToolCall | None:
+    if isinstance(block, ThinkingContent):
+        return _transform_thinking_block(block, is_same_model)
+    if isinstance(block, TextContent):
+        return block if is_same_model else TextContent(text=block.text)
+    if isinstance(block, ToolCall):
+        return _transform_tool_call(
+            block,
+            message,
+            model,
+            is_same_model,
+            tool_call_id_map,
+            normalize_tool_call_id,
+        )
+    return block
 
-        transformed.append(replace(message, content=transformed_content))
 
+def _transform_thinking_block(
+    block: ThinkingContent,
+    is_same_model: bool,
+) -> TextContent | ThinkingContent | None:
+    if block.redacted:
+        return block if is_same_model else None
+    if is_same_model and block.thinking_signature:
+        return block
+    if not block.thinking or not block.thinking.strip():
+        return None
+    return block if is_same_model else TextContent(text=block.thinking)
+
+
+def _transform_tool_call(
+    block: ToolCall,
+    message: AssistantMessage,
+    model: Model,
+    is_same_model: bool,
+    tool_call_id_map: dict[str, str],
+    normalize_tool_call_id: Callable[[str, Model, AssistantMessage], str] | None,
+) -> ToolCall:
+    if is_same_model:
+        return block
+    transformed = replace(block, thought_signature=None) if block.thought_signature else block
+    normalized_id = (
+        normalize_tool_call_id(block.id, model, message)
+        if normalize_tool_call_id is not None
+        else _normalize_tool_call_id(block.id, model)
+    )
+    if normalized_id == block.id:
+        return transformed
+    tool_call_id_map[block.id] = normalized_id
+    return replace(transformed, id=normalized_id)
+
+
+def _append_missing_tool_results(
+    result: list[Message],
+    pending_tool_calls: list[ToolCall],
+    existing_tool_result_ids: set[str],
+) -> None:
+    for tool_call in pending_tool_calls:
+        if tool_call.id not in existing_tool_result_ids:
+            result.append(
+                ToolResultMessage(
+                    tool_call_id=tool_call.id,
+                    tool_name=tool_call.name,
+                    content=[TextContent(text="No result provided")],
+                    is_error=True,
+                    timestamp=now_ms(),
+                )
+            )
+
+
+def _drop_unanswered_user_messages(result: list[Message]) -> None:
+    while result and result[-1].role == "user":
+        result.pop()
+
+
+def _repair_tool_result_history(transformed: list[Message]) -> list[Message]:
     result: list[Message] = []
     pending_tool_calls: list[ToolCall] = []
     existing_tool_result_ids: set[str] = set()
 
-    def insert_synthetic_tool_results() -> None:
-        nonlocal pending_tool_calls, existing_tool_result_ids
-        if not pending_tool_calls:
-            return
-        for tool_call in pending_tool_calls:
-            if tool_call.id not in existing_tool_result_ids:
-                result.append(
-                    ToolResultMessage(
-                        tool_call_id=tool_call.id,
-                        tool_name=tool_call.name,
-                        content=[TextContent(text="No result provided")],
-                        is_error=True,
-                        timestamp=now_ms(),
-                    )
-                )
-        pending_tool_calls = []
-        existing_tool_result_ids = set()
-
     for message in transformed:
-        if message.role == "assistant":
-            insert_synthetic_tool_results()
+        if isinstance(message, AssistantMessage):
+            if pending_tool_calls:
+                _append_missing_tool_results(result, pending_tool_calls, existing_tool_result_ids)
+                pending_tool_calls = []
+                existing_tool_result_ids = set()
             if message.stop_reason in ("error", "aborted"):
                 # Failed assistant messages can contain incomplete reasoning or
                 # malformed tool calls. They are retained in the session record
@@ -180,24 +241,24 @@ def _transform_messages(
                 # input as well. Replaying it beside the next prompt makes some
                 # providers treat the newer instruction as an injection or as
                 # steering for the cancelled task.
-                while result and result[-1].role == "user":
-                    result.pop()
+                _drop_unanswered_user_messages(result)
                 continue
             tool_calls = [block for block in message.content if isinstance(block, ToolCall)]
             if tool_calls:
                 pending_tool_calls = tool_calls
                 existing_tool_result_ids = set()
             result.append(message)
-        elif message.role == "toolResult":
+        elif isinstance(message, ToolResultMessage):
             existing_tool_result_ids.add(message.tool_call_id)
             result.append(message)
-        elif message.role == "user":
-            insert_synthetic_tool_results()
-            result.append(message)
         else:
+            if pending_tool_calls:
+                _append_missing_tool_results(result, pending_tool_calls, existing_tool_result_ids)
+                pending_tool_calls = []
+                existing_tool_result_ids = set()
             result.append(message)
 
-    insert_synthetic_tool_results()
+    _append_missing_tool_results(result, pending_tool_calls, existing_tool_result_ids)
     return result
 
 
@@ -257,32 +318,63 @@ def _convert_message(
     compat: OpenAICompat | None = None,
 ) -> dict | None:
     compat = compat or (resolve_openai_compat(model) if model is not None else OpenAICompat())
-    if message.role == "user":
+    if not isinstance(message, AssistantMessage):
+        if isinstance(message, ToolResultMessage):
+            return _convert_single_tool_result(message)
         content = _sanitize_surrogates(message.content) if isinstance(message.content, str) else _convert_user_content_parts(message.content)
         return {"role": "user", "content": content}
-    if message.role == "toolResult":
-        return _convert_single_tool_result(message)
-    # assistant
-    text_parts = [
+    return _convert_assistant_message(message, model, compat)
+
+
+def _assistant_text(message: AssistantMessage) -> str:
+    return "".join(
         _sanitize_surrogates(block.text)
         for block in message.content
         if isinstance(block, TextContent) and block.text.strip()
-    ]
-    thinking_parts = [b for b in message.content if isinstance(b, ThinkingContent) and b.thinking.strip()]
-    responses_reasoning_items: list[dict[str, Any]] = []
+    )
+
+
+def _parse_responses_reasoning_item(signature: str | None) -> dict[str, object] | None:
+    if not signature:
+        return None
+    try:
+        value = json.loads(signature)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if not isinstance(value, dict) or value.get("type") != "reasoning":
+        return None
+    if not all(isinstance(key, str) for key in value):
+        return None
+    return {key: item for key, item in value.items() if isinstance(key, str)}
+
+
+def _assistant_reasoning(
+    message: AssistantMessage,
+) -> tuple[list[dict[str, object]], list[ThinkingContent]]:
+    responses_reasoning_items: list[dict[str, object]] = []
     textual_thinking_parts: list[ThinkingContent] = []
-    for block in thinking_parts:
-        signature = block.thinking_signature
-        if signature:
-            try:
-                reasoning_item = json.loads(signature)
-            except (json.JSONDecodeError, TypeError, ValueError):
-                reasoning_item = None
-            if isinstance(reasoning_item, dict) and reasoning_item.get("type") == "reasoning":
-                responses_reasoning_items.append(reasoning_item)
-                continue
-        textual_thinking_parts.append(block)
-    tool_calls = []
+    for block in message.content:
+        if not isinstance(block, ThinkingContent) or not block.thinking.strip():
+            continue
+        reasoning_item = _parse_responses_reasoning_item(block.thinking_signature)
+        if reasoning_item is not None:
+            responses_reasoning_items.append(reasoning_item)
+        else:
+            textual_thinking_parts.append(block)
+    return responses_reasoning_items, textual_thinking_parts
+
+
+def _parse_reasoning_detail(signature: str) -> object | None:
+    try:
+        return json.loads(signature)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+
+
+def _assistant_tool_payloads(
+    message: AssistantMessage,
+) -> tuple[list[dict[str, object]], list[object]]:
+    tool_calls: list[dict[str, object]] = []
     reasoning_details: list[object] = []
     for block in message.content:
         if not isinstance(block, ToolCall):
@@ -298,35 +390,65 @@ def _convert_message(
             },
         )
         if block.thought_signature:
-            try:
-                reasoning_detail = json.loads(block.thought_signature)
-            except (json.JSONDecodeError, TypeError, ValueError):
-                reasoning_detail = None
+            reasoning_detail = _parse_reasoning_detail(block.thought_signature)
             if reasoning_detail is not None:
                 reasoning_details.append(reasoning_detail)
-    content_text = "".join(text_parts)
-    if not content_text and not thinking_parts and not tool_calls:
+    return tool_calls, reasoning_details
+
+
+def _apply_textual_reasoning(
+    out: dict[str, object],
+    textual_thinking_parts: list[ThinkingContent],
+    content_text: str,
+    model: Model | None,
+    compat: OpenAICompat,
+) -> None:
+    if not textual_thinking_parts:
+        return
+    if compat.requires_thinking_as_text:
+        thinking_text = "\n\n".join(
+            _sanitize_surrogates(block.thinking) for block in textual_thinking_parts
+        )
+        thinking_content = [{"type": "text", "text": thinking_text}]
+        if content_text:
+            thinking_content.append({"type": "text", "text": content_text})
+        out["content"] = thinking_content
+        return
+    signature = textual_thinking_parts[0].thinking_signature
+    if model is not None and model.provider == "opencode-go" and signature == "reasoning":
+        signature = "reasoning_content"
+    if signature:
+        out[signature] = "\n".join(
+            _sanitize_surrogates(block.thinking) for block in textual_thinking_parts
+        )
+
+
+def _assistant_has_content(out: dict[str, object]) -> bool:
+    content = out.get("content")
+    if isinstance(content, str):
+        return bool(content)
+    if isinstance(content, list):
+        return bool(content)
+    return False
+
+
+def _convert_assistant_message(
+    message: AssistantMessage,
+    model: Model | None,
+    compat: OpenAICompat,
+) -> dict[str, object] | None:
+    content_text = _assistant_text(message)
+    responses_reasoning_items, textual_thinking_parts = _assistant_reasoning(message)
+    tool_calls, reasoning_details = _assistant_tool_payloads(message)
+    if not content_text and not responses_reasoning_items and not textual_thinking_parts and not tool_calls:
         return None
-    out: dict = {
+    out: dict[str, object] = {
         "role": "assistant",
         "content": "" if compat.requires_assistant_after_tool_result else None,
     }
     if responses_reasoning_items:
         out["codex_reasoning_items"] = responses_reasoning_items
-    if textual_thinking_parts and compat.requires_thinking_as_text:
-        thinking_text = "\n\n".join(_sanitize_surrogates(block.thinking) for block in textual_thinking_parts)
-        thinking_content = [{"type": "text", "text": thinking_text}]
-        if content_text:
-            thinking_content.append({"type": "text", "text": content_text})
-        out["content"] = thinking_content
-    elif textual_thinking_parts:
-        signature = textual_thinking_parts[0].thinking_signature
-        if model is not None and model.provider == "opencode-go" and signature == "reasoning":
-            signature = "reasoning_content"
-        if signature:
-            out[signature] = "\n".join(
-                _sanitize_surrogates(block.thinking) for block in textual_thinking_parts
-            )
+    _apply_textual_reasoning(out, textual_thinking_parts, content_text, model, compat)
     if tool_calls:
         out["tool_calls"] = tool_calls
     if reasoning_details:
@@ -340,15 +462,7 @@ def _convert_message(
         and "reasoning_content" not in out
     ):
         out["reasoning_content"] = ""
-    content = out.get("content")
-    has_content = (
-        bool(content)
-        if isinstance(content, str)
-        else bool(content)
-        if isinstance(content, list)
-        else False
-    )
-    if not has_content and not tool_calls:
+    if not _assistant_has_content(out) and not tool_calls:
         return None
     return out
 
