@@ -9,9 +9,21 @@ from typing import Any
 from urllib.parse import quote
 
 from travis.ai.providers.base import NormalizedResponse, ProviderProfile
-from travis.ai.types import AssistantMessage, Context, ImageContent, TextContent, ThinkingContent, ToolCall, ToolResultMessage
+from travis.ai.types import (
+    AssistantMessage,
+    Context,
+    ImageContent,
+    Message,
+    Model,
+    TextContent,
+    ThinkingContent,
+    ToolCall,
+    ToolResultMessage,
+    UserMessage,
+)
 
-def _bedrock_supports_cache(model: Any) -> bool:
+
+def _bedrock_supports_cache(model: Model) -> bool:
     candidates = {
         value.lower().replace("_", "-").replace(".", "-").replace(":", "-")
         for value in (model.id, model.name)
@@ -29,7 +41,7 @@ def _bedrock_supports_cache(model: Any) -> bool:
     )
 
 
-def _bedrock_image(block: ImageContent) -> dict[str, Any]:
+def _bedrock_image(block: ImageContent) -> dict[str, object]:
     image_format = {
         "image/jpeg": "jpeg",
         "image/jpg": "jpeg",
@@ -47,87 +59,133 @@ def _bedrock_image(block: ImageContent) -> dict[str, Any]:
     }
 
 
-def _bedrock_messages(context: Context, model: Any, cache_retention: str) -> list[dict[str, Any]]:
-    from travis.ai.providers.message_translation import _sanitize_surrogates, _transform_messages
+def _bedrock_user_message(message: UserMessage) -> dict[str, object]:
+    from travis.ai.providers.message_translation import _sanitize_surrogates
+
+    blocks: list[dict[str, object]] = []
+    if isinstance(message.content, str):
+        text = _sanitize_surrogates(message.content)
+        blocks.append({"text": text if text.strip() else "<empty>"})
+    else:
+        for block in message.content:
+            if isinstance(block, TextContent) and block.text.strip():
+                blocks.append({"text": _sanitize_surrogates(block.text)})
+            elif isinstance(block, ImageContent):
+                blocks.append(_bedrock_image(block))
+    return {"role": "user", "content": blocks or [{"text": "<empty>"}]}
+
+
+def _bedrock_assistant_message(
+    message: AssistantMessage,
+    model: Model,
+) -> dict[str, object] | None:
+    from travis.ai.providers.message_translation import _sanitize_surrogates
+
+    blocks: list[dict[str, object]] = []
+    is_claude = "claude" in model.id.lower() or "claude" in model.name.lower()
+    for block in message.content:
+        if isinstance(block, TextContent) and block.text.strip():
+            blocks.append({"text": _sanitize_surrogates(block.text)})
+        elif isinstance(block, ToolCall):
+            blocks.append(
+                {
+                    "toolUse": {
+                        "toolUseId": block.id[:64],
+                        "name": block.name,
+                        "input": block.arguments,
+                    }
+                }
+            )
+        elif isinstance(block, ThinkingContent) and block.thinking.strip():
+            thinking = _sanitize_surrogates(block.thinking)
+            if is_claude and not block.thinking_signature:
+                blocks.append({"text": thinking})
+            else:
+                reasoning_text: dict[str, object] = {"text": thinking}
+                if is_claude:
+                    reasoning_text["signature"] = block.thinking_signature
+                blocks.append({"reasoningContent": {"reasoningText": reasoning_text}})
+    return {"role": "assistant", "content": blocks} if blocks else None
+
+
+def _bedrock_tool_result_block(message: ToolResultMessage) -> dict[str, object]:
+    from travis.ai.providers.message_translation import _sanitize_surrogates
+
+    content: list[dict[str, object]] = []
+    for block in message.content:
+        if isinstance(block, TextContent) and block.text.strip():
+            content.append({"text": _sanitize_surrogates(block.text)})
+        elif isinstance(block, ImageContent):
+            content.append(_bedrock_image(block))
+    return {
+        "toolResult": {
+            "toolUseId": message.tool_call_id[:64],
+            "content": content or [{"text": "<empty>"}],
+            "status": "error" if message.is_error else "success",
+        }
+    }
+
+
+def _bedrock_tool_result_message(
+    transformed: list[Message],
+    start_index: int,
+) -> tuple[dict[str, object], int]:
+    results: list[dict[str, object]] = []
+    index = start_index
+    while index < len(transformed):
+        result = transformed[index]
+        if not isinstance(result, ToolResultMessage):
+            break
+        results.append(_bedrock_tool_result_block(result))
+        index += 1
+    return {"role": "user", "content": results}, index
+
+
+def _append_bedrock_cache_point(
+    messages: list[dict[str, object]],
+    model: Model,
+    cache_retention: str,
+) -> None:
+    if cache_retention == "none" or not _bedrock_supports_cache(model) or not messages:
+        return
+    last = messages[-1]
+    content = last.get("content")
+    if last.get("role") != "user" or not isinstance(content, list):
+        return
+    cache_point: dict[str, object] = {"type": "default"}
+    if cache_retention == "long":
+        cache_point["ttl"] = "1h"
+    content.append({"cachePoint": cache_point})
+
+
+def _bedrock_messages(
+    context: Context,
+    model: Model,
+    cache_retention: str,
+) -> list[dict[str, object]]:
+    from travis.ai.providers.message_translation import _transform_messages
 
     transformed = _transform_messages(
         context.messages,
         model,
         lambda tool_call_id, _model, _source: re.sub(r"[^a-zA-Z0-9_-]", "_", tool_call_id)[:64],
     )
-    messages: list[dict[str, Any]] = []
+    messages: list[dict[str, object]] = []
     index = 0
     while index < len(transformed):
         message = transformed[index]
-        if message.role == "user":
-            blocks: list[dict[str, Any]] = []
-            if isinstance(message.content, str):
-                text = _sanitize_surrogates(message.content)
-                blocks.append({"text": text if text.strip() else "<empty>"})
-            else:
-                for block in message.content:
-                    if isinstance(block, TextContent) and block.text.strip():
-                        blocks.append({"text": _sanitize_surrogates(block.text)})
-                    elif isinstance(block, ImageContent):
-                        blocks.append(_bedrock_image(block))
-            messages.append({"role": "user", "content": blocks or [{"text": "<empty>"}]})
+        if isinstance(message, UserMessage):
+            messages.append(_bedrock_user_message(message))
             index += 1
-            continue
-        if isinstance(message, AssistantMessage):
-            blocks = []
-            is_claude = "claude" in model.id.lower() or "claude" in model.name.lower()
-            for block in message.content:
-                if isinstance(block, TextContent) and block.text.strip():
-                    blocks.append({"text": _sanitize_surrogates(block.text)})
-                elif isinstance(block, ToolCall):
-                    blocks.append(
-                        {"toolUse": {"toolUseId": block.id[:64], "name": block.name, "input": block.arguments}}
-                    )
-                elif isinstance(block, ThinkingContent) and block.thinking.strip():
-                    thinking = _sanitize_surrogates(block.thinking)
-                    if is_claude and not block.thinking_signature:
-                        blocks.append({"text": thinking})
-                    else:
-                        reasoning_text: dict[str, Any] = {"text": thinking}
-                        if is_claude:
-                            reasoning_text["signature"] = block.thinking_signature
-                        blocks.append({"reasoningContent": {"reasoningText": reasoning_text}})
-            if blocks:
-                messages.append({"role": "assistant", "content": blocks})
+        elif isinstance(message, AssistantMessage):
+            converted = _bedrock_assistant_message(message, model)
+            if converted is not None:
+                messages.append(converted)
             index += 1
-            continue
-        if isinstance(message, ToolResultMessage):
-            results: list[dict[str, Any]] = []
-            while index < len(transformed):
-                result = transformed[index]
-                if not isinstance(result, ToolResultMessage):
-                    break
-                result_content: list[dict[str, Any]] = []
-                for block in result.content:
-                    if isinstance(block, TextContent) and block.text.strip():
-                        result_content.append({"text": _sanitize_surrogates(block.text)})
-                    elif isinstance(block, ImageContent):
-                        result_content.append(_bedrock_image(block))
-                results.append(
-                    {
-                        "toolResult": {
-                            "toolUseId": result.tool_call_id[:64],
-                            "content": result_content or [{"text": "<empty>"}],
-                            "status": "error" if result.is_error else "success",
-                        }
-                    }
-                )
-                index += 1
-            messages.append({"role": "user", "content": results})
-            continue
-        index += 1
-    if cache_retention != "none" and _bedrock_supports_cache(model) and messages:
-        last = messages[-1]
-        if last.get("role") == "user":
-            cache_point: dict[str, Any] = {"type": "default"}
-            if cache_retention == "long":
-                cache_point["ttl"] = "1h"
-            last["content"].append({"cachePoint": cache_point})
+        else:
+            converted, index = _bedrock_tool_result_message(transformed, index)
+            messages.append(converted)
+    _append_bedrock_cache_point(messages, model, cache_retention)
     return messages
 
 
