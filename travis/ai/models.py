@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import threading
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from typing import Any
@@ -66,7 +66,7 @@ class Provider:
         name: str | None = None,
         base_url: str | None = None,
         headers: Mapping[str, str] | None = None,
-        refresh_models: Callable[[], Sequence[Model]] | None = None,
+        refresh_models: Callable[[], Sequence[Model] | Awaitable[Sequence[Model]]] | None = None,
     ) -> None:
         if not id:
             raise ValueError("provider id is required")
@@ -85,7 +85,7 @@ class Provider:
         with self._refresh_lock:
             return self._models
 
-    def with_models(self, models: Sequence[Model]) -> "Provider":
+    def with_models(self, models: Sequence[Model]) -> Provider:
         return Provider(
             id=self.id,
             name=self.name,
@@ -97,7 +97,7 @@ class Provider:
             refresh_models=self._refresh_models,
         )
 
-    def with_base_url(self, base_url: str) -> "Provider":
+    def with_base_url(self, base_url: str) -> Provider:
         """Clone provider metadata without wrapping its stream dispatch."""
         return Provider(
             id=self.id,
@@ -118,7 +118,7 @@ class Provider:
         auth: ProviderAuth,
         models: Sequence[Model],
         api: ProviderStreams | Mapping[str, ProviderStreams] | None = None,
-    ) -> "Provider":
+    ) -> Provider:
         """Create a configured provider while retaining owned stream dispatch."""
         return Provider(
             id=self.id,
@@ -244,7 +244,7 @@ class Models:
     def get_model(self, provider: str, model_id: str) -> Model | None:
         return next((model for model in self.get_models(provider) if model.id == model_id), None)
 
-    def async_api(self) -> "AsyncModels":
+    def async_api(self) -> AsyncModels:
         return AsyncModels(self)
 
     def refresh(self, provider: str | None = None) -> None:
@@ -364,6 +364,7 @@ class Models:
             options_type,
         )
         if simple:
+            assert request_options is None or isinstance(request_options, SimpleStreamOptions)
             return provider.stream_simple(request_model, context, request_options)
         return provider.stream(request_model, context, request_options)
 
@@ -523,8 +524,14 @@ def _best_effort_refresh(provider: Provider) -> None:
         return
 
 
-def _settle_runtime_value(value: Any) -> Any:
-    return asyncio.run(value) if inspect.isawaitable(value) else value
+async def _await_runtime_value[T](value: Awaitable[T]) -> T:
+    return await value
+
+
+def _settle_runtime_value[T](value: T | Awaitable[T]) -> T:
+    if inspect.isawaitable(value):
+        return asyncio.run(_await_runtime_value(value))
+    return value
 
 
 def _has_running_event_loop() -> bool:

@@ -8,8 +8,8 @@ from travis.ai.providers.base import (
 )
 from travis.ai.providers.catalog import (
     CANONICAL_PROVIDERS,
-    ProviderDescriptor,
     ProviderDef,
+    ProviderDescriptor,
     ProviderEntry,
     determine_api_mode,
     get_provider,
