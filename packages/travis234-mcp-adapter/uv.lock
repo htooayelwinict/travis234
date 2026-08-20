@@ -669,8 +669,10 @@ provides-extras = ["browser"]
 [package.metadata.requires-dev]
 coverage-test = [{ name = "travis234-mcp-adapter", directory = "." }]
 dev = [
+    { name = "bandit", specifier = ">=1.8,<2" },
     { name = "build", specifier = ">=1,<2" },
     { name = "coverage", specifier = ">=7,<8" },
+    { name = "pip-audit", specifier = ">=2.9,<3" },
     { name = "pyright", specifier = ">=1.1,<2" },
     { name = "pytest", specifier = ">=8,<10" },
     { name = "radon", specifier = ">=6,<7" },

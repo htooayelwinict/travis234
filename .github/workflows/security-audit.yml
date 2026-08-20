@@ -1,0 +1,28 @@
+name: Scheduled dependency audit
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit-locked-dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+      - name: Sync locked environment
+        run: uv sync --locked --all-extras --dev
+      - name: Audit locked dependencies
+        run: >-
+          uv run --locked --all-extras --dev
+          pip-audit --strict
