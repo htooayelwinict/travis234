@@ -13,7 +13,18 @@ from travis.ai.providers.transport_families._shared import (
     tool_arguments as _tool_arguments,
     tool_function as _tool_function,
 )
-from travis.ai.types import AssistantMessage, Context, ImageContent, TextContent, ThinkingContent, ToolCall, ToolResultMessage
+from travis.ai.types import (
+    AssistantMessage,
+    Context,
+    ImageContent,
+    Message,
+    Model,
+    TextContent,
+    ThinkingContent,
+    ToolCall,
+    ToolResultMessage,
+    UserMessage,
+)
 
 _CLAUDE_CODE_TOOL_NAMES = {
     name.lower(): name
@@ -43,7 +54,7 @@ def _claude_code_tool_name(name: str) -> str:
     return _CLAUDE_CODE_TOOL_NAMES.get(name.lower(), name)
 
 
-def _anthropic_default_supports_tool_references(model: Any) -> bool:
+def _anthropic_default_supports_tool_references(model: Model) -> bool:
     if model.provider != "anthropic" or "haiku" in model.id:
         return False
     match = re.match(r"^claude-(?:opus|sonnet|fable)-(\d+)(?:-(\d+))?(?:-|$)", model.id)
@@ -101,15 +112,185 @@ def _openai_content_to_anthropic(content: Any) -> str | list[dict[str, Any]]:
     if len(blocks) == 1 and blocks[0].get("type") == "text":
         return str(blocks[0].get("text") or "")
     return blocks
+def _anthropic_image_block(block: ImageContent) -> dict[str, object]:
+    return {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": block.mime_type,
+            "data": block.data,
+        },
+    }
+
+
+def _anthropic_user_message(message: UserMessage) -> dict[str, object] | None:
+    if isinstance(message.content, str):
+        return (
+            {"role": "user", "content": message.content}
+            if message.content.strip()
+            else None
+        )
+    blocks: list[dict[str, object]] = []
+    for block in message.content:
+        if isinstance(block, TextContent) and block.text.strip():
+            blocks.append({"type": "text", "text": block.text})
+        elif isinstance(block, ImageContent):
+            blocks.append(_anthropic_image_block(block))
+    return {"role": "user", "content": blocks} if blocks else None
+
+
+def _anthropic_thinking_block(
+    block: ThinkingContent,
+    allow_empty_signature: bool,
+) -> dict[str, object] | None:
+    if block.redacted and block.thinking_signature:
+        return {"type": "redacted_thinking", "data": block.thinking_signature}
+    if not block.thinking.strip():
+        return None
+    if block.thinking_signature:
+        return {
+            "type": "thinking",
+            "thinking": block.thinking,
+            "signature": block.thinking_signature,
+        }
+    if allow_empty_signature:
+        return {"type": "thinking", "thinking": block.thinking, "signature": ""}
+    return {"type": "text", "text": block.thinking}
+
+
+def _anthropic_assistant_message(
+    message: AssistantMessage,
+    allow_empty_signature: bool,
+    normalize_tool_name: Callable[[str], str],
+) -> dict[str, object] | None:
+    blocks: list[dict[str, object]] = []
+    for block in message.content:
+        if isinstance(block, TextContent) and block.text.strip():
+            blocks.append({"type": "text", "text": block.text})
+        elif isinstance(block, ThinkingContent):
+            thinking = _anthropic_thinking_block(block, allow_empty_signature)
+            if thinking is not None:
+                blocks.append(thinking)
+        elif isinstance(block, ToolCall):
+            blocks.append(
+                {
+                    "type": "tool_use",
+                    "id": block.id,
+                    "name": normalize_tool_name(block.name),
+                    "input": block.arguments or {},
+                }
+            )
+    return {"role": "assistant", "content": blocks} if blocks else None
+
+
+def _anthropic_result_content(
+    result: ToolResultMessage,
+) -> str | list[dict[str, object]]:
+    content: list[dict[str, object]] = []
+    for block in result.content:
+        if isinstance(block, TextContent) and block.text.strip():
+            content.append({"type": "text", "text": block.text})
+        elif isinstance(block, ImageContent):
+            content.append(_anthropic_image_block(block))
+    has_images = any(isinstance(block, ImageContent) for block in result.content)
+    if has_images and not any(part.get("type") == "text" for part in content):
+        content.insert(0, {"type": "text", "text": "(see attached image)"})
+    if has_images:
+        return content
+    return "\n".join(
+        block.text for block in result.content if isinstance(block, TextContent)
+    )
+
+
+def _anthropic_tool_references(
+    result: ToolResultMessage,
+    deferred_tool_names: set[str],
+    loaded_tool_names: set[str],
+    normalize_tool_name: Callable[[str], str],
+) -> list[dict[str, object]]:
+    references: list[dict[str, object]] = []
+    for name in result.added_tool_names or []:
+        normalized_name = normalize_tool_name(name)
+        if normalized_name not in deferred_tool_names or normalized_name in loaded_tool_names:
+            continue
+        loaded_tool_names.add(normalized_name)
+        references.append(
+            {"type": "tool_reference", "tool_name": normalize_tool_name(name)}
+        )
+    return references
+
+
+def _anthropic_tool_result_message(
+    transformed: list[Message],
+    start_index: int,
+    deferred_tool_names: set[str],
+    loaded_tool_names: set[str],
+    normalize_tool_name: Callable[[str], str],
+) -> tuple[dict[str, object], int]:
+    results: list[dict[str, object]] = []
+    sibling_content: list[dict[str, object]] = []
+    index = start_index
+    while index < len(transformed):
+        result = transformed[index]
+        if not isinstance(result, ToolResultMessage):
+            break
+        converted_content = _anthropic_result_content(result)
+        references = _anthropic_tool_references(
+            result,
+            deferred_tool_names,
+            loaded_tool_names,
+            normalize_tool_name,
+        )
+        results.append(
+            {
+                "type": "tool_result",
+                "tool_use_id": result.tool_call_id,
+                "content": references if references else converted_content,
+                "is_error": result.is_error,
+            }
+        )
+        if references:
+            if isinstance(converted_content, str):
+                sibling_content.append({"type": "text", "text": converted_content})
+            else:
+                sibling_content.extend(converted_content)
+        index += 1
+    return {"role": "user", "content": [*results, *sibling_content]}, index
+
+
+def _apply_anthropic_message_cache_control(
+    messages: list[dict[str, object]],
+    cache_control: dict[str, str] | None,
+) -> None:
+    if not cache_control or not messages or messages[-1].get("role") != "user":
+        return
+    last = messages[-1]
+    content = last.get("content")
+    if isinstance(content, str):
+        last["content"] = [
+            {"type": "text", "text": content, "cache_control": cache_control}
+        ]
+        return
+    if not isinstance(content, list) or not content:
+        return
+    final_block = content[-1]
+    if isinstance(final_block, dict) and final_block.get("type") in {
+        "text",
+        "image",
+        "tool_result",
+    }:
+        final_block["cache_control"] = cache_control
+
+
 def _anthropic_native_messages(
     context: Context,
-    model: Any,
-    cache_control: dict[str, Any] | None,
+    model: Model,
+    cache_control: dict[str, str] | None,
     *,
     allow_empty_signature: bool = False,
     deferred_tool_names: set[str] | None = None,
-    normalize_tool_name=lambda name: name,
-) -> list[dict[str, Any]]:
+    normalize_tool_name: Callable[[str], str] = lambda name: name,
+) -> list[dict[str, object]]:
     from travis.ai.providers.message_translation import _transform_messages
 
     transformed = _transform_messages(
@@ -117,142 +298,36 @@ def _anthropic_native_messages(
         model,
         lambda tool_call_id, _model, _source: re.sub(r"[^a-zA-Z0-9_-]", "_", tool_call_id)[:64],
     )
-    messages: list[dict[str, Any]] = []
+    messages: list[dict[str, object]] = []
     loaded_tool_names: set[str] = set()
-    deferred_tool_names = deferred_tool_names or set()
+    resolved_deferred_names = deferred_tool_names or set()
     index = 0
     while index < len(transformed):
         message = transformed[index]
-        if message.role == "user":
-            if isinstance(message.content, str):
-                if message.content.strip():
-                    messages.append({"role": "user", "content": message.content})
-            else:
-                blocks: list[dict[str, Any]] = []
-                for block in message.content:
-                    if isinstance(block, TextContent) and block.text.strip():
-                        blocks.append({"type": "text", "text": block.text})
-                    elif isinstance(block, ImageContent):
-                        blocks.append(
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": block.mime_type,
-                                    "data": block.data,
-                                },
-                            }
-                        )
-                if blocks:
-                    messages.append({"role": "user", "content": blocks})
+        if isinstance(message, UserMessage):
+            converted = _anthropic_user_message(message)
+            if converted is not None:
+                messages.append(converted)
             index += 1
-            continue
-        if isinstance(message, AssistantMessage):
-            blocks = []
-            for block in message.content:
-                if isinstance(block, TextContent) and block.text.strip():
-                    blocks.append({"type": "text", "text": block.text})
-                elif isinstance(block, ThinkingContent):
-                    if block.redacted and block.thinking_signature:
-                        blocks.append({"type": "redacted_thinking", "data": block.thinking_signature})
-                    elif block.thinking.strip():
-                        if block.thinking_signature:
-                            blocks.append(
-                                {
-                                    "type": "thinking",
-                                    "thinking": block.thinking,
-                                    "signature": block.thinking_signature,
-                                }
-                            )
-                        elif allow_empty_signature:
-                            blocks.append({"type": "thinking", "thinking": block.thinking, "signature": ""})
-                        else:
-                            blocks.append({"type": "text", "text": block.thinking})
-                elif isinstance(block, ToolCall):
-                    blocks.append(
-                        {
-                            "type": "tool_use",
-                            "id": block.id,
-                            "name": normalize_tool_name(block.name),
-                            "input": block.arguments or {},
-                        }
-                    )
-            if blocks:
-                messages.append({"role": "assistant", "content": blocks})
+        elif isinstance(message, AssistantMessage):
+            converted = _anthropic_assistant_message(
+                message,
+                allow_empty_signature,
+                normalize_tool_name,
+            )
+            if converted is not None:
+                messages.append(converted)
             index += 1
-            continue
-        if isinstance(message, ToolResultMessage):
-            results: list[dict[str, Any]] = []
-            sibling_content: list[dict[str, Any]] = []
-            while index < len(transformed):
-                result = transformed[index]
-                if not isinstance(result, ToolResultMessage):
-                    break
-                content: list[dict[str, Any]] = []
-                for block in result.content:
-                    if isinstance(block, TextContent) and block.text.strip():
-                        content.append({"type": "text", "text": block.text})
-                    elif isinstance(block, ImageContent):
-                        content.append(
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": block.mime_type,
-                                    "data": block.data,
-                                },
-                            }
-                        )
-                has_images = any(isinstance(block, ImageContent) for block in result.content)
-                if has_images and not any(part.get("type") == "text" for part in content):
-                    content.insert(0, {"type": "text", "text": "(see attached image)"})
-                converted_content: str | list[dict[str, Any]]
-                if not has_images:
-                    converted_content = "\n".join(
-                        block.text for block in result.content if isinstance(block, TextContent)
-                    )
-                else:
-                    converted_content = content
-                references: list[dict[str, Any]] = []
-                for name in result.added_tool_names or []:
-                    normalized_name = normalize_tool_name(name)
-                    if normalized_name not in deferred_tool_names or normalized_name in loaded_tool_names:
-                        continue
-                    loaded_tool_names.add(normalized_name)
-                    references.append(
-                        {"type": "tool_reference", "tool_name": normalize_tool_name(name)}
-                    )
-                results.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": result.tool_call_id,
-                        "content": references if references else converted_content,
-                        "is_error": result.is_error,
-                    }
-                )
-                if references:
-                    if isinstance(converted_content, str):
-                        sibling_content.append({"type": "text", "text": converted_content})
-                    else:
-                        sibling_content.extend(converted_content)
-                index += 1
-            messages.append({"role": "user", "content": [*results, *sibling_content]})
-            continue
-        index += 1
-    if cache_control and messages and messages[-1].get("role") == "user":
-        last = messages[-1]
-        if isinstance(last.get("content"), str):
-            last["content"] = [
-                {"type": "text", "text": last["content"], "cache_control": cache_control}
-            ]
-        elif isinstance(last.get("content"), list) and last["content"]:
-            final_block = last["content"][-1]
-            if isinstance(final_block, dict) and final_block.get("type") in {
-                "text",
-                "image",
-                "tool_result",
-            }:
-                final_block["cache_control"] = cache_control
+        else:
+            converted, index = _anthropic_tool_result_message(
+                transformed,
+                index,
+                resolved_deferred_names,
+                loaded_tool_names,
+                normalize_tool_name,
+            )
+            messages.append(converted)
+    _apply_anthropic_message_cache_control(messages, cache_control)
     return messages
 
 
