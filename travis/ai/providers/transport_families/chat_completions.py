@@ -500,6 +500,80 @@ def _apply_chat_request_overrides(
     return extra_body
 
 
+def _chat_model_extra_value(owner: object, key: str) -> object | None:
+    if not hasattr(owner, "model_extra"):
+        return None
+    model_extra = getattr(owner, "model_extra", None) or {}
+    return model_extra.get(key) if isinstance(model_extra, dict) else None
+
+
+def _chat_dumped_extra_content(extra_content: object) -> object:
+    if not hasattr(extra_content, "model_dump"):
+        return extra_content
+    try:
+        model_dump: object = getattr(extra_content, "model_dump")
+        if callable(model_dump):
+            return model_dump()
+    except Exception:
+        pass
+    return extra_content
+
+
+def _chat_tool_call_extra_content(raw_tool_call: object) -> tuple[bool, object | None]:
+    extra_content = getattr(raw_tool_call, "extra_content", None)
+    if extra_content is None:
+        extra_content = _chat_model_extra_value(raw_tool_call, "extra_content")
+    if extra_content is None:
+        return False, None
+    return True, _chat_dumped_extra_content(extra_content)
+
+
+def _normalize_chat_tool_call(raw_tool_call: object) -> NormalizedToolCall:
+    provider_data: dict[str, object] = {}
+    has_extra_content, extra_content = _chat_tool_call_extra_content(raw_tool_call)
+    if has_extra_content:
+        provider_data["extra_content"] = extra_content
+    function = getattr(raw_tool_call, "function", None)
+    return NormalizedToolCall(
+        id=getattr(raw_tool_call, "id", None),
+        name=getattr(function, "name", "") if function is not None else "",
+        arguments=getattr(function, "arguments", "") if function is not None else "",
+        provider_data=provider_data or None,
+    )
+
+
+def _normalize_chat_tool_calls(message: object) -> list[NormalizedToolCall] | None:
+    raw_tool_calls = getattr(message, "tool_calls", None)
+    if not raw_tool_calls:
+        return None
+    return [_normalize_chat_tool_call(raw_tool_call) for raw_tool_call in raw_tool_calls]
+
+
+def _normalize_chat_usage(response: object) -> NormalizedUsage | None:
+    raw_usage = getattr(response, "usage", None)
+    if raw_usage is None:
+        return None
+    return NormalizedUsage(
+        prompt_tokens=int(getattr(raw_usage, "prompt_tokens", 0) or 0),
+        completion_tokens=int(getattr(raw_usage, "completion_tokens", 0) or 0),
+        total_tokens=int(getattr(raw_usage, "total_tokens", 0) or 0),
+        cached_tokens=int(getattr(raw_usage, "cached_tokens", 0) or 0),
+    )
+
+
+def _chat_response_provider_data(
+    message: object,
+    reasoning_content: object | None,
+) -> dict[str, object]:
+    provider_data: dict[str, object] = {}
+    if reasoning_content is not None:
+        provider_data["reasoning_content"] = reasoning_content
+    reasoning_details = getattr(message, "reasoning_details", None)
+    if reasoning_details:
+        provider_data["reasoning_details"] = reasoning_details
+    return provider_data
+
+
 class ChatCompletionsTransport:
     api = "openai-completions"
     api_mode = "chat_completions"
@@ -621,65 +695,19 @@ class ChatCompletionsTransport:
         choice = response.choices[0]
         message = choice.message
         finish_reason = choice.finish_reason or "stop"
-
-        tool_calls: list[NormalizedToolCall] | None = None
-        raw_tool_calls = getattr(message, "tool_calls", None)
-        if raw_tool_calls:
-            tool_calls = []
-            for raw_tool_call in raw_tool_calls:
-                provider_data: dict[str, Any] = {}
-                extra_content = getattr(raw_tool_call, "extra_content", None)
-                if extra_content is None and hasattr(raw_tool_call, "model_extra"):
-                    model_extra = getattr(raw_tool_call, "model_extra", None) or {}
-                    if isinstance(model_extra, dict):
-                        extra_content = model_extra.get("extra_content")
-                if extra_content is not None:
-                    if hasattr(extra_content, "model_dump"):
-                        try:
-                            extra_content = extra_content.model_dump()
-                        except Exception:
-                            pass
-                    provider_data["extra_content"] = extra_content
-                function = getattr(raw_tool_call, "function", None)
-                tool_calls.append(
-                    NormalizedToolCall(
-                        id=getattr(raw_tool_call, "id", None),
-                        name=getattr(function, "name", "") if function is not None else "",
-                        arguments=getattr(function, "arguments", "") if function is not None else "",
-                        provider_data=provider_data or None,
-                    )
-                )
-
-        usage = None
-        raw_usage = getattr(response, "usage", None)
-        if raw_usage is not None:
-            usage = NormalizedUsage(
-                prompt_tokens=int(getattr(raw_usage, "prompt_tokens", 0) or 0),
-                completion_tokens=int(getattr(raw_usage, "completion_tokens", 0) or 0),
-                total_tokens=int(getattr(raw_usage, "total_tokens", 0) or 0),
-                cached_tokens=int(getattr(raw_usage, "cached_tokens", 0) or 0),
-            )
-
+        tool_calls = _normalize_chat_tool_calls(message)
+        usage = _normalize_chat_usage(response)
         reasoning = getattr(message, "reasoning", None)
         reasoning_content = getattr(message, "reasoning_content", None)
         if reasoning_content is None and hasattr(message, "model_extra"):
             model_extra = getattr(message, "model_extra", None) or {}
             if isinstance(model_extra, dict):
                 reasoning_content = model_extra.get("reasoning_content")
-
-        provider_data: dict[str, Any] = {}
-        if reasoning_content is not None:
-            provider_data["reasoning_content"] = reasoning_content
-        reasoning_details = getattr(message, "reasoning_details", None)
-        if reasoning_details:
-            provider_data["reasoning_details"] = reasoning_details
-
+        provider_data = _chat_response_provider_data(message, reasoning_content)
         content = getattr(message, "content", None)
         refusal = getattr(message, "refusal", None)
-        if refusal is None and hasattr(message, "model_extra"):
-            model_extra = getattr(message, "model_extra", None) or {}
-            if isinstance(model_extra, dict):
-                refusal = model_extra.get("refusal")
+        if refusal is None:
+            refusal = _chat_model_extra_value(message, "refusal")
         if isinstance(refusal, str) and refusal.strip():
             provider_data["refusal"] = refusal
             has_text = isinstance(content, str) and bool(content.strip())
