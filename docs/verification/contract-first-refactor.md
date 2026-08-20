@@ -866,3 +866,276 @@ Baseline commands and summarized outcomes:
   built because container qualification remains deferred until the complete design
   implementation gate. No merge, push, publish, version, permission, or Phase 3 action
   occurred.
+
+## Phase 3 — Provider ownership and wire isolation
+
+### Task 3.1 — Isolate provider contracts and supported-mode facts
+
+- Commit: `5794daa` (`refactor(providers): isolate provider contracts`).
+- RED command:
+  `uv run --locked --all-extras --dev pytest -q tests/ai/providers/test_provider_contracts.py tests/ai/providers/test_provider_owners.py tests/test_provider_ownership_architecture.py`
+  — 10 failed and 3 passed because the three leaf owner modules did not exist and the
+  profile still reached the concrete transport module for availability.
+- Focused GREEN command: the Task 3.1 public-import, contract/owner/capability,
+  architecture, scoped Pyright, and scoped Ruff gates passed; 33 tests passed and
+  Pyright reported 0 errors, 0 warnings, and 0 informations.
+- Phase suite command:
+  `uv run --locked --all-extras --dev pytest -q tests/ai/providers tests/test_ai_provider_capabilities.py tests/test_provider_ownership_architecture.py tests/test_provider_replay_neutrality.py tests/test_subscription_provider_wire_compatibility.py tests/test_codex_reliability_contract.py tests/test_ai_images.py tests/test_reference_runtime_contract.py`
+  — 176 passed.
+- Installed-wheel TUI scenario: deferred to the single exact-wheel real-PTY provider
+  matrix required by Task 3.10; this slice moves declarations without changing a
+  transport family.
+- Protected-loop SHA-256:
+  `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`.
+- Notes/remaining risks: model catalog I/O remains behaviorally unchanged inside the
+  profile owner until the regression-first bounded-fetch work in Task 3.9.
+
+### Task 3.2 — Capture sanitized golden wire fixtures
+
+- Commit: `12ce799` (`test(providers): pin sanitized wire contracts`).
+- RED evidence: the fixture validation slice first reported 8 failures because the
+  read-only validator/loader did not exist; after the schema guard was present, the
+  fixture execution slice reported 3 failures because request, response, and stream
+  renderers did not exist.
+- Added eight hand-authored canonical JSON fixtures covering chat completions, Mistral,
+  Google, Bedrock, Anthropic, Codex Responses, OpenAI Responses, and Azure Responses.
+  Fixtures contain only reviewed placeholders for credentials, account/session IDs,
+  request IDs, and the dynamic client user-agent; the validator rejects noncanonical
+  ordering, private absolute paths, token/JWT patterns, unsafe authorization values,
+  missing case groups, and ambient-environment update switches.
+- Focused GREEN command:
+  `uv run --locked --all-extras --dev pytest -q -p no:cacheprovider tests/ai/providers/test_provider_characterization.py tests/test_subscription_provider_wire_compatibility.py tests/test_ai_provider_capabilities.py`
+  — 53 passed. Scoped Ruff also passed.
+- Fixture coverage pins developer/system instruction differences, text/image/thinking/
+  tool-call/tool-result conversion, omitted and explicit sampling, reasoning controls,
+  cache/session keys, Mistral IDs, Anthropic OAuth identity and tool constraints,
+  normalized usage/finish reasons, partial stream errors, and final done events.
+- Installed-wheel TUI scenario: deferred to the single exact-wheel real-PTY provider
+  matrix required by Task 3.10; this task only records behavior against the pre-move
+  transport owners.
+- Protected-loop SHA-256:
+  `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`.
+
+### Task 3.3 — Introduce the transport registry and compatibility surface
+
+- Commits: `230f00a` (`refactor(providers): add explicit transport registry`) and
+  typed-boundary correction `00d0bfa` (`refactor(providers): type transport registry
+  boundary`).
+- Initial RED command:
+  `uv run --locked --all-extras --dev pytest -q -p no:cacheprovider tests/ai/providers/test_transport_registry.py tests/test_ai_provider_capabilities.py tests/test_provider_ownership_architecture.py`
+  — 7 failed and 22 passed because the registry and unsupported-family owners did not
+  exist.
+- Controller-review RED: the new annotation regression failed because the registry map
+  was unannotated and its builder/lookup annotations erased concrete transports to
+  `Any`. The correction defines an explicit union of the nine registered concrete
+  families, a truthful supported-or-unsupported lookup union, and no cast, ignore, or
+  blanket suppression.
+- Corrected focused registry/capability/architecture gate: 30 passed. Fixture,
+  subscription-wire, and replay-neutrality replay: 35 passed. Full Pyright reported 0
+  errors, 0 warnings, and 0 informations; provider-scoped Ruff passed.
+- The default registry is immutable and canonical-key sorted; aliases resolve to the
+  same singleton, duplicate construction fails deterministically, unknown modes retain
+  their normalized value in the separately owned unsupported transport, and existing
+  compatibility imports remain available.
+- Installed-wheel TUI scenario: deferred to the single exact-wheel real-PTY provider
+  matrix required by Task 3.10; no concrete family behavior moved in this boundary task.
+- Protected-loop SHA-256:
+  `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`.
+
+### Task 3.4 — Extract chat-completions and Mistral families
+
+- Commit: `7a4cda1` (`refactor(providers): isolate chat and mistral transports`).
+- RED owner/architecture slice: 2 failed and 10 passed because the chat-completions and
+  Mistral family modules did not exist.
+- `ChatCompletionsTransport`, its request/response normalization and reasoning/cache
+  helpers, and the shared prompt-cache-key clamp now live in `chat_completions.py`.
+  `MistralConversationsTransport` and its ID/message normalization now live in
+  `mistral.py`, explicitly depending on the chat family without importing the
+  compatibility module.
+- Focused golden/registry/architecture/capability/replay/image slice: 50 passed. The
+  broader provider, subscription, Codex, image, and reference-runtime slice passed 199
+  tests. Provider Ruff, scoped family Pyright, and the complete configured Pyright gate
+  passed with 0 errors, 0 warnings, and 0 informations.
+- Installed-wheel TUI scenario: deferred to Task 3.10 so all provider families can be
+  exercised from one exact installed wheel.
+- Protected-loop SHA-256:
+  `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`.
+
+### Task 3.5 — Extract Google and Bedrock families
+
+- Commit: `67cf28e` (`refactor(providers): isolate google and bedrock transports`).
+- RED owner/architecture slice: 2 failed and 11 passed because the Google and Bedrock
+  family owners did not exist.
+- Google Generative AI/Vertex request URL, message/tool conversion, thinking, and
+  normalization behavior now live in `google.py`; Bedrock cache/image/message/request
+  behavior now lives in `bedrock.py`. Vertex authorization and Bedrock EventStream
+  parsing/execution remain with their existing non-transport owners.
+- Focused family/golden/reference slice: 26 passed with 102 deselected. The broader
+  provider/reference slice passed 200 tests; the dedicated stream/image/parity/auth
+  slice passed 34 tests. Provider Ruff, scoped family Pyright, and complete configured
+  Pyright passed with 0 errors, 0 warnings, and 0 informations.
+- Installed-wheel TUI scenario: deferred to Task 3.10 so all provider families can be
+  exercised from one exact installed wheel.
+- Protected-loop SHA-256:
+  `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`.
+
+### Task 3.6 — Extract Anthropic Messages
+
+- Commit: `47a6821` (`refactor(providers): isolate anthropic transport`).
+- RED helper/owner/architecture slice: 13 failed and 12 passed because the Anthropic
+  family owner and its pure cache, sampling, system, tool, and thinking helpers did not
+  exist.
+- `AnthropicMessagesTransport` now lives in `anthropic.py`. Its former high-complexity
+  request builder delegates to directly tested pure helpers for cache retention,
+  sampling omission/fixed temperature, system/OAuth identity blocks, immediate and
+  deferred tools, and adaptive/manual/disabled thinking. Cross-family content/tool
+  parsing primitives live in a leaf `_shared.py`; no family imports the compatibility
+  module.
+- Focused helper/registry/architecture/golden/subscription/capability slice: 78 passed.
+  The broader provider, subscription, Codex, image, and reference-runtime slice passed
+  212 tests. Provider Ruff, scoped family Pyright, and complete configured Pyright
+  passed with 0 errors, 0 warnings, and 0 informations.
+- Installed-wheel TUI scenario: deferred to Task 3.10 so all provider families can be
+  exercised from one exact installed wheel.
+- Protected-loop SHA-256:
+  `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`.
+
+### Task 3.7 — Extract Codex, OpenAI, and Azure Responses families
+
+- Commit: `d01754f` (`refactor(providers): isolate responses transports`).
+- RED helper/owner/architecture slice: 8 failed and 13 passed because the Responses
+  and Azure family owners and pure construction helpers did not exist.
+- Codex/OpenAI response input conversion, developer/system instruction selection,
+  deferred tools, reasoning items, cache keys, service tier, sampling, and response
+  reasoning now live in `responses.py`. Azure URL/key/deployment behavior now lives in
+  `azure_responses.py`; deployment mapping is an independently tested pure helper.
+  Compatibility class imports remain identity-preserving.
+- Focused helper/registry/architecture/golden/subscription/Codex/capability slice: 77
+  passed. The broader provider, response-stream, subscription, image, and reference
+  slice passed 223 tests; OAuth/stream-proxy follow-up passed 8 tests. Provider Ruff,
+  scoped family Pyright, and complete configured Pyright passed with 0 errors, 0
+  warnings, and 0 informations.
+- Installed-wheel TUI scenario: deferred to Task 3.10 so all provider families can be
+  exercised from one exact installed wheel.
+- Protected-loop SHA-256:
+  `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`.
+
+### Task 3.8 — Finish monolith reduction and remove provider cycles
+
+- Commit: `97c6f0e` (`refactor(providers): complete bounded transport ownership`).
+- RED architecture evidence: the monotonic Pyright-scope check failed because none of
+  the newly migrated registry/family/facade owners were configured; the direct
+  compatibility identity/declaration-free checks then failed while `transports.py`
+  still wrapped registry lookup.
+- `transports.py` is now a 34-line explicit compatibility export module with no concrete
+  class or function declarations. It re-exports the exact typed registry lookup and all
+  legacy class imports. The provider AST import graph has no strongly connected
+  component larger than one, and every family is proven not to import the compatibility
+  module.
+- All migrated provider owners were added to the monotonic Pyright scope. Registry and
+  architecture tests passed 18 tests; the exact Task 3.8 provider suite passed 139
+  tests. Provider Ruff passed, and configured Pyright reported 0 errors, 0 warnings,
+  and 0 informations.
+- Protected-loop SHA-256 remains
+  `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`, and its diff
+  from `7838749452b567940bd5b69a715b6184b8f9f13e` remains empty.
+
+### Task 3.9 — Bound remote model catalogs and refresh concurrency
+
+- Commit: `698ba37` (`fix(providers): bound model catalog discovery`).
+- RED command:
+  `uv run --locked --all-extras --dev pytest -q -p no:cacheprovider tests/ai/providers/test_model_catalog_fetch.py tests/test_models_runtime.py -k refresh`
+  — 17 failed and 6 passed: the bounded fetch owner did not exist and refresh-all
+  reached 10 concurrent provider threads.
+- Remote catalogs now accept HTTPS and loopback-only HTTP; remote HTTP, file, data, FTP,
+  scheme-relative URLs, and unsafe redirect targets are rejected before their relevant
+  read/follow boundary. Reads use 64 KiB chunks, permit at most 2 MiB, and probe only one
+  byte beyond the limit. JSON/shape/decoding/size/I/O failures return the existing
+  best-effort `None` result with a provider-and-exception-type diagnostic that excludes
+  response bodies, URLs, and credentials.
+- `ProviderProfile.fetch_models` delegates to the bounded leaf owner and no longer
+  imports JSON or urllib. Refresh-all uses at most four workers, settles every provider,
+  isolates failure, and preserves provider registration/model order independent of
+  completion order; model streaming has no executor change.
+- Focused GREEN: 23 passed with 4 deselected. Catalog/security/architecture suite: 83
+  passed. Broader provider/reference suite: 244 passed. Provider/model Ruff and complete
+  configured Pyright passed with 0 errors, 0 warnings, and 0 informations.
+- Protected-loop SHA-256:
+  `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`.
+
+### Task 3.10 — Phase 3 qualification
+
+- Qualification source head: `698ba37` (`fix(providers): bound model catalog
+  discovery`); the evidence ledger is committed separately as
+  `docs: record phase 3 provider qualification`.
+- Master checkpoint and source/package gates:
+  - `git diff --check`, both root and adapter `uv lock --check` commands, Ruff, and the
+    complete configured Pyright gate passed; Pyright reported 0 errors, 0 warnings, and
+    0 informations. The checked locks contained 84 root and 56 adapter packages.
+  - The pinned master-worktree interpreter command
+    `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. /Users/htooayelwin/orca/travis234/.venv/bin/python -m pytest -q -p no:cacheprovider tests`
+    passed 2,903 tests in 534.98s.
+  - The fully locked source coverage run passed the same 2,903 tests in 831.18s. The
+    independent coverage checker reported 39,411/46,337 statements (85.05%) and
+    10,624/15,266 branches (69.59%), above the required 83% and 68% floors.
+  - The locked adapter suite passed 125 tests in 31.10s. The npm launcher suite passed
+    all 24 tests, and npm dry-pack produced the expected 11-file inventory.
+  - Fresh root and adapter wheel/sdist builds passed Twine checks for all four
+    artifacts. Their SHA-256 values are root wheel
+    `5f92725f5a57a744603b931934bed318adb4df2fa3b074b5107d39adc53043cf`,
+    root sdist
+    `fcf5689d630e1e0f7efe4d129065ef2e1f95c9cc30b3bac9ec8bcc4c09194544`,
+    adapter wheel
+    `3bd8ebd742430bc19b535c0e1e73889012b61f5c865dc0330d7d52df555ce890`,
+    and adapter sdist
+    `68eed35a36ed414d63848233a0661a6ec99d3549d2c146ee16fa703c028bf39d`.
+- Golden replay command:
+  `uv run --locked --all-extras --dev pytest -q -p no:cacheprovider --keep-duplicates tests/ai/providers/test_provider_characterization.py tests/ai/providers/test_provider_characterization.py -k sanitized_wire_fixtures`
+  — 6 passed with 18 deselected in one interpreter. This executes each sanitized
+  fixture twice: Anthropic 2 request/1 response/2 stream cases; Azure Responses 1/1/1;
+  Bedrock 1/1/1; chat completions 2/1/1; Codex Responses 1/1/1; Google 1/1/1; Mistral
+  1/1/1; and OpenAI Responses 2/1/1. Totals are 11 request, 8 response, and 9 stream
+  cases per pass, or 56 executed fixture cases across both passes, with no mutable
+  singleton-state drift.
+- Response-size and refresh-concurrency qualification:
+  `uv run --locked --all-extras --dev pytest -q -p no:cacheprovider tests/ai/providers/test_model_catalog_fetch.py tests/test_models_runtime.py`
+  — 28 passed. The cases prove 64 KiB incremental reads and a 2 MiB plus one-byte
+  rejection probe; rejection before unsafe I/O/redirect reads; at most four simultaneous
+  provider refreshes; stable registration order; failure isolation; and settlement of
+  every provider.
+- Exact installed-wheel qualification:
+  - The root wheel above was installed offline into a fresh Python 3.13.13 virtual
+    environment. From outside the repository with user-site imports disabled, `travis`
+    plus the catalog owner, registry, compatibility facade, and all seven concrete
+    family modules resolved as 11 imports from that environment's `site-packages`;
+    the installed `travis234 --help` entry point also passed.
+  - A clean real PTY launched that exact installed entry point with an isolated
+    task-owned home, agent directory, and working directory, `--offline`, `--no-session`,
+    thinking `medium`, and sanitized event/conversation logs. `/models` discovered the
+    faux provider and `/model` selected it without network discovery; a local refresh
+    command returned the newly registered model in stable order.
+  - The faux stream emitted reasoning events, requested a `bash` `pwd` tool, received a
+    successful tool result, and completed with the expected stream/tool/reasoning marker.
+    Trace evidence recorded one successful `tool_end`, one successful process event, and
+    an `ok` first turn.
+  - The login fixture accepted only a synthetic qualification value through masked
+    input. Its loopback 401 response reflected that value in authorization and message
+    fields, while the visible error and persisted conversation contained only
+    `[REDACTED]`; the synthetic value was absent from the evidence and agent directories.
+    `/logout` removed the stored value, leaving zero stored authentication entries.
+  - `/exit` returned 0, the last trace event was `shutdown` with status `ok`, and no TUI
+    process remained. The final trace contains one TUI-ready event, one model-picker-ready
+    event, two model selections, one extension command, one tool completion, two turn
+    completions (`ok`, then expected `error`), and one shutdown; the conversation log has
+    the matching two sanitized records.
+  - Sanitized evidence is retained under
+    `/tmp/travis234-phase3-qual.eyaaD1/final-evidence`; the ephemeral qualification
+    extension was removed from the repository before this ledger update.
+- Protected-loop SHA-256:
+  `b332f3ae0dffb0df8bdf97cb0113818342ed5c83dc03198e215b344fa4adf5c7`.
+  The protected-loop diff from `7838749452b567940bd5b69a715b6184b8f9f13e` remains
+  empty.
+- Notes/remaining risks: no live-provider smoke ran because no live credentials were
+  supplied or required. Container work was explicitly prohibited for this assignment;
+  remote CI was not invoked. No merge, push, publish, version, permission, user-state,
+  or Phase 4 action occurred.
