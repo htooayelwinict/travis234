@@ -246,6 +246,69 @@ def _apply_reasoning_payload(
         _apply_default_reasoning(body, compat, enabled, mapped, thinking_level_map)
 
 
+_INTERNAL_CHAT_MESSAGE_FIELDS = (
+    "codex_reasoning_items",
+    "codex_message_items",
+    "tool_name",
+    "timestamp",
+)
+
+
+def _chat_tool_call_needs_sanitize(tool_call: object, strip_extra_content: bool) -> bool:
+    return bool(
+        isinstance(tool_call, dict)
+        and (
+            "call_id" in tool_call
+            or "response_item_id" in tool_call
+            or (strip_extra_content and "extra_content" in tool_call)
+        )
+    )
+
+
+def _chat_message_needs_sanitize(
+    message: dict[str, object],
+    strip_extra_content: bool,
+) -> bool:
+    if any(field in message for field in _INTERNAL_CHAT_MESSAGE_FIELDS):
+        return True
+    if any(isinstance(key, str) and key.startswith("_") for key in message):
+        return True
+    tool_calls = message.get("tool_calls")
+    return bool(
+        isinstance(tool_calls, list)
+        and any(
+            _chat_tool_call_needs_sanitize(tool_call, strip_extra_content)
+            for tool_call in tool_calls
+        )
+    )
+
+
+def _sanitize_chat_tool_call(
+    tool_call: dict[object, object],
+    strip_extra_content: bool,
+) -> None:
+    tool_call.pop("call_id", None)
+    tool_call.pop("response_item_id", None)
+    if strip_extra_content:
+        tool_call.pop("extra_content", None)
+
+
+def _sanitize_chat_message(
+    message: dict[str, object],
+    strip_extra_content: bool,
+) -> None:
+    for field in _INTERNAL_CHAT_MESSAGE_FIELDS:
+        message.pop(field, None)
+    for key in [key for key in message if isinstance(key, str) and key.startswith("_")]:
+        message.pop(key, None)
+    tool_calls = message.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return
+    for tool_call in tool_calls:
+        if isinstance(tool_call, dict):
+            _sanitize_chat_tool_call(tool_call, strip_extra_content)
+
+
 class ChatCompletionsTransport:
     api = "openai-completions"
     api_mode = "chat_completions"
@@ -259,56 +322,17 @@ class ChatCompletionsTransport:
         compatible providers must only receive schema-valid chat messages.
         """
         strip_extra_content = not _model_consumes_thought_signature(model)
-        needs_sanitize = False
-        for message in messages:
-            if not isinstance(message, dict):
-                continue
-            if (
-                "codex_reasoning_items" in message
-                or "codex_message_items" in message
-                or "tool_name" in message
-                or "timestamp" in message
-            ):
-                needs_sanitize = True
-                break
-            if any(isinstance(key, str) and key.startswith("_") for key in message):
-                needs_sanitize = True
-                break
-            tool_calls = message.get("tool_calls")
-            if isinstance(tool_calls, list):
-                for tool_call in tool_calls:
-                    if isinstance(tool_call, dict) and (
-                        "call_id" in tool_call
-                        or "response_item_id" in tool_call
-                        or (strip_extra_content and "extra_content" in tool_call)
-                    ):
-                        needs_sanitize = True
-                        break
-                if needs_sanitize:
-                    break
-
-        if not needs_sanitize:
+        if not any(
+            isinstance(message, dict)
+            and _chat_message_needs_sanitize(message, strip_extra_content)
+            for message in messages
+        ):
             return messages
 
         sanitized = copy.deepcopy(messages)
         for message in sanitized:
-            if not isinstance(message, dict):
-                continue
-            message.pop("codex_reasoning_items", None)
-            message.pop("codex_message_items", None)
-            message.pop("tool_name", None)
-            message.pop("timestamp", None)
-            for key in [key for key in message if isinstance(key, str) and key.startswith("_")]:
-                message.pop(key, None)
-            tool_calls = message.get("tool_calls")
-            if isinstance(tool_calls, list):
-                for tool_call in tool_calls:
-                    if not isinstance(tool_call, dict):
-                        continue
-                    tool_call.pop("call_id", None)
-                    tool_call.pop("response_item_id", None)
-                    if strip_extra_content:
-                        tool_call.pop("extra_content", None)
+            if isinstance(message, dict):
+                _sanitize_chat_message(message, strip_extra_content)
         return sanitized
 
     def convert_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
