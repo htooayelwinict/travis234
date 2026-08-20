@@ -6,7 +6,7 @@ import copy
 import json
 import math
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, TypeGuard
 
 from jsonschema.exceptions import SchemaError, ValidationError
 from jsonschema.validators import validator_for
@@ -107,7 +107,7 @@ def _format_received_arguments(tool_name: str, arguments: Any) -> str:
         return str(arguments)
 
 
-def _is_record(value: Any) -> bool:
+def _is_record(value: Any) -> TypeGuard[dict[object, object]]:
     return isinstance(value, dict)
 
 
@@ -138,59 +138,79 @@ def _matches_json_type(value: Any, schema_type: str) -> bool:
     return False
 
 
+def _coerce_number(value: object) -> object:
+    if value is None:
+        return 0
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = float(value)
+        except ValueError:
+            return value
+        if math.isfinite(parsed):
+            return int(parsed) if parsed.is_integer() else parsed
+    if isinstance(value, bool):
+        return 1 if value else 0
+    return value
+
+
+def _coerce_integer(value: object) -> object:
+    if value is None:
+        return 0
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = float(value)
+        except ValueError:
+            return value
+        if math.isfinite(parsed) and parsed.is_integer():
+            return int(parsed)
+    if isinstance(value, bool):
+        return 1 if value else 0
+    return value
+
+
+def _coerce_boolean(value: object) -> object:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        if value == "true":
+            return True
+        if value == "false":
+            return False
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+    return value
+
+
+def _coerce_string(value: object) -> object:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return value
+
+
+def _coerce_null(value: object) -> object:
+    if value in ("", 0, False):
+        return None
+    return value
+
+
 def _coerce_primitive_by_type(value: Any, schema_type: str) -> Any:
     if schema_type == "number":
-        if value is None:
-            return 0
-        if isinstance(value, str) and value.strip():
-            try:
-                parsed = float(value)
-            except ValueError:
-                return value
-            if math.isfinite(parsed):
-                return int(parsed) if parsed.is_integer() else parsed
-        if isinstance(value, bool):
-            return 1 if value else 0
-        return value
+        return _coerce_number(value)
     if schema_type == "integer":
-        if value is None:
-            return 0
-        if isinstance(value, str) and value.strip():
-            try:
-                parsed = float(value)
-            except ValueError:
-                return value
-            if math.isfinite(parsed) and parsed.is_integer():
-                return int(parsed)
-        if isinstance(value, bool):
-            return 1 if value else 0
-        return value
+        return _coerce_integer(value)
     if schema_type == "boolean":
-        if value is None:
-            return False
-        if isinstance(value, str):
-            if value == "true":
-                return True
-            if value == "false":
-                return False
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            if value == 1:
-                return True
-            if value == 0:
-                return False
-        return value
+        return _coerce_boolean(value)
     if schema_type == "string":
-        if value is None:
-            return ""
-        if isinstance(value, bool):
-            return "true" if value else "false"
-        if isinstance(value, (int, float)):
-            return str(value)
-        return value
+        return _coerce_string(value)
     if schema_type == "null":
-        if value in ("", 0, False):
-            return None
-        return value
+        return _coerce_null(value)
     return value
 
 
@@ -199,6 +219,58 @@ def _coerce_with_union_schema(value: Any, schemas: list[dict[str, Any]]) -> Any:
         candidate = _coerce_with_json_schema(copy.deepcopy(value), schema)
         if _is_valid_value(candidate, schema):
             return candidate
+    return value
+
+
+def _coerce_schema_types(value: object, schema_types: list[str]) -> object:
+    matches_union_member = len(schema_types) > 1 and any(
+        _matches_json_type(value, item) for item in schema_types
+    )
+    if schema_types and not matches_union_member:
+        for schema_type in schema_types:
+            candidate = _coerce_primitive_by_type(value, schema_type)
+            if candidate is not value:
+                return candidate
+    return value
+
+
+def _coerce_object_properties(
+    value: object,
+    schema: Mapping[str, object],
+    schema_types: list[str],
+) -> object:
+    if "object" not in schema_types and "properties" not in schema:
+        return value
+    if not _is_record(value):
+        return value
+    properties = schema.get("properties") or {}
+    if isinstance(properties, dict):
+        for key, property_schema in properties.items():
+            if key in value:
+                value[key] = _coerce_with_json_schema(value[key], property_schema)
+        additional = schema.get("additionalProperties")
+        if isinstance(additional, dict):
+            for key, item in list(value.items()):
+                if key not in properties:
+                    value[key] = _coerce_with_json_schema(item, additional)
+    return value
+
+
+def _coerce_array_items(
+    value: object,
+    schema: Mapping[str, object],
+    schema_types: list[str],
+) -> object:
+    if "array" not in schema_types or not isinstance(value, list):
+        return value
+    items = schema.get("items")
+    if isinstance(items, list):
+        for index, item_schema in enumerate(items):
+            if index < len(value):
+                value[index] = _coerce_with_json_schema(value[index], item_schema)
+    elif isinstance(items, dict):
+        for index, item in enumerate(list(value)):
+            value[index] = _coerce_with_json_schema(item, items)
     return value
 
 
@@ -220,38 +292,9 @@ def _coerce_with_json_schema(value: Any, schema: Any) -> Any:
         next_value = _coerce_with_union_schema(next_value, [item for item in one_of if isinstance(item, dict)])
 
     schema_types = _schema_types(schema)
-    matches_union_member = len(schema_types) > 1 and any(_matches_json_type(next_value, item) for item in schema_types)
-    if schema_types and not matches_union_member:
-        for schema_type in schema_types:
-            candidate = _coerce_primitive_by_type(next_value, schema_type)
-            if candidate is not next_value:
-                next_value = candidate
-                break
-
-    if "object" in schema_types or "properties" in schema:
-        if _is_record(next_value):
-            properties = schema.get("properties") or {}
-            if isinstance(properties, dict):
-                for key, property_schema in properties.items():
-                    if key in next_value:
-                        next_value[key] = _coerce_with_json_schema(next_value[key], property_schema)
-                additional = schema.get("additionalProperties")
-                if isinstance(additional, dict):
-                    for key, item in list(next_value.items()):
-                        if key not in properties:
-                            next_value[key] = _coerce_with_json_schema(item, additional)
-
-    if "array" in schema_types and isinstance(next_value, list):
-        items = schema.get("items")
-        if isinstance(items, list):
-            for index, item_schema in enumerate(items):
-                if index < len(next_value):
-                    next_value[index] = _coerce_with_json_schema(next_value[index], item_schema)
-        elif isinstance(items, dict):
-            for index, item in enumerate(list(next_value)):
-                next_value[index] = _coerce_with_json_schema(item, items)
-
-    return next_value
+    next_value = _coerce_schema_types(next_value, schema_types)
+    next_value = _coerce_object_properties(next_value, schema, schema_types)
+    return _coerce_array_items(next_value, schema, schema_types)
 
 
 def _is_valid_value(value: Any, schema: dict[str, Any]) -> bool:
@@ -261,7 +304,11 @@ def _is_valid_value(value: Any, schema: dict[str, Any]) -> bool:
         return False
 
 
-def _validate_value(value: Any, schema: dict[str, Any], path: str) -> None:
+def _validate_compositions(
+    value: object,
+    schema: Mapping[str, object],
+    path: str,
+) -> None:
     all_of = schema.get("allOf")
     if isinstance(all_of, list):
         for nested in all_of:
@@ -269,14 +316,89 @@ def _validate_value(value: Any, schema: dict[str, Any], path: str) -> None:
                 _validate_value(value, nested, path)
     any_of = schema.get("anyOf")
     if isinstance(any_of, list) and any_of:
-        if not any(isinstance(nested, dict) and _is_valid_value(value, nested) for nested in any_of):
+        if not any(
+            isinstance(nested, dict) and _is_valid_value(value, nested)
+            for nested in any_of
+        ):
             raise ToolValidationError(f"{path}: expected anyOf match")
     one_of = schema.get("oneOf")
     if isinstance(one_of, list) and one_of:
-        matches = sum(1 for nested in one_of if isinstance(nested, dict) and _is_valid_value(value, nested))
+        matches = sum(
+            1
+            for nested in one_of
+            if isinstance(nested, dict) and _is_valid_value(value, nested)
+        )
         if matches != 1:
             raise ToolValidationError(f"{path}: expected oneOf match")
 
+
+def _validate_array_value(
+    value: object,
+    schema: Mapping[str, object],
+    path: str,
+) -> None:
+    if not isinstance(value, list):
+        raise ToolValidationError(f"{path}: expected array")
+    min_items = schema.get("minItems")
+    if isinstance(min_items, int) and len(value) < min_items:
+        raise ToolValidationError(f"{path}: expected array length >= {min_items}")
+    max_items = schema.get("maxItems")
+    if isinstance(max_items, int) and len(value) > max_items:
+        raise ToolValidationError(f"{path}: expected array length <= {max_items}")
+    items = schema.get("items")
+    if isinstance(items, list):
+        for index, item_schema in enumerate(items):
+            if index < len(value):
+                _validate_value(value[index], item_schema, f"{path}[{index}]")
+    elif isinstance(items, dict):
+        for index, item in enumerate(value):
+            _validate_value(item, items, f"{path}[{index}]")
+
+
+def _validate_string_value(
+    value: object,
+    schema: Mapping[str, object],
+    path: str,
+) -> None:
+    if not isinstance(value, str):
+        raise ToolValidationError(f"{path}: expected string")
+    min_length = schema.get("minLength")
+    if isinstance(min_length, int) and len(value) < min_length:
+        raise ToolValidationError(f"{path}: expected string length >= {min_length}")
+    max_length = schema.get("maxLength")
+    if isinstance(max_length, int) and len(value) > max_length:
+        raise ToolValidationError(f"{path}: expected string length <= {max_length}")
+
+
+def _validate_primitive_value(
+    value: object,
+    schema: Mapping[str, object],
+    schema_types: list[str],
+    path: str,
+) -> None:
+    if len(schema_types) > 1:
+        if any(_is_valid_primitive(value, schema_type) for schema_type in schema_types):
+            return
+        raise ToolValidationError(f"{path}: expected {' or '.join(schema_types)}")
+    schema_type = schema_types[0] if schema_types else None
+    if schema_type == "string":
+        _validate_string_value(value, schema, path)
+    elif schema_type == "integer" and (
+        not isinstance(value, int) or isinstance(value, bool)
+    ):
+        raise ToolValidationError(f"{path}: expected integer")
+    elif schema_type == "number" and (
+        not isinstance(value, (int, float)) or isinstance(value, bool)
+    ):
+        raise ToolValidationError(f"{path}: expected number")
+    elif schema_type == "boolean" and not isinstance(value, bool):
+        raise ToolValidationError(f"{path}: expected boolean")
+    elif schema_type == "null" and value is not None:
+        raise ToolValidationError(f"{path}: expected null")
+
+
+def _validate_value(value: Any, schema: dict[str, Any], path: str) -> None:
+    _validate_compositions(value, schema, path)
     schema_types = _schema_types(schema)
     if "object" in schema_types or "properties" in schema:
         if not isinstance(value, dict):
@@ -293,46 +415,9 @@ def _validate_value(value: Any, schema: dict[str, Any], path: str) -> None:
                 raise ToolValidationError(f"{path}.{key}: unexpected property")
         return
     if "array" in schema_types:
-        if not isinstance(value, list):
-            raise ToolValidationError(f"{path}: expected array")
-        min_items = schema.get("minItems")
-        if isinstance(min_items, int) and len(value) < min_items:
-            raise ToolValidationError(f"{path}: expected array length >= {min_items}")
-        max_items = schema.get("maxItems")
-        if isinstance(max_items, int) and len(value) > max_items:
-            raise ToolValidationError(f"{path}: expected array length <= {max_items}")
-        items = schema.get("items")
-        if isinstance(items, list):
-            for index, item_schema in enumerate(items):
-                if index < len(value):
-                    _validate_value(value[index], item_schema, f"{path}[{index}]")
-        elif isinstance(items, dict):
-            for index, item in enumerate(value):
-                _validate_value(item, items, f"{path}[{index}]")
+        _validate_array_value(value, schema, path)
         return
-
-    if len(schema_types) > 1:
-        if any(_is_valid_primitive(value, schema_type) for schema_type in schema_types):
-            return
-        raise ToolValidationError(f"{path}: expected {' or '.join(schema_types)}")
-    schema_type = schema_types[0] if schema_types else None
-    if schema_type == "string" and not isinstance(value, str):
-        raise ToolValidationError(f"{path}: expected string")
-    if schema_type == "string":
-        min_length = schema.get("minLength")
-        if isinstance(min_length, int) and len(value) < min_length:
-            raise ToolValidationError(f"{path}: expected string length >= {min_length}")
-        max_length = schema.get("maxLength")
-        if isinstance(max_length, int) and len(value) > max_length:
-            raise ToolValidationError(f"{path}: expected string length <= {max_length}")
-    if schema_type == "integer" and (not isinstance(value, int) or isinstance(value, bool)):
-        raise ToolValidationError(f"{path}: expected integer")
-    if schema_type == "number" and (not isinstance(value, (int, float)) or isinstance(value, bool)):
-        raise ToolValidationError(f"{path}: expected number")
-    if schema_type == "boolean" and not isinstance(value, bool):
-        raise ToolValidationError(f"{path}: expected boolean")
-    if schema_type == "null" and value is not None:
-        raise ToolValidationError(f"{path}: expected null")
+    _validate_primitive_value(value, schema, schema_types, path)
 
 
 def _is_valid_primitive(value: Any, schema_type: str) -> bool:
