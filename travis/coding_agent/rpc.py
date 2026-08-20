@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+from dataclasses import dataclass
 from typing import Mapping, TextIO
 
 from travis.ai.types import AssistantMessage, TextContent
@@ -21,6 +22,58 @@ _MUTATING_METHODS = {
     "compact",
     "close",
 }
+
+_RPC_METHODS = {
+    "prompt",
+    "continue",
+    "abort",
+    "get_state",
+    "set_model",
+    "set_thinking",
+    "compact",
+    "close",
+}
+
+
+@dataclass(frozen=True)
+class _RpcRequest:
+    id: object
+    method: str
+    params: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class _RpcRequestError:
+    id: object
+    code: str
+    message: str
+
+
+def _parse_rpc_request(line: str) -> _RpcRequest | _RpcRequestError:
+    try:
+        request: object = json.loads(line)
+    except json.JSONDecodeError:
+        return _RpcRequestError(None, "parse_error", "Invalid JSON frame")
+    if not isinstance(request, dict):
+        return _RpcRequestError(None, "invalid_request", "Request must be an object")
+    request_id = request.get("id")
+    method = request.get("method")
+    params = request.get("params", {})
+    if "id" not in request or not isinstance(method, str):
+        return _RpcRequestError(
+            request_id,
+            "invalid_request",
+            "Request requires id and method",
+        )
+    if not isinstance(params, dict):
+        return _RpcRequestError(request_id, "invalid_params", "params must be an object")
+    if method not in _RPC_METHODS:
+        return _RpcRequestError(
+            request_id,
+            "unknown_method",
+            f"Unknown method: {method}",
+        )
+    return _RpcRequest(request_id, method, params)
 
 
 class RpcServer:
@@ -74,83 +127,57 @@ class RpcServer:
         )
 
     def _handle_line(self, line: str) -> None:
-        try:
-            request = json.loads(line)
-        except json.JSONDecodeError:
-            self._write_error(None, "parse_error", "Invalid JSON frame")
-            return
-        if not isinstance(request, dict):
-            self._write_error(None, "invalid_request", "Request must be an object")
-            return
-        request_id = request.get("id")
-        method = request.get("method")
-        params = request.get("params", {})
-        if "id" not in request or not isinstance(method, str):
-            self._write_error(request_id, "invalid_request", "Request requires id and method")
-            return
-        if not isinstance(params, dict):
-            self._write_error(request_id, "invalid_params", "params must be an object")
-            return
-        if method not in {
-            "prompt",
-            "continue",
-            "abort",
-            "get_state",
-            "set_model",
-            "set_thinking",
-            "compact",
-            "close",
-        }:
-            self._write_error(request_id, "unknown_method", f"Unknown method: {method}")
+        request = _parse_rpc_request(line)
+        if isinstance(request, _RpcRequestError):
+            self._write_error(request.id, request.code, request.message)
             return
         with self._lock:
             busy = self._active_id is not None
-        if busy and method in _MUTATING_METHODS:
-            self._write_error(request_id, "busy_session", "Another request owns the active turn")
+        if busy and request.method in _MUTATING_METHODS:
+            self._write_error(request.id, "busy_session", "Another request owns the active turn")
             return
+        self._dispatch_request(request)
+
+    def _dispatch_request(self, request: _RpcRequest) -> None:
         try:
-            if method == "prompt":
-                text = params.get("text")
-                if not isinstance(text, str):
-                    raise _InvalidParams("prompt requires string params.text")
-                images = params.get("images", [])
-                if not isinstance(images, list) or not all(
-                    isinstance(path, str) for path in images
-                ):
-                    raise _InvalidParams("prompt params.images must be an array of paths")
-                self._start_turn(
-                    request_id,
-                    (
-                        (lambda: self.app.run_turn(text, image_paths=images, input_source="rpc"))
-                        if images
-                        else (lambda: self.app.run_turn(text, input_source="rpc"))
-                    ),
-                )
-            elif method == "continue":
-                if params:
-                    raise _InvalidParams("continue does not accept params")
-                self._start_turn(request_id, self.app.session.continue_)
-            elif method == "abort":
-                self._handle_abort(request_id)
-            elif method == "get_state":
-                if params:
-                    raise _InvalidParams("get_state does not accept params")
-                self._write_result(request_id, self._state())
-            elif method == "set_model":
-                self._handle_set_model(request_id, params)
-            elif method == "set_thinking":
-                self._handle_set_thinking(request_id, params)
-            elif method == "compact":
-                self._handle_compact(request_id, params)
+            if request.method == "prompt":
+                self._handle_prompt(request)
+            elif request.method == "continue":
+                _require_no_params(request)
+                self._start_turn(request.id, self.app.session.continue_)
+            elif request.method == "abort":
+                self._handle_abort(request.id)
+            elif request.method == "get_state":
+                _require_no_params(request)
+                self._write_result(request.id, self._state())
+            elif request.method == "set_model":
+                self._handle_set_model(request.id, request.params)
+            elif request.method == "set_thinking":
+                self._handle_set_thinking(request.id, request.params)
+            elif request.method == "compact":
+                self._handle_compact(request.id, request.params)
             else:
-                if params:
-                    raise _InvalidParams("close does not accept params")
-                self._write_result(request_id, {"closed": True})
+                _require_no_params(request)
+                self._write_result(request.id, {"closed": True})
                 self._closed = True
         except _InvalidParams as error:
-            self._write_error(request_id, "invalid_params", str(error))
+            self._write_error(request.id, "invalid_params", str(error))
         except Exception:
-            self._write_error(request_id, "internal_error", "Request failed")
+            self._write_error(request.id, "internal_error", "Request failed")
+
+    def _handle_prompt(self, request: _RpcRequest) -> None:
+        text = request.params.get("text")
+        if not isinstance(text, str):
+            raise _InvalidParams("prompt requires string params.text")
+        images = request.params.get("images", [])
+        if not isinstance(images, list) or not all(isinstance(path, str) for path in images):
+            raise _InvalidParams("prompt params.images must be an array of paths")
+        operation = (
+            (lambda: self.app.run_turn(text, image_paths=images, input_source="rpc"))
+            if images
+            else (lambda: self.app.run_turn(text, input_source="rpc"))
+        )
+        self._start_turn(request.id, operation)
 
     def _start_turn(self, request_id: object, operation) -> None:
         with self._lock:
@@ -268,6 +295,11 @@ class RpcServer:
 
 class _InvalidParams(ValueError):
     pass
+
+
+def _require_no_params(request: _RpcRequest) -> None:
+    if request.params:
+        raise _InvalidParams(f"{request.method} does not accept params")
 
 
 def _last_assistant(messages) -> AssistantMessage | None:
