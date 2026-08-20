@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Callable, Iterable, Iterator
-from typing import Any
 
 from travis.ai.providers._shared import blank_assistant_message
 from travis.ai.providers.sse_common import _iter_sse_data
@@ -30,12 +29,17 @@ from travis.ai.types import (
 )
 
 
-def _cached_prompt_tokens(raw_usage: dict[str, Any], prompt_tokens: int) -> int:
+def _usage_detail(raw_usage: dict[str, object], container: str, field: str) -> object:
+    details = raw_usage.get(container)
+    return details.get(field) if isinstance(details, dict) else None
+
+
+def _cached_prompt_tokens(raw_usage: dict[str, object], prompt_tokens: int) -> int:
     candidates = (
-        ((raw_usage.get("prompt_tokens_details") or {}).get("cached_tokens")),
-        ((raw_usage.get("promptTokensDetails") or {}).get("cachedTokens")),
-        ((raw_usage.get("prompt_token_details") or {}).get("cached_tokens")),
-        ((raw_usage.get("promptTokenDetails") or {}).get("cachedTokens")),
+        _usage_detail(raw_usage, "prompt_tokens_details", "cached_tokens"),
+        _usage_detail(raw_usage, "promptTokensDetails", "cachedTokens"),
+        _usage_detail(raw_usage, "prompt_token_details", "cached_tokens"),
+        _usage_detail(raw_usage, "promptTokenDetails", "cachedTokens"),
         raw_usage.get("num_cached_tokens"),
         raw_usage.get("numCachedTokens"),
     )
@@ -82,6 +86,121 @@ def _decode_mistral_stream(
             current = None
             yield event
 
+    def record_usage(raw_usage: dict[str, object]) -> None:
+        prompt = int(raw_usage.get("prompt_tokens", raw_usage.get("promptTokens", 0)) or 0)
+        cached = _cached_prompt_tokens(raw_usage, prompt)
+        message.usage.input = max(0, prompt - cached)
+        message.usage.output = int(
+            raw_usage.get("completion_tokens", raw_usage.get("completionTokens", 0)) or 0
+        )
+        message.usage.cache_read = cached
+        message.usage.cache_write = 0
+        message.usage.total_tokens = int(
+            raw_usage.get("total_tokens", raw_usage.get("totalTokens", 0))
+            or message.usage.input + message.usage.output + cached
+        )
+
+    def content_item(item: object) -> tuple[str, str] | None:
+        if isinstance(item, str):
+            return "text", item
+        if not isinstance(item, dict):
+            return None
+        if item.get("type") == "text":
+            return "text", str(item.get("text") or "")
+        if item.get("type") != "thinking" or not include_reasoning:
+            return None
+        thinking = item.get("thinking")
+        text = (
+            "".join(
+                str(part.get("text") or "")
+                for part in thinking
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+            if isinstance(thinking, list)
+            else ""
+        )
+        return "thinking", text
+
+    def apply_content_item(item: object) -> Iterator[object]:
+        nonlocal current
+        parsed = content_item(item)
+        if parsed is None:
+            return
+        kind, text = parsed
+        if not text:
+            return
+        desired = TextContent if kind == "text" else ThinkingContent
+        if current is None or not isinstance(current, desired):
+            yield from finish_current()
+            if kind == "text":
+                current = TextContent(text="")
+                message.content.append(current)
+                yield TextStartEvent(
+                    content_index=len(message.content) - 1,
+                    partial=message,
+                )
+            else:
+                current = ThinkingContent(thinking="")
+                message.content.append(current)
+                yield ThinkingStartEvent(
+                    content_index=len(message.content) - 1,
+                    partial=message,
+                )
+        index = message.content.index(current)
+        if isinstance(current, TextContent):
+            current.text += text
+            yield TextDeltaEvent(content_index=index, delta=text, partial=message)
+        else:
+            current.thinking += text
+            yield ThinkingDeltaEvent(content_index=index, delta=text, partial=message)
+
+    def apply_tool_call(position: int, raw_call: dict[str, object]) -> Iterator[object]:
+        stream_index = raw_call.get("index")
+        call_id = str(raw_call.get("id") or "")
+        key: object = stream_index if isinstance(stream_index, int) else call_id or position
+        function = raw_call.get("function")
+        if not isinstance(function, dict):
+            function = {}
+        entry = tool_blocks.get(key)
+        if entry is None:
+            yield from finish_current()
+            block = ToolCall(
+                id=call_id,
+                name=str(function.get("name") or ""),
+                arguments={},
+            )
+            message.content.append(block)
+            content_index = len(message.content) - 1
+            tool_blocks[key] = (content_index, "")
+            yield ToolcallStartEvent(content_index=content_index, partial=message)
+        else:
+            content_index, _buffer = entry
+            block = message.content[content_index]
+            if not isinstance(block, ToolCall):
+                return
+            if call_id and not block.id:
+                block.id = call_id
+            name = function.get("name")
+            if isinstance(name, str) and name and not block.name:
+                block.name = name
+        content_index, buffer = tool_blocks[key]
+        block = message.content[content_index]
+        arguments = function.get("arguments")
+        fragment = (
+            arguments
+            if isinstance(arguments, str)
+            else json.dumps(arguments or {}, separators=(",", ":"))
+        )
+        buffer += fragment
+        tool_blocks[key] = (content_index, buffer)
+        if isinstance(block, ToolCall):
+            block.arguments = _parse_streaming_json(buffer)
+        yield ToolcallDeltaEvent(
+            content_index=content_index,
+            delta=fragment,
+            partial=message,
+        )
+
     try:
         for payload in _iter_sse_data(
             lines,
@@ -98,18 +217,7 @@ def _decode_mistral_stream(
                 message.response_id = chunk["id"]
             raw_usage = chunk.get("usage")
             if isinstance(raw_usage, dict):
-                prompt = int(raw_usage.get("prompt_tokens", raw_usage.get("promptTokens", 0)) or 0)
-                cached = _cached_prompt_tokens(raw_usage, prompt)
-                message.usage.input = max(0, prompt - cached)
-                message.usage.output = int(
-                    raw_usage.get("completion_tokens", raw_usage.get("completionTokens", 0)) or 0
-                )
-                message.usage.cache_read = cached
-                message.usage.cache_write = 0
-                message.usage.total_tokens = int(
-                    raw_usage.get("total_tokens", raw_usage.get("totalTokens", 0))
-                    or message.usage.input + message.usage.output + cached
-                )
+                record_usage(raw_usage)
 
             choices = chunk.get("choices")
             choice = choices[0] if isinstance(choices, list) and choices else None
@@ -124,86 +232,13 @@ def _decode_mistral_stream(
             content = delta.get("content")
             content_items = [content] if isinstance(content, str) else content if isinstance(content, list) else []
             for item in content_items:
-                if isinstance(item, str):
-                    text = item
-                    kind = "text"
-                elif isinstance(item, dict) and item.get("type") == "text":
-                    text = str(item.get("text") or "")
-                    kind = "text"
-                elif isinstance(item, dict) and item.get("type") == "thinking":
-                    if not include_reasoning:
-                        continue
-                    thinking = item.get("thinking")
-                    text = "".join(
-                        str(part.get("text") or "")
-                        for part in thinking
-                        if isinstance(part, dict) and part.get("type") == "text"
-                    ) if isinstance(thinking, list) else ""
-                    kind = "thinking"
-                else:
-                    continue
-                if not text:
-                    continue
-                desired = TextContent if kind == "text" else ThinkingContent
-                if current is None or not isinstance(current, desired):
-                    yield from finish_current()
-                    if kind == "text":
-                        current = TextContent(text="")
-                        message.content.append(current)
-                        yield TextStartEvent(content_index=len(message.content) - 1, partial=message)
-                    else:
-                        current = ThinkingContent(thinking="")
-                        message.content.append(current)
-                        yield ThinkingStartEvent(content_index=len(message.content) - 1, partial=message)
-                index = message.content.index(current)
-                if isinstance(current, TextContent):
-                    current.text += text
-                    yield TextDeltaEvent(content_index=index, delta=text, partial=message)
-                else:
-                    current.thinking += text
-                    yield ThinkingDeltaEvent(content_index=index, delta=text, partial=message)
+                yield from apply_content_item(item)
 
             tool_calls = delta.get("tool_calls", delta.get("toolCalls"))
             for position, raw_call in enumerate(tool_calls if isinstance(tool_calls, list) else []):
                 if not isinstance(raw_call, dict):
                     continue
-                stream_index = raw_call.get("index")
-                call_id = str(raw_call.get("id") or "")
-                key: object = stream_index if isinstance(stream_index, int) else call_id or position
-                function = raw_call.get("function")
-                if not isinstance(function, dict):
-                    function = {}
-                entry = tool_blocks.get(key)
-                if entry is None:
-                    yield from finish_current()
-                    block = ToolCall(
-                        id=call_id,
-                        name=str(function.get("name") or ""),
-                        arguments={},
-                    )
-                    message.content.append(block)
-                    content_index = len(message.content) - 1
-                    tool_blocks[key] = (content_index, "")
-                    yield ToolcallStartEvent(content_index=content_index, partial=message)
-                else:
-                    content_index, _buffer = entry
-                    block = message.content[content_index]
-                    if not isinstance(block, ToolCall):
-                        continue
-                    if call_id and not block.id:
-                        block.id = call_id
-                    name = function.get("name")
-                    if isinstance(name, str) and name and not block.name:
-                        block.name = name
-                content_index, buffer = tool_blocks[key]
-                block = message.content[content_index]
-                arguments = function.get("arguments")
-                fragment = arguments if isinstance(arguments, str) else json.dumps(arguments or {}, separators=(",", ":"))
-                buffer += fragment
-                tool_blocks[key] = (content_index, buffer)
-                if isinstance(block, ToolCall):
-                    block.arguments = _parse_streaming_json(buffer)
-                yield ToolcallDeltaEvent(content_index=content_index, delta=fragment, partial=message)
+                yield from apply_tool_call(position, raw_call)
 
         yield from finish_current()
         for content_index, buffer in tool_blocks.values():
