@@ -468,6 +468,56 @@ def _format_file_operations(read_files: list[str], modified_files: list[str]) ->
     return "\n\n" + "\n\n".join(sections) if sections else ""
 
 
+def _compact_fallback_turn(message: Message) -> str:
+    text = _sanitize_summary_source_text(_message_text(message))
+    text = re.sub(r"\bgh[pousr]_[A-Za-z0-9_.-]+", "[REDACTED]", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > _FALLBACK_TURN_MAX_CHARS:
+        text = text[: _FALLBACK_TURN_MAX_CHARS - 15].rstrip() + " ...[truncated]"
+    return text
+
+
+def _remember_fallback_turn(
+    turns: list[str],
+    label: str,
+    text: str,
+    *,
+    limit: int = 8,
+) -> None:
+    text = text.strip()
+    if not text:
+        return
+    turns.append(f"{label}: {text}")
+    if len(turns) > limit:
+        del turns[0]
+
+
+def _fallback_tool_path(arguments: object) -> str:
+    if not isinstance(arguments, dict):
+        return ""
+    value = arguments.get("path") or arguments.get("file_path")
+    return value if isinstance(value, str) else ""
+
+
+def _fallback_bullets(items: list[str], *, limit: int = 8) -> str:
+    unique: list[str] = []
+    for item in items:
+        item = item.strip()
+        if item and item not in unique:
+            unique.append(item)
+        if len(unique) >= limit:
+            break
+    return "\n".join(f"- {item}" for item in unique) if unique else "None."
+
+
+def _truncate_fallback_summary(summary: str) -> str:
+    if len(summary) <= _FALLBACK_SUMMARY_MAX_CHARS:
+        return summary
+    marker = "\n...[fallback summary middle truncated]...\n"
+    head_chars = _FALLBACK_SUMMARY_MAX_CHARS - _FALLBACK_SUMMARY_TAIL_CHARS - len(marker)
+    return summary[:head_chars].rstrip() + marker + summary[-_FALLBACK_SUMMARY_TAIL_CHARS:].lstrip()
+
+
 @dataclass
 class CompressionResult:
     messages: list[Message]
@@ -1440,34 +1490,12 @@ Write only the summary body. Do not include any preamble or prefix."""
         last_dropped_turns: list[str] = []
         call_id_to_tool: dict[str, tuple[str, str]] = {}
 
-        def compact_turn(message: Message) -> str:
-            text = _sanitize_summary_source_text(_message_text(message))
-            text = re.sub(r"\bgh[pousr]_[A-Za-z0-9_.-]+", "[REDACTED]", text)
-            text = re.sub(r"\s+", " ", text).strip()
-            if len(text) > _FALLBACK_TURN_MAX_CHARS:
-                text = text[: _FALLBACK_TURN_MAX_CHARS - 15].rstrip() + " ...[truncated]"
-            return text
-
-        def remember(label: str, text: str, *, limit: int = 8) -> None:
-            text = text.strip()
-            if not text:
-                return
-            last_dropped_turns.append(f"{label}: {text}")
-            if len(last_dropped_turns) > limit:
-                del last_dropped_turns[0]
-
-        def tool_path(arguments: dict | None) -> str:
-            if not isinstance(arguments, dict):
-                return ""
-            value = arguments.get("path") or arguments.get("file_path")
-            return value if isinstance(value, str) else ""
-
         for message in middle:
             if getattr(message, "role", None) != "assistant":
                 continue
             for call in self._tool_calls(message):
                 call_id_to_tool[call.id] = (call.name, str(call.arguments or ""))
-                path = tool_path(call.arguments)
+                path = _fallback_tool_path(call.arguments)
                 if call.name == "read":
                     _dedupe_append(read_files, path, limit=12)
                 elif call.name in {"write", "edit"}:
@@ -1478,7 +1506,7 @@ Write only the summary body. Do not include any preamble or prefix."""
 
         for message in middle:
             role = getattr(message, "role", "unknown")
-            text = compact_turn(message)
+            text = _compact_fallback_turn(message)
             _collect_path_mentions(text, relevant_files)
             turn_text = text
             if role == "assistant":
@@ -1496,17 +1524,7 @@ Write only the summary body. Do not include any preamble or prefix."""
                     blockers.append(text[:500])
             elif role == "user" and text:
                 user_asks.append(text)
-            remember(str(role).upper(), turn_text)
-
-        def bullets(items: list[str], limit: int = 8) -> str:
-            unique: list[str] = []
-            for item in items:
-                item = item.strip()
-                if item and item not in unique:
-                    unique.append(item)
-                if len(unique) >= limit:
-                    break
-            return "\n".join(f"- {item}" for item in unique) if unique else "None."
+            _remember_fallback_turn(last_dropped_turns, str(role).upper(), turn_text)
 
         completed = [
             f"{idx}. {item}"
@@ -1538,9 +1556,9 @@ Recovered from a deterministic fallback because the LLM context summarizer was u
 
 	## File Operations
 	Modified files:
-	{bullets(modified_files, limit=12)}
+	{_fallback_bullets(modified_files, limit=12)}
 	Read files:
-	{bullets(read_files, limit=12)}
+	{_fallback_bullets(read_files, limit=12)}
 
 	## Active State
 	Unknown from deterministic fallback. Inspect current repository/session state if needed.
@@ -1549,7 +1567,7 @@ Recovered from a deterministic fallback because the LLM context summarizer was u
 Unknown from deterministic fallback. Current work is defined by the protected retained tail.
 
 ## Blocked
-{bullets(blockers, limit=5)}
+{_fallback_bullets(blockers, limit=5)}
 
 ## Key Decisions
 None recoverable from deterministic fallback.
@@ -1561,26 +1579,18 @@ None recoverable from deterministic fallback.
 None inferred. Historical asks are not automatically outstanding.
 
 ## Relevant Files
-{bullets(relevant_files, limit=12)}
+{_fallback_bullets(relevant_files, limit=12)}
 
 {HISTORICAL_REMAINING_WORK_HEADING}
 {retained_focus}
 
 ## Last Dropped Turns
-{bullets(last_dropped_turns, limit=8)}
+{_fallback_bullets(last_dropped_turns, limit=8)}
 
 ## Critical Context
 Summary generation was unavailable, so this is a best-effort deterministic fallback for {len(middle)} compacted message(s).{reason_text}"""
         summary = _redact_sensitive_text(_scrub_internal_replay_markers(body.strip()))
-        if len(summary) > _FALLBACK_SUMMARY_MAX_CHARS:
-            marker = "\n...[fallback summary middle truncated]...\n"
-            head_chars = _FALLBACK_SUMMARY_MAX_CHARS - _FALLBACK_SUMMARY_TAIL_CHARS - len(marker)
-            summary = (
-                summary[:head_chars].rstrip()
-                + marker
-                + summary[-_FALLBACK_SUMMARY_TAIL_CHARS :].lstrip()
-            )
-        return summary
+        return _truncate_fallback_summary(summary)
 
     # --- Orchestrator ---
 
