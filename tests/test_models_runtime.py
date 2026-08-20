@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 
 import pytest
 
@@ -240,3 +241,107 @@ def test_sync_model_refresh_in_running_loop_points_to_async_api() -> None:
             runtime.refresh()
 
     asyncio.run(scenario())
+
+
+def test_refresh_all_never_runs_more_than_four_providers_concurrently() -> None:
+    release = threading.Event()
+    condition = threading.Condition()
+    active = 0
+    maximum_active = 0
+
+    def refresh():
+        nonlocal active, maximum_active
+        with condition:
+            active += 1
+            maximum_active = max(maximum_active, active)
+            condition.notify_all()
+        release.wait(2)
+        with condition:
+            active -= 1
+        return []
+
+    runtime = Models()
+    for index in range(10):
+        runtime.set_provider(
+            Provider(
+                id=f"provider-{index}",
+                auth=_auth(),
+                models=[],
+                api=_streams(),
+                refresh_models=refresh,
+            )
+        )
+
+    owner = threading.Thread(target=runtime.refresh)
+    owner.start()
+    with condition:
+        assert condition.wait_for(lambda: maximum_active >= 4, timeout=1)
+    time.sleep(0.05)
+    release.set()
+    owner.join(3)
+
+    assert not owner.is_alive()
+    assert maximum_active == 4
+
+
+def test_refresh_all_preserves_registration_order_not_completion_order() -> None:
+    release = {provider: threading.Event() for provider in ("one", "two", "three", "four")}
+    started = {provider: threading.Event() for provider in release}
+    completion_order: list[str] = []
+    runtime = Models()
+
+    for provider_id in release:
+        def refresh(provider_id: str = provider_id):
+            started[provider_id].set()
+            release[provider_id].wait(2)
+            completion_order.append(provider_id)
+            return [_model(provider=provider_id)]
+
+        runtime.set_provider(
+            Provider(
+                id=provider_id,
+                auth=_auth(),
+                models=[],
+                api=_streams(),
+                refresh_models=refresh,
+            )
+        )
+
+    owner = threading.Thread(target=runtime.refresh)
+    owner.start()
+    assert all(event.wait(1) for event in started.values())
+    for provider_id in ("four", "three", "two", "one"):
+        release[provider_id].set()
+        while provider_id not in completion_order:
+            time.sleep(0.001)
+    owner.join(3)
+
+    assert completion_order == ["four", "three", "two", "one"]
+    assert [model.provider for model in runtime.get_models()] == ["one", "two", "three", "four"]
+
+
+def test_refresh_all_isolates_one_provider_failure_and_settles_the_rest() -> None:
+    runtime = Models()
+    runtime.set_provider(
+        Provider(
+            id="bad",
+            auth=_auth(),
+            models=[_model(provider="bad")],
+            api=_streams(),
+            refresh_models=lambda: (_ for _ in ()).throw(RuntimeError("fixture failure")),
+        )
+    )
+    runtime.set_provider(
+        Provider(
+            id="good",
+            auth=_auth(),
+            models=[],
+            api=_streams(),
+            refresh_models=lambda: [_model(provider="good")],
+        )
+    )
+
+    runtime.refresh()
+
+    assert runtime.get_model("bad", "model") == _model(provider="bad")
+    assert runtime.get_model("good", "model") == _model(provider="good")

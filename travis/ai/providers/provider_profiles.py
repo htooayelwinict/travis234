@@ -2,16 +2,10 @@
 
 from __future__ import annotations
 
-import json
-import logging
-import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
 
 from travis.ai.providers.provider_modes import transport_mode_is_supported
-
-logger = logging.getLogger(__name__)
-
 
 @dataclass(frozen=True)
 class ProviderProfile:
@@ -76,22 +70,15 @@ class ProviderProfile:
                 return None
             url = effective_base.rstrip("/") + "/models"
 
-        request = urllib.request.Request(url)
-        if api_key:
-            request.add_header("Authorization", f"Bearer {api_key}")
-        request.add_header("Accept", "application/json")
-        request.add_header("User-Agent", "travis")
-        for key, value in self.default_headers.items():
-            request.add_header(key, value)
+        from travis.ai.providers.model_catalog_fetch import fetch_model_catalog
 
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                data = json.loads(response.read().decode())
-            items = data if isinstance(data, list) else data.get("data", [])
-            return [item["id"] for item in items if isinstance(item, dict) and isinstance(item.get("id"), str)]
-        except Exception as exc:
-            logger.debug("fetch_models(%s): %s", self.name, exc)
-            return None
+        return fetch_model_catalog(
+            provider_name=self.name,
+            url=url,
+            api_key=api_key,
+            headers=self.default_headers,
+            timeout=timeout,
+        )
 
 
 __all__ = ["ProviderProfile"]

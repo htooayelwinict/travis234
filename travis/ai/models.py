@@ -11,6 +11,7 @@ import asyncio
 import inspect
 import threading
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -270,14 +271,16 @@ class Models:
                     cause=error,
                 ) from error
             return
-        threads = [
-            threading.Thread(target=_best_effort_refresh, args=(entry,))
-            for entry in self.get_providers()
-        ]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
+        providers = self.get_providers()
+        if not providers:
+            return
+        with ThreadPoolExecutor(
+            max_workers=min(4, len(providers)),
+            thread_name_prefix="travis-model-refresh",
+        ) as executor:
+            futures = [executor.submit(_best_effort_refresh, entry) for entry in providers]
+            for future in futures:
+                future.result()
 
     def get_auth(self, model: Model) -> AuthResult | None:
         provider = self.get_provider(model.provider)

@@ -5,6 +5,7 @@
     "travis/ai/providers/provider_modes.py",
     "travis/ai/providers/provider_profiles.py",
     "travis/ai/providers/base.py",
+    "travis/ai/providers/model_catalog_fetch.py",
     "travis/ai/providers/transport_families/__init__.py",
     "travis/ai/providers/transport_families/_shared.py",
     "travis/ai/providers/transport_families/anthropic.py",

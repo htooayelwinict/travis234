@@ -42,6 +42,15 @@ def test_provider_leaf_modules_do_not_depend_on_runtime_or_concrete_transports()
     assert failures == []
 
 
+def test_provider_profile_owner_delegates_catalog_io_without_urllib_or_json() -> None:
+    path = ROOT / "travis" / "ai" / "providers" / "provider_profiles.py"
+
+    imported = _imported_modules(path)
+
+    assert "urllib.request" not in imported
+    assert "json" not in imported
+
+
 def test_provider_consumers_do_not_access_registry_privates() -> None:
     root = ROOT / "travis"
     forbidden = ("._models", "._registered_providers", "._fallback_api_key", "_DEFAULT_API_PROVIDER_REGISTRY")
