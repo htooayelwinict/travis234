@@ -6,12 +6,14 @@ import json
 import re
 import tempfile
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, Protocol, TypeGuard, overload
 
 from travis.agent.types import AgentTool, AgentToolResult
 from travis.ai.types import TextContent
 from travis.coding_agent.artifact_store import ArtifactPromotionError
-from travis.coding_agent.artifacts import ArtifactRegistry, artifact_read_instruction
+from travis.coding_agent.artifacts import ArtifactRef, ArtifactRegistry, artifact_read_instruction
 from travis.coding_agent.policy.context import action_policy_context
 from travis.coding_agent.policy.types import ALL_TOOL_EFFECTS
 from travis.coding_agent.processes.service import ProcessSessionService
@@ -23,7 +25,7 @@ from travis.coding_agent.processes.types import (
     ProcessState,
 )
 from travis.coding_agent.tools.types import ToolDefinition, wrap_tool_definition
-from travis.coding_agent.tools.truncate import truncation_to_details
+from travis.coding_agent.tools.truncate import TruncationResult, truncation_to_details
 
 PROCESS_ACTIONS = ("poll", "wait", "write", "write_raw", "resize", "interrupt", "terminate", "kill", "list")
 MAX_PROCESS_WAIT_MS = 60_000
@@ -116,8 +118,64 @@ _PROCESS_FIELD_TOKEN_MAP = {
 }
 _COLLAPSED_PROCESS_SESSION_ID = re.compile(r"^proc([0-9a-f]{32})$")
 
+_ProcessAction = Literal[
+    "poll",
+    "wait",
+    "write",
+    "write_raw",
+    "resize",
+    "interrupt",
+    "terminate",
+    "kill",
+    "list",
+]
 
-def _coerce_process_integer(value):
+
+class _ValidatedProcessArguments(Protocol):
+    @overload
+    def __getitem__(self, field: Literal["action"]) -> _ProcessAction: ...
+
+    @overload
+    def __getitem__(self, field: Literal["session_id", "input"]) -> str: ...
+
+    @overload
+    def __getitem__(
+        self,
+        field: Literal[
+            "cursor",
+            "yield_time_ms",
+            "wait_time_ms",
+            "max_bytes",
+            "rows",
+            "cols",
+        ],
+    ) -> int: ...
+
+    @overload
+    def __getitem__(self, field: Literal["eof"]) -> bool: ...
+
+    def __getitem__(self, field: str) -> object: ...
+
+    @overload
+    def get(
+        self,
+        field: Literal["yield_time_ms", "wait_time_ms", "max_bytes"],
+    ) -> int | None: ...
+
+    @overload
+    def get(
+        self,
+        field: Literal["yield_time_ms", "wait_time_ms", "max_bytes"],
+        default: int,
+    ) -> int: ...
+
+    @overload
+    def get(self, field: Literal["eof"], default: bool) -> bool: ...
+
+    def get(self, field: str, default: object = None) -> object: ...
+
+
+def _coerce_process_integer(value: object) -> object:
     if not isinstance(value, str):
         return value
     candidate = value.strip()
@@ -126,7 +184,7 @@ def _coerce_process_integer(value):
     return value
 
 
-def _repair_process_session_id(value):
+def _repair_process_session_id(value: object) -> object:
     if not isinstance(value, str):
         return value
     match = _COLLAPSED_PROCESS_SESSION_ID.fullmatch(value)
@@ -135,7 +193,7 @@ def _repair_process_session_id(value):
     return f"proc_{match.group(1)}"
 
 
-def _normalized_process_field_value(field: str, value):
+def _normalized_process_field_value(field: str, value: object) -> object:
     if field in _PROCESS_INTEGER_FIELDS:
         return _coerce_process_integer(value)
     if field == "session_id":
@@ -143,7 +201,7 @@ def _normalized_process_field_value(field: str, value):
     return value
 
 
-def _normalize_process_field_aliases(args: dict) -> None:
+def _normalize_process_field_aliases(args: dict[str, object]) -> None:
     canonical_fields = set(_PROCESS_FIELDS)
     for supplied_field in tuple(args):
         if supplied_field in canonical_fields or supplied_field == "action":
@@ -156,24 +214,20 @@ def _normalize_process_field_aliases(args: dict) -> None:
         if canonical_field in args:
             canonical_value = _normalized_process_field_value(canonical_field, args[canonical_field])
             if canonical_value != supplied_value:
-                raise ValueError(
-                    f"conflicting process fields: {canonical_field} and {supplied_field}"
-                )
+                raise ValueError(f"conflicting process fields: {canonical_field} and {supplied_field}")
         else:
             args[canonical_field] = supplied_value
         args.pop(supplied_field)
 
 
-def prepare_process_arguments(raw_args):
-    if not isinstance(raw_args, Mapping):
-        return raw_args
-    args = dict(raw_args)
-    _normalize_process_field_aliases(args)
+def _normalize_process_scalar_fields(args: dict[str, object]) -> None:
     for field in _PROCESS_INTEGER_FIELDS.intersection(args):
         args[field] = _coerce_process_integer(args[field])
     if "session_id" in args:
         args["session_id"] = _repair_process_session_id(args["session_id"])
 
+
+def _normalize_process_action(args: dict[str, object]) -> object:
     action = args.get("action")
     if action == "start":
         raise ValueError(
@@ -182,20 +236,28 @@ def prepare_process_arguments(raw_args):
         )
     if action == "write_line":
         args["action"] = "write"
-        action = "write"
-    if action in {"write", "write_raw"}:
-        payload_fields = [name for name in ("input", "data", "content") if name in args]
-        if len(payload_fields) > 1:
-            raise ValueError(
-                "process write received multiple stdin payload fields; use only input"
-            )
-        if payload_fields and payload_fields[0] != "input":
-            args["input"] = args.pop(payload_fields[0])
-    if action == "write" and isinstance(args.get("input"), str) and any(
-        character in args["input"] for character in "\r\n"
-    ):
+        return "write"
+    return action
+
+
+def _normalize_process_write_payload(
+    args: dict[str, object],
+    action: object,
+) -> None:
+    if action not in {"write", "write_raw"}:
+        return
+    payload_fields = [name for name in ("input", "data", "content") if name in args]
+    if len(payload_fields) > 1:
+        raise ValueError("process write received multiple stdin payload fields; use only input")
+    if payload_fields and payload_fields[0] != "input":
+        args["input"] = args.pop(payload_fields[0])
+    input_value = args.get("input")
+    if action == "write" and isinstance(input_value, str) and any(character in input_value for character in "\r\n"):
         args["action"] = "write_raw"
-        action = "write_raw"
+
+
+def _normalize_process_observation(args: dict[str, object]) -> None:
+    action = args.get("action")
     if action == "wait" and "yield_time_ms" in args:
         if "wait_time_ms" in args:
             raise ValueError("wait action received both wait_time_ms and yield_time_ms")
@@ -204,26 +266,36 @@ def prepare_process_arguments(raw_args):
     elif action == "poll" and "wait_time_ms" in args:
         args["action"] = "wait"
         args.pop("yield_time_ms", None)
+    wait_time = args.get("wait_time_ms")
+    if args.get("action") == "wait" and isinstance(wait_time, int) and not isinstance(wait_time, bool):
+        args["wait_time_ms"] = min(wait_time, MAX_PROCESS_WAIT_MS)
 
-    if (
-        args.get("action") == "wait"
-        and isinstance(args.get("wait_time_ms"), int)
-        and not isinstance(args["wait_time_ms"], bool)
-    ):
-        args["wait_time_ms"] = min(args["wait_time_ms"], MAX_PROCESS_WAIT_MS)
 
-    normalized_action = args.get("action")
-    if normalized_action in {"poll", "wait"}:
-        example = PROCESS_POLL_EXAMPLE if normalized_action == "poll" else PROCESS_WAIT_EXAMPLE
-        session_id = args.get("session_id")
-        if not isinstance(session_id, str) or not session_id:
-            raise ValueError(f"{normalized_action} requires session_id; use tool process with {example}")
-        cursor = args.get("cursor")
-        if not isinstance(cursor, int) or isinstance(cursor, bool) or cursor < 0:
-            raise ValueError(
-                f"cursor must be a nonnegative integer for the {normalized_action} action; "
-                f"use tool process with {example}"
-            )
+def _validate_prepared_process_observation(args: dict[str, object]) -> None:
+    action = args.get("action")
+    if action not in {"poll", "wait"}:
+        return
+    example = PROCESS_POLL_EXAMPLE if action == "poll" else PROCESS_WAIT_EXAMPLE
+    session_id = args.get("session_id")
+    if not isinstance(session_id, str) or not session_id:
+        raise ValueError(f"{action} requires session_id; use tool process with {example}")
+    cursor = args.get("cursor")
+    if not isinstance(cursor, int) or isinstance(cursor, bool) or cursor < 0:
+        raise ValueError(
+            f"cursor must be a nonnegative integer for the {action} action; use tool process with {example}"
+        )
+
+
+def prepare_process_arguments(raw_args):
+    if not isinstance(raw_args, Mapping):
+        return raw_args
+    args = dict(raw_args)
+    _normalize_process_field_aliases(args)
+    _normalize_process_scalar_fields(args)
+    action = _normalize_process_action(args)
+    _normalize_process_write_payload(args, action)
+    _normalize_process_observation(args)
+    _validate_prepared_process_observation(args)
 
     if isinstance(raw_args, dict):
         raw_args.clear()
@@ -261,9 +333,7 @@ def format_process_poll_instruction(session_id: str, cursor: int, yield_time_ms:
 
 
 def format_process_write_instruction(session_id: str) -> str:
-    arguments = _compact_process_call(
-        {"action": "write", "session_id": session_id, "input": "<line>"}
-    )
+    arguments = _compact_process_call({"action": "write", "session_id": session_id, "input": "<line>"})
     return f"To submit one line, call the process tool with {arguments}."
 
 
@@ -433,7 +503,7 @@ def _recover_invalid_cursor(
     service: ProcessSessionService,
     owner: ProcessOwner,
     session_id: str,
-    args: Mapping[str, object],
+    args: _ValidatedProcessArguments,
     error: InvalidCursorError,
     artifacts: ArtifactRegistry | None,
     *,
@@ -470,47 +540,141 @@ def _recover_invalid_cursor(
     )
 
 
-def _validate_args(raw_args) -> dict[str, object]:
-    prepared_args = prepare_process_arguments(raw_args)
-    if not isinstance(prepared_args, Mapping):
-        raise ValueError("process arguments must be an object")
-    args = dict(prepared_args)
+def _is_process_integer(value: object) -> TypeGuard[int]:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _has_optional_process_integer(
+    args: dict[str, object],
+    field: str,
+) -> bool:
+    return field not in args or _is_process_integer(args[field])
+
+
+def _has_valid_process_field_types(
+    args: dict[str, object],
+) -> TypeGuard[_ValidatedProcessArguments]:
     action = args.get("action")
-    if action not in PROCESS_ACTIONS:
+    eof = args.get("eof")
+    return (
+        isinstance(action, str)
+        and action in PROCESS_ACTIONS
+        and ("session_id" not in args or isinstance(args["session_id"], str))
+        and ("input" not in args or isinstance(args["input"], str))
+        and ("eof" not in args or isinstance(eof, bool))
+        and all(_has_optional_process_integer(args, field) for field in _PROCESS_INTEGER_FIELDS)
+    )
+
+
+def _validated_process_action(args: dict[str, object]) -> _ProcessAction:
+    action = args.get("action")
+    if not isinstance(action, str) or action not in PROCESS_ACTIONS:
         raise ValueError(f"action must be one of: {', '.join(PROCESS_ACTIONS)}")
+    return action
+
+
+def _reject_unexpected_process_fields(
+    args: dict[str, object],
+    action: _ProcessAction,
+) -> None:
     unexpected = set(args) - _ACTION_FIELDS[action]
     if unexpected:
         name = sorted(unexpected)[0]
         raise ValueError(f"{action} does not accept {name}")
-    if action != "list":
-        _require_string(args, action, "session_id")
-    if action in {"poll", "wait"}:
-        cursor = args.get("cursor")
-        if not isinstance(cursor, int) or isinstance(cursor, bool) or cursor < 0:
-            raise ValueError("cursor must be a nonnegative integer")
-    elif action in {"write", "write_raw"}:
-        _require_string(args, action, "input", allow_empty=True)
-        if action == "write" and any(character in args["input"] for character in "\r\n"):
-            raise ValueError("write input must contain exactly one line without a newline; use write_raw for exact input")
-        if "eof" in args and not isinstance(args["eof"], bool):
-            raise ValueError("eof must be a boolean")
-    elif action == "resize":
-        for field in ("rows", "cols"):
-            if not isinstance(args.get(field), int) or isinstance(args.get(field), bool):
-                raise _missing_process_field("resize", field)
+
+
+def _validate_process_timing_fields(args: dict[str, object]) -> None:
     if "yield_time_ms" in args:
         value = args["yield_time_ms"]
-        if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 30_000:
+        if not _is_process_integer(value) or not 0 <= value <= 30_000:
             raise ValueError("yield_time_ms must be an integer between 0 and 30000")
     if "wait_time_ms" in args:
         value = args["wait_time_ms"]
-        if not isinstance(value, int) or isinstance(value, bool) or not 1_000 <= value <= MAX_PROCESS_WAIT_MS:
+        if not _is_process_integer(value) or not 1_000 <= value <= MAX_PROCESS_WAIT_MS:
             raise ValueError(f"wait_time_ms must be an integer between 1000 and {MAX_PROCESS_WAIT_MS}")
     if "max_bytes" in args:
         value = args["max_bytes"]
-        if not isinstance(value, int) or isinstance(value, bool) or not 1024 <= value <= 51_200:
+        if not _is_process_integer(value) or not 1024 <= value <= 51_200:
             raise ValueError("max_bytes must be an integer between 1024 and 51200")
+
+
+def _validated_observation_arguments(
+    args: dict[str, object],
+) -> _ValidatedProcessArguments:
+    cursor = args.get("cursor")
+    if not _is_process_integer(cursor) or cursor < 0:
+        raise ValueError("cursor must be a nonnegative integer")
+    _validate_process_timing_fields(args)
+    if not _has_valid_process_field_types(args):
+        raise ValueError("cursor must be a nonnegative integer")
     return args
+
+
+def _validated_write_arguments(
+    args: dict[str, object],
+    action: Literal["write", "write_raw"],
+) -> _ValidatedProcessArguments:
+    input_text = _require_string(args, action, "input", allow_empty=True)
+    if action == "write" and any(character in input_text for character in "\r\n"):
+        raise ValueError("write input must contain exactly one line without a newline; use write_raw for exact input")
+    if "eof" in args and not isinstance(args["eof"], bool):
+        raise ValueError("eof must be a boolean")
+    _validate_process_timing_fields(args)
+    if not _has_valid_process_field_types(args):
+        raise _missing_process_field(action, "input")
+    return args
+
+
+def _validated_resize_arguments(
+    args: dict[str, object],
+) -> _ValidatedProcessArguments:
+    for field in ("rows", "cols"):
+        if not _is_process_integer(args.get(field)):
+            raise _missing_process_field("resize", field)
+    if not _has_valid_process_field_types(args):
+        raise _missing_process_field("resize", "rows")
+    return args
+
+
+def _validated_control_arguments(
+    args: dict[str, object],
+    action: Literal["interrupt", "terminate", "kill"],
+) -> _ValidatedProcessArguments:
+    _validate_process_timing_fields(args)
+    if not _has_valid_process_field_types(args):
+        raise _missing_process_field(action, "session_id")
+    return args
+
+
+def _validated_list_arguments(args: dict[str, object]) -> _ValidatedProcessArguments:
+    if not _has_valid_process_field_types(args):
+        raise ValueError(f"action must be one of: {', '.join(PROCESS_ACTIONS)}")
+    return args
+
+
+def _validate_args(raw_args: object) -> _ValidatedProcessArguments:
+    prepared_args = prepare_process_arguments(raw_args)
+    if not isinstance(prepared_args, Mapping):
+        raise ValueError("process arguments must be an object")
+    args = dict(prepared_args)
+    action = _validated_process_action(args)
+    _reject_unexpected_process_fields(args, action)
+    if action == "list":
+        return _validated_list_arguments(args)
+    _require_string(args, action, "session_id")
+    if action in {"poll", "wait"}:
+        return _validated_observation_arguments(args)
+    if action == "write":
+        return _validated_write_arguments(args, "write")
+    if action == "write_raw":
+        return _validated_write_arguments(args, "write_raw")
+    if action == "resize":
+        return _validated_resize_arguments(args)
+    if action == "interrupt":
+        return _validated_control_arguments(args, "interrupt")
+    if action == "terminate":
+        return _validated_control_arguments(args, "terminate")
+    return _validated_control_arguments(args, "kill")
 
 
 def _require_string(args: dict[str, object], action: str, field: str, *, allow_empty: bool = False) -> str:
@@ -521,9 +685,7 @@ def _require_string(args: dict[str, object], action: str, field: str, *, allow_e
 
 
 def _missing_process_field(action: str, field: str) -> ValueError:
-    return ValueError(
-        f"{action} requires {field}; use tool process with {_PROCESS_ACTION_EXAMPLES[action]}"
-    )
+    return ValueError(f"{action} requires {field}; use tool process with {_PROCESS_ACTION_EXAMPLES[action]}")
 
 
 def _snapshot_result(snapshot: ProcessSnapshot, *, include_poll_hint: bool = True) -> AgentToolResult:
@@ -559,70 +721,110 @@ def _snapshot_footer(snapshot: ProcessSnapshot, *, include_poll_hint: bool = Tru
     return footer
 
 
-def _terminal_process_result(
+@dataclass(frozen=True)
+class _TerminalArtifactResult:
+    path: Path | None
+    artifact: ArtifactRef | None
+    unavailable: dict[str, str] | None
+
+
+def _store_terminal_artifact(
+    artifacts: ArtifactRegistry,
+    path: Path,
+    *,
+    exported_temporary: bool,
+    tool_call_id: str | None,
+) -> tuple[ArtifactRef | None, dict[str, str] | None]:
+    if artifacts.is_durable:
+        try:
+            return (
+                artifacts.promote(
+                    path,
+                    kind="process-output",
+                    tool_call_id=tool_call_id,
+                ),
+                None,
+            )
+        except ArtifactPromotionError as error:
+            return None, _artifact_unavailable(error)
+        except OSError:
+            return None, _artifact_unavailable(None)
+    if exported_temporary:
+        return artifacts.register(path, kind="process-output", access="read"), None
+    return (
+        artifacts.register(
+            path,
+            kind="process-output",
+            access="read",
+            remove_on_close=False,
+        ),
+        None,
+    )
+
+
+def _resolve_terminal_artifact(
     service: ProcessSessionService,
     owner: ProcessOwner,
     snapshot: ProcessSnapshot,
+    tail: TruncationResult,
     artifacts: ArtifactRegistry | None,
     *,
-    tool_call_id: str | None = None,
-) -> AgentToolResult:
-    tail = service.tail_snapshot(owner, snapshot.session_id)
-    details = snapshot.as_details()
-    details["nextCursor"] = snapshot.output_size
-    full_output_path = Path(snapshot.full_output_path) if snapshot.full_output_path else None
-    artifact = None
-    artifact_unavailable: dict[str, str] | None = None
+    tool_call_id: str | None,
+) -> _TerminalArtifactResult:
+    path = Path(snapshot.full_output_path) if snapshot.full_output_path else None
     exported_temporary = False
-    if full_output_path is not None and artifacts is not None:
-        if artifacts.is_durable:
-            try:
-                artifact = artifacts.promote(
-                    full_output_path,
-                    kind="process-output",
-                    tool_call_id=tool_call_id,
-                )
-            except ArtifactPromotionError as error:
-                artifact_unavailable = _artifact_unavailable(error)
-            except OSError:
-                artifact_unavailable = _artifact_unavailable(None)
-        else:
-            artifact = artifacts.register(
-                full_output_path,
-                kind="process-output",
-                access="read",
-                remove_on_close=False,
-            )
+    artifact = None
+    unavailable = None
+    if path is not None and artifacts is not None:
+        artifact, unavailable = _store_terminal_artifact(
+            artifacts,
+            path,
+            exported_temporary=False,
+            tool_call_id=tool_call_id,
+        )
     elif tail.truncated:
-        full_output_path = service.export_output(owner, snapshot.session_id, tempfile.gettempdir())
+        path = service.export_output(owner, snapshot.session_id, tempfile.gettempdir())
         exported_temporary = True
         if artifacts is not None:
-            if artifacts.is_durable:
-                try:
-                    artifact = artifacts.promote(
-                        full_output_path,
-                        kind="process-output",
-                        tool_call_id=tool_call_id,
-                    )
-                except ArtifactPromotionError as error:
-                    artifact_unavailable = _artifact_unavailable(error)
-                except OSError:
-                    artifact_unavailable = _artifact_unavailable(None)
-            else:
-                artifact = artifacts.register(full_output_path, kind="process-output", access="read")
-    if exported_temporary and artifacts is not None and artifacts.is_durable and full_output_path is not None:
-        full_output_path.unlink(missing_ok=True)
-    if full_output_path is not None and not (artifacts is not None and artifacts.is_durable):
-        details["fullOutputPath"] = str(full_output_path)
+            artifact, unavailable = _store_terminal_artifact(
+                artifacts,
+                path,
+                exported_temporary=True,
+                tool_call_id=tool_call_id,
+            )
+    if exported_temporary and artifacts is not None and artifacts.is_durable and path is not None:
+        path.unlink(missing_ok=True)
+    return _TerminalArtifactResult(path, artifact, unavailable)
+
+
+def _apply_terminal_artifact_details(
+    details: dict[str, object],
+    state: _TerminalArtifactResult,
+    tail: TruncationResult,
+    artifacts: ArtifactRegistry | None,
+) -> None:
+    if state.path is not None and not (artifacts is not None and artifacts.is_durable):
+        details["fullOutputPath"] = str(state.path)
     else:
         details.pop("fullOutputPath", None)
-    if artifact is not None:
-        details["artifactId"] = artifact.id
-    if artifact_unavailable is not None:
-        details["artifactUnavailable"] = artifact_unavailable
+    if state.artifact is not None:
+        details["artifactId"] = state.artifact.id
+    if state.unavailable is not None:
+        details["artifactUnavailable"] = state.unavailable
     if tail.truncated:
         details["truncation"] = truncation_to_details(tail)
-    terminal = ProcessSnapshot(
+
+
+def _reconstructed_terminal_snapshot(
+    snapshot: ProcessSnapshot,
+    tail: TruncationResult,
+    state: _TerminalArtifactResult,
+    artifacts: ArtifactRegistry | None,
+) -> ProcessSnapshot:
+    exposed_path = (
+        str(state.path) if state.path is not None and not (artifacts is not None and artifacts.is_durable) else None
+    )
+    return ProcessSnapshot(
         session_id=snapshot.session_id,
         state=snapshot.state,
         output=tail.content,
@@ -636,20 +838,49 @@ def _terminal_process_result(
         cwd=snapshot.cwd,
         suggested_poll_delay_ms=snapshot.suggested_poll_delay_ms,
         durable_output=snapshot.durable_output,
-        full_output_path=(
-            str(full_output_path)
-            if full_output_path is not None and not (artifacts is not None and artifacts.is_durable)
-            else None
-        ),
+        full_output_path=exposed_path,
         failure_code=snapshot.failure_code,
     )
+
+
+def _append_terminal_artifact_notice(
+    result: AgentToolResult,
+    state: _TerminalArtifactResult,
+) -> None:
+    if state.artifact is None and state.unavailable is None:
+        return
+    first_content = result.content[0]
+    if not isinstance(first_content, TextContent):
+        raise AttributeError(f"'{type(first_content).__name__}' object has no attribute 'text'")
+    if state.artifact is not None:
+        first_content.text += f"\n\n[{artifact_read_instruction(state.artifact.id)}]"
+    elif state.unavailable is not None:
+        first_content.text += f"\n\n[Full output artifact unavailable ({state.unavailable['code']}).]"
+
+
+def _terminal_process_result(
+    service: ProcessSessionService,
+    owner: ProcessOwner,
+    snapshot: ProcessSnapshot,
+    artifacts: ArtifactRegistry | None,
+    *,
+    tool_call_id: str | None = None,
+) -> AgentToolResult:
+    tail = service.tail_snapshot(owner, snapshot.session_id)
+    details = snapshot.as_details()
+    details["nextCursor"] = snapshot.output_size
+    artifact_state = _resolve_terminal_artifact(
+        service,
+        owner,
+        snapshot,
+        tail,
+        artifacts,
+        tool_call_id=tool_call_id,
+    )
+    _apply_terminal_artifact_details(details, artifact_state, tail, artifacts)
+    terminal = _reconstructed_terminal_snapshot(snapshot, tail, artifact_state, artifacts)
     result = _snapshot_result(terminal)
-    if artifact is not None:
-        result.content[0].text += f"\n\n[{artifact_read_instruction(artifact.id)}]"
-    elif artifact_unavailable is not None:
-        result.content[0].text += (
-            f"\n\n[Full output artifact unavailable ({artifact_unavailable['code']}).]"
-        )
+    _append_terminal_artifact_notice(result, artifact_state)
     return AgentToolResult(content=result.content, details=details)
 
 
