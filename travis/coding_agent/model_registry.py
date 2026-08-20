@@ -19,6 +19,7 @@ from travis.ai.auth import (
     ProviderAuth,
     oauth_auth_from_mapping,
 )
+from travis.ai.auth.types import ApiKeyCredential, AuthContext
 from travis.ai.env_config import ModelConfig
 from travis.ai.model_cost import cost_from_mapping
 from travis.ai.models import Models, Provider, ProviderStreams
@@ -38,6 +39,104 @@ from travis.coding_agent.resolve_config_value import (
 
 def _agent_models_path() -> Path:
     return Path.home() / ".travis234" / "agent" / "models.json"
+
+
+def _configured_auth_base_result(
+    base: ApiKeyAuth | None,
+    model: Model,
+    context: AuthContext,
+    credential: ApiKeyCredential | None,
+) -> object | None:
+    if base is None:
+        return None
+    result: object | None = _settle(base.resolve(model, context, credential))
+    return result
+
+
+def _configured_auth_credential_env(
+    credential: ApiKeyCredential | None,
+) -> dict[str, str]:
+    credential_env = credential.get("env") if credential else None
+    if not isinstance(credential_env, dict):
+        return {}
+    return {str(key): str(value) for key, value in credential_env.items()}
+
+
+def _configured_auth_api_key(
+    base_result: object | None,
+    credential: ApiKeyCredential | None,
+    configured_key: object,
+    model: Model,
+    credential_env: Mapping[str, str],
+) -> str | None:
+    api_key = base_result.auth.api_key if isinstance(base_result, AuthResult) else None
+    if api_key is None and credential and credential.get("key"):
+        api_key = resolve_config_value(str(credential["key"]), credential_env, uncached=True)
+    if api_key is None and isinstance(configured_key, str):
+        api_key = resolve_config_value_or_throw(
+            configured_key,
+            f'API key for provider "{model.provider}"',
+            credential_env,
+        )
+    return api_key
+
+
+def _configured_auth_headers(
+    base_result: object | None,
+    configured_headers: object,
+    model: Model,
+    credential_env: Mapping[str, str],
+) -> dict[str, str]:
+    return {
+        **(dict(base_result.auth.headers or {}) if isinstance(base_result, AuthResult) else {}),
+        **(
+            resolve_headers_or_throw(
+                configured_headers,
+                f'provider "{model.provider}"',
+                credential_env,
+            )
+            or {}
+        ),
+        **(
+            resolve_headers_or_throw(
+                model.headers,
+                f'model "{model.provider}/{model.id}"',
+                credential_env,
+            )
+            or {}
+        ),
+    }
+
+
+def _configured_auth_result(
+    base_result: object | None,
+    api_key: str | None,
+    headers: dict[str, str],
+    credential_env: Mapping[str, str],
+    model: Model,
+    *,
+    auth_header: bool,
+) -> AuthResult | None:
+    if auth_header:
+        if not api_key:
+            raise RuntimeError(f'No API key found for "{model.provider}"')
+        headers["Authorization"] = f"Bearer {api_key}"
+    if base_result is None and api_key is None and not headers:
+        return None
+    base_auth = base_result.auth if isinstance(base_result, AuthResult) else ModelAuth()
+    return AuthResult(
+        auth=ModelAuth(
+            api_key=api_key,
+            headers=headers or None,
+            base_url=base_auth.base_url,
+        ),
+        source=base_result.source if isinstance(base_result, AuthResult) else "provider config",
+        env={
+            **(dict(base_result.env or {}) if isinstance(base_result, AuthResult) else {}),
+            **credential_env,
+        }
+        or None,
+    )
 
 
 class ProviderRegistration:
@@ -525,45 +624,33 @@ class ModelRegistry:
         configured_headers = config.get("headers")
         auth_header = bool(config.get("authHeader", config.get("auth_header", False)))
 
-        def resolve(model, context, credential):
-            base_result = _settle(base.resolve(model, context, credential)) if base is not None else None
-            credential_env = (
-                {str(key): str(value) for key, value in credential.get("env", {}).items()}
-                if credential and isinstance(credential.get("env"), dict)
-                else {}
+        def resolve(
+            model: Model,
+            context: AuthContext,
+            credential: ApiKeyCredential | None,
+        ) -> AuthResult | None:
+            base_result = _configured_auth_base_result(base, model, context, credential)
+            credential_env = _configured_auth_credential_env(credential)
+            api_key = _configured_auth_api_key(
+                base_result,
+                credential,
+                configured_key,
+                model,
+                credential_env,
             )
-            api_key = base_result.auth.api_key if isinstance(base_result, AuthResult) else None
-            if api_key is None and credential and credential.get("key"):
-                api_key = resolve_config_value(str(credential["key"]), credential_env, uncached=True)
-            if api_key is None and isinstance(configured_key, str):
-                api_key = resolve_config_value_or_throw(
-                    configured_key,
-                    f'API key for provider "{model.provider}"',
-                    credential_env,
-                )
-            headers = {
-                **(dict(base_result.auth.headers or {}) if isinstance(base_result, AuthResult) else {}),
-                **(resolve_headers_or_throw(configured_headers, f'provider "{model.provider}"', credential_env) or {}),
-                **(resolve_headers_or_throw(model.headers, f'model "{model.provider}/{model.id}"', credential_env) or {}),
-            }
-            if auth_header:
-                if not api_key:
-                    raise RuntimeError(f'No API key found for "{model.provider}"')
-                headers["Authorization"] = f"Bearer {api_key}"
-            if base_result is None and api_key is None and not headers:
-                return None
-            base_auth = base_result.auth if isinstance(base_result, AuthResult) else ModelAuth()
-            return AuthResult(
-                auth=ModelAuth(
-                    api_key=api_key,
-                    headers=headers or None,
-                    base_url=base_auth.base_url,
-                ),
-                source=base_result.source if isinstance(base_result, AuthResult) else "provider config",
-                env={
-                    **(dict(base_result.env or {}) if isinstance(base_result, AuthResult) else {}),
-                    **credential_env,
-                } or None,
+            headers = _configured_auth_headers(
+                base_result,
+                configured_headers,
+                model,
+                credential_env,
+            )
+            return _configured_auth_result(
+                base_result,
+                api_key,
+                headers,
+                credential_env,
+                model,
+                auth_header=auth_header,
             )
 
         return ApiKeyAuth(
