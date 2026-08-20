@@ -24,6 +24,50 @@ from travis.tui.terminal_image import (
 )
 from travis.tui.utils import slice_by_column, truncate_to_width, visible_width, wrap_text
 
+
+def _file_search_location(
+    base_path: str,
+    raw_prefix: str,
+    expanded_prefix: str,
+    *,
+    is_at_prefix: bool,
+) -> tuple[str, str]:
+    is_root_prefix = raw_prefix in {"", "./", "../", "~", "~/", "/"} or (
+        is_at_prefix and raw_prefix == ""
+    )
+    if is_root_prefix or raw_prefix.endswith("/"):
+        directory = expanded_prefix
+        search_prefix = ""
+    else:
+        directory = os.path.dirname(expanded_prefix)
+        search_prefix = os.path.basename(expanded_prefix)
+    search_dir = (
+        directory
+        if raw_prefix.startswith("~") or expanded_prefix.startswith("/")
+        else os.path.join(base_path, directory)
+    )
+    return search_dir, search_prefix
+
+
+def _completion_relative_path(display_prefix: str, entry_name: str) -> str:
+    if display_prefix.endswith("/"):
+        relative_path = display_prefix + entry_name
+    elif "/" in display_prefix or "\\" in display_prefix:
+        if display_prefix.startswith("~/"):
+            home_relative_dir = display_prefix[2:]
+            directory_name = os.path.dirname(home_relative_dir)
+            relative_path = f"~/{entry_name}" if directory_name == "" else f"~/{directory_name}/{entry_name}"
+        elif display_prefix.startswith("/"):
+            directory_name = os.path.dirname(display_prefix)
+            relative_path = f"/{entry_name}" if directory_name == "/" else f"{directory_name}/{entry_name}"
+        else:
+            relative_path = os.path.join(os.path.dirname(display_prefix), entry_name)
+            if display_prefix.startswith("./") and not relative_path.startswith("./"):
+                relative_path = f"./{relative_path}"
+    else:
+        relative_path = f"~/{entry_name}" if display_prefix.startswith("~") else entry_name
+    return _to_display_path(relative_path)
+
 class SimpleAutocompleteProvider:
     """Small Python equivalent of travis-tui's CombinedAutocompleteProvider."""
 
@@ -256,17 +300,12 @@ class CombinedAutocompleteProvider:
         try:
             raw_prefix, is_at_prefix, is_quoted_prefix = _parse_path_prefix(prefix)
             expanded_prefix = _expand_home_path(raw_prefix)
-            is_root_prefix = raw_prefix in {"", "./", "../", "~", "~/", "/"} or (is_at_prefix and raw_prefix == "")
-            if is_root_prefix:
-                search_dir = expanded_prefix if raw_prefix.startswith("~") or expanded_prefix.startswith("/") else os.path.join(self.base_path, expanded_prefix)
-                search_prefix = ""
-            elif raw_prefix.endswith("/"):
-                search_dir = expanded_prefix if raw_prefix.startswith("~") or expanded_prefix.startswith("/") else os.path.join(self.base_path, expanded_prefix)
-                search_prefix = ""
-            else:
-                directory = os.path.dirname(expanded_prefix)
-                search_prefix = os.path.basename(expanded_prefix)
-                search_dir = directory if raw_prefix.startswith("~") or expanded_prefix.startswith("/") else os.path.join(self.base_path, directory)
+            search_dir, search_prefix = _file_search_location(
+                self.base_path,
+                raw_prefix,
+                expanded_prefix,
+                is_at_prefix=is_at_prefix,
+            )
 
             suggestions: list[dict[str, str]] = []
             for entry in os.scandir(search_dir or "."):
@@ -276,24 +315,7 @@ class CombinedAutocompleteProvider:
                     is_directory = entry.is_dir()
                 except OSError:
                     is_directory = False
-                display_prefix = raw_prefix
-                if display_prefix.endswith("/"):
-                    relative_path = display_prefix + entry.name
-                elif "/" in display_prefix or "\\" in display_prefix:
-                    if display_prefix.startswith("~/"):
-                        home_relative_dir = display_prefix[2:]
-                        directory_name = os.path.dirname(home_relative_dir)
-                        relative_path = f"~/{entry.name}" if directory_name == "" else f"~/{directory_name}/{entry.name}"
-                    elif display_prefix.startswith("/"):
-                        directory_name = os.path.dirname(display_prefix)
-                        relative_path = f"/{entry.name}" if directory_name == "/" else f"{directory_name}/{entry.name}"
-                    else:
-                        relative_path = os.path.join(os.path.dirname(display_prefix), entry.name)
-                        if display_prefix.startswith("./") and not relative_path.startswith("./"):
-                            relative_path = f"./{relative_path}"
-                else:
-                    relative_path = f"~/{entry.name}" if display_prefix.startswith("~") else entry.name
-                relative_path = _to_display_path(relative_path)
+                relative_path = _completion_relative_path(raw_prefix, entry.name)
                 path_value = f"{relative_path}/" if is_directory else relative_path
                 suggestions.append(
                     {
