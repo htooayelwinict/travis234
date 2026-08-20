@@ -33,7 +33,11 @@ from travis.coding_agent.session_types import (
     _SUBAGENT_RESULT_SUMMARY_LIMIT,
     _TASK_ID_SCHEMA,
 )
-from travis.coding_agent.subagent_roles import resolve_agent_role, typed_role_prompt_guidelines
+from travis.coding_agent.subagent_roles import (
+    ResolvedAgentRole,
+    resolve_agent_role,
+    typed_role_prompt_guidelines,
+)
 from travis.coding_agent.subagent_supervision import ControlResult
 from travis.coding_agent.subagent_trace import (
     _coerce_subagent_timeout_seconds,
@@ -116,6 +120,39 @@ class SessionSubagentController(SessionSubagentControllerSurface):
         normalized = re.sub(r"-{2,}", "-", normalized).strip("-")
         return normalized
 
+    def _resolve_subagent_role(
+        self,
+        role: str,
+        definition_name: object,
+        allowed_tools: tuple[str, ...] | None,
+        requested_timeout: int | None,
+    ) -> ResolvedAgentRole | None:
+        if self._resource_loader is None:
+            return None
+        registry = self._resource_loader.get_agent_roles()
+        if definition_name is not None:
+            if not isinstance(definition_name, str) or not definition_name:
+                raise ValueError("roleDefinitionName must be a non-empty string")
+            definition = registry.get(definition_name)
+            if definition is None:
+                raise ValueError(f'Unknown agent role definition: "{definition_name}"')
+        else:
+            definition = registry.get(role)
+        if definition is None:
+            return None
+        parent_tools = tuple(self.get_active_tool_names())
+        if allowed_tools is not None:
+            requested_tool_set = set(allowed_tools)
+            parent_tools = tuple(
+                name for name in parent_tools if name in requested_tool_set
+            )
+        return resolve_agent_role(
+            definition,
+            parent_tools=parent_tools,
+            definitions_by_name=self._tool_definition_by_name,
+            requested_timeout=requested_timeout,
+        )
+
     def _build_subagent_task(self, role: str, goal: str, options: dict | None = None) -> SubagentTask:
         options = options or {}
         role = self._normalize_subagent_role(role)
@@ -140,31 +177,12 @@ class SessionSubagentController(SessionSubagentControllerSurface):
         definition_name = options.get(
             "roleDefinitionName", options.get("role_definition_name")
         )
-        definition = None
-        if self._resource_loader is not None:
-            registry = self._resource_loader.get_agent_roles()
-            if definition_name is not None:
-                if not isinstance(definition_name, str) or not definition_name:
-                    raise ValueError("roleDefinitionName must be a non-empty string")
-                definition = registry.get(definition_name)
-                if definition is None:
-                    raise ValueError(f'Unknown agent role definition: "{definition_name}"')
-            else:
-                definition = registry.get(role)
-        resolved_role = None
-        if definition is not None:
-            parent_tools = tuple(self.get_active_tool_names())
-            if allowed_tools is not None:
-                requested_tool_set = set(allowed_tools)
-                parent_tools = tuple(
-                    name for name in parent_tools if name in requested_tool_set
-                )
-            resolved_role = resolve_agent_role(
-                definition,
-                parent_tools=parent_tools,
-                definitions_by_name=self._tool_definition_by_name,
-                requested_timeout=requested_timeout,
-            )
+        resolved_role = self._resolve_subagent_role(
+            role,
+            definition_name,
+            allowed_tools,
+            requested_timeout,
+        )
         task_options = {
             "role": role,
             "goal": goal,
