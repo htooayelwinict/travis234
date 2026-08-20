@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from dataclasses import field
@@ -12,13 +12,14 @@ import json
 import os
 from pathlib import Path
 import sys
+from typing import Protocol, TypedDict, runtime_checkable
 
 from travis.ai.env_config import ModelConfig, get_default_model_for_provider, load_dotenv_values, load_model_config
 from travis.ai.model_resolver import ScopedModel, resolve_cli_model, resolve_model_scope
 from travis.ai.providers.capabilities import ProviderParamWarning, build_generation_payload
 from travis.ai.providers.catalog import determine_api_mode, normalize_provider, provider_catalog
 from travis.ai.providers.params import GenerationParams, merge_generation_params, params_from_mapping
-from travis.ai.types import Model
+from travis.ai.types import Model, ThinkingLevel
 from travis.app import CodingApp
 from travis.coding_agent.auth_storage import AuthStorage
 from travis.coding_agent.automation import run_json_mode, run_print_mode
@@ -42,6 +43,11 @@ _ORCHESTRATION_ACTIVE_DOTENV = "TRAVIS234_ORCHESTRATION_ACTIVE_DOTENV"
 _ORCHESTRATION_ACTIVE_MODEL = "TRAVIS234_ORCHESTRATION_ACTIVE_MODEL"
 _ORCHESTRATION_ACTIVE_THINKING = "TRAVIS234_ORCHESTRATION_ACTIVE_THINKING"
 _ORCHESTRATION_HELPER = "TRAVIS234_ORCHESTRATION_HELPER"
+
+
+@runtime_checkable
+class _KnownToolNamesGetter(Protocol):
+    def __call__(self) -> Iterable[str]: ...
 
 
 @contextmanager
@@ -122,7 +128,7 @@ def _resolve_explicit_resource_paths(
 def _unknown_cli_tool_names(app: object, requested: list[str]) -> list[str]:
     session = getattr(app, "session", None)
     get_known_tool_names = getattr(session, "get_known_tool_names", None)
-    if not callable(get_known_tool_names):
+    if not isinstance(get_known_tool_names, _KnownToolNamesGetter):
         return []
     known = set(get_known_tool_names())
     return [name for name in requested if name not in known]
@@ -341,7 +347,7 @@ def _hydrate_models_for_list(config: ModelConfig, model_registry) -> None:
     )
 
 
-def _select_project_trust_option(prompt: str, choices: list[str] | tuple[str, ...]) -> str | None:
+def _select_project_trust_option(prompt: str, choices: Sequence[str]) -> str | None:
     print(prompt)
     for index, choice in enumerate(choices, start=1):
         print(f"  {index}. {choice}")
@@ -517,226 +523,462 @@ def _dispose_loaded_extension_runtime(resource_loader: DefaultResourceLoader | N
         runtime.dispose()
 
 
-def main(argv: list[str] | None = None) -> int:
-    resolved_argv = list(sys.argv[1:] if argv is None else argv)
-    if is_package_cli_invocation(resolved_argv):
-        return run_package_cli(resolved_argv, agent_dir=get_agent_dir())
+@dataclass(frozen=True)
+class _CliExit:
+    code: int
+
+
+@dataclass(frozen=True)
+class _InitialCli:
+    argv: list[str]
+    bootstrap_parser: argparse.ArgumentParser
+    bootstrap_args: argparse.Namespace
+    parser: argparse.ArgumentParser
+    args: argparse.Namespace
+    core_only: bool
+
+
+@dataclass(frozen=True)
+class _CliPaths:
+    cwd: Path
+    cwd_was_explicit: bool
+    launch_dir: Path
+    agent_dir: str
+    extension_paths: list[str]
+    skill_paths: list[str]
+    prompt_template_paths: list[str]
+    theme_paths: list[str]
+    image_paths: list[str]
+
+
+@dataclass(frozen=True)
+class _CliStartup:
+    cwd: Path
+    session: _StartupSessionSelection
+    settings_manager: SettingsManager
+
+
+@dataclass(frozen=True)
+class _LoadedCli:
+    parser: argparse.ArgumentParser
+    args: argparse.Namespace
+    project_trust_context: ProjectTrustContext
+    resource_loader: DefaultResourceLoader | None
+
+
+@dataclass(frozen=True)
+class _ToolSelection:
+    selected: list[str]
+    excluded: list[str]
+    allowed: list[str] | None
+    additional_active: list[str] | None
+
+
+@dataclass(frozen=True)
+class _CliModelConfigs:
+    dotenv_path: Path
+    worker: ModelConfig
+    compression: ModelConfig
+
+
+class _CompressionRuntimeOptions(TypedDict, total=False):
+    compression_model: Model
+    compression_api_key: str | None
+    compression_timeout_seconds: float
+    compression_generation_params: GenerationParams
+
+
+@dataclass(frozen=True)
+class _RuntimeLaunch:
+    dotenv_path: Path
+    config: ModelConfig
+    startup: _StartupModelSelection
+    model_registry: ModelRegistry
+    evaluation_redactor: SecretRedactor
+    generation_warnings: list[ProviderParamWarning]
+    runtime_options: _CompressionRuntimeOptions
+
+
+def _parse_initial_cli(resolved_argv: list[str]) -> _InitialCli | _CliExit:
     bootstrap_parser = _build_parser(include_prompt=False)
     bootstrap_args, _bootstrap_unknown = bootstrap_parser.parse_known_args(resolved_argv)
-    core_only_action = bool(
+    core_only = bool(
         bootstrap_args.export
         or bootstrap_args.list_models
         or bootstrap_args.list_providers
     )
-    if core_only_action:
-        parser = _build_parser(include_prompt=True)
-        args = parser.parse_args(resolved_argv)
-        if args.help:
-            parser.print_help()
-            return 0
-        selected_mode = _resolved_cli_mode(args)
-        if selected_mode in {"print", "json"} and not args.prompt:
-            parser.error(f"--mode {selected_mode} requires a prompt")
-    else:
-        parser = bootstrap_parser
-        args = bootstrap_args
-        args.prompt = []
+    if not core_only:
+        bootstrap_args.prompt = []
+        return _InitialCli(
+            resolved_argv,
+            bootstrap_parser,
+            bootstrap_args,
+            bootstrap_parser,
+            bootstrap_args,
+            False,
+        )
+    parser = _build_parser(include_prompt=True)
+    args = parser.parse_args(resolved_argv)
+    if args.help:
+        parser.print_help()
+        return _CliExit(0)
+    _require_mode_prompt(args, parser)
+    return _InitialCli(
+        resolved_argv,
+        bootstrap_parser,
+        bootstrap_args,
+        parser,
+        args,
+        True,
+    )
 
-    if args.export:
-        output_path = args.prompt[0] if args.prompt else None
-        try:
-            exported_path = export_from_file(args.export, output_path)
-        except Exception as error:  # noqa: BLE001 - CLI should convert export failures to an exit code.
-            print(f"Error: {error}", file=sys.stderr)
-            return 1
-        print(f"Exported to: {exported_path}")
-        return 0
 
+def _require_mode_prompt(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+) -> None:
+    selected_mode = _resolved_cli_mode(args)
+    if selected_mode in {"print", "json"} and not args.prompt:
+        parser.error(f"--mode {selected_mode} requires a prompt")
+
+
+def _run_export_action(args: argparse.Namespace) -> int:
+    output_path = args.prompt[0] if args.prompt else None
+    try:
+        exported_path = export_from_file(args.export, output_path)
+    except Exception as error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 1
+    print(f"Exported to: {exported_path}")
+    return 0
+
+
+def _resolve_cli_paths(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+) -> _CliPaths | _CliExit:
     cwd_was_explicit = args.cwd is not None
     launch_dir = (_npm_initial_cwd() or Path.cwd()).resolve()
-    cwd_path = _resolve_cwd_path(args.cwd or ".")
-    if not cwd_path.exists():
-        print(f"Error: working directory does not exist: {cwd_path}", file=sys.stderr)
-        return 1
-    if not cwd_path.is_dir():
-        print(f"Error: working directory is not a directory: {cwd_path}", file=sys.stderr)
-        return 1
+    cwd = _resolve_cwd_path(args.cwd or ".")
+    if not cwd.exists():
+        print(f"Error: working directory does not exist: {cwd}", file=sys.stderr)
+        return _CliExit(1)
+    if not cwd.is_dir():
+        print(f"Error: working directory is not a directory: {cwd}", file=sys.stderr)
+        return _CliExit(1)
     try:
         extension_paths = _resolve_explicit_resource_paths(
             args.extension_paths,
-            cwd=cwd_path,
+            cwd=cwd,
             label="extension",
         )
         skill_paths = _resolve_explicit_resource_paths(
             args.skill_paths,
-            cwd=cwd_path,
+            cwd=cwd,
             label="skill",
         )
         prompt_template_paths = _resolve_explicit_resource_paths(
             args.prompt_template_paths,
-            cwd=cwd_path,
+            cwd=cwd,
             label="prompt-template",
         )
         theme_paths = _resolve_explicit_resource_paths(
             args.theme_paths,
-            cwd=cwd_path,
+            cwd=cwd,
             label="theme",
         )
         image_paths = _resolve_explicit_resource_paths(
             args.image_paths,
-            cwd=cwd_path,
+            cwd=cwd,
             label="image",
         )
     except ValueError as error:
         parser.error(str(error))
-    agent_dir = get_agent_dir()
-    if not core_only_action and args.help:
-        startup_session = _StartupSessionSelection(cwd_path, None, None, False)
+    return _CliPaths(
+        cwd=cwd,
+        cwd_was_explicit=cwd_was_explicit,
+        launch_dir=launch_dir,
+        agent_dir=get_agent_dir(),
+        extension_paths=extension_paths,
+        skill_paths=skill_paths,
+        prompt_template_paths=prompt_template_paths,
+        theme_paths=theme_paths,
+        image_paths=image_paths,
+    )
+
+
+def _resolve_cli_startup(
+    initial: _InitialCli,
+    paths: _CliPaths,
+) -> _CliStartup:
+    if not initial.core_only and initial.args.help:
+        session = _StartupSessionSelection(paths.cwd, None, None, False)
     else:
-        session_catalog = SessionCatalog(agent_dir)
+        session_catalog = SessionCatalog(paths.agent_dir)
         try:
-            startup_session = _resolve_startup_session(
-                args,
-                cwd=cwd_path,
-                cwd_was_explicit=cwd_was_explicit,
-                launch_dir=launch_dir,
+            session = _resolve_startup_session(
+                initial.args,
+                cwd=paths.cwd,
+                cwd_was_explicit=paths.cwd_was_explicit,
+                launch_dir=paths.launch_dir,
                 catalog=session_catalog,
             )
         except (SessionCatalogError, ValueError) as error:
-            parser.error(str(error))
-    cwd_path = startup_session.cwd
-    settings_manager = SettingsManager.create(str(cwd_path), agent_dir)
-    resource_loader: DefaultResourceLoader | None = None
-    if not core_only_action:
-        resource_loader = DefaultResourceLoader(
-            cwd=str(cwd_path),
-            agent_dir=agent_dir,
-            settings_manager=settings_manager,
-            project_trusted=bootstrap_args.project_trust_override,
-            additional_extension_paths=extension_paths,
-            additional_skill_paths=skill_paths,
-            additional_prompt_template_paths=prompt_template_paths,
-            additional_theme_paths=theme_paths,
-            offline=bootstrap_args.offline,
-        )
-        pretrust = resource_loader.load_project_trust_extensions()
-        pretrust_runtime = pretrust.get("runtime")
-        if not isinstance(pretrust_runtime, ExtensionRunner):
-            raise RuntimeError("Pre-trust extension load did not produce an extension runtime")
-        try:
-            provisional_parser = _build_parser(
-                include_prompt=True,
-                extension_runtime=pretrust_runtime,
-            )
-        except ExtensionFlagSchemaError as error:
-            pretrust_runtime.dispose()
-            bootstrap_parser.error(str(error))
-        try:
-            provisional_args, unresolved = provisional_parser.parse_known_args(resolved_argv)
-        except SystemExit:
-            pretrust_runtime.dispose()
-            raise
-        has_unresolved_option = any(
-            token.startswith("-") and token != "-"
-            for token in unresolved
-        )
-        provisional_mode = _resolved_cli_mode(provisional_args)
-        trust_has_ui = (
-            not provisional_args.help
-            and not has_unresolved_option
-            and provisional_mode == "interactive"
-            and not provisional_args.plain
-        )
-        project_trust_context = ProjectTrustContext(
-            has_ui=trust_has_ui,
-            select=_select_project_trust_option if trust_has_ui else None,
-        )
-        resource_loader.complete_reload(
-            {
-                "projectTrustOverride": bootstrap_args.project_trust_override,
-                "projectTrustContext": project_trust_context,
-            },
-            pretrust_extensions=pretrust,
-        )
-        runtime = resource_loader.get_extensions().get("runtime")
-        if not isinstance(runtime, ExtensionRunner):
-            raise RuntimeError("Resource load did not produce an extension runtime")
-        try:
-            parser = _build_parser(include_prompt=True, extension_runtime=runtime)
-        except ExtensionFlagSchemaError as error:
-            runtime.dispose()
-            bootstrap_parser.error(str(error))
-        try:
-            args = parser.parse_args(resolved_argv)
-        except SystemExit:
-            runtime.dispose()
-            raise
-        if args.help:
-            try:
-                parser.print_help()
-                return 0
-            finally:
-                runtime.dispose()
-        selected_mode = _resolved_cli_mode(args)
-        if selected_mode in {"print", "json"} and not args.prompt:
-            runtime.dispose()
-            parser.error(f"--mode {selected_mode} requires a prompt")
-        if args.resume_session and (args.plain or args.prompt):
-            runtime.dispose()
-            parser.error("--resume requires interactive TUI mode without an initial prompt")
-    else:
-        project_trust_context = ProjectTrustContext(has_ui=False, select=None)
+            initial.parser.error(str(error))
+    settings_manager = SettingsManager.create(str(session.cwd), paths.agent_dir)
+    return _CliStartup(session.cwd, session, settings_manager)
 
-    args.image_paths = image_paths
-    selected_tool_names = _split_repeatable_csv(args.tools)
-    excluded_tool_names = _split_repeatable_csv(args.exclude_tools)
-    if args.mcp and "mcp" in excluded_tool_names:
-        parser.error("--mcp cannot be combined with --exclude-tools mcp")
-    if args.mcp and "mcp" not in selected_tool_names:
-        selected_tool_names.append("mcp")
-    allowed_tool_names = (
-        selected_tool_names
-        if args.tools is not None or args.mcp and args.no_tools
-        else []
-        if args.no_tools
-        else None
+
+def _create_resource_loader(
+    initial: _InitialCli,
+    paths: _CliPaths,
+    startup: _CliStartup,
+) -> DefaultResourceLoader:
+    return DefaultResourceLoader(
+        cwd=str(startup.cwd),
+        agent_dir=paths.agent_dir,
+        settings_manager=startup.settings_manager,
+        project_trusted=initial.bootstrap_args.project_trust_override,
+        additional_extension_paths=paths.extension_paths,
+        additional_skill_paths=paths.skill_paths,
+        additional_prompt_template_paths=paths.prompt_template_paths,
+        additional_theme_paths=paths.theme_paths,
+        offline=initial.bootstrap_args.offline,
     )
-    additional_active_tool_names = ["mcp"] if args.mcp else None
 
-    if args.thinking and args.thinking not in _VALID_THINKING_LEVELS:
-        print(
-            f'Warning: Invalid thinking level "{args.thinking}". '
-            f"Valid values: {', '.join(_VALID_THINKING_LEVELS)}",
-            file=sys.stderr,
-        )
-        args.thinking = None
 
-    dotenv_path = _resolve_dotenv_path(args.dotenv, search_start=cwd_path)
+def _required_extension_runtime(
+    extensions: dict[str, object],
+    *,
+    error_message: str,
+) -> ExtensionRunner:
+    runtime = extensions.get("runtime")
+    if not isinstance(runtime, ExtensionRunner):
+        raise RuntimeError(error_message)
+    return runtime
+
+
+def _build_extension_parser(
+    runtime: ExtensionRunner,
+    error_parser: argparse.ArgumentParser,
+) -> argparse.ArgumentParser:
     try:
-        config = _config_with_cli_generation_params(load_model_config("TRAVIS234_WORKER_LLM", dotenv_path), args)
-        compression_config = load_model_config("TRAVIS234_COMPRESSION_LLM", dotenv_path)
-    except ValueError as error:
+        return _build_parser(include_prompt=True, extension_runtime=runtime)
+    except ExtensionFlagSchemaError as error:
+        runtime.dispose()
+        error_parser.error(str(error))
+
+
+def _parse_pretrust_args(
+    parser: argparse.ArgumentParser,
+    argv: list[str],
+    runtime: ExtensionRunner,
+) -> tuple[argparse.Namespace, list[str]]:
+    try:
+        return parser.parse_known_args(argv)
+    except SystemExit:
+        runtime.dispose()
+        raise
+
+
+def _project_trust_context(
+    provisional_args: argparse.Namespace,
+    unresolved: list[str],
+) -> ProjectTrustContext:
+    has_unresolved_option = any(
+        token.startswith("-") and token != "-"
+        for token in unresolved
+    )
+    provisional_mode = _resolved_cli_mode(provisional_args)
+    trust_has_ui = (
+        not provisional_args.help
+        and not has_unresolved_option
+        and provisional_mode == "interactive"
+        and not provisional_args.plain
+    )
+    return ProjectTrustContext(
+        has_ui=trust_has_ui,
+        select=_select_project_trust_option if trust_has_ui else None,
+    )
+
+
+def _reload_extension_runtime(
+    resource_loader: DefaultResourceLoader,
+    initial: _InitialCli,
+    project_trust_context: ProjectTrustContext,
+    pretrust_extensions: dict[str, object],
+) -> ExtensionRunner:
+    resource_loader.complete_reload(
+        {
+            "projectTrustOverride": initial.bootstrap_args.project_trust_override,
+            "projectTrustContext": project_trust_context,
+        },
+        pretrust_extensions=pretrust_extensions,
+    )
+    return _required_extension_runtime(
+        resource_loader.get_extensions(),
+        error_message="Resource load did not produce an extension runtime",
+    )
+
+
+def _parse_full_cli(
+    initial: _InitialCli,
+    parser: argparse.ArgumentParser,
+    runtime: ExtensionRunner,
+    project_trust_context: ProjectTrustContext,
+    resource_loader: DefaultResourceLoader,
+) -> _LoadedCli | _CliExit:
+    try:
+        args = parser.parse_args(initial.argv)
+    except SystemExit:
+        runtime.dispose()
+        raise
+    if args.help:
+        try:
+            parser.print_help()
+            return _CliExit(0)
+        finally:
+            runtime.dispose()
+    _require_mode_prompt_with_cleanup(args, parser, runtime)
+    if args.resume_session and (args.plain or args.prompt):
+        runtime.dispose()
+        parser.error("--resume requires interactive TUI mode without an initial prompt")
+    return _LoadedCli(parser, args, project_trust_context, resource_loader)
+
+
+def _require_mode_prompt_with_cleanup(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+    runtime: ExtensionRunner,
+) -> None:
+    selected_mode = _resolved_cli_mode(args)
+    if selected_mode in {"print", "json"} and not args.prompt:
+        runtime.dispose()
+        parser.error(f"--mode {selected_mode} requires a prompt")
+
+
+def _load_extension_cli(
+    initial: _InitialCli,
+    paths: _CliPaths,
+    startup: _CliStartup,
+) -> _LoadedCli | _CliExit:
+    if initial.core_only:
+        return _LoadedCli(
+            initial.parser,
+            initial.args,
+            ProjectTrustContext(has_ui=False, select=None),
+            None,
+        )
+    resource_loader = _create_resource_loader(initial, paths, startup)
+    pretrust_extensions = resource_loader.load_project_trust_extensions()
+    pretrust_runtime = _required_extension_runtime(
+        pretrust_extensions,
+        error_message="Pre-trust extension load did not produce an extension runtime",
+    )
+    provisional_parser = _build_extension_parser(
+        pretrust_runtime,
+        initial.bootstrap_parser,
+    )
+    provisional_args, unresolved = _parse_pretrust_args(
+        provisional_parser,
+        initial.argv,
+        pretrust_runtime,
+    )
+    project_trust_context = _project_trust_context(provisional_args, unresolved)
+    runtime = _reload_extension_runtime(
+        resource_loader,
+        initial,
+        project_trust_context,
+        pretrust_extensions,
+    )
+    parser = _build_extension_parser(runtime, initial.bootstrap_parser)
+    return _parse_full_cli(
+        initial,
+        parser,
+        runtime,
+        project_trust_context,
+        resource_loader,
+    )
+
+
+@contextmanager
+def _dispose_extension_runtime_on_error(
+    resource_loader: DefaultResourceLoader | None,
+) -> Iterator[None]:
+    try:
+        yield
+    except BaseException:
         _dispose_loaded_extension_runtime(resource_loader)
-        parser.error(str(error))
-    auth_storage = AuthStorage.create(get_auth_path())
-    model_registry = ModelRegistry.create(
-        auth_storage,
-        get_models_path(),
-        provider_config=config,
+        raise
+
+
+def _allowed_tool_names(
+    args: argparse.Namespace,
+    selected: list[str],
+) -> list[str] | None:
+    if args.tools is not None or args.mcp and args.no_tools:
+        return selected
+    if args.no_tools:
+        return []
+    return None
+
+
+def _resolve_tool_selection(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+) -> _ToolSelection:
+    selected = _split_repeatable_csv(args.tools)
+    excluded = _split_repeatable_csv(args.exclude_tools)
+    if args.mcp and "mcp" in excluded:
+        parser.error("--mcp cannot be combined with --exclude-tools mcp")
+    if args.mcp and "mcp" not in selected:
+        selected.append("mcp")
+    return _ToolSelection(
+        selected=selected,
+        excluded=excluded,
+        allowed=_allowed_tool_names(args, selected),
+        additional_active=["mcp"] if args.mcp else None,
     )
-    model_registry.set_offline(args.offline)
-    provider_dotenv_secrets = _register_dotenv_provider_credentials(model_registry, dotenv_path)
-    if args.list_providers:
-        _print_provider_list(model_registry)
-        return 0
-    if args.list_models:
-        _hydrate_models_for_list(config, model_registry)
-        _print_model_list(model_registry, verbose=args.verbose_models)
-        return 0
+
+
+def _normalize_thinking_level(args: argparse.Namespace) -> None:
+    if not args.thinking or args.thinking in _VALID_THINKING_LEVELS:
+        return
+    print(
+        f'Warning: Invalid thinking level "{args.thinking}". '
+        f"Valid values: {', '.join(_VALID_THINKING_LEVELS)}",
+        file=sys.stderr,
+    )
+    args.thinking = None
+
+
+def _load_cli_model_configs(
+    args: argparse.Namespace,
+    cwd: Path,
+    parser: argparse.ArgumentParser,
+) -> _CliModelConfigs:
+    dotenv_path = _resolve_dotenv_path(args.dotenv, search_start=cwd)
     try:
-        startup = _startup_model_from_env(
-            dotenv_path,
-            config=config,
+        worker = _config_with_cli_generation_params(
+            load_model_config("TRAVIS234_WORKER_LLM", dotenv_path),
+            args,
+        )
+        compression = load_model_config("TRAVIS234_COMPRESSION_LLM", dotenv_path)
+    except ValueError as error:
+        parser.error(str(error))
+    return _CliModelConfigs(dotenv_path, worker, compression)
+
+
+def _resolve_runtime_startup_model(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+    configs: _CliModelConfigs,
+    model_registry: ModelRegistry,
+) -> _StartupModelSelection:
+    try:
+        return _startup_model_from_env(
+            configs.dotenv_path,
+            config=configs.worker,
             cli_provider=args.provider,
             cli_model=args.model,
             cli_thinking=args.thinking,
@@ -744,101 +986,190 @@ def main(argv: list[str] | None = None) -> int:
             model_registry=model_registry,
         )
     except ValueError as error:
-        _dispose_loaded_extension_runtime(resource_loader)
         parser.error(str(error))
-    if config.api_key:
-        auth_storage.set_runtime_api_key(config.provider, config.api_key)
-    evaluation_redactor = SecretRedactor(
+
+
+def _compression_runtime_options(
+    config: ModelConfig,
+    model_registry: ModelRegistry,
+) -> _CompressionRuntimeOptions:
+    if not config.enabled:
+        return {}
+    return {
+        "compression_model": _env_model_from_config(
+            config,
+            model_registry=model_registry,
+        ),
+        "compression_api_key": config.api_key,
+        "compression_timeout_seconds": config.timeout_seconds,
+        "compression_generation_params": config.generation_params,
+    }
+
+
+def _effective_thinking_level(startup: _StartupModelSelection) -> ThinkingLevel:
+    match startup.thinking_level:
+        case "minimal":
+            return "minimal"
+        case "low":
+            return "low"
+        case "medium":
+            return "medium"
+        case "high":
+            return "high"
+        case "xhigh":
+            return "xhigh"
+        case "max":
+            return "max"
+        case _:
+            return "off"
+
+
+def _prepare_runtime_launch(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+    cwd: Path,
+) -> _RuntimeLaunch | _CliExit:
+    configs = _load_cli_model_configs(args, cwd, parser)
+    auth_storage = AuthStorage.create(get_auth_path())
+    model_registry = ModelRegistry.create(
+        auth_storage,
+        get_models_path(),
+        provider_config=configs.worker,
+    )
+    model_registry.set_offline(args.offline)
+    provider_secrets = _register_dotenv_provider_credentials(
+        model_registry,
+        configs.dotenv_path,
+    )
+    if args.list_providers:
+        _print_provider_list(model_registry)
+        return _CliExit(0)
+    if args.list_models:
+        _hydrate_models_for_list(configs.worker, model_registry)
+        _print_model_list(model_registry, verbose=args.verbose_models)
+        return _CliExit(0)
+    startup = _resolve_runtime_startup_model(args, parser, configs, model_registry)
+    if configs.worker.api_key:
+        auth_storage.set_runtime_api_key(
+            configs.worker.provider,
+            configs.worker.api_key,
+        )
+    redactor = SecretRedactor(
         [
             secret
-            for secret in [config.api_key, compression_config.api_key, *provider_dotenv_secrets]
+            for secret in [
+                configs.worker.api_key,
+                configs.compression.api_key,
+                *provider_secrets,
+            ]
             if secret
         ]
     )
-    generation_warnings = _generation_param_warnings_for_model(startup.model, config.generation_params)
-    _print_generation_param_warnings(generation_warnings)
-    runtime_options: dict[str, object] = {}
-    if compression_config.enabled:
-        runtime_options.update(
-            {
-                "compression_model": _env_model_from_config(
-                    compression_config,
-                    model_registry=model_registry,
-                ),
-                "compression_api_key": compression_config.api_key,
-                "compression_timeout_seconds": compression_config.timeout_seconds,
-                "compression_generation_params": compression_config.generation_params,
-            }
-        )
+    warnings = _generation_param_warnings_for_model(
+        startup.model,
+        configs.worker.generation_params,
+    )
+    _print_generation_param_warnings(warnings)
+    return _RuntimeLaunch(
+        dotenv_path=configs.dotenv_path,
+        config=configs.worker,
+        startup=startup,
+        model_registry=model_registry,
+        evaluation_redactor=redactor,
+        generation_warnings=warnings,
+        runtime_options=_compression_runtime_options(
+            configs.compression,
+            model_registry,
+        ),
+    )
+
+
+def _create_coding_app(
+    loaded: _LoadedCli,
+    paths: _CliPaths,
+    startup: _CliStartup,
+    tools: _ToolSelection,
+    launch: _RuntimeLaunch,
+) -> CodingApp:
+    args = loaded.args
+    selected_mode = _resolved_cli_mode(args)
     try:
-        app = CodingApp(
-            cwd=str(cwd_path),
-            model=startup.model,
-            thinking_level=startup.thinking_level or "off",
-            scoped_models=startup.scoped_models,
+        return CodingApp(
+            cwd=str(startup.cwd),
+            model=launch.startup.model,
+            thinking_level=_effective_thinking_level(launch.startup),
+            scoped_models=launch.startup.scoped_models,
             enable_tui=(
                 selected_mode == "interactive" and not args.plain
                 or args.tui and selected_mode not in {"json", "rpc"}
             ),
-            session_path=startup_session.session_path,
-            session_id=startup_session.session_id,
-            agent_dir=agent_dir,
-            settings_manager=settings_manager,
+            session_path=startup.session.session_path,
+            session_id=startup.session.session_id,
+            agent_dir=paths.agent_dir,
+            settings_manager=startup.settings_manager,
             project_trust_override=args.project_trust_override,
-            project_trust_context=project_trust_context,
-            model_registry=model_registry,
-            allowed_tool_names=allowed_tool_names,
-            excluded_tool_names=excluded_tool_names,
-            additional_active_tool_names=additional_active_tool_names,
-            additional_extension_paths=extension_paths,
-            additional_skill_paths=skill_paths,
-            additional_prompt_template_paths=prompt_template_paths,
-            additional_theme_paths=theme_paths,
-            initial_resource_loader=resource_loader,
+            project_trust_context=loaded.project_trust_context,
+            model_registry=launch.model_registry,
+            allowed_tool_names=tools.allowed,
+            excluded_tool_names=tools.excluded,
+            additional_active_tool_names=tools.additional_active,
+            additional_extension_paths=paths.extension_paths,
+            additional_skill_paths=paths.skill_paths,
+            additional_prompt_template_paths=paths.prompt_template_paths,
+            additional_theme_paths=paths.theme_paths,
+            initial_resource_loader=loaded.resource_loader,
             extension_flag_values=args.extension_flag_values,
             offline=args.offline,
             event_trace=(
-                EvalTraceWriter(args.event_trace, redactor=evaluation_redactor)
+                EvalTraceWriter(args.event_trace, redactor=launch.evaluation_redactor)
                 if args.event_trace
                 else None
             ),
             conversation_log=(
-                ConversationLogWriter(args.conversation_log, redactor=evaluation_redactor)
+                ConversationLogWriter(
+                    args.conversation_log,
+                    redactor=launch.evaluation_redactor,
+                )
                 if args.conversation_log
                 else None
             ),
-            **runtime_options,
+            **launch.runtime_options,
         )
     except ExtensionFlagValidationError as error:
-        _dispose_loaded_extension_runtime(resource_loader)
-        parser.error(str(error))
-    except BaseException:
-        _dispose_loaded_extension_runtime(resource_loader)
-        raise
+        loaded.parser.error(str(error))
+
+
+def _run_and_close_app(
+    app: CodingApp,
+    loaded: _LoadedCli,
+    launch: _RuntimeLaunch,
+    startup: _CliStartup,
+    tools: _ToolSelection,
+) -> int:
     try:
         unknown_tool_names = _unknown_cli_tool_names(
             app,
-            [*selected_tool_names, *excluded_tool_names],
+            [*tools.selected, *tools.excluded],
         )
         if unknown_tool_names:
-            if args.mcp and "mcp" in unknown_tool_names:
-                parser.error(
+            if loaded.args.mcp and "mcp" in unknown_tool_names:
+                loaded.parser.error(
                     "MCP tool is unavailable; install it with: "
                     "travis234 install travis234-mcp-adapter"
                 )
             noun = "name" if len(unknown_tool_names) == 1 else "names"
-            parser.error(f"unknown tool {noun}: {', '.join(unknown_tool_names)}")
+            loaded.parser.error(f"unknown tool {noun}: {', '.join(unknown_tool_names)}")
         with _scoped_orchestration_launch_defaults(
-            dotenv_path=dotenv_path,
-            model=startup.model,
-            thinking=startup.thinking_level or "off",
+            dotenv_path=launch.dotenv_path,
+            model=launch.startup.model,
+            thinking=_effective_thinking_level(launch.startup),
         ):
             return _run_configured_app(
                 app,
-                args,
-                config,
-                generation_warnings,
-                open_resume_picker=startup_session.open_resume_picker,
+                loaded.args,
+                launch.config,
+                launch.generation_warnings,
+                open_resume_picker=startup.session.open_resume_picker,
             )
     finally:
         close = getattr(app, "close", None)
@@ -846,11 +1177,38 @@ def main(argv: list[str] | None = None) -> int:
             close()
 
 
+def main(argv: list[str] | None = None) -> int:
+    resolved_argv = list(sys.argv[1:] if argv is None else argv)
+    if is_package_cli_invocation(resolved_argv):
+        return run_package_cli(resolved_argv, agent_dir=get_agent_dir())
+    initial = _parse_initial_cli(resolved_argv)
+    if isinstance(initial, _CliExit):
+        return initial.code
+    if initial.args.export:
+        return _run_export_action(initial.args)
+    paths = _resolve_cli_paths(initial.args, initial.parser)
+    if isinstance(paths, _CliExit):
+        return paths.code
+    startup = _resolve_cli_startup(initial, paths)
+    loaded = _load_extension_cli(initial, paths, startup)
+    if isinstance(loaded, _CliExit):
+        return loaded.code
+    loaded.args.image_paths = paths.image_paths
+    with _dispose_extension_runtime_on_error(loaded.resource_loader):
+        tools = _resolve_tool_selection(loaded.args, loaded.parser)
+        _normalize_thinking_level(loaded.args)
+        launch = _prepare_runtime_launch(loaded.args, loaded.parser, startup.cwd)
+        if isinstance(launch, _CliExit):
+            return launch.code
+        app = _create_coding_app(loaded, paths, startup, tools, launch)
+    return _run_and_close_app(app, loaded, launch, startup, tools)
+
+
 def _run_configured_app(
-    app,
+    app: CodingApp,
     args: argparse.Namespace,
     config: ModelConfig,
-    generation_warnings: list[str],
+    generation_warnings: list[ProviderParamWarning],
     *,
     open_resume_picker: bool,
 ) -> int:
