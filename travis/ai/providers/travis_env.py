@@ -39,13 +39,11 @@ class _BedrockEventRegistry(Protocol):
 
 
 class _BedrockClientMeta(Protocol):
-    @property
-    def events(self) -> _BedrockEventRegistry: ...
+    events: _BedrockEventRegistry
 
 
 class _BedrockHeaderClient(Protocol):
-    @property
-    def meta(self) -> _BedrockClientMeta: ...
+    meta: _BedrockClientMeta
 
 
 class _BedrockHttpRequest(Protocol):

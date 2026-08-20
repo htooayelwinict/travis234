@@ -10,13 +10,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
-from travis.agent.types import (
-    AbortSignal,
-    AgentToolResult,
-)
-from travis.ai.types import (
-    TextContent,
-)
+from travis.agent.types import AbortSignal, AgentToolResult
+from travis.ai.types import TextContent
 from travis.coding_agent.artifact_store import ArtifactPromotionError
 from travis.coding_agent.policy.context import fixed_action_context, subagent_policy_context
 from travis.coding_agent.policy.types import ALL_TOOL_EFFECTS
@@ -61,9 +56,7 @@ from travis.coding_agent.subagents import (
     SubagentResult,
     SubagentTask,
 )
-from travis.coding_agent.tools.types import (
-    ToolDefinition,
-)
+from travis.coding_agent.tools.types import ToolDefinition
 
 
 def _merge_role_context(role_context: str, task_context: str) -> str:

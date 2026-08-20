@@ -104,140 +104,50 @@ from travis.coding_agent.session_tooling import SessionToolController
 from travis.coding_agent.session_turns import SessionTurnController
 from travis.coding_agent.session_types import (
     _BRANCH_SUMMARY_PREFIX as _BRANCH_SUMMARY_PREFIX,
-)
-from travis.coding_agent.session_types import (
     _BRANCH_SUMMARY_SUFFIX as _BRANCH_SUMMARY_SUFFIX,
-)
-from travis.coding_agent.session_types import (
     _CANCEL_SUBAGENT_SCHEMA as _CANCEL_SUBAGENT_SCHEMA,
-)
-from travis.coding_agent.session_types import (
     _COMPACTION_SUMMARY_PREFIX as _COMPACTION_SUMMARY_PREFIX,
-)
-from travis.coding_agent.session_types import (
     _COMPACTION_SUMMARY_SUFFIX as _COMPACTION_SUMMARY_SUFFIX,
-)
-from travis.coding_agent.session_types import (
     _DEFAULT_ACTIVE_TOOL_NAMES as _DEFAULT_ACTIVE_TOOL_NAMES,
-)
-from travis.coding_agent.session_types import (
     _DEFAULT_SUBAGENT_ALLOWED_TOOLS as _DEFAULT_SUBAGENT_ALLOWED_TOOLS,
-)
-from travis.coding_agent.session_types import (
     _EXPAND_SUBAGENT_RESULT_SCHEMA as _EXPAND_SUBAGENT_RESULT_SCHEMA,
-)
-from travis.coding_agent.session_types import (
     _LIST_SUBAGENTS_SCHEMA as _LIST_SUBAGENTS_SCHEMA,
-)
-from travis.coding_agent.session_types import (
     _MALFORMED_STREAM_RECOVERY_PREFIX as _MALFORMED_STREAM_RECOVERY_PREFIX,
-)
-from travis.coding_agent.session_types import (
     _MALFORMED_STREAMED_TOOL_ARGS_MARKER as _MALFORMED_STREAMED_TOOL_ARGS_MARKER,
-)
-from travis.coding_agent.session_types import (
     _MALFORMED_STREAMED_TOOL_CALL_ARGUMENTS_CODE as _MALFORMED_STREAMED_TOOL_CALL_ARGUMENTS_CODE,
-)
-from travis.coding_agent.session_types import (
     _MAX_PARTIAL_STREAM_CONTINUATIONS as _MAX_PARTIAL_STREAM_CONTINUATIONS,
-)
-from travis.coding_agent.session_types import (
     _MODEL_SUBAGENT_SPAWN_LIMIT_PER_TURN as _MODEL_SUBAGENT_SPAWN_LIMIT_PER_TURN,
-)
-from travis.coding_agent.session_types import (
     _MODEL_SUBAGENT_TIMEOUT_SECONDS_DEFAULT as _MODEL_SUBAGENT_TIMEOUT_SECONDS_DEFAULT,
-)
-from travis.coding_agent.session_types import (
     _MODEL_SUBAGENT_TIMEOUT_SECONDS_MAX as _MODEL_SUBAGENT_TIMEOUT_SECONDS_MAX,
-)
-from travis.coding_agent.session_types import (
     _NON_RETRYABLE_PROVIDER_LIMIT_MARKERS as _NON_RETRYABLE_PROVIDER_LIMIT_MARKERS,
-)
-from travis.coding_agent.session_types import (
     _PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE as _PARTIAL_STREAM_DROPPED_TOOL_CALLS_CODE,
-)
-from travis.coding_agent.session_types import (
     _PARTIAL_STREAM_STUB_ID as _PARTIAL_STREAM_STUB_ID,
-)
-from travis.coding_agent.session_types import (
     _RETRYABLE_ERROR_MARKERS as _RETRYABLE_ERROR_MARKERS,
-)
-from travis.coding_agent.session_types import (
     _SKILL_SUBAGENT_ALLOWED_TOOL_NAMES as _SKILL_SUBAGENT_ALLOWED_TOOL_NAMES,
-)
-from travis.coding_agent.session_types import (
     _SPAWN_SUBAGENT_SCHEMA as _SPAWN_SUBAGENT_SCHEMA,
-)
-from travis.coding_agent.session_types import (
     _SUBAGENT_EXPANSION_BUDGETS as _SUBAGENT_EXPANSION_BUDGETS,
-)
-from travis.coding_agent.session_types import (
     _SUBAGENT_OPT_IN_TERMS as _SUBAGENT_OPT_IN_TERMS,
-)
-from travis.coding_agent.session_types import (
     _SUBAGENT_OPT_OUT_TERMS as _SUBAGENT_OPT_OUT_TERMS,
-)
-from travis.coding_agent.session_types import (
     _SUBAGENT_RESULT_SUMMARY_LIMIT as _SUBAGENT_RESULT_SUMMARY_LIMIT,
-)
-from travis.coding_agent.session_types import (
     _SUBAGENT_TOOL_NAMES as _SUBAGENT_TOOL_NAMES,
-)
-from travis.coding_agent.session_types import (
     _SUBAGENT_TOOL_TRACE_DISPLAY_LIMIT as _SUBAGENT_TOOL_TRACE_DISPLAY_LIMIT,
-)
-from travis.coding_agent.session_types import (
     _SUBAGENT_VISIBLE_SUMMARY_LIMIT as _SUBAGENT_VISIBLE_SUMMARY_LIMIT,
-)
-from travis.coding_agent.session_types import (
     _TASK_ID_SCHEMA as _TASK_ID_SCHEMA,
-)
-from travis.coding_agent.session_types import (
     _THINKING_LEVELS as _THINKING_LEVELS,
-)
-from travis.coding_agent.session_types import (
     AgentSettledEvent as AgentSettledEvent,
-)
-from travis.coding_agent.session_types import (
     AutoRetryEndEvent as AutoRetryEndEvent,
-)
-from travis.coding_agent.session_types import (
     AutoRetryStartEvent as AutoRetryStartEvent,
-)
-from travis.coding_agent.session_types import (
     BashResult as BashResult,
-)
-from travis.coding_agent.session_types import (
     CompactionResult as CompactionResult,
-)
-from travis.coding_agent.session_types import (
     ExtensionCommandContext as ExtensionCommandContext,
-)
-from travis.coding_agent.session_types import (
     ExtensionCompactionResult as ExtensionCompactionResult,
-)
-from travis.coding_agent.session_types import (
     ModelCycleResult as ModelCycleResult,
-)
-from travis.coding_agent.session_types import (
     QueueUpdateEvent as QueueUpdateEvent,
-)
-from travis.coding_agent.session_types import (
     SessionInfoChangedEvent as SessionInfoChangedEvent,
-)
-from travis.coding_agent.session_types import (
     ThinkingLevelChangedEvent as ThinkingLevelChangedEvent,
-)
-from travis.coding_agent.session_types import (
     _prompt_rejects_subagent_tools as _prompt_rejects_subagent_tools,
-)
-from travis.coding_agent.session_types import (
     _prompt_requests_subagent_tools as _prompt_requests_subagent_tools,
-)
-from travis.coding_agent.session_types import (
     _tool_result_text as _tool_result_text,
-)
-from travis.coding_agent.session_types import (
     default_convert_to_llm as default_convert_to_llm,
 )
 from travis.coding_agent.settings_manager import SettingsManager
@@ -303,94 +213,52 @@ class _SessionRuntime:
         self._session_bindings = SessionRuntimeBindings()
         self.turn_state = SessionTurnState()
         self.presentation_state = SessionPresentationState()
-        self._session_bindings._pending_next_turn_messages.bind_attribute(
-            self.turn_state, "pending_next_turn_messages"
-        )
-        self._session_bindings._retry_attempt.bind_attribute(
-            self.turn_state, "retry_attempt"
-        )
-        self._session_bindings._retry_enabled.bind_attribute(
-            self.turn_state, "retry_enabled"
-        )
-        self._session_bindings._session_name.bind_attribute(
-            self.presentation_state, "session_name"
-        )
+        self._session_bindings._pending_next_turn_messages.bind_attribute(self.turn_state, "pending_next_turn_messages")
+        self._session_bindings._retry_attempt.bind_attribute(self.turn_state, "retry_attempt")
+        self._session_bindings._retry_enabled.bind_attribute(self.turn_state, "retry_enabled")
+        self._session_bindings._session_name.bind_attribute(self.presentation_state, "session_name")
         self._session_bindings._generation_param_overrides.bind_attribute(
             self.presentation_state, "generation_overrides"
         )
         self.controllers = SessionControllers(
             events=SessionEventController(
-                compose_controller_dependencies(
-                    SessionEventDependencies,
-                    self._session_bindings,
-                )
+                compose_controller_dependencies(SessionEventDependencies, self._session_bindings)
             ),
             models=SessionModelController(
                 compose_controller_dependencies(
-                    SessionModelDependencies,
-                    self._session_bindings,
-                    presentation_state=self.presentation_state,
+                    SessionModelDependencies, self._session_bindings, presentation_state=self.presentation_state
                 )
             ),
             generation=SessionGenerationParams(
-                compose_controller_dependencies(
-                    SessionGenerationDependencies,
-                    self._session_bindings,
-                )
+                compose_controller_dependencies(SessionGenerationDependencies, self._session_bindings)
             ),
             persistence=SessionPersistence(
-                compose_controller_dependencies(
-                    SessionPersistenceDependencies,
-                    self._session_bindings,
-                )
+                compose_controller_dependencies(SessionPersistenceDependencies, self._session_bindings)
             ),
             bash=SessionBashController(
-                compose_controller_dependencies(
-                    SessionBashDependencies,
-                    self._session_bindings,
-                )
+                compose_controller_dependencies(SessionBashDependencies, self._session_bindings)
             ),
             policy=SessionPolicyController(
-                compose_controller_dependencies(
-                    SessionPolicyDependencies,
-                    self._session_bindings,
-                )
+                compose_controller_dependencies(SessionPolicyDependencies, self._session_bindings)
             ),
             operations=SessionOperationController(
-                compose_controller_dependencies(
-                    SessionOperationDependencies,
-                    self._session_bindings,
-                )
+                compose_controller_dependencies(SessionOperationDependencies, self._session_bindings)
             ),
             tools=SessionToolController(
-                compose_controller_dependencies(
-                    SessionToolDependencies,
-                    self._session_bindings,
-                )
+                compose_controller_dependencies(SessionToolDependencies, self._session_bindings)
             ),
             extensions=SessionExtensionController(
-                compose_controller_dependencies(
-                    SessionExtensionDependencies,
-                    self._session_bindings,
-                )
+                compose_controller_dependencies(SessionExtensionDependencies, self._session_bindings)
             ),
             subagents=SessionSubagentController(
-                compose_controller_dependencies(
-                    SessionSubagentDependencies,
-                    self._session_bindings,
-                )
+                compose_controller_dependencies(SessionSubagentDependencies, self._session_bindings)
             ),
             subagent_trace=SessionSubagentTraceController(
-                compose_controller_dependencies(
-                    SessionSubagentTraceDependencies,
-                    self._session_bindings,
-                )
+                compose_controller_dependencies(SessionSubagentTraceDependencies, self._session_bindings)
             ),
             turns=SessionTurnController(
                 compose_controller_dependencies(
-                    SessionTurnDependencies,
-                    self._session_bindings,
-                    turn_state=self.turn_state,
+                    SessionTurnDependencies, self._session_bindings, turn_state=self.turn_state
                 )
             ),
         )
@@ -418,23 +286,15 @@ class _SessionRuntime:
         tool_policy_event_sink: Callable[[dict[str, object]], None] | None,
         tool_policy_redactor: SecretRedactor | None,
     ) -> None:
-        tool_policy_getter = getattr(
-            self.settings_manager,
-            "get_tool_policy_settings",
-            None,
-        )
+        tool_policy_getter = getattr(self.settings_manager, "get_tool_policy_settings", None)
         tool_policy_raw = cast(
             dict[str, object],
-            tool_policy_getter()
-            if callable(tool_policy_getter)
-            else {"mode": "audit", "autoAllowEffects": ["read"]},
+            tool_policy_getter() if callable(tool_policy_getter) else {"mode": "audit", "autoAllowEffects": ["read"]},
         )
         self._tool_policy_engine = ToolPolicyEngine(
             ToolPolicySettings(
                 mode=cast(ToolPolicyMode, tool_policy_raw["mode"]),
-                auto_allow_effects=frozenset(
-                    cast(list[ToolEffect], tool_policy_raw["autoAllowEffects"])
-                ),
+                auto_allow_effects=frozenset(cast(list[ToolEffect], tool_policy_raw["autoAllowEffects"])),
             ),
             broker=tool_approval_broker,
             redactor=tool_policy_redactor,
@@ -458,9 +318,7 @@ class _SessionRuntime:
                 cwd=cwd,
                 agent_dir=agent_dir,
                 system_prompt=custom_prompt,
-                append_system_prompt=[append_system_prompt]
-                if append_system_prompt
-                else None,
+                append_system_prompt=[append_system_prompt] if append_system_prompt else None,
             )
             self._resource_loader.reload()
         if extension_runner is None:
@@ -479,10 +337,7 @@ class _SessionRuntime:
         session_id: str | None,
     ) -> None:
         memory_getter = getattr(self.settings_manager, "get_memory_settings", None)
-        self._memory_settings = cast(
-            MemorySettings,
-            memory_getter() if callable(memory_getter) else MemorySettings(),
-        )
+        self._memory_settings = cast(MemorySettings, memory_getter() if callable(memory_getter) else MemorySettings())
         self._memory_project_key = project_key_for_path(cwd)
         memory_requested = (
             tools is None
@@ -494,8 +349,7 @@ class _SessionRuntime:
         if memory_requested:
             try:
                 self._memory_store = MemoryStore(
-                    Path(agent_dir or get_agent_dir()).expanduser().resolve()
-                    / "memory.sqlite3",
+                    Path(agent_dir or get_agent_dir()).expanduser().resolve() / "memory.sqlite3",
                     settings=self._memory_settings,
                 )
             except MemoryStoreUnavailable:
@@ -507,8 +361,7 @@ class _SessionRuntime:
                 project_key=self._memory_project_key,
                 session_id=self.session_id or session_id,
                 artifacts=self._artifacts,
-                spill_dir=Path(agent_dir or get_agent_dir()).expanduser().resolve()
-                / "memory-spill",
+                spill_dir=Path(agent_dir or get_agent_dir()).expanduser().resolve() / "memory-spill",
                 redactor=self._tool_policy_engine.redactor,
             )
             if memory_requested
@@ -523,25 +376,13 @@ class _SessionRuntime:
         tool_definitions: list[ToolDefinition] | None,
     ) -> None:
         self._language_services: LanguageServiceManager | None = None
-        language_server_getter = getattr(
-            self.settings_manager,
-            "get_language_server_configs",
-            None,
-        )
+        language_server_getter = getattr(self.settings_manager, "get_language_server_configs", None)
         language_server_configs = cast(
             list[LanguageServerConfig],
             language_server_getter() if callable(language_server_getter) else [],
         )
-        if (
-            tools is None
-            and tool_definitions is None
-            and language_server_configs
-            and self._is_allowed_tool("lsp")
-        ):
-            self._language_services = LanguageServiceManager(
-                cwd,
-                language_server_configs,
-            )
+        if tools is None and tool_definitions is None and language_server_configs and self._is_allowed_tool("lsp"):
+            self._language_services = LanguageServiceManager(cwd, language_server_configs)
 
     def _create_base_tools(
         self,
@@ -551,32 +392,21 @@ class _SessionRuntime:
         tool_definitions: list[ToolDefinition] | None,
     ) -> tuple[list[AgentTool], list[ToolDefinition], dict[str, SourceInfo]]:
         if tools is not None:
-            definitions = [
-                create_tool_definition_from_agent_tool(tool) for tool in tools
-            ]
+            definitions = [create_tool_definition_from_agent_tool(tool) for tool in tools]
             source_infos = {
                 definition.name: definition.source_info
-                or create_synthetic_source_info(
-                    f"<sdk:{definition.name}>",
-                    source="sdk",
-                )
+                or create_synthetic_source_info(f"<sdk:{definition.name}>", source="sdk")
                 for definition in definitions
             }
             return tools, definitions, source_infos
         if tool_definitions is not None:
             wrapped_tools = [
-                wrap_tool_definition(
-                    definition,
-                    lambda: ToolContext(cwd=self.cwd, model=self.model),
-                )
+                wrap_tool_definition(definition, lambda: ToolContext(cwd=self.cwd, model=self.model))
                 for definition in tool_definitions
             ]
             source_infos = {
                 definition.name: definition.source_info
-                or create_synthetic_source_info(
-                    f"<sdk:{definition.name}>",
-                    source="sdk",
-                )
+                or create_synthetic_source_info(f"<sdk:{definition.name}>", source="sdk")
                 for definition in tool_definitions
             }
             return wrapped_tools, tool_definitions, source_infos
@@ -586,37 +416,19 @@ class _SessionRuntime:
             *self._create_subagent_tool_definitions(),
         ]
         if self._language_services is not None:
-            definitions.append(
-                create_lsp_tool_definition(
-                    self._language_services,
-                    self._artifacts,
-                    cwd,
-                )
-            )
+            definitions.append(create_lsp_tool_definition(self._language_services, self._artifacts, cwd))
         if (
             self.process_service is not None
             and self.process_owner is not None
             and self._is_allowed_tool("process")
         ):
-            definitions.append(
-                create_process_tool_definition(
-                    self.process_service,
-                    self.process_owner,
-                    self._artifacts,
-                )
-            )
+            definitions.append(create_process_tool_definition(self.process_service, self.process_owner, self._artifacts))
         wrapped_tools = [
-            wrap_tool_definition(
-                definition,
-                lambda: ToolContext(cwd=self.cwd, model=self.model),
-            )
+            wrap_tool_definition(definition, lambda: ToolContext(cwd=self.cwd, model=self.model))
             for definition in definitions
         ]
         source_infos = {
-            definition.name: create_synthetic_source_info(
-                f"<builtin:{definition.name}>",
-                source="builtin",
-            )
+            definition.name: create_synthetic_source_info(f"<builtin:{definition.name}>", source="builtin")
             for definition in definitions
         }
         return wrapped_tools, definitions, source_infos
@@ -629,24 +441,14 @@ class _SessionRuntime:
         base_definitions: list[ToolDefinition],
         base_source_infos: dict[str, SourceInfo],
     ) -> None:
-        if (
-            tools_were_supplied
-            or self._memory_tool_runtime is None
-            or any(definition.name == "memory" for definition in base_definitions)
+        if tools_were_supplied or self._memory_tool_runtime is None or any(
+            definition.name == "memory" for definition in base_definitions
         ):
             return
         memory_definition = create_memory_tool_definition(self._memory_tool_runtime)
         base_definitions.append(memory_definition)
-        base_tools.append(
-            wrap_tool_definition(
-                memory_definition,
-                lambda: ToolContext(cwd=self.cwd, model=self.model),
-            )
-        )
-        base_source_infos["memory"] = create_synthetic_source_info(
-            "<builtin:memory>",
-            source="builtin",
-        )
+        base_tools.append(wrap_tool_definition(memory_definition, lambda: ToolContext(cwd=self.cwd, model=self.model)))
+        base_source_infos["memory"] = create_synthetic_source_info("<builtin:memory>", source="builtin")
 
     def _initial_active_tool_names(
         self,
