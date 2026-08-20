@@ -61,6 +61,7 @@ from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import ProcessOwner
 from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.session_bash import SessionBashController
+from travis.coding_agent.session_contracts import SessionRuntimePort
 from travis.coding_agent.session_controllers import (
     SESSION_CONTROLLER_DELEGATES,
     SESSION_DELEGATED_NAMES,
@@ -804,6 +805,33 @@ class AgentSession(RuntimeFacade):
         runtime = _SessionRuntime(*args, **kwargs)
         object.__setattr__(runtime, "_session_factory", type(self))
         object.__setattr__(self, "_runtime", runtime)
+
+    def _session_runtime_port(self) -> SessionRuntimePort:
+        return cast(SessionRuntimePort, self._runtime)
+
+    @property
+    def cwd(self) -> str:
+        return self._session_runtime_port().cwd
+
+    @property
+    def extension_runner(self) -> ExtensionRunner:
+        return self._session_runtime_port().extension_runner
+
+    @property
+    def session_path(self) -> str | None:
+        return self._session_runtime_port().session_path
+
+    def create_branched_session(self, leaf_id: str, path: str | None = None) -> str:
+        return self._session_runtime_port().create_branched_session(leaf_id, path)
+
+    def emit_deferred_session_start(self) -> None:
+        self._session_runtime_port().emit_deferred_session_start()
+
+    def get_session_entry(self, entry_id: str) -> dict[str, object] | None:
+        return self._session_runtime_port().get_session_entry(entry_id)
+
+    def get_session_leaf_id(self) -> str | None:
+        return self._session_runtime_port().get_session_leaf_id()
 
     def dispose(self) -> None:
         try:

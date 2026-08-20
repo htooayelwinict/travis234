@@ -128,7 +128,8 @@ class SessionFactory(Protocol):
 class SessionRuntimePort(SessionLifecyclePort, Protocol):
     """Session operations required by the replacement runtime host."""
 
-    cwd: str
+    @property
+    def cwd(self) -> str: ...
 
     @property
     def extension_runner(self) -> ExtensionRunner: ...

@@ -6,34 +6,42 @@ application, with no imports of external source packages.
 
 from __future__ import annotations
 
-import json
 import os
 import time
 import uuid
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any, Callable, Literal, Mapping, Optional
+from typing import Any, Literal, cast
 
-from travis.ai.model_resolver import ScopedModel
 from travis.ai.context_estimate import calculate_prompt_tokens, estimate_context_tokens
+from travis.ai.model_resolver import ScopedModel
 from travis.ai.overflow import is_context_overflow, parse_available_output_tokens_from_error
-from travis.ai.types import Context, Model, SimpleStreamOptions, TextContent, Tool, UserMessage, now_ms
-from travis.ai.types import AssistantMessage
+from travis.ai.types import (
+    AssistantMessage,
+    Context,
+    Model,
+    SimpleStreamOptions,
+    TextContent,
+    ThinkingLevel,
+    Tool,
+    UserMessage,
+    now_ms,
+)
 from travis.coding_agent.agent_session import AgentSession
-from travis.coding_agent.message_utils import last_assistant_message as _last_assistant_message
-from travis.coding_agent.object_utils import first_defined as _first_setting
 from travis.coding_agent.agent_session_runtime import AgentSessionRuntime, CreateAgentSessionRuntimeResult
-from travis.coding_agent.compaction_adapter import to_compressor_messages
+from travis.coding_agent.auth_storage import AuthStorage
 from travis.coding_agent.branch_summarization import SUMMARIZATION_SYSTEM_PROMPT
+from travis.coding_agent.compaction_adapter import to_compressor_messages
 from travis.coding_agent.config import get_agent_dir
 from travis.coding_agent.extensions import (
     ExtensionFlagValidationError,
     ExtensionRunner,
     apply_extension_flag_values,
 )
-from travis.coding_agent.settings_manager import SettingsManager
-from travis.coding_agent.auth_storage import AuthStorage
+from travis.coding_agent.message_utils import last_assistant_message as _last_assistant_message
 from travis.coding_agent.model_registry import ModelRegistry
 from travis.coding_agent.model_roles import ModelRole
+from travis.coding_agent.object_utils import first_defined as _first_setting
 from travis.coding_agent.operations import OperationRuntime
 from travis.coding_agent.processes.completions import ProcessCompletionStore
 from travis.coding_agent.processes.local import create_local_process_transport
@@ -41,9 +49,11 @@ from travis.coding_agent.processes.service import ProcessSessionService
 from travis.coding_agent.processes.types import ProcessLaunchRequest, ProcessOwner
 from travis.coding_agent.project_trust import ProjectTrustContext
 from travis.coding_agent.resource_loader import DefaultResourceLoader
-from travis.coding_agent.tools.bash import get_shell_env
 from travis.coding_agent.session_catalog import SessionCatalog
+from travis.coding_agent.session_contracts import SessionRuntimePort
 from travis.coding_agent.session_store import SessionStore
+from travis.coding_agent.settings_manager import SettingsManager
+from travis.coding_agent.tools.bash import get_shell_env
 from travis.compaction.compressor import ContextCompressor, estimate_tokens
 from travis.compaction.policy import CompactionPolicyInput
 from travis.compaction.timing import CompactionManager
@@ -98,17 +108,17 @@ class CodingApp:
         *,
         cwd: str,
         model: Model,
-        terminal: Optional[Terminal] = None,
+        terminal: Terminal | None = None,
         context_length: int | None = None,
         summarizer=None,
         compression_model: Model | None = None,
         compression_api_key: str | None = None,
         compression_timeout_seconds: float | None = None,
         compression_generation_params: object | None = None,
-        thinking_level: str = "off",
+        thinking_level: ThinkingLevel = "off",
         scoped_models: list[ScopedModel] | None = None,
         enable_tui: bool = True,
-        settings_manager: object | None = None,
+        settings_manager: SettingsManager | None = None,
         project_trust_override: bool | None = None,
         project_trust_context: ProjectTrustContext | None = None,
         session_path: str | None = None,
@@ -249,7 +259,7 @@ class CodingApp:
         *,
         cwd: str,
         fallback_model: Model,
-        thinking_level: str,
+        thinking_level: ThinkingLevel,
         session_path: str | None,
         session_id: str | None = None,
         parent_session_path: str | None = None,
@@ -474,7 +484,7 @@ class CodingApp:
                 str(options["parent_session_path"]) if options.get("parent_session_path") else None
             ),
             session_start_event=(
-                dict(options["session_start_event"])
+                dict(cast(Mapping[str, object], options["session_start_event"]))
                 if isinstance(options.get("session_start_event"), Mapping)
                 else None
             ),
@@ -489,10 +499,11 @@ class CodingApp:
             },
         )
 
-    def _handle_session_rebound(self, session: AgentSession) -> None:
-        self._bind_session(session)
+    def _handle_session_rebound(self, session: SessionRuntimePort) -> None:
+        rebound_session = cast(AgentSession, session)
+        self._bind_session(rebound_session)
         for listener in list(self._session_rebound_listeners):
-            listener(session)
+            listener(rebound_session)
 
     def subscribe_session_rebound(self, listener: Callable[[AgentSession], None]) -> Callable[[], None]:
         self._session_rebound_listeners.append(listener)
@@ -838,7 +849,7 @@ class CodingApp:
 def _model_summarizer(
     model: Model | Callable[[], Model],
     *,
-    thinking_level: str | Callable[[], str] = "off",
+    thinking_level: ThinkingLevel | Callable[[], ThinkingLevel] = "off",
     api_key: str | None = None,
     timeout_seconds: float | None = None,
     generation_params: object | None = None,
