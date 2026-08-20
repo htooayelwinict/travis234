@@ -20,11 +20,12 @@ def _clamp_openai_prompt_cache_key(key: str | None) -> str | None:
     return "".join(list(key)[:64])
 
 
-def _merge_body(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
+def _merge_body(base: dict[str, object], extra: dict[str, object]) -> dict[str, object]:
     merged = dict(base)
     for key, value in extra.items():
-        if key == "provider" and isinstance(value, dict) and isinstance(merged.get(key), dict):
-            provider = dict(merged[key])
+        existing_value = merged.get(key)
+        if key == "provider" and isinstance(value, dict) and isinstance(existing_value, dict):
+            provider = dict(existing_value)
             provider.update(value)
             merged[key] = provider
             continue
@@ -37,7 +38,7 @@ def _model_consumes_thought_signature(model: Any) -> bool:
     return "gemini" in model_name or "gemma" in model_name
 
 
-def _add_cache_control_to_text_content(message: dict[str, Any], marker: dict[str, str]) -> bool:
+def _add_cache_control_to_text_content(message: dict[str, object], marker: dict[str, str]) -> bool:
     content = message.get("content")
     if isinstance(content, str):
         if not content:
@@ -54,8 +55,8 @@ def _add_cache_control_to_text_content(message: dict[str, Any], marker: dict[str
 
 
 def _apply_anthropic_cache_control(
-    messages: list[dict[str, Any]],
-    tools: list[dict[str, Any]] | None,
+    messages: list[dict[str, object]],
+    tools: list[dict[str, object]] | None,
     marker: dict[str, str],
 ) -> None:
     for message in messages:
@@ -309,6 +310,196 @@ def _sanitize_chat_message(
             _sanitize_chat_tool_call(tool_call, strip_extra_content)
 
 
+def _prepare_chat_cache_payload(
+    messages: list[dict[str, object]],
+    tools: list[dict[str, object]] | None,
+    compat: OpenAICompat,
+    cache_retention: str,
+) -> tuple[list[dict[str, object]], list[dict[str, object]] | None]:
+    if compat.cache_control_format != "anthropic" or cache_retention == "none":
+        return messages, tools
+    prepared_messages = copy.deepcopy(messages)
+    prepared_tools = copy.deepcopy(tools)
+    marker = {"type": "ephemeral"}
+    if cache_retention == "long" and compat.supports_long_cache_retention:
+        marker["ttl"] = "1h"
+    _apply_anthropic_cache_control(prepared_messages, prepared_tools, marker)
+    return prepared_messages, prepared_tools
+
+
+def _apply_chat_cache_options(
+    body: dict[str, object],
+    compat: OpenAICompat,
+    *,
+    session_id: str | None,
+    base_url: str,
+    cache_retention: str,
+) -> None:
+    if session_id and (
+        ("api.openai.com" in base_url and cache_retention != "none")
+        or (cache_retention == "long" and compat.supports_long_cache_retention)
+    ):
+        body["prompt_cache_key"] = _clamp_openai_prompt_cache_key(session_id)
+    if cache_retention == "long" and compat.supports_long_cache_retention:
+        body["prompt_cache_retention"] = "24h"
+
+
+def _apply_chat_generation_options(
+    body: dict[str, object],
+    compat: OpenAICompat,
+    profile: ProviderProfile,
+    *,
+    model: str,
+    temperature: float | None,
+    max_tokens: int | None,
+    omit_max_tokens: bool,
+) -> None:
+    if profile.fixed_temperature is OMIT_TEMPERATURE:
+        pass
+    elif profile.fixed_temperature is not None:
+        body["temperature"] = profile.fixed_temperature
+    elif temperature is not None:
+        body["temperature"] = temperature
+    resolved_max_tokens = (
+        None
+        if omit_max_tokens
+        else max_tokens if max_tokens is not None else profile.get_max_tokens(model)
+    )
+    if resolved_max_tokens is not None:
+        body[compat.max_tokens_field] = resolved_max_tokens
+
+
+def _build_chat_base_body(
+    *,
+    model: str,
+    messages: list[dict[str, object]],
+    tools: list[dict[str, object]] | None,
+    compat: OpenAICompat,
+    profile: ProviderProfile,
+    stream: bool,
+    temperature: float | None,
+    max_tokens: int | None,
+    omit_max_tokens: bool,
+    tool_choice: object | None,
+    session_id: str | None,
+    cache_retention: str,
+    timeout: float | None,
+    base_url: str,
+) -> dict[str, object]:
+    body: dict[str, object] = {
+        "model": model,
+        "messages": messages,
+        "stream": stream,
+    }
+    _apply_chat_cache_options(
+        body,
+        compat,
+        session_id=session_id,
+        base_url=base_url,
+        cache_retention=cache_retention,
+    )
+    if stream and compat.supports_usage_in_streaming:
+        body["stream_options"] = {"include_usage": True}
+    if compat.supports_store:
+        body["store"] = False
+    if timeout is not None:
+        body["timeout"] = timeout
+    _apply_chat_generation_options(
+        body,
+        compat,
+        profile,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        omit_max_tokens=omit_max_tokens,
+    )
+    if tools is not None:
+        body["tools"] = tools
+    if tool_choice is not None:
+        body["tool_choice"] = tool_choice
+    return body
+
+
+def _chat_gateway_options(compat: OpenAICompat) -> dict[str, object] | None:
+    routing = compat.vercel_gateway_routing
+    if not routing:
+        return None
+    gateway = {
+        key: routing[key]
+        for key in ("only", "order")
+        if key in routing and routing[key] is not None
+    }
+    return {"gateway": gateway} if gateway else None
+
+
+def _chat_affinity_headers(
+    compat: OpenAICompat,
+    session_id: str | None,
+) -> dict[str, str] | None:
+    if not session_id or not compat.send_session_affinity_headers:
+        return None
+    if compat.session_affinity_format == "openrouter":
+        return {"x-session-id": session_id}
+    headers: dict[str, str] = {}
+    if compat.session_affinity_format == "openai":
+        headers["session_id"] = session_id
+    headers["x-client-request-id"] = session_id
+    headers["x-session-affinity"] = session_id
+    return headers
+
+
+def _compose_chat_extensions(
+    compat: OpenAICompat,
+    *,
+    tools: list[dict[str, object]] | None,
+    provider_preferences: dict[str, object] | None,
+    session_id: str | None,
+    model_reasoning: bool,
+    reasoning_config: dict[str, object] | None,
+    thinking_level_map: dict[str, str | None] | None,
+    extra_body_additions: dict[str, object] | None,
+) -> tuple[dict[str, object], dict[str, object]]:
+    extra_body: dict[str, object] = {}
+    if provider_preferences:
+        extra_body["provider"] = dict(provider_preferences)
+    top_level: dict[str, object] = {}
+    if model_reasoning:
+        _apply_reasoning_payload(
+            top_level,
+            compat,
+            reasoning_config,
+            thinking_level_map,
+        )
+    if compat.openrouter_routing:
+        extra_body = _merge_body(extra_body, {"provider": compat.openrouter_routing})
+    gateway_options = _chat_gateway_options(compat)
+    if gateway_options is not None:
+        top_level["providerOptions"] = gateway_options
+    if compat.zai_tool_stream and tools:
+        top_level["tool_stream"] = True
+    affinity_headers = _chat_affinity_headers(compat, session_id)
+    if affinity_headers is not None:
+        top_level["extra_headers"] = affinity_headers
+    if extra_body_additions:
+        extra_body = _merge_body(extra_body, extra_body_additions)
+    return top_level, extra_body
+
+
+def _apply_chat_request_overrides(
+    body: dict[str, object],
+    extra_body: dict[str, object],
+    request_overrides: dict[str, object] | None,
+) -> dict[str, object]:
+    if not request_overrides:
+        return extra_body
+    for key, value in request_overrides.items():
+        if key == "extra_body" and isinstance(value, dict):
+            extra_body = _merge_body(extra_body, value)
+        else:
+            body[key] = value
+    return extra_body
+
+
 class ChatCompletionsTransport:
     api = "openai-completions"
     api_mode = "chat_completions"
@@ -383,94 +574,40 @@ class ChatCompletionsTransport:
         prepared_messages = self.convert_messages(messages, model=model)
         prepared_tools = self.convert_tools(tools) if tools is not None else None
         resolved_cache_retention = cache_retention or "short"
-        if compat.cache_control_format == "anthropic" and resolved_cache_retention != "none":
-            prepared_messages = copy.deepcopy(prepared_messages)
-            prepared_tools = copy.deepcopy(prepared_tools)
-            marker = {"type": "ephemeral"}
-            if resolved_cache_retention == "long" and compat.supports_long_cache_retention:
-                marker["ttl"] = "1h"
-            _apply_anthropic_cache_control(prepared_messages, prepared_tools, marker)
-
-        body: dict[str, Any] = {
-            "model": model,
-            "messages": prepared_messages,
-            "stream": stream,
-        }
-        effective_base_url = base_url or profile.base_url
-        if session_id and (
-            ("api.openai.com" in effective_base_url and resolved_cache_retention != "none")
-            or (resolved_cache_retention == "long" and compat.supports_long_cache_retention)
-        ):
-            body["prompt_cache_key"] = _clamp_openai_prompt_cache_key(session_id)
-        if resolved_cache_retention == "long" and compat.supports_long_cache_retention:
-            body["prompt_cache_retention"] = "24h"
-        if stream and compat.supports_usage_in_streaming:
-            body["stream_options"] = {"include_usage": True}
-        if compat.supports_store:
-            body["store"] = False
-        if timeout is not None:
-            body["timeout"] = timeout
-        if profile.fixed_temperature is OMIT_TEMPERATURE:
-            pass
-        elif profile.fixed_temperature is not None:
-            body["temperature"] = profile.fixed_temperature
-        elif temperature is not None:
-            body["temperature"] = temperature
-        if prepared_tools is not None:
-            body["tools"] = prepared_tools
-        if tool_choice is not None:
-            body["tool_choice"] = tool_choice
-        resolved_max_tokens = (
-            None
-            if omit_max_tokens
-            else max_tokens if max_tokens is not None else profile.get_max_tokens(model)
+        prepared_messages, prepared_tools = _prepare_chat_cache_payload(
+            prepared_messages,
+            prepared_tools,
+            compat,
+            resolved_cache_retention,
         )
-        if resolved_max_tokens is not None:
-            body[compat.max_tokens_field] = resolved_max_tokens
-
-        extra_body: dict[str, Any] = {}
-        if provider_preferences:
-            extra_body["provider"] = dict(provider_preferences)
-        top_level: dict[str, object] = {}
-        if model_reasoning:
-            _apply_reasoning_payload(
-                top_level,
-                compat,
-                reasoning_config,
-                model_thinking_level_map,
-            )
-        if compat.openrouter_routing:
-            extra_body = _merge_body(extra_body, {"provider": compat.openrouter_routing})
-        if compat.vercel_gateway_routing:
-            routing = compat.vercel_gateway_routing
-            gateway = {
-                key: routing[key]
-                for key in ("only", "order")
-                if key in routing and routing[key] is not None
-            }
-            if gateway:
-                top_level["providerOptions"] = {"gateway": gateway}
-        if compat.zai_tool_stream and prepared_tools:
-            top_level["tool_stream"] = True
-        if session_id and compat.send_session_affinity_headers:
-            affinity_headers: dict[str, str] = {}
-            if compat.session_affinity_format == "openrouter":
-                affinity_headers["x-session-id"] = session_id
-            else:
-                if compat.session_affinity_format == "openai":
-                    affinity_headers["session_id"] = session_id
-                affinity_headers["x-client-request-id"] = session_id
-                affinity_headers["x-session-affinity"] = session_id
-            top_level["extra_headers"] = affinity_headers
-        if extra_body_additions:
-            extra_body = _merge_body(extra_body, extra_body_additions)
+        body = _build_chat_base_body(
+            model=model,
+            messages=prepared_messages,
+            tools=prepared_tools,
+            compat=compat,
+            profile=profile,
+            stream=stream,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            omit_max_tokens=omit_max_tokens,
+            tool_choice=tool_choice,
+            session_id=session_id,
+            cache_retention=resolved_cache_retention,
+            timeout=timeout,
+            base_url=base_url or profile.base_url,
+        )
+        top_level, extra_body = _compose_chat_extensions(
+            compat,
+            tools=prepared_tools,
+            provider_preferences=provider_preferences,
+            session_id=session_id,
+            model_reasoning=model_reasoning,
+            reasoning_config=reasoning_config,
+            thinking_level_map=model_thinking_level_map,
+            extra_body_additions=extra_body_additions,
+        )
         body.update(top_level)
-        if request_overrides:
-            for key, value in request_overrides.items():
-                if key == "extra_body" and isinstance(value, dict):
-                    extra_body = _merge_body(extra_body, value)
-                else:
-                    body[key] = value
+        extra_body = _apply_chat_request_overrides(body, extra_body, request_overrides)
         body.update(extra_body)
         return body
 
