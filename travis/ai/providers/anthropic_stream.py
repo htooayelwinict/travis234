@@ -270,6 +270,17 @@ def _parse_anthropic_messages_sse_chunks(
             message.stop_reason = "error"
             message.error_message = error_message
             return ErrorEvent(reason="error", error=message)
+        if stop_reason == "length" and not any(
+            isinstance(block, ToolCall)
+            or (isinstance(block, TextContent) and bool(block.text.strip()))
+            for block in message.content
+        ):
+            message.stop_reason = "error"
+            message.error_message = (
+                "Provider output token limit reached before producing "
+                "user-visible text or a tool call"
+            )
+            return ErrorEvent(reason="error", error=message)
         message.stop_reason = stop_reason
         return DoneEvent(reason=stop_reason, message=message)
 

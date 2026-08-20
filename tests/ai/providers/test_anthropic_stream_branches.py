@@ -23,6 +23,84 @@ def _sse(event: object) -> str:
     return f"data: {json.dumps(event, separators=(',', ':'))}"
 
 
+def _max_tokens_lines(content_block: dict[str, object]) -> list[str]:
+    return [
+        _sse(
+            {
+                "type": "message_start",
+                "message": {"id": "message-1", "usage": {"input_tokens": 1}},
+            }
+        ),
+        _sse(
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": content_block,
+            }
+        ),
+        _sse({"type": "content_block_stop", "index": 0}),
+        _sse(
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "max_tokens"},
+                "usage": {"output_tokens": 12_000},
+            }
+        ),
+        _sse({"type": "message_stop"}),
+    ]
+
+
+def test_reasoning_only_output_limit_is_an_error() -> None:
+    events = list(
+        decode_anthropic_stream(
+            _max_tokens_lines({"type": "thinking", "thinking": "reasoning only"}),
+            _model(),
+        )
+    )
+
+    terminal = events[-1]
+    assert isinstance(terminal, ErrorEvent)
+    assert terminal.error.stop_reason == "error"
+    assert terminal.error.error_message == (
+        "Provider output token limit reached before producing user-visible text or a tool call"
+    )
+
+
+def test_visible_output_limit_remains_a_partial_response() -> None:
+    events = list(
+        decode_anthropic_stream(
+            _max_tokens_lines({"type": "text", "text": "partial answer"}),
+            _model(),
+        )
+    )
+
+    terminal = events[-1]
+    assert not isinstance(terminal, ErrorEvent)
+    assert terminal.message.stop_reason == "length"
+    assert terminal.message.content == [TextContent(text="partial answer")]
+
+
+def test_tool_output_limit_remains_available_for_truncated_tool_recovery() -> None:
+    events = list(
+        decode_anthropic_stream(
+            _max_tokens_lines(
+                {
+                    "type": "tool_use",
+                    "id": "call-1",
+                    "name": "read",
+                    "input": {"path": "README.md"},
+                }
+            ),
+            _model(),
+        )
+    )
+
+    terminal = events[-1]
+    assert not isinstance(terminal, ErrorEvent)
+    assert terminal.message.stop_reason == "length"
+    assert isinstance(terminal.message.content[0], ToolCall)
+
+
 def test_content_block_lifecycles_preserve_text_thinking_tool_and_usage() -> None:
     lines = [
         _sse(

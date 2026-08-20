@@ -662,6 +662,15 @@ class SessionTurnController(SessionTurnControllerSurface):
                 self._retry_attempt = 0
             return False
         if not self._is_retryable_error(message):
+            if self._retry_attempt > 0:
+                self._emit(
+                    AutoRetryEndEvent(
+                        success=False,
+                        attempt=self._retry_attempt,
+                        final_error=message.error_message,
+                    )
+                )
+                self._retry_attempt = 0
             return False
         self._retry_attempt += 1
         self._retry_signal = AbortSignal()

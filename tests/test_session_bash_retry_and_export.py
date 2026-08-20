@@ -435,6 +435,58 @@ def test_agent_session_auto_retry_events_for_transient_provider_error(tmp_path: 
     assert session.retry_attempt == 0
 
 
+def test_agent_session_ends_retry_after_non_retryable_recovery_error(tmp_path: Path) -> None:
+    model = faux_model()
+    calls = {"n": 0}
+
+    def stream_fn(model, context, options):
+        del context, options
+        calls["n"] += 1
+        stream = create_assistant_message_event_stream()
+        error_message = (
+            "Anthropic stream ended before message_stop"
+            if calls["n"] == 1
+            else (
+                "Provider output token limit reached before producing "
+                "user-visible text or a tool call"
+            )
+        )
+        error = AssistantMessage(
+            content=[TextContent(text="")],
+            api=model.api,
+            provider=model.provider,
+            model=model.id,
+            usage=empty_usage(),
+            stop_reason="error",
+            error_message=error_message,
+        )
+        stream.push(ErrorEvent(reason="error", error=error))
+        return stream
+
+    session = AgentSession(
+        cwd=str(tmp_path),
+        model=model,
+        retry_enabled=True,
+        max_retries=3,
+        retry_delay_ms=0,
+    )
+    events: list[object] = []
+    session.subscribe(events.append)
+
+    messages = session.prompt("Test", stream_fn=stream_fn)
+
+    retry_events = [event for event in events if event.type.startswith("auto_retry_")]
+    assert calls["n"] == 2
+    assert [event.type for event in retry_events] == ["auto_retry_start", "auto_retry_end"]
+    assert retry_events[-1].success is False
+    assert retry_events[-1].attempt == 1
+    assert retry_events[-1].final_error == (
+        "Provider output token limit reached before producing user-visible text or a tool call"
+    )
+    assert messages[-1].stop_reason == "error"
+    assert session.retry_attempt == 0
+
+
 @pytest.mark.parametrize(
     "error_message",
     [
