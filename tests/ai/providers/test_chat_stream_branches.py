@@ -7,7 +7,7 @@ import json
 import pytest
 
 from travis.ai.providers.chat_stream import parse_sse_chunks
-from travis.ai.types import ErrorEvent, Model, ThinkingContent, ToolCall
+from travis.ai.types import ErrorEvent, Model, TextContent, ThinkingContent, ToolCall
 
 
 def _model(*, provider: str = "openai") -> Model:
@@ -73,6 +73,56 @@ def test_reasoning_is_suppressed_without_dropping_text() -> None:
 
     assert len(events[-1].message.content) == 1
     assert events[-1].message.content[0].text == "visible"
+
+
+def test_reasoning_only_output_limit_is_an_error() -> None:
+    lines = [
+        _sse(
+            {
+                "choices": [
+                    {
+                        "delta": {"reasoning_content": "reasoning only"},
+                        "finish_reason": "length",
+                    }
+                ]
+            }
+        )
+    ]
+
+    events = list(parse_sse_chunks(lines, _model(provider="opencode-go")))
+
+    terminal = events[-1]
+    assert isinstance(terminal, ErrorEvent)
+    assert terminal.error.stop_reason == "error"
+    assert terminal.error.error_message == (
+        "Provider output token limit reached before producing user-visible text or a tool call"
+    )
+
+
+def test_visible_output_limit_remains_a_partial_response() -> None:
+    lines = [
+        _sse(
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "reasoning_content": "reasoning",
+                            "content": "partial answer",
+                        },
+                        "finish_reason": "length",
+                    }
+                ]
+            }
+        )
+    ]
+
+    events = list(parse_sse_chunks(lines, _model(provider="opencode-go")))
+
+    terminal = events[-1]
+    assert not isinstance(terminal, ErrorEvent)
+    assert terminal.message.stop_reason == "length"
+    assert isinstance(terminal.message.content[1], TextContent)
+    assert terminal.message.content[1].text == "partial answer"
 
 
 def test_split_tool_call_receives_deferred_encrypted_reasoning_detail() -> None:

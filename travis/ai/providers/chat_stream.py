@@ -165,6 +165,18 @@ def parse_sse_chunks(
             message.error_message = error_message
             yield ErrorEvent(reason="error", error=message)
             return
+        if reason == "length" and not any(
+            isinstance(block, ToolCall)
+            or (isinstance(block, TextContent) and bool(block.text.strip()))
+            for block in message.content
+        ):
+            message.stop_reason = "error"
+            message.error_message = (
+                "Provider output token limit reached before producing "
+                "user-visible text or a tool call"
+            )
+            yield ErrorEvent(reason="error", error=message)
+            return
         yield DoneEvent(reason=reason, message=message)
 
     stream_state = _ChatStreamState(
