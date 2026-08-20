@@ -8,7 +8,18 @@ from typing import Any
 from urllib.parse import quote
 
 from travis.ai.providers.base import NormalizedResponse, ProviderProfile
-from travis.ai.types import AssistantMessage, Context, ImageContent, TextContent, ThinkingContent, ToolCall, ToolResultMessage
+from travis.ai.types import (
+    AssistantMessage,
+    Context,
+    ImageContent,
+    Model,
+    TextContent,
+    ThinkingContent,
+    ToolCall,
+    ToolResultMessage,
+    UserMessage,
+)
+
 
 def _google_requires_tool_call_id(model_id: str) -> bool:
     return model_id.startswith(("claude-", "gpt-oss-"))
@@ -27,10 +38,117 @@ def _google_supports_multimodal_function_response(model_id: str) -> bool:
     return int(match.group(1)) >= 3 if match else True
 
 
-def _google_contents(context: Context, model: Any) -> list[dict[str, Any]]:
-    from travis.ai.providers.message_translation import _sanitize_surrogates, _transform_messages
+def _google_user_content(message: UserMessage) -> dict[str, object] | None:
+    from travis.ai.providers.message_translation import _sanitize_surrogates
 
-    contents: list[dict[str, Any]] = []
+    if isinstance(message.content, str):
+        parts: list[dict[str, object]] = [
+            {"text": _sanitize_surrogates(message.content)}
+        ]
+    else:
+        parts = []
+        for block in message.content:
+            if isinstance(block, TextContent):
+                parts.append({"text": _sanitize_surrogates(block.text)})
+            elif isinstance(block, ImageContent):
+                parts.append(
+                    {"inlineData": {"mimeType": block.mime_type, "data": block.data}}
+                )
+    return {"role": "user", "parts": parts} if parts else None
+
+
+def _google_assistant_content(
+    message: AssistantMessage,
+    model: Model,
+) -> dict[str, object] | None:
+    from travis.ai.providers.message_translation import _sanitize_surrogates
+
+    parts: list[dict[str, object]] = []
+    same_model = message.provider == model.provider and message.model == model.id
+    for block in message.content:
+        if isinstance(block, TextContent) and block.text.strip():
+            part: dict[str, object] = {"text": _sanitize_surrogates(block.text)}
+            if same_model and _google_valid_thought_signature(block.text_signature):
+                part["thoughtSignature"] = block.text_signature
+            parts.append(part)
+        elif isinstance(block, ThinkingContent) and block.thinking.strip():
+            part = {"text": _sanitize_surrogates(block.thinking)}
+            if same_model:
+                part["thought"] = True
+                if _google_valid_thought_signature(block.thinking_signature):
+                    part["thoughtSignature"] = block.thinking_signature
+            parts.append(part)
+        elif isinstance(block, ToolCall):
+            call: dict[str, object] = {"name": block.name, "args": block.arguments or {}}
+            if _google_requires_tool_call_id(model.id):
+                call["id"] = block.id
+            part = {"functionCall": call}
+            if same_model and _google_valid_thought_signature(block.thought_signature):
+                part["thoughtSignature"] = block.thought_signature
+            parts.append(part)
+    return {"role": "model", "parts": parts} if parts else None
+
+
+def _append_to_previous_function_response(
+    contents: list[dict[str, object]],
+    part: dict[str, object],
+) -> bool:
+    if not contents or contents[-1].get("role") != "user":
+        return False
+    parts = contents[-1].get("parts")
+    if not isinstance(parts, list):
+        return False
+    if not any(isinstance(item, dict) and "functionResponse" in item for item in parts):
+        return False
+    parts.append(part)
+    return True
+
+
+def _append_google_tool_result(
+    contents: list[dict[str, object]],
+    message: ToolResultMessage,
+    model: Model,
+) -> None:
+    from travis.ai.providers.message_translation import _sanitize_surrogates
+
+    text = "\n".join(
+        block.text for block in message.content if isinstance(block, TextContent)
+    )
+    images = (
+        [block for block in message.content if isinstance(block, ImageContent)]
+        if "image" in model.input
+        else []
+    )
+    response_value = _sanitize_surrogates(
+        text if text else "(see attached image)" if images else ""
+    )
+    response = {"error" if message.is_error else "output": response_value}
+    image_parts: list[dict[str, object]] = [
+        {"inlineData": {"mimeType": image.mime_type, "data": image.data}}
+        for image in images
+    ]
+    supports_multimodal = _google_supports_multimodal_function_response(model.id)
+    function_response: dict[str, object] = {
+        "name": message.tool_name,
+        "response": response,
+    }
+    if images and supports_multimodal:
+        function_response["parts"] = image_parts
+    if _google_requires_tool_call_id(model.id):
+        function_response["id"] = message.tool_call_id
+    part: dict[str, object] = {"functionResponse": function_response}
+    if not _append_to_previous_function_response(contents, part):
+        contents.append({"role": "user", "parts": [part]})
+    if images and not supports_multimodal:
+        contents.append(
+            {"role": "user", "parts": [{"text": "Tool result image:"}, *image_parts]}
+        )
+
+
+def _google_contents(context: Context, model: Model) -> list[dict[str, object]]:
+    from travis.ai.providers.message_translation import _transform_messages
+
+    contents: list[dict[str, object]] = []
     transformed = _transform_messages(
         context.messages,
         model,
@@ -41,88 +159,16 @@ def _google_contents(context: Context, model: Any) -> list[dict[str, Any]]:
         ),
     )
     for message in transformed:
-        if message.role == "user":
-            if isinstance(message.content, str):
-                parts = [{"text": _sanitize_surrogates(message.content)}]
-            else:
-                parts = []
-                for block in message.content:
-                    if isinstance(block, TextContent):
-                        parts.append({"text": _sanitize_surrogates(block.text)})
-                    elif isinstance(block, ImageContent):
-                        parts.append({"inlineData": {"mimeType": block.mime_type, "data": block.data}})
-            if parts:
-                contents.append({"role": "user", "parts": parts})
-            continue
-        if isinstance(message, AssistantMessage):
-            parts: list[dict[str, Any]] = []
-            same_model = (
-                message.provider == model.provider
-                and message.model == model.id
-            )
-            for block in message.content:
-                if isinstance(block, TextContent) and block.text.strip():
-                    part: dict[str, Any] = {"text": _sanitize_surrogates(block.text)}
-                    if same_model and _google_valid_thought_signature(block.text_signature):
-                        part["thoughtSignature"] = block.text_signature
-                    parts.append(part)
-                elif isinstance(block, ThinkingContent) and block.thinking.strip():
-                    part = {"text": _sanitize_surrogates(block.thinking)}
-                    if same_model:
-                        part["thought"] = True
-                        if _google_valid_thought_signature(block.thinking_signature):
-                            part["thoughtSignature"] = block.thinking_signature
-                    parts.append(part)
-                elif isinstance(block, ToolCall):
-                    call: dict[str, Any] = {"name": block.name, "args": block.arguments or {}}
-                    if _google_requires_tool_call_id(model.id):
-                        call["id"] = block.id
-                    part = {"functionCall": call}
-                    if same_model and _google_valid_thought_signature(block.thought_signature):
-                        part["thoughtSignature"] = block.thought_signature
-                    parts.append(part)
-            if parts:
-                contents.append({"role": "model", "parts": parts})
-            continue
-        if isinstance(message, ToolResultMessage):
-            text = "\n".join(
-                block.text for block in message.content if isinstance(block, TextContent)
-            )
-            images = (
-                [block for block in message.content if isinstance(block, ImageContent)]
-                if "image" in model.input
-                else []
-            )
-            response_value = _sanitize_surrogates(
-                text if text else "(see attached image)" if images else ""
-            )
-            response = {"error" if message.is_error else "output": response_value}
-            image_parts = [
-                {"inlineData": {"mimeType": image.mime_type, "data": image.data}}
-                for image in images
-            ]
-            supports_multimodal = _google_supports_multimodal_function_response(model.id)
-            function_response: dict[str, Any] = {
-                "name": message.tool_name,
-                "response": response,
-            }
-            if images and supports_multimodal:
-                function_response["parts"] = image_parts
-            if _google_requires_tool_call_id(model.id):
-                function_response["id"] = message.tool_call_id
-            part = {"functionResponse": function_response}
-            if (
-                contents
-                and contents[-1].get("role") == "user"
-                and any("functionResponse" in item for item in contents[-1].get("parts", []))
-            ):
-                contents[-1]["parts"].append(part)
-            else:
-                contents.append({"role": "user", "parts": [part]})
-            if images and not supports_multimodal:
-                contents.append(
-                    {"role": "user", "parts": [{"text": "Tool result image:"}, *image_parts]}
-                )
+        if isinstance(message, UserMessage):
+            converted = _google_user_content(message)
+            if converted is not None:
+                contents.append(converted)
+        elif isinstance(message, AssistantMessage):
+            converted = _google_assistant_content(message, model)
+            if converted is not None:
+                contents.append(converted)
+        else:
+            _append_google_tool_result(contents, message, model)
     return contents
 
 
