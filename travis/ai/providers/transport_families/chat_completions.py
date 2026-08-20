@@ -12,6 +12,7 @@ from travis.ai.providers.base import (
     NormalizedUsage,
     ProviderProfile,
 )
+from travis.ai.providers.openai_compat import OpenAICompat
 
 def _clamp_openai_prompt_cache_key(key: str | None) -> str | None:
     if key is None:
@@ -68,7 +69,7 @@ def _apply_anthropic_cache_control(
             break
 
 
-def _thinking_enabled(reasoning_config: dict[str, Any] | None) -> tuple[bool, str | None]:
+def _thinking_enabled(reasoning_config: dict[str, object] | None) -> tuple[bool, str | None]:
     if not isinstance(reasoning_config, dict) or reasoning_config.get("enabled") is False:
         return False, None
     effort = str(reasoning_config.get("effort") or "").strip().lower()
@@ -95,12 +96,12 @@ def _off_thinking_supported(thinking_level_map: dict[str, str | None] | None) ->
 
 
 def _resolve_chat_template_value(
-    value: Any,
+    value: object,
     *,
     enabled: bool,
     effort: str | None,
     thinking_level_map: dict[str, str | None] | None,
-) -> Any:
+) -> object | None:
     if not isinstance(value, dict):
         return value
     if not enabled and value.get("omitWhenOff"):
@@ -112,72 +113,137 @@ def _resolve_chat_template_value(
     return mapped if isinstance(mapped, str) else effort
 
 
-def _apply_reasoning_payload(
-    body: dict[str, Any],
-    compat,
-    reasoning_config: dict[str, Any] | None,
+def _apply_zai_reasoning(
+    body: dict[str, object],
+    compat: OpenAICompat,
+    enabled: bool,
+    mapped_effort: str | None,
+) -> None:
+    thinking: dict[str, object] = {"type": "enabled" if enabled else "disabled"}
+    if enabled:
+        thinking["clear_thinking"] = False
+        if compat.supports_reasoning_effort and mapped_effort is not None:
+            body["reasoning_effort"] = mapped_effort
+    body["thinking"] = thinking
+
+
+def _apply_chat_template_reasoning(
+    body: dict[str, object],
+    compat: OpenAICompat,
+    enabled: bool,
+    effort: str | None,
     thinking_level_map: dict[str, str | None] | None,
 ) -> None:
-    enabled, effort = _thinking_enabled(reasoning_config)
-    mapped_effort = _mapped_thinking_level(thinking_level_map, effort) if effort else None
-    thinking_format = compat.thinking_format
+    kwargs: dict[str, object] = {}
+    for key, value in compat.chat_template_kwargs.items():
+        resolved = _resolve_chat_template_value(
+            value,
+            enabled=enabled,
+            effort=effort,
+            thinking_level_map=thinking_level_map,
+        )
+        if resolved is not None:
+            kwargs[key] = resolved
+    if kwargs:
+        body["chat_template_kwargs"] = kwargs
 
-    if thinking_format == "zai":
-        thinking: dict[str, Any] = {"type": "enabled" if enabled else "disabled"}
-        if enabled:
-            thinking["clear_thinking"] = False
-            if compat.supports_reasoning_effort and isinstance(mapped_effort, str):
-                body["reasoning_effort"] = mapped_effort
-        body["thinking"] = thinking
-    elif thinking_format == "qwen":
-        body["enable_thinking"] = enabled
-    elif thinking_format == "qwen-chat-template":
-        body["chat_template_kwargs"] = {"enable_thinking": enabled, "preserve_thinking": True}
-    elif thinking_format == "chat-template":
-        kwargs: dict[str, Any] = {}
-        for key, value in compat.chat_template_kwargs.items():
-            resolved = _resolve_chat_template_value(
-                value,
-                enabled=enabled,
-                effort=effort,
-                thinking_level_map=thinking_level_map,
-            )
-            if resolved is not None:
-                kwargs[key] = resolved
-        if kwargs:
-            body["chat_template_kwargs"] = kwargs
-    elif thinking_format == "deepseek":
-        if enabled:
-            body["thinking"] = {"type": "enabled"}
-        elif _off_thinking_supported(thinking_level_map):
-            body["thinking"] = {"type": "disabled"}
-        if enabled and compat.supports_reasoning_effort and isinstance(mapped_effort, str):
-            body["reasoning_effort"] = mapped_effort
-    elif thinking_format == "openrouter":
-        if enabled and isinstance(mapped_effort, str):
-            body["reasoning"] = {"effort": mapped_effort}
-        elif _off_thinking_supported(thinking_level_map):
-            off_value = (thinking_level_map or {}).get("off", "none")
-            body["reasoning"] = {"effort": off_value if isinstance(off_value, str) else "none"}
-    elif thinking_format == "ant-ling":
-        if enabled and isinstance(mapped_effort, str):
-            body["reasoning"] = {"effort": mapped_effort}
-    elif thinking_format == "together":
-        body["reasoning"] = {"enabled": enabled}
-        if enabled and compat.supports_reasoning_effort and isinstance(mapped_effort, str):
-            body["reasoning_effort"] = mapped_effort
-    elif thinking_format == "string-thinking":
-        if enabled and isinstance(mapped_effort, str):
-            body["thinking"] = mapped_effort
-        elif _off_thinking_supported(thinking_level_map):
-            off_value = (thinking_level_map or {}).get("off", "none")
-            body["thinking"] = off_value if isinstance(off_value, str) else "none"
-    elif enabled and compat.supports_reasoning_effort and isinstance(mapped_effort, str):
+
+def _apply_deepseek_reasoning(
+    body: dict[str, object],
+    compat: OpenAICompat,
+    enabled: bool,
+    mapped_effort: str | None,
+    thinking_level_map: dict[str, str | None] | None,
+) -> None:
+    if enabled:
+        body["thinking"] = {"type": "enabled"}
+    elif _off_thinking_supported(thinking_level_map):
+        body["thinking"] = {"type": "disabled"}
+    if enabled and compat.supports_reasoning_effort and mapped_effort is not None:
+        body["reasoning_effort"] = mapped_effort
+
+
+def _off_thinking_value(
+    thinking_level_map: dict[str, str | None] | None,
+) -> str:
+    value = (thinking_level_map or {}).get("off", "none")
+    return value if isinstance(value, str) else "none"
+
+
+def _apply_openrouter_reasoning(
+    body: dict[str, object],
+    enabled: bool,
+    mapped_effort: str | None,
+    thinking_level_map: dict[str, str | None] | None,
+) -> None:
+    if enabled and mapped_effort is not None:
+        body["reasoning"] = {"effort": mapped_effort}
+    elif _off_thinking_supported(thinking_level_map):
+        body["reasoning"] = {"effort": _off_thinking_value(thinking_level_map)}
+
+
+def _apply_string_reasoning(
+    body: dict[str, object],
+    enabled: bool,
+    mapped_effort: str | None,
+    thinking_level_map: dict[str, str | None] | None,
+) -> None:
+    if enabled and mapped_effort is not None:
+        body["thinking"] = mapped_effort
+    elif _off_thinking_supported(thinking_level_map):
+        body["thinking"] = _off_thinking_value(thinking_level_map)
+
+
+def _apply_default_reasoning(
+    body: dict[str, object],
+    compat: OpenAICompat,
+    enabled: bool,
+    mapped_effort: str | None,
+    thinking_level_map: dict[str, str | None] | None,
+) -> None:
+    if enabled and compat.supports_reasoning_effort and mapped_effort is not None:
         body["reasoning_effort"] = mapped_effort
     elif compat.supports_reasoning_effort and thinking_level_map is not None:
         off_value = thinking_level_map.get("off")
         if isinstance(off_value, str):
             body["reasoning_effort"] = off_value
+
+
+def _apply_reasoning_payload(
+    body: dict[str, object],
+    compat: OpenAICompat,
+    reasoning_config: dict[str, object] | None,
+    thinking_level_map: dict[str, str | None] | None,
+) -> None:
+    enabled, effort = _thinking_enabled(reasoning_config)
+    mapped = _mapped_thinking_level(thinking_level_map, effort) if effort else None
+    thinking_format = compat.thinking_format
+    if thinking_format == "zai":
+        _apply_zai_reasoning(body, compat, enabled, mapped)
+    elif thinking_format == "qwen":
+        body["enable_thinking"] = enabled
+    elif thinking_format == "qwen-chat-template":
+        body["chat_template_kwargs"] = {
+            "enable_thinking": enabled,
+            "preserve_thinking": True,
+        }
+    elif thinking_format == "chat-template":
+        _apply_chat_template_reasoning(body, compat, enabled, effort, thinking_level_map)
+    elif thinking_format == "deepseek":
+        _apply_deepseek_reasoning(body, compat, enabled, mapped, thinking_level_map)
+    elif thinking_format == "openrouter":
+        _apply_openrouter_reasoning(body, enabled, mapped, thinking_level_map)
+    elif thinking_format == "ant-ling":
+        if enabled and mapped is not None:
+            body["reasoning"] = {"effort": mapped}
+    elif thinking_format == "together":
+        body["reasoning"] = {"enabled": enabled}
+        if enabled and compat.supports_reasoning_effort and mapped is not None:
+            body["reasoning_effort"] = mapped
+    elif thinking_format == "string-thinking":
+        _apply_string_reasoning(body, enabled, mapped, thinking_level_map)
+    else:
+        _apply_default_reasoning(body, compat, enabled, mapped, thinking_level_map)
 
 
 class ChatCompletionsTransport:
@@ -341,7 +407,7 @@ class ChatCompletionsTransport:
         extra_body: dict[str, Any] = {}
         if provider_preferences:
             extra_body["provider"] = dict(provider_preferences)
-        top_level: dict[str, Any] = {}
+        top_level: dict[str, object] = {}
         if model_reasoning:
             _apply_reasoning_payload(
                 top_level,
