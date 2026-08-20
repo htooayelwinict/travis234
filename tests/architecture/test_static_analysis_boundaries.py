@@ -22,3 +22,7 @@ def _cast_calls(relative_path: str) -> list[int]:
 def test_session_history_owners_do_not_use_cast_escape_hatches() -> None:
     assert _cast_calls("travis/coding_agent/compaction_adapter.py") == []
     assert _cast_calls("travis/coding_agent/session_store.py") == []
+
+
+def test_tui_theme_owner_does_not_use_cast_escape_hatches() -> None:
+    assert _cast_calls("travis/tui/interactive_theme_helpers.py") == []

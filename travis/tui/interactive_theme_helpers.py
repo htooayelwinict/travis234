@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
-from typing import Protocol, cast
+from collections.abc import Iterable
+from typing import Protocol
 
+from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.themes import Theme, ThemeRegistry
 
 
@@ -28,14 +29,9 @@ def ensure_builtin_themes(registry: ThemeRegistry, builtins: Iterable[Theme]) ->
 def reload_resource_themes(
     registry: ThemeRegistry,
     builtins: Iterable[Theme],
-    resource_loader: object | None,
+    resource_loader: DefaultResourceLoader | None,
 ) -> str | None:
-    get_themes = getattr(resource_loader, "get_themes", None)
-    discovered = (
-        cast(Iterable[object], cast(Mapping[str, object], get_themes()).get("themes", []))
-        if callable(get_themes)
-        else []
-    )
+    discovered = resource_loader.get_themes().get("themes", []) if resource_loader is not None else []
     resource_themes = [theme for theme in discovered if isinstance(theme, Theme)]
     resource_names = {theme.name for theme in resource_themes}
     return registry.reload([*resource_themes, *(theme for theme in builtins if theme.name not in resource_names)])
