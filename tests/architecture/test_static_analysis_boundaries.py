@@ -59,9 +59,33 @@ def _class_attribute_annotation(
     return ast.unparse(annotations[0])
 
 
+def _function_local_annotations(relative_path: str, function_name: str) -> list[str]:
+    tree = ast.parse((ROOT / relative_path).read_text(encoding="utf-8"))
+    functions = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == function_name
+    ]
+    assert len(functions) == 1
+    return [
+        ast.unparse(node.annotation)
+        for node in ast.walk(functions[0])
+        if isinstance(node, ast.AnnAssign)
+    ]
+
+
 def test_session_history_owners_do_not_use_cast_escape_hatches() -> None:
     assert _cast_calls("travis/coding_agent/compaction_adapter.py") == []
     assert _cast_calls("travis/coding_agent/session_store.py") == []
+
+
+def test_session_entry_builders_do_not_add_any_annotations() -> None:
+    relative_path = "travis/coding_agent/session_store.py"
+    for function_name in ("append_compaction", "branch_with_summary"):
+        assert "dict[str, Any]" not in _function_local_annotations(
+            relative_path,
+            function_name,
+        )
 
 
 def test_tui_theme_owner_does_not_use_cast_escape_hatches() -> None:

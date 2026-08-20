@@ -365,7 +365,7 @@ class SessionStore:
         *,
         parent_id: str | None = None,
     ) -> str:
-        entry: dict[str, Any] = {
+        entry: dict[str, object] = {
             "type": "compaction",
             "summary": summary,
             "firstKeptEntryId": first_kept_entry_id,
@@ -440,7 +440,7 @@ class SessionStore:
             raise ValueError(f"Entry {branch_from_id} not found")
         self.leaf_id = branch_from_id
         self._explicit_parent_selection = True
-        entry: dict[str, Any] = {
+        entry: dict[str, object] = {
             "type": "branch_summary",
             "fromId": branch_from_id or "root",
             "summary": summary,
