@@ -223,6 +223,46 @@ def _render_diff(files: list[PreparedFileEdit]) -> str:
     return "".join(chunks)
 
 
+def _stage_preview_files(
+    preview: WorkspaceEditPreview,
+    *,
+    workspace: Path,
+    limits: LanguageServiceLimits,
+    signal: object | None,
+) -> list[tuple[PreparedFileEdit, bytes, int]]:
+    staged: list[tuple[PreparedFileEdit, bytes, int]] = []
+    total_original_bytes = 0
+    for file in preview.files:
+        if bool(getattr(signal, "aborted", False)):
+            raise WorkspaceEditError("workspace edit apply was aborted before mutation")
+        if file.path.is_symlink():
+            raise WorkspaceEditError("workspace edit containment changed after preview (symlink)")
+        try:
+            resolved = file.path.resolve(strict=True)
+        except (FileNotFoundError, OSError) as error:
+            raise WorkspaceEditError("workspace edit target must remain an existing regular file") from error
+        if resolved != file.path or (
+            resolved != workspace and workspace not in resolved.parents
+        ):
+            raise WorkspaceEditError("workspace edit containment changed after preview")
+        if not resolved.is_file():
+            raise WorkspaceEditError("workspace edit target must remain an existing regular file")
+        current_mode = stat.S_IMODE(resolved.stat().st_mode)
+        parent_mode = stat.S_IMODE(resolved.parent.stat().st_mode)
+        if not current_mode & 0o222 or not parent_mode & 0o222:
+            raise WorkspaceEditError("workspace edit target and parent must be writable")
+        current = resolved.read_bytes()
+        if hashlib.sha256(current).hexdigest() != file.original_hash:
+            raise WorkspaceEditError(
+                f"workspace edit target {file.relative_path!r} changed since preview"
+            )
+        total_original_bytes += len(current)
+        if total_original_bytes > limits.max_apply_original_bytes:
+            raise WorkspaceEditError("workspace edit original bytes exceed the apply limit")
+        staged.append((file, current, current_mode))
+    return staged
+
+
 class WorkspaceEditPreviewStore:
     def __init__(
         self,
@@ -324,37 +364,12 @@ class WorkspaceEditPreviewStore:
             raise WorkspaceEditError("workspace edit apply was aborted before locking")
 
         def mutate() -> WorkspaceEditApplyReport:
-            staged: list[tuple[PreparedFileEdit, bytes, int]] = []
-            total_original_bytes = 0
-            for file in preview.files:
-                if bool(getattr(signal, "aborted", False)):
-                    raise WorkspaceEditError("workspace edit apply was aborted before mutation")
-                if file.path.is_symlink():
-                    raise WorkspaceEditError("workspace edit containment changed after preview (symlink)")
-                try:
-                    resolved = file.path.resolve(strict=True)
-                except (FileNotFoundError, OSError) as error:
-                    raise WorkspaceEditError("workspace edit target must remain an existing regular file") from error
-                if resolved != file.path or (
-                    resolved != self.workspace and self.workspace not in resolved.parents
-                ):
-                    raise WorkspaceEditError("workspace edit containment changed after preview")
-                if not resolved.is_file():
-                    raise WorkspaceEditError("workspace edit target must remain an existing regular file")
-                current_mode = stat.S_IMODE(resolved.stat().st_mode)
-                parent_mode = stat.S_IMODE(resolved.parent.stat().st_mode)
-                if not current_mode & 0o222 or not parent_mode & 0o222:
-                    raise WorkspaceEditError("workspace edit target and parent must be writable")
-                current = resolved.read_bytes()
-                if hashlib.sha256(current).hexdigest() != file.original_hash:
-                    raise WorkspaceEditError(
-                        f"workspace edit target {file.relative_path!r} changed since preview"
-                    )
-                total_original_bytes += len(current)
-                if total_original_bytes > self.limits.max_apply_original_bytes:
-                    raise WorkspaceEditError("workspace edit original bytes exceed the apply limit")
-                staged.append((file, current, current_mode))
-
+            staged = _stage_preview_files(
+                preview,
+                workspace=self.workspace,
+                limits=self.limits,
+                signal=signal,
+            )
             if bool(getattr(signal, "aborted", False)):
                 raise WorkspaceEditError("workspace edit apply was aborted before mutation")
             self.consume(token)

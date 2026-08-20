@@ -155,6 +155,61 @@ def test_later_write_failure_rolls_back_prior_files_and_reports_restored(tmp_pat
     assert second.read_text(encoding="utf-8") == "bbb\n"
 
 
+def test_apply_consumes_all_noop_preview_without_writing(tmp_path: Path) -> None:
+    source = tmp_path / "main.py"
+    source.write_text("same\n", encoding="utf-8")
+    store = WorkspaceEditPreviewStore(tmp_path)
+    preview = _preview(store, DocumentTracker(tmp_path), {source: []})
+    writes: list[tuple[Path, bytes, int]] = []
+
+    report = store.apply(
+        preview.token,
+        server_generation=1,
+        config_generation=1,
+        write_bytes=lambda path, data, mode: writes.append((path, data, mode)),
+    )
+
+    assert report.applied is True
+    assert report.changed == ()
+    assert report.restored == ()
+    assert report.unresolved == ()
+    assert writes == []
+    with pytest.raises(WorkspaceEditError, match="unknown"):
+        store.get(preview.token)
+
+
+def test_failed_write_that_changed_target_is_included_in_rollback(tmp_path: Path) -> None:
+    source = tmp_path / "main.py"
+    source.write_text("old\n", encoding="utf-8")
+    store = WorkspaceEditPreviewStore(tmp_path)
+    preview = _preview(
+        store,
+        DocumentTracker(tmp_path),
+        {source: [{"range": _range(0, 3), "newText": "new"}]},
+    )
+    calls: list[bytes] = []
+
+    def change_then_fail(path: Path, data: bytes, mode: int) -> None:
+        calls.append(data)
+        atomic_replace_bytes(path, data, mode=mode)
+        if data == b"new\n":
+            raise OSError("failure after mutation")
+
+    report = store.apply(
+        preview.token,
+        server_generation=1,
+        config_generation=1,
+        write_bytes=change_then_fail,
+    )
+
+    assert report.applied is False
+    assert report.changed == ("main.py",)
+    assert report.restored == ("main.py",)
+    assert report.unresolved == ()
+    assert calls == [b"new\n", b"old\n"]
+    assert source.read_bytes() == b"old\n"
+
+
 def test_rollback_failure_is_reported_as_unresolved(tmp_path: Path) -> None:
     first = tmp_path / "a.py"
     second = tmp_path / "b.py"
