@@ -673,6 +673,7 @@ dev = [
     { name = "coverage", specifier = ">=7,<8" },
     { name = "pyright", specifier = ">=1.1,<2" },
     { name = "pytest", specifier = ">=8,<10" },
+    { name = "radon", specifier = ">=6,<7" },
     { name = "ruff", specifier = ">=0.12,<1" },
     { name = "twine", specifier = ">=6,<7" },
 ]

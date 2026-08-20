@@ -34,6 +34,7 @@ dev = [
   "coverage>=7,<8",
   "pyright>=1.1,<2",
   "pytest>=8,<10",
+  "radon>=6,<7",
   "ruff>=0.12,<1",
   "twine>=6,<7",
 ]

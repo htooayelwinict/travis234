@@ -65,6 +65,10 @@ def test_source_ci_runs_locked_quality_root_adapter_npm_and_build_gates() -> Non
     assert "uv sync --locked --all-extras --dev" in joined
     assert "ruff check --select E9,F63,F7,F82 travis tests" in joined
     assert "uv run --locked --all-extras --dev pyright" in joined
+    assert (
+        "python scripts/check_python_complexity.py travis --max-complexity 25"
+        in joined
+    )
     assert "pytest -q -p no:cacheprovider tests" in joined
     assert "--project packages/travis234-mcp-adapter" in joined
     assert "packages/travis234-mcp-adapter/tests" in joined

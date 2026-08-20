@@ -35,6 +35,10 @@ jobs:
           ruff check --select E9,F63,F7,F82 travis tests
       - name: Run scoped Pyright
         run: uv run --locked --all-extras --dev pyright
+      - name: Enforce bounded Python complexity
+        run: >-
+          uv run --locked --all-extras --dev
+          python scripts/check_python_complexity.py travis --max-complexity 25
       - name: Sync locked coverage environment
         run: uv sync --locked --all-extras --dev --group coverage-test
       - name: Run root tests with coverage
