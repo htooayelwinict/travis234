@@ -91,3 +91,26 @@ def test_preloaded_runtime_does_not_reexecute_inline_factory(
         assert "profile" in adopted.runtime.get_flags()
     finally:
         adopted.release()
+
+
+def test_missing_extension_path_is_reported_once_across_duplicate_inputs(
+    tmp_path: Path,
+) -> None:
+    missing = tmp_path / "missing"
+    request = replace(
+        extension_request(tmp_path),
+        discovered_paths=(str(missing), str(missing)),
+        additional_paths=(str(missing),),
+    )
+
+    lease = load_extension_runtime(request)
+    try:
+        assert lease.result["extensions"] == []
+        assert lease.result["errors"] == [
+            {
+                "path": str(missing),
+                "error": f"Extension path does not exist: {missing}",
+            }
+        ]
+    finally:
+        lease.release()

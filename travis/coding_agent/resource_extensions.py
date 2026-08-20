@@ -107,14 +107,14 @@ def create_empty_extension_runtime(
     return ExtensionRuntimeLease(result, runtime)
 
 
-def load_extension_runtime(
-    request: ExtensionLoadRequest,
-    *,
-    preloaded: ExtensionRuntimeLease | None = None,
-) -> ExtensionRuntimeLease:
-    lease = preloaded or create_empty_extension_runtime(request.cwd, request.event_bus)
-    runtime = lease.runtime
-    existing = lease.result if preloaded is not None else {}
+def _extension_runtime_state(
+    existing: dict[str, object],
+) -> tuple[
+    list[dict[str, object]],
+    dict[str, dict[str, object]],
+    list[dict[str, object]],
+    set[str],
+]:
     errors = [
         dict(error)
         for error in _result_entries(existing, "errors")
@@ -142,30 +142,51 @@ def load_extension_runtime(
         for error in errors
         if isinstance(error.get("path"), str)
     }
+    return errors, loaded_by_path, inline_loaded, failed_paths
 
+
+def _discover_extension_files(
+    request: ExtensionLoadRequest,
+    errors: list[dict[str, object]],
+    failed_paths: set[str],
+) -> list[Path]:
+    if request.no_extensions:
+        return []
     extension_files: list[Path] = []
-    if not request.no_extensions:
-        seen: set[str] = set()
-        for path_text in (*request.discovered_paths, *request.additional_paths):
-            path = Path(path_text).expanduser()
-            if not path.is_absolute():
-                path = Path(request.cwd) / path
-            path = path.resolve()
-            if not path.exists():
-                if str(path) not in failed_paths:
-                    errors.append(
-                        {
-                            "path": str(path),
-                            "error": f"Extension path does not exist: {path}",
-                        }
-                    )
-                    failed_paths.add(str(path))
-                continue
-            for extension_file in collect_resource_files(path, "extensions"):
-                resolved = str(extension_file.resolve())
-                if resolved not in seen:
-                    seen.add(resolved)
-                    extension_files.append(extension_file.resolve())
+    seen: set[str] = set()
+    for path_text in (*request.discovered_paths, *request.additional_paths):
+        path = Path(path_text).expanduser()
+        if not path.is_absolute():
+            path = Path(request.cwd) / path
+        path = path.resolve()
+        if not path.exists():
+            if str(path) not in failed_paths:
+                errors.append(
+                    {
+                        "path": str(path),
+                        "error": f"Extension path does not exist: {path}",
+                    }
+                )
+                failed_paths.add(str(path))
+            continue
+        for extension_file in collect_resource_files(path, "extensions"):
+            resolved = str(extension_file.resolve())
+            if resolved not in seen:
+                seen.add(resolved)
+                extension_files.append(extension_file.resolve())
+    return extension_files
+
+
+def load_extension_runtime(
+    request: ExtensionLoadRequest,
+    *,
+    preloaded: ExtensionRuntimeLease | None = None,
+) -> ExtensionRuntimeLease:
+    lease = preloaded or create_empty_extension_runtime(request.cwd, request.event_bus)
+    runtime = lease.runtime
+    existing = lease.result if preloaded is not None else {}
+    errors, loaded_by_path, inline_loaded, failed_paths = _extension_runtime_state(existing)
+    extension_files = _discover_extension_files(request, errors, failed_paths)
 
     try:
         for extension_file in extension_files:
