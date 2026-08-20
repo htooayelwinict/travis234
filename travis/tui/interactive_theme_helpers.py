@@ -5,12 +5,19 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Protocol
 
-from travis.coding_agent.resource_loader import DefaultResourceLoader
 from travis.coding_agent.themes import Theme, ThemeRegistry
 
 
+class InteractiveThemeResourceLoaderPort(Protocol):
+    def get_themes(self) -> dict[str, list[object]]: ...
+
+
+class InteractiveThemeSessionPort(Protocol):
+    resource_loader: InteractiveThemeResourceLoaderPort
+
+
 class InteractiveThemeAppPort(Protocol):
-    session: object
+    session: InteractiveThemeSessionPort
 
 
 class InteractiveThemeViewPort(Protocol):
@@ -29,7 +36,7 @@ def ensure_builtin_themes(registry: ThemeRegistry, builtins: Iterable[Theme]) ->
 def reload_resource_themes(
     registry: ThemeRegistry,
     builtins: Iterable[Theme],
-    resource_loader: DefaultResourceLoader | None,
+    resource_loader: InteractiveThemeResourceLoaderPort | None,
 ) -> str | None:
     discovered = resource_loader.get_themes().get("themes", []) if resource_loader is not None else []
     resource_themes = [theme for theme in discovered if isinstance(theme, Theme)]
@@ -42,11 +49,10 @@ def ensure_view_builtin_themes(view: InteractiveThemeViewPort) -> None:
 
 
 def reload_view_resource_themes(view: InteractiveThemeViewPort) -> str | None:
-    session = view.app.session
     return reload_resource_themes(
         view.theme_registry,
         view._builtin_theme_records,
-        getattr(session, "resource_loader", None),
+        view.app.session.resource_loader,
     )
 
 
