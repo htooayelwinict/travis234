@@ -299,59 +299,7 @@ class _SessionRuntime:
     set_active_tools_by_name: Callable
     set_compaction_manager: Callable
 
-    def __init__(
-        self,
-        *,
-        cwd: str,
-        model: Model,
-        tools: list[AgentTool] | None = None,
-        tool_definitions: list[ToolDefinition] | None = None,
-        active_tool_names: list[str] | None = None,
-        allowed_tool_names: list[str] | None = None,
-        excluded_tool_names: list[str] | None = None,
-        additional_active_tool_names: list[str] | None = None,
-        convert_to_llm: Callable[[list[AgentMessage]], list[Message]] | None = None,
-        custom_prompt: str | None = None,
-        append_system_prompt: str | None = None,
-        transform_context=None,
-        thinking_level: ThinkingLevel = "off",
-        scoped_models: list[ScopedModel] | None = None,
-        steering_mode: QueueMode = "one-at-a-time",
-        follow_up_mode: QueueMode = "one-at-a-time",
-        transport: str | None = None,
-        thinking_budgets: dict[str, int] | None = None,
-        max_retry_delay_ms: int | None = None,
-        compaction_manager: CompactionManager | None = None,
-        retry_enabled: bool = False,
-        max_retries: int = 0,
-        retry_delay_ms: int = 0,
-        retryable_error_predicate: Callable[[AssistantMessage], bool] | None = None,
-        session_path: str | None = None,
-        parent_session_path: str | None = None,
-        session_id: str | None = None,
-        extension_runner: ExtensionRunner | None = None,
-        session_start_event: dict[str, object] | None = None,
-        defer_session_start: bool = False,
-        defer_agent_settled: bool = False,
-        resource_loader: DefaultResourceLoader | None = None,
-        agent_dir: str | None = None,
-        session_index: SessionIndex | None = None,
-        settings_manager: SettingsManager | None = None,
-        stream_fn=None,
-        model_registry: ModelRegistry | None = None,
-        process_service: ProcessSessionService | None = None,
-        process_owner: ProcessOwner | None = None,
-        model_change_listener: Callable[[Model, Model], None] | None = None,
-        model_role_bindings: Mapping[ModelRole, ScopedModel] | None = None,
-        model_role_event_sink: Callable[[dict[str, object]], None] | None = None,
-        tool_approval_broker: ToolApprovalBroker | None = None,
-        tool_policy_event_sink: Callable[[dict[str, object]], None] | None = None,
-        tool_policy_redactor: SecretRedactor | None = None,
-        operation_runtime: OperationRuntime | None = None,
-        owns_operation_runtime: bool = False,
-        operation_role: str | None = None,
-        operation_task_id: str | None = None,
-    ) -> None:
+    def _initialize_controllers(self) -> None:
         self._session_bindings = SessionRuntimeBindings()
         self.turn_state = SessionTurnState()
         self.presentation_state = SessionPresentationState()
@@ -447,12 +395,12 @@ class _SessionRuntime:
             ),
         )
         bind_session_controller_owners(self._session_bindings, self.controllers)
-        self.cwd = cwd
-        self.model_registry = model_registry or ModelRegistry.create(AuthStorage.create())
-        self.model_registry.ensure_model(model)
-        self.auth_storage = self.model_registry.auth_storage
-        self._workspace = WorkspaceCapability(Path(cwd))
-        self.execution_backend = select_execution_backend(cwd)
+
+    def _initialize_process_context(
+        self,
+        process_service: ProcessSessionService | None,
+        process_owner: ProcessOwner | None,
+    ) -> None:
         if (process_service is None) != (process_owner is None):
             raise ValueError("process_service and process_owner must be provided together")
         self.process_service = process_service
@@ -462,8 +410,19 @@ class _SessionRuntime:
             if process_service is not None and process_owner is not None
             else None
         )
-        self.settings_manager = settings_manager or SettingsManager.in_memory()
-        tool_policy_getter = getattr(self.settings_manager, "get_tool_policy_settings", None)
+
+    def _initialize_tool_policy(
+        self,
+        *,
+        tool_approval_broker: ToolApprovalBroker | None,
+        tool_policy_event_sink: Callable[[dict[str, object]], None] | None,
+        tool_policy_redactor: SecretRedactor | None,
+    ) -> None:
+        tool_policy_getter = getattr(
+            self.settings_manager,
+            "get_tool_policy_settings",
+            None,
+        )
         tool_policy_raw = cast(
             dict[str, object],
             tool_policy_getter()
@@ -473,13 +432,315 @@ class _SessionRuntime:
         self._tool_policy_engine = ToolPolicyEngine(
             ToolPolicySettings(
                 mode=cast(ToolPolicyMode, tool_policy_raw["mode"]),
-                auto_allow_effects=frozenset(cast(list[ToolEffect], tool_policy_raw["autoAllowEffects"])),
+                auto_allow_effects=frozenset(
+                    cast(list[ToolEffect], tool_policy_raw["autoAllowEffects"])
+                ),
             ),
             broker=tool_approval_broker,
             redactor=tool_policy_redactor,
         )
         self._tool_approval_broker = tool_approval_broker
         self._tool_policy_event_sink = tool_policy_event_sink
+
+    def _initialize_resource_loader(
+        self,
+        *,
+        cwd: str,
+        agent_dir: str | None,
+        custom_prompt: str | None,
+        append_system_prompt: str | None,
+        extension_runner: ExtensionRunner | None,
+        resource_loader: DefaultResourceLoader | None,
+    ) -> None:
+        self._resource_loader = resource_loader
+        if self._resource_loader is None:
+            self._resource_loader = DefaultResourceLoader(
+                cwd=cwd,
+                agent_dir=agent_dir,
+                system_prompt=custom_prompt,
+                append_system_prompt=[append_system_prompt]
+                if append_system_prompt
+                else None,
+            )
+            self._resource_loader.reload()
+        if extension_runner is None:
+            loaded_runner = self._resource_loader.get_extensions().get("runtime")
+            if isinstance(loaded_runner, ExtensionRunner):
+                self._extension_runner = loaded_runner
+                self._extension_runner._model_registry = self.model_registry  # noqa: SLF001
+
+    def _initialize_memory_runtime(
+        self,
+        *,
+        cwd: str,
+        agent_dir: str | None,
+        tools: list[AgentTool] | None,
+        active_tool_names: list[str] | None,
+        session_id: str | None,
+    ) -> None:
+        memory_getter = getattr(self.settings_manager, "get_memory_settings", None)
+        self._memory_settings = cast(
+            MemorySettings,
+            memory_getter() if callable(memory_getter) else MemorySettings(),
+        )
+        self._memory_project_key = project_key_for_path(cwd)
+        memory_requested = (
+            tools is None
+            and self._memory_settings.enabled
+            and self._is_allowed_tool("memory")
+            and (active_tool_names is None or "memory" in active_tool_names)
+        )
+        self._memory_store: MemoryStore | None = None
+        if memory_requested:
+            try:
+                self._memory_store = MemoryStore(
+                    Path(agent_dir or get_agent_dir()).expanduser().resolve()
+                    / "memory.sqlite3",
+                    settings=self._memory_settings,
+                )
+            except MemoryStoreUnavailable:
+                self._memory_store = None
+        self._memory_tool_runtime = (
+            MemoryToolRuntime(
+                self._memory_store,
+                settings=self._memory_settings,
+                project_key=self._memory_project_key,
+                session_id=self.session_id or session_id,
+                artifacts=self._artifacts,
+                spill_dir=Path(agent_dir or get_agent_dir()).expanduser().resolve()
+                / "memory-spill",
+                redactor=self._tool_policy_engine.redactor,
+            )
+            if memory_requested
+            else None
+        )
+
+    def _initialize_language_services(
+        self,
+        *,
+        cwd: str,
+        tools: list[AgentTool] | None,
+        tool_definitions: list[ToolDefinition] | None,
+    ) -> None:
+        self._language_services: LanguageServiceManager | None = None
+        language_server_getter = getattr(
+            self.settings_manager,
+            "get_language_server_configs",
+            None,
+        )
+        language_server_configs = cast(
+            list[LanguageServerConfig],
+            language_server_getter() if callable(language_server_getter) else [],
+        )
+        if (
+            tools is None
+            and tool_definitions is None
+            and language_server_configs
+            and self._is_allowed_tool("lsp")
+        ):
+            self._language_services = LanguageServiceManager(
+                cwd,
+                language_server_configs,
+            )
+
+    def _create_base_tools(
+        self,
+        *,
+        cwd: str,
+        tools: list[AgentTool] | None,
+        tool_definitions: list[ToolDefinition] | None,
+    ) -> tuple[list[AgentTool], list[ToolDefinition], dict[str, SourceInfo]]:
+        if tools is not None:
+            definitions = [
+                create_tool_definition_from_agent_tool(tool) for tool in tools
+            ]
+            source_infos = {
+                definition.name: definition.source_info
+                or create_synthetic_source_info(
+                    f"<sdk:{definition.name}>",
+                    source="sdk",
+                )
+                for definition in definitions
+            }
+            return tools, definitions, source_infos
+        if tool_definitions is not None:
+            wrapped_tools = [
+                wrap_tool_definition(
+                    definition,
+                    lambda: ToolContext(cwd=self.cwd, model=self.model),
+                )
+                for definition in tool_definitions
+            ]
+            source_infos = {
+                definition.name: definition.source_info
+                or create_synthetic_source_info(
+                    f"<sdk:{definition.name}>",
+                    source="sdk",
+                )
+                for definition in tool_definitions
+            }
+            return wrapped_tools, tool_definitions, source_infos
+
+        definitions = [
+            *create_all_tool_definitions(cwd, self._builtin_tool_options()),
+            *self._create_subagent_tool_definitions(),
+        ]
+        if self._language_services is not None:
+            definitions.append(
+                create_lsp_tool_definition(
+                    self._language_services,
+                    self._artifacts,
+                    cwd,
+                )
+            )
+        if (
+            self.process_service is not None
+            and self.process_owner is not None
+            and self._is_allowed_tool("process")
+        ):
+            definitions.append(
+                create_process_tool_definition(
+                    self.process_service,
+                    self.process_owner,
+                    self._artifacts,
+                )
+            )
+        wrapped_tools = [
+            wrap_tool_definition(
+                definition,
+                lambda: ToolContext(cwd=self.cwd, model=self.model),
+            )
+            for definition in definitions
+        ]
+        source_infos = {
+            definition.name: create_synthetic_source_info(
+                f"<builtin:{definition.name}>",
+                source="builtin",
+            )
+            for definition in definitions
+        }
+        return wrapped_tools, definitions, source_infos
+
+    def _append_memory_tool(
+        self,
+        *,
+        tools_were_supplied: bool,
+        base_tools: list[AgentTool],
+        base_definitions: list[ToolDefinition],
+        base_source_infos: dict[str, SourceInfo],
+    ) -> None:
+        if (
+            tools_were_supplied
+            or self._memory_tool_runtime is None
+            or any(definition.name == "memory" for definition in base_definitions)
+        ):
+            return
+        memory_definition = create_memory_tool_definition(self._memory_tool_runtime)
+        base_definitions.append(memory_definition)
+        base_tools.append(
+            wrap_tool_definition(
+                memory_definition,
+                lambda: ToolContext(cwd=self.cwd, model=self.model),
+            )
+        )
+        base_source_infos["memory"] = create_synthetic_source_info(
+            "<builtin:memory>",
+            source="builtin",
+        )
+
+    def _initial_active_tool_names(
+        self,
+        *,
+        active_tool_names: list[str] | None,
+        allowed_tool_names: list[str] | None,
+        additional_active_tool_names: list[str] | None,
+        tools: list[AgentTool] | None,
+        tool_definitions: list[ToolDefinition] | None,
+        base_tools: list[AgentTool],
+        base_definitions: list[ToolDefinition],
+    ) -> list[str]:
+        if active_tool_names is not None:
+            initial_names = active_tool_names
+        elif tools is not None:
+            initial_names = [tool.name for tool in base_tools]
+        elif tool_definitions is not None:
+            initial_names = [definition.name for definition in base_definitions]
+        elif allowed_tool_names is not None:
+            initial_names = list(allowed_tool_names)
+        else:
+            initial_names = self._default_active_tool_names()
+        for name in additional_active_tool_names or []:
+            if name not in initial_names:
+                initial_names.append(name)
+        return initial_names
+
+    def __init__(
+        self,
+        *,
+        cwd: str,
+        model: Model,
+        tools: list[AgentTool] | None = None,
+        tool_definitions: list[ToolDefinition] | None = None,
+        active_tool_names: list[str] | None = None,
+        allowed_tool_names: list[str] | None = None,
+        excluded_tool_names: list[str] | None = None,
+        additional_active_tool_names: list[str] | None = None,
+        convert_to_llm: Callable[[list[AgentMessage]], list[Message]] | None = None,
+        custom_prompt: str | None = None,
+        append_system_prompt: str | None = None,
+        transform_context=None,
+        thinking_level: ThinkingLevel = "off",
+        scoped_models: list[ScopedModel] | None = None,
+        steering_mode: QueueMode = "one-at-a-time",
+        follow_up_mode: QueueMode = "one-at-a-time",
+        transport: str | None = None,
+        thinking_budgets: dict[str, int] | None = None,
+        max_retry_delay_ms: int | None = None,
+        compaction_manager: CompactionManager | None = None,
+        retry_enabled: bool = False,
+        max_retries: int = 0,
+        retry_delay_ms: int = 0,
+        retryable_error_predicate: Callable[[AssistantMessage], bool] | None = None,
+        session_path: str | None = None,
+        parent_session_path: str | None = None,
+        session_id: str | None = None,
+        extension_runner: ExtensionRunner | None = None,
+        session_start_event: dict[str, object] | None = None,
+        defer_session_start: bool = False,
+        defer_agent_settled: bool = False,
+        resource_loader: DefaultResourceLoader | None = None,
+        agent_dir: str | None = None,
+        session_index: SessionIndex | None = None,
+        settings_manager: SettingsManager | None = None,
+        stream_fn=None,
+        model_registry: ModelRegistry | None = None,
+        process_service: ProcessSessionService | None = None,
+        process_owner: ProcessOwner | None = None,
+        model_change_listener: Callable[[Model, Model], None] | None = None,
+        model_role_bindings: Mapping[ModelRole, ScopedModel] | None = None,
+        model_role_event_sink: Callable[[dict[str, object]], None] | None = None,
+        tool_approval_broker: ToolApprovalBroker | None = None,
+        tool_policy_event_sink: Callable[[dict[str, object]], None] | None = None,
+        tool_policy_redactor: SecretRedactor | None = None,
+        operation_runtime: OperationRuntime | None = None,
+        owns_operation_runtime: bool = False,
+        operation_role: str | None = None,
+        operation_task_id: str | None = None,
+    ) -> None:
+        self._initialize_controllers()
+        self.cwd = cwd
+        self.model_registry = model_registry or ModelRegistry.create(AuthStorage.create())
+        self.model_registry.ensure_model(model)
+        self.auth_storage = self.model_registry.auth_storage
+        self._workspace = WorkspaceCapability(Path(cwd))
+        self.execution_backend = select_execution_backend(cwd)
+        self._initialize_process_context(process_service, process_owner)
+        self.settings_manager = settings_manager or SettingsManager.in_memory()
+        self._initialize_tool_policy(
+            tool_approval_broker=tool_approval_broker,
+            tool_policy_event_sink=tool_policy_event_sink,
+            tool_policy_redactor=tool_policy_redactor,
+        )
         self._stream_fn = stream_fn or self.model_registry.stream_simple
         self._allowed_tool_names = set(allowed_tool_names) if allowed_tool_names is not None else None
         self._excluded_tool_names = set(excluded_tool_names or [])
@@ -529,20 +790,14 @@ class _SessionRuntime:
         self._scoped_models = list(scoped_models or [])
         self._convert_to_llm = convert_to_llm or default_convert_to_llm
         self._caller_transform_context = transform_context
-        self._resource_loader = resource_loader
-        if self._resource_loader is None:
-            self._resource_loader = DefaultResourceLoader(
-                cwd=cwd,
-                agent_dir=agent_dir,
-                system_prompt=custom_prompt,
-                append_system_prompt=[append_system_prompt] if append_system_prompt else None,
-            )
-            self._resource_loader.reload()
-        if extension_runner is None:
-            loaded_runner = self._resource_loader.get_extensions().get("runtime")
-            if isinstance(loaded_runner, ExtensionRunner):
-                self._extension_runner = loaded_runner
-                self._extension_runner._model_registry = self.model_registry  # noqa: SLF001
+        self._initialize_resource_loader(
+            cwd=cwd,
+            agent_dir=agent_dir,
+            custom_prompt=custom_prompt,
+            append_system_prompt=append_system_prompt,
+            extension_runner=extension_runner,
+            resource_loader=resource_loader,
+        )
         self._custom_prompt: str | None = None
         self._append_system_prompt: str | None = None
         self._context_files: list[tuple[str, str]] = []
@@ -602,55 +857,18 @@ class _SessionRuntime:
             agent_dir=str(Path(agent_dir or get_agent_dir()).expanduser().resolve()),
             settings_manager=self.settings_manager,
         )
-        memory_getter = getattr(self.settings_manager, "get_memory_settings", None)
-        self._memory_settings = cast(
-            MemorySettings,
-            memory_getter() if callable(memory_getter) else MemorySettings(),
+        self._initialize_memory_runtime(
+            cwd=cwd,
+            agent_dir=agent_dir,
+            tools=tools,
+            active_tool_names=active_tool_names,
+            session_id=session_id,
         )
-        self._memory_project_key = project_key_for_path(cwd)
-        memory_requested = (
-            tools is None
-            and self._memory_settings.enabled
-            and self._is_allowed_tool("memory")
-            and (active_tool_names is None or "memory" in active_tool_names)
+        self._initialize_language_services(
+            cwd=cwd,
+            tools=tools,
+            tool_definitions=tool_definitions,
         )
-        self._memory_store: MemoryStore | None = None
-        if memory_requested:
-            try:
-                self._memory_store = MemoryStore(
-                    Path(agent_dir or get_agent_dir()).expanduser().resolve()
-                    / "memory.sqlite3",
-                    settings=self._memory_settings,
-                )
-            except MemoryStoreUnavailable:
-                self._memory_store = None
-        self._memory_tool_runtime = (
-            MemoryToolRuntime(
-                self._memory_store,
-                settings=self._memory_settings,
-                project_key=self._memory_project_key,
-                session_id=self.session_id or session_id,
-                artifacts=self._artifacts,
-                spill_dir=Path(agent_dir or get_agent_dir()).expanduser().resolve()
-                / "memory-spill",
-                redactor=self._tool_policy_engine.redactor,
-            )
-            if memory_requested
-            else None
-        )
-        self._language_services: LanguageServiceManager | None = None
-        language_server_getter = getattr(self.settings_manager, "get_language_server_configs", None)
-        language_server_configs = cast(
-            list[LanguageServerConfig],
-            language_server_getter() if callable(language_server_getter) else [],
-        )
-        if (
-            tools is None
-            and tool_definitions is None
-            and language_server_configs
-            and self._is_allowed_tool("lsp")
-        ):
-            self._language_services = LanguageServiceManager(cwd, language_server_configs)
         self._session_start_event = session_start_event or {"type": "session_start", "reason": "startup"}
         self._defer_session_start = bool(defer_session_start)
         self._defer_agent_settled = bool(defer_agent_settled)
@@ -668,81 +886,31 @@ class _SessionRuntime:
             event_sink=model_role_event_sink,
         )
 
-        if tools is not None:
-            base_tools = tools
-            base_definitions = [create_tool_definition_from_agent_tool(tool) for tool in base_tools]
-            base_source_infos = {
-                definition.name: definition.source_info
-                or create_synthetic_source_info(f"<sdk:{definition.name}>", source="sdk")
-                for definition in base_definitions
-            }
-        elif tool_definitions is not None:
-            base_tools = [
-                wrap_tool_definition(definition, lambda: ToolContext(cwd=self.cwd, model=self.model))
-                for definition in tool_definitions
-            ]
-            base_definitions = tool_definitions
-            base_source_infos = {
-                definition.name: definition.source_info
-                or create_synthetic_source_info(f"<sdk:{definition.name}>", source="sdk")
-                for definition in base_definitions
-            }
-        else:
-            base_definitions = [
-                *create_all_tool_definitions(cwd, self._builtin_tool_options()),
-                *self._create_subagent_tool_definitions(),
-            ]
-            if self._language_services is not None:
-                base_definitions.append(
-                    create_lsp_tool_definition(self._language_services, self._artifacts, cwd)
-                )
-            if self.process_service is not None and self.process_owner is not None and self._is_allowed_tool("process"):
-                base_definitions.append(
-                    create_process_tool_definition(self.process_service, self.process_owner, self._artifacts)
-                )
-            base_tools = [
-                wrap_tool_definition(definition, lambda: ToolContext(cwd=self.cwd, model=self.model))
-                for definition in base_definitions
-            ]
-            base_source_infos = {
-                definition.name: create_synthetic_source_info(f"<builtin:{definition.name}>", source="builtin")
-                for definition in base_definitions
-            }
-        if (
-            tools is None
-            and self._memory_tool_runtime is not None
-            and not any(definition.name == "memory" for definition in base_definitions)
-        ):
-            memory_definition = create_memory_tool_definition(self._memory_tool_runtime)
-            base_definitions.append(memory_definition)
-            base_tools.append(
-                wrap_tool_definition(
-                    memory_definition,
-                    lambda: ToolContext(cwd=self.cwd, model=self.model),
-                )
-            )
-            base_source_infos["memory"] = create_synthetic_source_info(
-                "<builtin:memory>", source="builtin"
-            )
+        base_tools, base_definitions, base_source_infos = self._create_base_tools(
+            cwd=cwd,
+            tools=tools,
+            tool_definitions=tool_definitions,
+        )
+        self._append_memory_tool(
+            tools_were_supplied=tools is not None,
+            base_tools=base_tools,
+            base_definitions=base_definitions,
+            base_source_infos=base_source_infos,
+        )
         self._base_tool_by_name = {tool.name: tool for tool in base_tools}
         self._base_definition_by_name = {definition.name: definition for definition in base_definitions}
         self._base_source_info_by_name = dict(base_source_infos)
         self.refresh_tools()
 
-        initial_active_tool_names = (
-            active_tool_names
-            if active_tool_names is not None
-            else [tool.name for tool in base_tools]
-            if tools is not None
-            else [definition.name for definition in base_definitions]
-            if tool_definitions is not None
-            else list(allowed_tool_names)
-            if allowed_tool_names is not None
-            else self._default_active_tool_names()
+        initial_active_tool_names = self._initial_active_tool_names(
+            active_tool_names=active_tool_names,
+            allowed_tool_names=allowed_tool_names,
+            additional_active_tool_names=additional_active_tool_names,
+            tools=tools,
+            tool_definitions=tool_definitions,
+            base_tools=base_tools,
+            base_definitions=base_definitions,
         )
-        for name in additional_active_tool_names or []:
-            if name not in initial_active_tool_names:
-                initial_active_tool_names.append(name)
         self.system_prompt = self._build_system_prompt([])
         self.agent = Agent(
             system_prompt=self.system_prompt,
