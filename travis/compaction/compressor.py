@@ -1594,31 +1594,36 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
 
     # --- Orchestrator ---
 
-    def compress(
+    @staticmethod
+    def _compression_noop(
+        messages: list[Message],
+        before: int,
+    ) -> CompressionResult:
+        return CompressionResult(
+            messages=messages,
+            compressed=False,
+            savings_pct=0.0,
+            tokens_before=before,
+        )
+
+    def _compression_preflight(
         self,
         messages: list[Message],
-        summarizer: Optional[Summarizer] = None,
         *,
-        focus_topic: str | None = None,
-        force: bool = False,
-        deep: bool = False,
-        durable: bool = False,
-        summary_only: bool = False,
-    ) -> CompressionResult:
-        summarizer = summarizer or self._summarizer
-        before = estimate_tokens(messages)
+        before: int,
+        force: bool,
+        summary_only: bool,
+        focus_topic: str | None,
+    ) -> CompressionResult | None:
         self._last_noop_reason = None
         if force and self._summary_failure_cooldown_until > 0.0:
             self._clear_summary_failure_cooldown()
         elif not force and self._summary_failure_in_cooldown():
             self._last_noop_reason = "cooldown"
-            return CompressionResult(
-                messages=messages,
-                compressed=False,
-                savings_pct=0.0,
-                tokens_before=before,
-            )
-        existing_summary_index, _existing_summary = self._find_previous_summary(messages)
+            return self._compression_noop(messages, before)
+        existing_summary_index, _existing_summary = self._find_previous_summary(
+            messages
+        )
         if (
             existing_summary_index >= 0
             and not summary_only
@@ -1631,12 +1636,11 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             == len(messages)
         ):
             self._last_noop_reason = "protected_recent_context"
-            return CompressionResult(
-                messages=messages,
-                compressed=False,
-                savings_pct=0.0,
-                tokens_before=before,
-            )
+            return self._compression_noop(messages, before)
+        self._reset_compression_observations()
+        return None
+
+    def _reset_compression_observations(self) -> None:
         self._last_summary_error = None
         self._last_summary_dropped_count = 0
         self._last_summary_fallback_used = False
@@ -1647,131 +1651,186 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         self._last_summary_model_used = None
         self._last_summary_model_fallback_used = False
         self._summary_model_fallen_back = False
+
+    def _compression_boundaries(
+        self,
+        messages: list[Message],
+        *,
+        before: int,
+        force: bool,
+        deep: bool,
+        durable: bool,
+        summary_only: bool,
+    ) -> tuple[list[Message], int, int] | None:
         pruned = self.prune_old_tool_results(messages)
-        # Lossy pruning is input preparation for the summarizer only. Any head
-        # or tail retained for provider replay must come from the raw transcript;
-        # otherwise schema-valid tool arguments can be replaced by internal
-        # compaction metadata and then imitated by the model on later turns.
-        boundary_messages = messages
         if summary_only:
-            # Failed request payloads can themselves be the oversized recent
-            # tail. Summarize the whole failed context so that payload is not
-            # immediately replayed beside its summary on the next turn.
             head_end = 0
-            tail_start = len(boundary_messages)
+            tail_start = len(messages)
         else:
             head_end = 0 if durable else self._protect_head_size(messages)
-            head_end = self._align_boundary_forward(boundary_messages, head_end)
+            head_end = self._align_boundary_forward(messages, head_end)
             tail_start = self._find_tail_start(
-                boundary_messages,
+                messages,
                 head_end,
                 deep=deep,
                 preserve_role_anchors=True,
                 preserve_summary_anchor=not durable,
             )
+        if tail_start > head_end:
+            return pruned, head_end, tail_start
+        emergency_window = self._oversized_protected_head_window(
+            messages,
+            head_end,
+            before,
+            force=force,
+        )
+        if emergency_window is None:
+            return None
+        return pruned, *emergency_window
 
-        if tail_start <= head_end:
-            emergency_window = self._oversized_protected_head_window(messages, head_end, before, force=force)
-            if emergency_window is None:
-                self._last_noop_reason = "protected_recent_context"
-                return CompressionResult(
-                    messages=messages,
-                    compressed=False,
-                    savings_pct=0.0,
-                    tokens_before=before,
-                )
-            head_end, tail_start = emergency_window
-
+    def _middle_for_summary(
+        self,
+        pruned: list[Message],
+        *,
+        head_end: int,
+        tail_start: int,
+    ) -> list[Message] | None:
         middle = pruned[head_end:tail_start]
         summary_index, summary_body = self._find_latest_context_summary(
             pruned,
             0,
             min(len(pruned), tail_start + 1),
         )
-        if summary_index is not None:
-            if summary_body and not self._previous_summary:
-                self._previous_summary = summary_body
-            middle = pruned[max(head_end, summary_index + 1):tail_start]
-            retained_tail = self._retained_tail_after_summary(
-                _message_text(pruned[summary_index])
+        if summary_index is None:
+            if self._previous_summary:
+                self._previous_summary = None
+            return middle
+        if summary_body and not self._previous_summary:
+            self._previous_summary = summary_body
+        middle = pruned[max(head_end, summary_index + 1) : tail_start]
+        retained_tail = self._retained_tail_after_summary(
+            _message_text(pruned[summary_index])
+        )
+        if (
+            retained_tail
+            and head_end <= summary_index
+            and summary_index + 1 < tail_start
+        ):
+            middle.insert(
+                0,
+                self._message_with_replacement_text(
+                    pruned[summary_index],
+                    retained_tail,
+                ),
             )
-            if (
-                retained_tail
-                and head_end <= summary_index
-                and summary_index + 1 < tail_start
-            ):
-                middle.insert(
-                    0,
-                    self._message_with_replacement_text(
-                        pruned[summary_index],
-                        retained_tail,
-                    ),
-                )
-            if not middle:
-                self.last_compression_savings_pct = 0.0
-                self._ineffective_compression_count += 1
-                self._last_noop_reason = "protected_recent_context"
-                return CompressionResult(messages=messages, compressed=False, savings_pct=0.0, tokens_before=before)
-        elif self._previous_summary:
-            self._previous_summary = None
+        if middle:
+            return middle
+        self.last_compression_savings_pct = 0.0
+        self._ineffective_compression_count += 1
+        self._last_noop_reason = "protected_recent_context"
+        return None
+
+    def _try_generate_summary(
+        self,
+        middle: list[Message],
+        summarizer: Summarizer,
+        *,
+        focus_topic: str | None,
+    ) -> str | None:
         try:
-            summary_text = self.generate_summary(middle, summarizer, focus_topic=focus_topic)
+            return self.generate_summary(
+                middle,
+                summarizer,
+                focus_topic=focus_topic,
+            )
         except Exception as exc:  # noqa: BLE001 - fallback handoff mirrors default behavior
-            self._last_summary_error = _redact_sensitive_text(self._compact_error_text(exc))
+            self._last_summary_error = _redact_sensitive_text(
+                self._compact_error_text(exc)
+            )
             if _is_summary_auth_failure(exc):
                 self._last_summary_auth_failure = True
             if _is_summary_network_failure(exc):
                 self._last_summary_network_failure = True
             self._arm_summary_failure_cooldown(self._last_summary_error)
-            summary_text = None
-        if summary_text is None:
-            if (
-                self.abort_on_summary_failure
-                or self._last_summary_auth_failure
-                or self._last_summary_network_failure
-            ):
-                self._last_compress_aborted = True
-                return CompressionResult(
-                    messages=messages,
-                    compressed=False,
-                    savings_pct=0.0,
-                    tokens_before=before,
-                    summary_model_requested=self._last_summary_model_requested,
-                    summary_model_used=self._last_summary_model_used,
-                    summary_model_fallback=self._last_summary_model_fallback_used,
-                    summary_model_error=(
-                        self._last_aux_model_failure_error or self._last_summary_error
-                    ),
-                    summary_model_dedicated=bool(self.summary_model and self._summary_summarizer is not None),
-                )
-            self._last_summary_dropped_count = len(middle)
-            self._last_summary_fallback_used = True
-            recent_user_focus = next(
-                (
-                    _sanitize_summary_source_text(_message_text(message)).strip()
-                    for message in reversed(messages[tail_start:])
-                    if getattr(message, "role", None) == "user"
-                    and not self._is_context_summary_message(message)
-                    and _message_text(message).strip()
+            return None
+
+    def _summary_failure_result(
+        self,
+        messages: list[Message],
+        *,
+        before: int,
+    ) -> CompressionResult:
+        self._last_compress_aborted = True
+        return CompressionResult(
+            messages=messages,
+            compressed=False,
+            savings_pct=0.0,
+            tokens_before=before,
+            summary_model_requested=self._last_summary_model_requested,
+            summary_model_used=self._last_summary_model_used,
+            summary_model_fallback=self._last_summary_model_fallback_used,
+            summary_model_error=(
+                self._last_aux_model_failure_error or self._last_summary_error
+            ),
+            summary_model_dedicated=bool(
+                self.summary_model and self._summary_summarizer is not None
+            ),
+        )
+
+    def _fallback_summary_text(
+        self,
+        messages: list[Message],
+        middle: list[Message],
+        *,
+        tail_start: int,
+    ) -> str:
+        self._last_summary_dropped_count = len(middle)
+        self._last_summary_fallback_used = True
+        recent_user_focus = next(
+            (
+                _sanitize_summary_source_text(_message_text(message)).strip()
+                for message in reversed(messages[tail_start:])
+                if getattr(message, "role", None) == "user"
+                and not self._is_context_summary_message(message)
+                and _message_text(message).strip()
+            ),
+            None,
+        )
+        return _redact_sensitive_text(
+            self._static_fallback_summary(
+                middle,
+                reason=self._last_summary_error,
+                recent_user_focus=(
+                    f"Newest retained user focus: {recent_user_focus}"
+                    if recent_user_focus
+                    else None
                 ),
-                None,
             )
-            summary_text = _redact_sensitive_text(
-                self._static_fallback_summary(
-                    middle,
-                    reason=self._last_summary_error,
-                    recent_user_focus=(
-                        f"Newest retained user focus: {recent_user_focus}"
-                        if recent_user_focus
-                        else None
-                    ),
-                )
-            )
+        )
+
+    def _finalize_compression(
+        self,
+        messages: list[Message],
+        middle: list[Message],
+        summary_text: str,
+        *,
+        before: int,
+        head_end: int,
+        tail_start: int,
+    ) -> CompressionResult:
         read_files, modified_files = self._file_operations_for_summary(middle)
-        formatted_file_operations = _format_file_operations(read_files, modified_files)
+        formatted_file_operations = _format_file_operations(
+            read_files,
+            modified_files,
+        )
         if formatted_file_operations:
-            summary_text = _strip_file_operation_tags(summary_text) + formatted_file_operations
-        details: dict[str, object] = {"readFiles": read_files, "modifiedFiles": modified_files}
+            summary_text = (
+                _strip_file_operation_tags(summary_text) + formatted_file_operations
+            )
+        details: dict[str, object] = {
+            "readFiles": read_files,
+            "modifiedFiles": modified_files,
+        }
         if self._last_summary_error or self._last_summary_fallback_used:
             details.update(
                 {
@@ -1809,8 +1868,79 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             summary_model_requested=self._last_summary_model_requested,
             summary_model_used=self._last_summary_model_used,
             summary_model_fallback=self._last_summary_model_fallback_used,
-            summary_model_error=(self._last_aux_model_failure_error or self._last_summary_error),
-            summary_model_dedicated=bool(self.summary_model and self._summary_summarizer is not None),
+            summary_model_error=(
+                self._last_aux_model_failure_error or self._last_summary_error
+            ),
+            summary_model_dedicated=bool(
+                self.summary_model and self._summary_summarizer is not None
+            ),
+        )
+
+    def compress(
+        self,
+        messages: list[Message],
+        summarizer: Optional[Summarizer] = None,
+        *,
+        focus_topic: str | None = None,
+        force: bool = False,
+        deep: bool = False,
+        durable: bool = False,
+        summary_only: bool = False,
+    ) -> CompressionResult:
+        summarizer = summarizer or self._summarizer
+        before = estimate_tokens(messages)
+        preflight_result = self._compression_preflight(
+            messages,
+            before=before,
+            force=force,
+            summary_only=summary_only,
+            focus_topic=focus_topic,
+        )
+        if preflight_result is not None:
+            return preflight_result
+        boundaries = self._compression_boundaries(
+            messages,
+            before=before,
+            force=force,
+            deep=deep,
+            durable=durable,
+            summary_only=summary_only,
+        )
+        if boundaries is None:
+            self._last_noop_reason = "protected_recent_context"
+            return self._compression_noop(messages, before)
+        pruned, head_end, tail_start = boundaries
+        middle = self._middle_for_summary(
+            pruned,
+            head_end=head_end,
+            tail_start=tail_start,
+        )
+        if middle is None:
+            return self._compression_noop(messages, before)
+        summary_text = self._try_generate_summary(
+            middle,
+            summarizer,
+            focus_topic=focus_topic,
+        )
+        if summary_text is None:
+            if (
+                self.abort_on_summary_failure
+                or self._last_summary_auth_failure
+                or self._last_summary_network_failure
+            ):
+                return self._summary_failure_result(messages, before=before)
+            summary_text = self._fallback_summary_text(
+                messages,
+                middle,
+                tail_start=tail_start,
+            )
+        return self._finalize_compression(
+            messages,
+            middle,
+            summary_text,
+            before=before,
+            head_end=head_end,
+            tail_start=tail_start,
         )
 
     def _find_tail_start(
