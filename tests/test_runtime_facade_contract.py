@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
+import pytest
+
+import travis.coding_agent.agent_session as agent_session_module
 from tests._support_tui import CodingApp, FakeTerminal, faux_model
 from travis.coding_agent.agent_session import AgentSession
 from travis.coding_agent.session_contracts import AGENT_SESSION_PUBLIC_MEMBERS
@@ -49,6 +54,30 @@ class _AgentSessionRuntimeProbe:
         self.shutdown_reasons.append(reason)
 
 
+class _AgentSessionRuntimePortProbe:
+    cwd = "/workspace"
+    extension_runner = object()
+    session_path = None
+
+    def create_branched_session(self, leaf_id: str, path: str | None = None) -> str:
+        return path or leaf_id
+
+    def dispose(self) -> None:
+        return None
+
+    def emit_deferred_session_start(self) -> None:
+        return None
+
+    def get_session_entry(self, _entry_id: str) -> dict[str, object] | None:
+        return None
+
+    def get_session_leaf_id(self) -> str | None:
+        return None
+
+    def shutdown(self, *args: object, **kwargs: object) -> None:
+        return None
+
+
 class _CloseProbe:
     def __init__(self) -> None:
         self.close_calls = 0
@@ -66,6 +95,34 @@ def test_agent_session_explicit_lifecycle_methods_delegate_to_runtime() -> None:
 
     assert runtime.shutdown_reasons == ["replacement"]
     assert runtime.operation_coordinator.close_calls == 1
+
+
+def test_agent_session_caches_runtime_validation_across_facade_properties() -> None:
+    runtime = _AgentSessionRuntimePortProbe()
+    facade = object.__new__(AgentSession)
+    object.__setattr__(facade, "_runtime", runtime)
+
+    with patch.object(
+        agent_session_module,
+        "validate_session_runtime_port",
+        wraps=agent_session_module.validate_session_runtime_port,
+    ) as validate:
+        assert facade.cwd == "/workspace"
+        assert facade.cwd == "/workspace"
+        assert facade.session_path is None
+
+    assert validate.call_count == 1
+
+
+def test_agent_session_cached_runtime_preserves_structural_validation_errors() -> None:
+    facade = object.__new__(AgentSession)
+    object.__setattr__(facade, "_runtime", object())
+
+    with pytest.raises(
+        TypeError,
+        match=r"Unsupported runtime result: object \(missing required members: cwd",
+    ):
+        _ = facade.cwd
 
 
 def test_interactive_mode_preserves_dynamic_runtime_overrides() -> None:

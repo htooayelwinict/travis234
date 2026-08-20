@@ -804,13 +804,27 @@ install_controller_delegates(
 class AgentSession(RuntimeFacade):
     """Stable public facade over the composed coding-session runtime."""
 
+    _validated_runtime_port: SessionRuntimePort
+    _validated_runtime_source: object
+
     def __init__(self, *args, **kwargs) -> None:
         runtime = _SessionRuntime(*args, **kwargs)
+        runtime_port = validate_session_runtime_port(runtime)
         object.__setattr__(runtime, "_session_factory", type(self))
         object.__setattr__(self, "_runtime", runtime)
+        object.__setattr__(self, "_validated_runtime_source", runtime)
+        object.__setattr__(self, "_validated_runtime_port", runtime_port)
 
     def _session_runtime_port(self) -> SessionRuntimePort:
-        return validate_session_runtime_port(self._runtime)
+        runtime = self._runtime
+        if (
+            "_validated_runtime_source" not in self.__dict__
+            or self._validated_runtime_source is not runtime
+        ):
+            runtime_port = validate_session_runtime_port(runtime)
+            object.__setattr__(self, "_validated_runtime_source", runtime)
+            object.__setattr__(self, "_validated_runtime_port", runtime_port)
+        return self._validated_runtime_port
 
     @property
     def cwd(self) -> str:
