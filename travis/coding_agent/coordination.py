@@ -36,6 +36,15 @@ class CoordinationInvocation:
     goal: str
 
 
+@dataclass(frozen=True, slots=True)
+class _CoordinationPlanCollections:
+    tasks: list[object]
+    dependencies: list[object]
+    ownership: list[object]
+    verification: list[object]
+    route: str
+
+
 def parse_coordination_arguments(arguments: str) -> CoordinationInvocation:
     remaining = str(arguments).strip()
     mode: CoordinationMode = "auto"
@@ -236,7 +245,9 @@ def _is_plain_relative_scope(value: str) -> bool:
     )
 
 
-def validate_coordination_plan(value: object) -> tuple[str, ...]:
+def _plan_collections(
+    value: object,
+) -> _CoordinationPlanCollections | tuple[str, ...]:
     if not isinstance(value, dict):
         return ("plan must be an object",)
     tasks = value.get("tasks")
@@ -252,20 +263,63 @@ def validate_coordination_plan(value: object) -> tuple[str, ...]:
         and isinstance(route, str)
     ):
         return ("plan collections and route must satisfy the typed schema",)
+    return _CoordinationPlanCollections(
+        tasks=tasks,
+        dependencies=dependencies,
+        ownership=ownership,
+        verification=verification,
+        route=route,
+    )
 
-    errors: list[str] = []
-    task_ids = [
-        item.get("id")
-        for item in tasks
-        if isinstance(item, dict) and isinstance(item.get("id"), str)
-    ]
+
+def _validate_task_ids(tasks: list[object], errors: list[str]) -> list[object]:
+    task_ids: list[object] = []
+    for item in tasks:
+        if isinstance(item, dict) and isinstance(item.get("id"), str):
+            task_ids.append(item.get("id"))
     if len(task_ids) != len(tasks):
         errors.append("every task must have a string id")
     if len(set(task_ids)) != len(task_ids):
         errors.append("task ids must be unique")
-    known = set(task_ids)
+    return task_ids
 
-    graph = {task_id: set() for task_id in task_ids}
+
+def _visit_dependency(
+    task_id: object,
+    graph: dict[object, set[object]],
+    state: dict[object, int],
+) -> bool:
+    if state[task_id] == 1:
+        return True
+    if state[task_id] == 2:
+        return False
+    state[task_id] = 1
+    if any(_visit_dependency(next_id, graph, state) for next_id in graph[task_id]):
+        return True
+    state[task_id] = 2
+    return False
+
+
+def _dependencies_have_cycle(
+    graph: dict[object, set[object]],
+    task_ids: list[object],
+) -> bool:
+    state: dict[object, int] = {task_id: 0 for task_id in task_ids}
+    return any(
+        _visit_dependency(task_id, graph, state)
+        for task_id in task_ids
+        if state[task_id] == 0
+    )
+
+
+def _validate_dependencies(
+    dependencies: list[object],
+    task_ids: list[object],
+    known: set[object],
+    errors: list[str],
+) -> None:
+    graph: dict[object, set[object]] = {task_id: set() for task_id in task_ids}
+
     for edge in dependencies:
         if not isinstance(edge, dict):
             errors.append("dependency entries must be objects")
@@ -279,25 +333,42 @@ def validate_coordination_plan(value: object) -> tuple[str, ...]:
             errors.append("dependency cannot reference the same task")
             continue
         graph[before].add(after)
-
-    state = {task_id: 0 for task_id in task_ids}
-
-    def visit(task_id: str) -> bool:
-        if state[task_id] == 1:
-            return True
-        if state[task_id] == 2:
-            return False
-        state[task_id] = 1
-        if any(visit(next_id) for next_id in graph[task_id]):
-            return True
-        state[task_id] = 2
-        return False
-
-    if any(visit(task_id) for task_id in task_ids if state[task_id] == 0):
+    if _dependencies_have_cycle(graph, task_ids):
         errors.append("dependencies must be acyclic")
 
-    ownership_count = {task_id: 0 for task_id in task_ids}
-    write_scopes: list[tuple[str, str]] = []
+
+def _plain_ownership_scopes(
+    row: dict[object, object],
+    errors: list[str],
+) -> list[str] | None:
+    scopes = row.get("scopes")
+    if not isinstance(scopes, list):
+        return None
+    plain_scopes = [scope for scope in scopes if isinstance(scope, str)]
+    if any(not _is_plain_relative_scope(scope) for scope in plain_scopes):
+        errors.append("ownership scopes must be plain relative paths")
+    return plain_scopes
+
+
+def _validate_write_scope_overlaps(
+    write_scopes: list[tuple[object, str]],
+    errors: list[str],
+) -> None:
+    for index, (left_task, left_scope) in enumerate(write_scopes):
+        for right_task, right_scope in write_scopes[index + 1 :]:
+            if left_task != right_task and _scopes_overlap(left_scope, right_scope):
+                errors.append("write ownership scopes must be disjoint")
+                break
+
+
+def _validate_ownership(
+    ownership: list[object],
+    task_ids: list[object],
+    known: set[object],
+    errors: list[str],
+) -> None:
+    ownership_count: dict[object, int] = {task_id: 0 for task_id in task_ids}
+    write_scopes: list[tuple[object, str]] = []
     for row in ownership:
         if not isinstance(row, dict):
             errors.append("ownership entries must be objects")
@@ -307,22 +378,21 @@ def validate_coordination_plan(value: object) -> tuple[str, ...]:
             errors.append("ownership references an unknown task")
             continue
         ownership_count[task_id] += 1
-        scopes = row.get("scopes")
-        if isinstance(scopes, list):
-            plain_scopes = [scope for scope in scopes if isinstance(scope, str)]
-            if any(not _is_plain_relative_scope(scope) for scope in plain_scopes):
-                errors.append("ownership scopes must be plain relative paths")
-            if row.get("access") == "write":
-                write_scopes.extend((task_id, scope) for scope in plain_scopes)
+        plain_scopes = _plain_ownership_scopes(row, errors)
+        if plain_scopes is not None and row.get("access") == "write":
+            write_scopes.extend((task_id, scope) for scope in plain_scopes)
     if any(count != 1 for count in ownership_count.values()):
         errors.append("every task must have exactly one ownership entry")
-    for index, (left_task, left_scope) in enumerate(write_scopes):
-        for right_task, right_scope in write_scopes[index + 1 :]:
-            if left_task != right_task and _scopes_overlap(left_scope, right_scope):
-                errors.append("write ownership scopes must be disjoint")
-                break
+    _validate_write_scope_overlaps(write_scopes, errors)
 
-    verification_count = {task_id: 0 for task_id in task_ids}
+
+def _validate_verification(
+    verification: list[object],
+    task_ids: list[object],
+    known: set[object],
+    errors: list[str],
+) -> None:
+    verification_count: dict[object, int] = {task_id: 0 for task_id in task_ids}
     for row in verification:
         if not isinstance(row, dict):
             errors.append("verification entries must be objects")
@@ -335,6 +405,12 @@ def validate_coordination_plan(value: object) -> tuple[str, ...]:
     if any(count != 1 for count in verification_count.values()):
         errors.append("every task must have exactly one verification entry")
 
+
+def _validate_route(
+    route: str,
+    tasks: list[object],
+    errors: list[str],
+) -> None:
     owners = {
         item.get("owner")
         for item in tasks
@@ -354,6 +430,20 @@ def validate_coordination_plan(value: object) -> tuple[str, ...]:
         errors.append("mixed route must use parent plus one worker class")
     elif route not in {*exact_routes, "mixed"}:
         errors.append("route is unsupported")
+
+
+def validate_coordination_plan(value: object) -> tuple[str, ...]:
+    plan = _plan_collections(value)
+    if isinstance(plan, tuple):
+        return plan
+
+    errors: list[str] = []
+    task_ids = _validate_task_ids(plan.tasks, errors)
+    known: set[object] = set(task_ids)
+    _validate_dependencies(plan.dependencies, task_ids, known, errors)
+    _validate_ownership(plan.ownership, task_ids, known, errors)
+    _validate_verification(plan.verification, task_ids, known, errors)
+    _validate_route(plan.route, plan.tasks, errors)
 
     return tuple(dict.fromkeys(errors))[:8]
 
