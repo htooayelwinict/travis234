@@ -82,6 +82,56 @@ def _validate_task_id_reference(task_id: str) -> None:
         raise ValueError(f"Unsupported subagent task id: {task_id}")
 
 
+def _validate_required_task_text(value: object, field_name: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Subagent {field_name} is required")
+
+
+def _validate_task_identifier(value: object, field_name: str) -> None:
+    if not isinstance(value, str) or not value.strip() or not _TASK_ID_PATTERN.fullmatch(value):
+        raise ValueError(f"Unsupported subagent {field_name}: {value}")
+
+
+def _validate_task_cwd(value: object) -> None:
+    _validate_required_task_text(value, "cwd")
+    if not Path(value).is_dir():
+        raise ValueError(f"Subagent cwd must be an existing directory: {value}")
+
+
+def _validate_positive_task_integer(value: object, field_name: str, message: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"Subagent {field_name} {message}")
+
+
+def _normalize_task_reasoning(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"Unsupported subagent reasoning effort: {value}")
+    reasoning = value.strip().lower()
+    if reasoning not in _REASONING_EFFORTS:
+        raise ValueError(f"Unsupported subagent reasoning effort: {value}")
+    return reasoning
+
+
+def _normalize_allowed_tools(value: Sequence[str]) -> tuple[str, ...]:
+    if isinstance(value, str):
+        raise ValueError("Subagent allowed_tools must be a sequence of strings")
+    try:
+        allowed_tools = tuple(value or ())
+    except TypeError as error:
+        raise ValueError("Subagent allowed_tools must be a sequence of strings") from error
+    for tool in allowed_tools:
+        if not isinstance(tool, str) or not tool.strip() or not _TASK_ID_PATTERN.fullmatch(tool):
+            raise ValueError(f"Unsupported subagent allowed tool: {tool}")
+    return allowed_tools
+
+
+def _validate_optional_task_string(value: str | None, field_name: str) -> None:
+    if value is not None and not isinstance(value, str):
+        raise ValueError(f"Subagent {field_name} must be a string when set")
+
+
 @dataclass(frozen=True)
 class SubagentTask:
     role: str
@@ -109,54 +159,28 @@ class SubagentTask:
     artifact_policy: Literal["none", "declared", "declared_and_trace"] = "none"
 
     def __post_init__(self) -> None:
-        if not isinstance(self.role, str) or not self.role.strip():
-            raise ValueError("Subagent role is required")
+        _validate_required_task_text(self.role, "role")
         if not _TASK_ID_PATTERN.fullmatch(self.role):
             raise ValueError(f"Unsupported subagent role: {self.role}")
-        if not isinstance(self.goal, str) or not self.goal.strip():
-            raise ValueError("Subagent goal is required")
-        if not isinstance(self.cwd, str) or not self.cwd.strip():
-            raise ValueError("Subagent cwd is required")
-        if not Path(self.cwd).is_dir():
-            raise ValueError(f"Subagent cwd must be an existing directory: {self.cwd}")
-        if not isinstance(self.backend, str) or not self.backend.strip() or not _TASK_ID_PATTERN.fullmatch(self.backend):
-            raise ValueError(f"Unsupported subagent backend: {self.backend}")
-        if not isinstance(self.id, str) or not self.id.strip() or not _TASK_ID_PATTERN.fullmatch(self.id):
-            raise ValueError(f"Unsupported subagent task id: {self.id}")
+        _validate_required_task_text(self.goal, "goal")
+        _validate_task_cwd(self.cwd)
+        _validate_task_identifier(self.backend, "backend")
+        _validate_task_identifier(self.id, "task id")
         if not isinstance(self.sandbox, str) or self.sandbox not in _SANDBOX_FLAGS:
             raise ValueError(f"Unsupported subagent sandbox: {self.sandbox}")
-        if isinstance(self.timeout_seconds, bool) or not isinstance(self.timeout_seconds, int) or self.timeout_seconds <= 0:
-            raise ValueError("Subagent timeout_seconds must be positive")
-        if isinstance(self.depth, bool) or not isinstance(self.depth, int) or self.depth < 1:
-            raise ValueError("Subagent depth must be at least 1")
+        _validate_positive_task_integer(self.timeout_seconds, "timeout_seconds", "must be positive")
+        _validate_positive_task_integer(self.depth, "depth", "must be at least 1")
         if self.model is not None:
             if not isinstance(self.model, str) or not self.model.strip():
                 raise ValueError("Subagent model must be a non-empty string when set")
-        if self.reasoning is not None:
-            if not isinstance(self.reasoning, str):
-                raise ValueError(f"Unsupported subagent reasoning effort: {self.reasoning}")
-            reasoning = self.reasoning.strip().lower()
-            if reasoning not in _REASONING_EFFORTS:
-                raise ValueError(f"Unsupported subagent reasoning effort: {self.reasoning}")
-            object.__setattr__(self, "reasoning", reasoning)
-        if isinstance(self.allowed_tools, str):
-            raise ValueError("Subagent allowed_tools must be a sequence of strings")
-        try:
-            allowed_tools = tuple(self.allowed_tools or ())
-        except TypeError as error:
-            raise ValueError("Subagent allowed_tools must be a sequence of strings") from error
-        for tool in allowed_tools:
-            if not isinstance(tool, str) or not tool.strip() or not _TASK_ID_PATTERN.fullmatch(tool):
-                raise ValueError(f"Unsupported subagent allowed tool: {tool}")
-        object.__setattr__(self, "allowed_tools", allowed_tools)
+        object.__setattr__(self, "reasoning", _normalize_task_reasoning(self.reasoning))
+        object.__setattr__(self, "allowed_tools", _normalize_allowed_tools(self.allowed_tools))
         if not isinstance(self.context_pack, str):
             raise ValueError("Subagent context_pack must be a string")
         if not isinstance(self.return_contract, str) or not self.return_contract.strip():
             raise ValueError("Subagent return_contract is required")
-        if self.parent_session_id is not None and not isinstance(self.parent_session_id, str):
-            raise ValueError("Subagent parent_session_id must be a string when set")
-        if self.parent_turn_id is not None and not isinstance(self.parent_turn_id, str):
-            raise ValueError("Subagent parent_turn_id must be a string when set")
+        _validate_optional_task_string(self.parent_session_id, "parent_session_id")
+        _validate_optional_task_string(self.parent_turn_id, "parent_turn_id")
         object.__setattr__(self, "allowed_effects", validate_typed_task_fields(self))
 
     def prompt(self) -> str:
