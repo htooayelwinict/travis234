@@ -27,6 +27,14 @@ from travis.ai.types import (
 )
 
 
+def _google_finish_reason(reason: object) -> tuple[str, str | None] | None:
+    if reason in (None, "STOP"):
+        return None
+    if reason == "MAX_TOKENS":
+        return "length", None
+    return "error", f"Provider finish_reason: {reason}"
+
+
 def _parse_google_sse_chunks(
     lines: Iterable[str],
     model: Model,
@@ -57,6 +65,131 @@ def _parse_google_sse_chunks(
             yield ThinkingEndEvent(content_index=index, content=current.thinking, partial=message)
         current = None
 
+    def apply_text_part(part: dict[str, object]) -> Iterator[object]:
+        nonlocal current
+        text = part.get("text")
+        is_thinking = part.get("thought") is True
+        if not isinstance(text, str) or (is_thinking and not include_reasoning):
+            return
+        desired_type = ThinkingContent if is_thinking else TextContent
+        if current is None or not isinstance(current, desired_type):
+            yield from end_current()
+            start = start_state.ensure()
+            if start:
+                yield start
+            if is_thinking:
+                current = ThinkingContent(
+                    thinking="",
+                    thinking_signature=(
+                        part.get("thoughtSignature")
+                        if isinstance(part.get("thoughtSignature"), str)
+                        else None
+                    ),
+                )
+                message.content.append(current)
+                yield ThinkingStartEvent(
+                    content_index=len(message.content) - 1,
+                    partial=message,
+                )
+            else:
+                current = TextContent(text="")
+                message.content.append(current)
+                yield TextStartEvent(
+                    content_index=len(message.content) - 1,
+                    partial=message,
+                )
+        index = message.content.index(current)
+        signature = part.get("thoughtSignature")
+        if isinstance(current, ThinkingContent):
+            current.thinking += text
+            if isinstance(signature, str) and signature:
+                current.thinking_signature = signature
+            yield ThinkingDeltaEvent(content_index=index, delta=text, partial=message)
+        else:
+            current.text += text
+            if isinstance(signature, str) and signature:
+                current.text_signature = signature
+            yield TextDeltaEvent(content_index=index, delta=text, partial=message)
+
+    def apply_function_call(part: dict[str, object]) -> Iterator[object]:
+        nonlocal tool_counter
+        function_call = part.get("functionCall")
+        if not isinstance(function_call, dict):
+            return
+        yield from end_current()
+        start = start_state.ensure()
+        if start:
+            yield start
+        tool_counter += 1
+        name = str(function_call.get("name") or "")
+        provided_id = function_call.get("id")
+        duplicate_id = bool(
+            provided_id
+            and any(
+                isinstance(block, ToolCall) and block.id == provided_id
+                for block in message.content
+            )
+        )
+        call_id = (
+            str(provided_id)
+            if provided_id and not duplicate_id
+            else f"{name}_{now_ms()}_{tool_counter}"
+        )
+        arguments = function_call.get("args")
+        tool_call = ToolCall(
+            id=call_id,
+            name=name,
+            arguments=arguments if isinstance(arguments, dict) else {},
+            thought_signature=(
+                part.get("thoughtSignature")
+                if isinstance(part.get("thoughtSignature"), str)
+                else None
+            ),
+        )
+        message.content.append(tool_call)
+        index = len(message.content) - 1
+        yield ToolcallStartEvent(content_index=index, partial=message)
+        yield ToolcallDeltaEvent(
+            content_index=index,
+            delta=json.dumps(tool_call.arguments, separators=(",", ":")),
+            partial=message,
+        )
+        yield ToolcallEndEvent(
+            content_index=index,
+            tool_call=tool_call,
+            partial=message,
+        )
+
+    def apply_candidate(candidate: dict[str, object]) -> Iterator[object]:
+        nonlocal error_message, stop_reason
+        content = candidate.get("content")
+        parts = content.get("parts") if isinstance(content, dict) else None
+        if isinstance(parts, list):
+            for part in parts:
+                if not isinstance(part, dict):
+                    continue
+                yield from apply_text_part(part)
+                yield from apply_function_call(part)
+        mapped = _google_finish_reason(candidate.get("finishReason"))
+        if mapped is not None:
+            stop_reason, error_message = mapped
+
+    def record_usage(chunk: dict[str, object]) -> None:
+        raw_usage = chunk.get("usageMetadata")
+        if not isinstance(raw_usage, dict):
+            return
+        prompt = int(raw_usage.get("promptTokenCount") or 0)
+        cached = int(raw_usage.get("cachedContentTokenCount") or 0)
+        candidates_tokens = int(raw_usage.get("candidatesTokenCount") or 0)
+        thoughts = int(raw_usage.get("thoughtsTokenCount") or 0)
+        usage = empty_usage()
+        usage.input = max(0, prompt - cached)
+        usage.output = candidates_tokens + thoughts
+        usage.cache_read = cached
+        usage.reasoning = thoughts
+        usage.total_tokens = int(raw_usage.get("totalTokenCount") or 0)
+        message.usage = usage
+
     try:
         for payload in _iter_sse_data(
             lines,
@@ -80,108 +213,8 @@ def _parse_google_sse_chunks(
             candidates = chunk.get("candidates")
             candidate = candidates[0] if isinstance(candidates, list) and candidates else None
             if isinstance(candidate, dict):
-                content = candidate.get("content")
-                parts = content.get("parts") if isinstance(content, dict) else None
-                if isinstance(parts, list):
-                    for part in parts:
-                        if not isinstance(part, dict):
-                            continue
-                        text = part.get("text")
-                        is_thinking = part.get("thought") is True
-                        if isinstance(text, str) and (include_reasoning or not is_thinking):
-                            desired_type = ThinkingContent if is_thinking else TextContent
-                            if current is None or not isinstance(current, desired_type):
-                                yield from end_current()
-                                start = start_state.ensure()
-                                if start:
-                                    yield start
-                                if is_thinking:
-                                    current = ThinkingContent(
-                                        thinking="",
-                                        thinking_signature=part.get("thoughtSignature")
-                                        if isinstance(part.get("thoughtSignature"), str)
-                                        else None,
-                                    )
-                                    message.content.append(current)
-                                    yield ThinkingStartEvent(content_index=len(message.content) - 1, partial=message)
-                                else:
-                                    current = TextContent(text="")
-                                    message.content.append(current)
-                                    yield TextStartEvent(content_index=len(message.content) - 1, partial=message)
-                            index = message.content.index(current)
-                            signature = part.get("thoughtSignature")
-                            if isinstance(current, ThinkingContent):
-                                current.thinking += text
-                                if isinstance(signature, str) and signature:
-                                    current.thinking_signature = signature
-                                yield ThinkingDeltaEvent(content_index=index, delta=text, partial=message)
-                            else:
-                                current.text += text
-                                if isinstance(signature, str) and signature:
-                                    current.text_signature = signature
-                                yield TextDeltaEvent(content_index=index, delta=text, partial=message)
-                        function_call = part.get("functionCall")
-                        if isinstance(function_call, dict):
-                            yield from end_current()
-                            start = start_state.ensure()
-                            if start:
-                                yield start
-                            tool_counter += 1
-                            name = str(function_call.get("name") or "")
-                            provided_id = function_call.get("id")
-                            duplicate_id = bool(
-                                provided_id
-                                and any(
-                                    isinstance(block, ToolCall) and block.id == provided_id
-                                    for block in message.content
-                                )
-                            )
-                            call_id = (
-                                str(provided_id)
-                                if provided_id and not duplicate_id
-                                else f"{name}_{now_ms()}_{tool_counter}"
-                            )
-                            arguments = function_call.get("args")
-                            tool_call = ToolCall(
-                                id=call_id,
-                                name=name,
-                                arguments=arguments if isinstance(arguments, dict) else {},
-                                thought_signature=part.get("thoughtSignature")
-                                if isinstance(part.get("thoughtSignature"), str)
-                                else None,
-                            )
-                            message.content.append(tool_call)
-                            index = len(message.content) - 1
-                            yield ToolcallStartEvent(content_index=index, partial=message)
-                            yield ToolcallDeltaEvent(
-                                content_index=index,
-                                delta=json.dumps(tool_call.arguments, separators=(",", ":")),
-                                partial=message,
-                            )
-                            yield ToolcallEndEvent(
-                                content_index=index,
-                                tool_call=tool_call,
-                                partial=message,
-                            )
-                finish_reason = candidate.get("finishReason")
-                if finish_reason == "MAX_TOKENS":
-                    stop_reason = "length"
-                elif finish_reason and finish_reason != "STOP":
-                    stop_reason = "error"
-                    error_message = f"Provider finish_reason: {finish_reason}"
-            raw_usage = chunk.get("usageMetadata")
-            if isinstance(raw_usage, dict):
-                prompt = int(raw_usage.get("promptTokenCount") or 0)
-                cached = int(raw_usage.get("cachedContentTokenCount") or 0)
-                candidates_tokens = int(raw_usage.get("candidatesTokenCount") or 0)
-                thoughts = int(raw_usage.get("thoughtsTokenCount") or 0)
-                usage = empty_usage()
-                usage.input = max(0, prompt - cached)
-                usage.output = candidates_tokens + thoughts
-                usage.cache_read = cached
-                usage.reasoning = thoughts
-                usage.total_tokens = int(raw_usage.get("totalTokenCount") or 0)
-                message.usage = usage
+                yield from apply_candidate(candidate)
+            record_usage(chunk)
 
         yield from end_current()
         start = start_state.ensure()
