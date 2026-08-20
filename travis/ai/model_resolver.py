@@ -7,7 +7,6 @@ import sys
 from dataclasses import dataclass
 from dataclasses import replace
 from fnmatch import fnmatchcase
-from typing import Protocol
 
 from travis.ai.env_config import DEFAULT_MODEL_PER_PROVIDER
 from travis.ai.providers.catalog import get_provider_profile, list_provider_profiles, normalize_provider
@@ -15,13 +14,6 @@ from travis.ai.types import Model
 
 DEFAULT_THINKING_LEVEL = "off"
 VALID_THINKING_LEVELS = {"off", "minimal", "low", "medium", "high", "xhigh", "max"}
-
-
-class ModelRegistryLike(Protocol):
-    def get_all(self) -> list[Model]: ...
-    def get_available(self) -> list[Model]: ...
-    def find(self, provider: str, model_id: str) -> Model | None: ...
-    def has_configured_auth(self, model: Model) -> bool: ...
 
 
 @dataclass

@@ -623,7 +623,6 @@ class ChatCompletionsTransport:
         extra_body_additions: dict[str, Any] | None = None,
         timeout: float | None = None,
         base_url: str | None = None,
-        openrouter_min_coding_score: float | str | None = None,
         model_compat: dict[str, Any] | None = None,
         model_reasoning: bool = False,
         model_thinking_level_map: dict[str, str | None] | None = None,
