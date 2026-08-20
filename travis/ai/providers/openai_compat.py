@@ -70,6 +70,25 @@ def resolve_openai_compat(model: Model) -> OpenAICompat:
     return OpenAICompat(**values)
 
 
+def _detected_thinking_format(
+    *,
+    is_deepseek: bool,
+    is_zai: bool,
+    is_together: bool,
+    is_ant_ling: bool,
+    is_openrouter: bool,
+) -> str:
+    if is_deepseek:
+        return "deepseek"
+    if is_zai:
+        return "zai"
+    if is_together:
+        return "together"
+    if is_ant_ling:
+        return "ant-ling"
+    return "openrouter" if is_openrouter else "openai"
+
+
 def _detect_openai_compat(model: Model) -> OpenAICompat:
     provider = model.provider
     base_url = model.base_url
@@ -111,18 +130,13 @@ def _detect_openai_compat(model: Model) -> OpenAICompat:
         )
     )
     openrouter_developer = is_openrouter and model.id.startswith(("anthropic/", "openai/"))
-    if is_deepseek:
-        thinking_format = "deepseek"
-    elif is_zai:
-        thinking_format = "zai"
-    elif is_together:
-        thinking_format = "together"
-    elif is_ant_ling:
-        thinking_format = "ant-ling"
-    elif is_openrouter:
-        thinking_format = "openrouter"
-    else:
-        thinking_format = "openai"
+    thinking_format = _detected_thinking_format(
+        is_deepseek=is_deepseek,
+        is_zai=is_zai,
+        is_together=is_together,
+        is_ant_ling=is_ant_ling,
+        is_openrouter=is_openrouter,
+    )
     return OpenAICompat(
         supports_store=not is_nonstandard,
         supports_developer_role=openrouter_developer or (not is_nonstandard and not is_openrouter),
