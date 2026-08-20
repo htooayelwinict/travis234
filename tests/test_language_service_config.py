@@ -103,6 +103,30 @@ def test_config_accepts_bare_and_absolute_executables_and_normalizes_extensions(
     assert configs[1].extensions == {".pyi": "python"}
 
 
+def test_config_parsing_normalizes_every_field_and_deep_copies_options() -> None:
+    raw = _server(
+        name="  mixed  ",
+        args=["--stdio", ""],
+        languages=[" python ", "typescript"],
+        extensions={"PY": "python", ".TS": "typescript"},
+        rootMarkers=[" pyproject.toml ", "packages/app/package.json"],
+        initializationOptions={"analysis": {"modes": ["openFilesOnly"]}},
+    )
+
+    [config] = parse_language_servers([raw])
+    raw_options = raw["initializationOptions"]
+    assert isinstance(raw_options, dict)
+    raw_options["analysis"] = {"modes": ["changed"]}
+
+    assert config.name == "mixed"
+    assert config.command == "fixture-lsp"
+    assert config.args == ("--stdio", "")
+    assert config.languages == ("python", "typescript")
+    assert config.extensions == {".py": "python", ".ts": "typescript"}
+    assert config.root_markers == ("pyproject.toml", "packages/app/package.json")
+    assert config.initialization_options == {"analysis": {"modes": ["openFilesOnly"]}}
+
+
 def test_config_rejects_duplicate_names() -> None:
     with pytest.raises(SettingsValidationError, match="duplicate"):
         parse_language_servers([_server("same"), _server("same")])

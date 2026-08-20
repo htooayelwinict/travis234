@@ -71,51 +71,56 @@ def _validate_json(value: object, *, path: tuple[str, ...] = ()) -> None:
     raise SettingsValidationError("languageServers initializationOptions must contain JSON values")
 
 
-def _parse_one(raw: object) -> LanguageServerConfig:
-    if not isinstance(raw, dict):
-        raise SettingsValidationError("languageServers entries must be objects")
-    unknown = sorted(set(raw).difference(_ALLOWED_KEYS))
-    if unknown:
-        raise SettingsValidationError(f"languageServers entry has unknown keys: {', '.join(unknown)}")
-
-    name = _require_nonblank(raw.get("name"), "name")
-    command = _require_nonblank(raw.get("command"), "command")
+def _parse_command(value: object) -> str:
+    command = _require_nonblank(value, "command")
     command_path = Path(command).expanduser()
-    if not command_path.is_absolute() and (Path(command).name != command or any(char.isspace() for char in command)):
+    if not command_path.is_absolute() and (
+        Path(command).name != command or any(char.isspace() for char in command)
+    ):
         raise SettingsValidationError("languageServers command must be one bare or absolute single executable")
+    return str(command_path) if command_path.is_absolute() else command
 
-    raw_args = raw.get("args", [])
-    if not isinstance(raw_args, list) or any(not isinstance(arg, str) or "\x00" in arg for arg in raw_args):
+
+def _parse_args(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list) or any(
+        not isinstance(arg, str) or "\x00" in arg for arg in value
+    ):
         raise SettingsValidationError("languageServers args must be a string list")
+    return tuple(value)
 
-    raw_languages = raw.get("languages")
+
+def _parse_languages(value: object) -> tuple[str, ...]:
     if (
-        not isinstance(raw_languages, list)
-        or not raw_languages
-        or any(not isinstance(language, str) or not language.strip() for language in raw_languages)
+        not isinstance(value, list)
+        or not value
+        or any(not isinstance(language, str) or not language.strip() for language in value)
     ):
         raise SettingsValidationError("languageServers languages must be a non-empty string list")
-    languages = tuple(language.strip() for language in raw_languages)
+    languages = tuple(language.strip() for language in value)
     if len(set(languages)) != len(languages):
         raise SettingsValidationError("languageServers languages must not contain duplicates")
+    return languages
 
-    raw_extensions = raw.get("extensions")
-    if not isinstance(raw_extensions, dict) or not raw_extensions:
+
+def _parse_extensions(value: object, languages: tuple[str, ...]) -> dict[str, str]:
+    if not isinstance(value, dict) or not value:
         raise SettingsValidationError("languageServers extensions must be a non-empty object")
     extensions: dict[str, str] = {}
-    for suffix, language in raw_extensions.items():
+    for suffix, language in value.items():
         normalized = _normalize_extension(suffix)
         if not isinstance(language, str) or language not in languages:
             raise SettingsValidationError("languageServers extensions must map to a declared language")
         if normalized in extensions:
             raise SettingsValidationError("languageServers extensions normalize to a duplicate suffix")
         extensions[normalized] = language
+    return extensions
 
-    raw_markers = raw.get("rootMarkers", [])
-    if not isinstance(raw_markers, list) or any(not isinstance(marker, str) for marker in raw_markers):
+
+def _parse_root_markers(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list) or any(not isinstance(marker, str) for marker in value):
         raise SettingsValidationError("languageServers rootMarkers must be a string list")
     markers: list[str] = []
-    for marker in raw_markers:
+    for marker in value:
         normalized_marker = marker.strip()
         marker_path = Path(normalized_marker)
         if (
@@ -128,19 +133,38 @@ def _parse_one(raw: object) -> LanguageServerConfig:
         markers.append(normalized_marker)
     if len(set(markers)) != len(markers):
         raise SettingsValidationError("languageServers rootMarkers must not contain duplicates")
+    return tuple(markers)
 
-    initialization_options = raw.get("initializationOptions", {})
-    if not isinstance(initialization_options, dict):
+
+def _parse_initialization_options(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
         raise SettingsValidationError("languageServers initializationOptions must be a JSON object")
-    _validate_json(initialization_options)
+    _validate_json(value)
+    return copy.deepcopy(value)
+
+
+def _parse_one(raw: object) -> LanguageServerConfig:
+    if not isinstance(raw, dict):
+        raise SettingsValidationError("languageServers entries must be objects")
+    unknown = sorted(set(raw).difference(_ALLOWED_KEYS))
+    if unknown:
+        raise SettingsValidationError(f"languageServers entry has unknown keys: {', '.join(unknown)}")
+
+    name = _require_nonblank(raw.get("name"), "name")
+    command = _parse_command(raw.get("command"))
+    args = _parse_args(raw.get("args", []))
+    languages = _parse_languages(raw.get("languages"))
+    extensions = _parse_extensions(raw.get("extensions"), languages)
+    root_markers = _parse_root_markers(raw.get("rootMarkers", []))
+    initialization_options = _parse_initialization_options(raw.get("initializationOptions", {}))
     return LanguageServerConfig(
         name=name,
-        command=str(command_path) if command_path.is_absolute() else command,
-        args=tuple(raw_args),
+        command=command,
+        args=args,
         languages=languages,
         extensions=extensions,
-        root_markers=tuple(markers),
-        initialization_options=copy.deepcopy(initialization_options),
+        root_markers=root_markers,
+        initialization_options=initialization_options,
     )
 
 
