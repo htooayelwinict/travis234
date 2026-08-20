@@ -1,7 +1,8 @@
-"""provider transports for travis."""
+"""Compatibility exports for provider transport families."""
 
 from __future__ import annotations
 
+from travis.ai.providers.transport_registry import get_transport
 from travis.ai.providers.transport_families.anthropic import AnthropicMessagesTransport
 from travis.ai.providers.transport_families.azure_responses import AzureOpenAIResponsesTransport
 from travis.ai.providers.transport_families.bedrock import BedrockConverseStreamTransport
@@ -16,13 +17,6 @@ from travis.ai.providers.transport_families.responses import (
     OpenAIResponsesTransport,
 )
 from travis.ai.providers.transport_families.unsupported import UnsupportedTransport
-
-def get_transport(api_mode: str):
-    """Compatibility wrapper for the registry-owned lookup function."""
-
-    from travis.ai.providers.transport_registry import get_transport as registry_get_transport
-
-    return registry_get_transport(api_mode)
 
 
 __all__ = [

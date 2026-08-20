@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
@@ -87,3 +88,98 @@ def test_extracted_transport_families_do_not_import_compatibility_module() -> No
             failures.append(filename)
 
     assert failures == []
+
+
+def _provider_module_name(path: Path, provider_root: Path) -> str:
+    relative = path.relative_to(provider_root).with_suffix("")
+    parts = relative.parts[:-1] if relative.name == "__init__" else relative.parts
+    return ".".join(("travis", "ai", "providers", *parts))
+
+
+def _provider_import_graph(provider_root: Path) -> dict[str, set[str]]:
+    paths = tuple(sorted(provider_root.rglob("*.py")))
+    modules = {_provider_module_name(path, provider_root): path for path in paths}
+    graph: dict[str, set[str]] = {module: set() for module in modules}
+    for module, path in modules.items():
+        for imported in _imported_modules(path):
+            if imported in modules and imported != module:
+                graph[module].add(imported)
+    return graph
+
+
+def _strongly_connected_components(graph: dict[str, set[str]]) -> list[set[str]]:
+    index = 0
+    indexes: dict[str, int] = {}
+    lowlinks: dict[str, int] = {}
+    stack: list[str] = []
+    on_stack: set[str] = set()
+    components: list[set[str]] = []
+
+    def visit(node: str) -> None:
+        nonlocal index
+        indexes[node] = index
+        lowlinks[node] = index
+        index += 1
+        stack.append(node)
+        on_stack.add(node)
+        for neighbor in sorted(graph[node]):
+            if neighbor not in indexes:
+                visit(neighbor)
+                lowlinks[node] = min(lowlinks[node], lowlinks[neighbor])
+            elif neighbor in on_stack:
+                lowlinks[node] = min(lowlinks[node], indexes[neighbor])
+        if lowlinks[node] != indexes[node]:
+            return
+        component: set[str] = set()
+        while stack:
+            member = stack.pop()
+            on_stack.remove(member)
+            component.add(member)
+            if member == node:
+                break
+        components.append(component)
+
+    for node in sorted(graph):
+        if node not in indexes:
+            visit(node)
+    return components
+
+
+def test_provider_module_import_graph_has_no_cycles() -> None:
+    provider_root = ROOT / "travis" / "ai" / "providers"
+    graph = _provider_import_graph(provider_root)
+
+    cycles = [component for component in _strongly_connected_components(graph) if len(component) > 1]
+
+    assert cycles == []
+
+
+def test_transport_compatibility_module_is_bounded_and_declaration_free() -> None:
+    path = ROOT / "travis" / "ai" / "providers" / "transports.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+    assert len(path.read_text(encoding="utf-8").splitlines()) < 300
+    assert not any(isinstance(node, (ast.ClassDef, ast.AsyncFunctionDef)) for node in tree.body)
+    assert [node.name for node in tree.body if isinstance(node, ast.FunctionDef)] == []
+
+
+def test_every_migrated_provider_owner_is_in_the_monotonic_pyright_scope() -> None:
+    config = json.loads((ROOT / "pyrightconfig.json").read_text(encoding="utf-8"))
+    included = set(config["include"])
+    expected = {
+        "travis/ai/providers/base.py",
+        "travis/ai/providers/transport_families/__init__.py",
+        "travis/ai/providers/transport_families/_shared.py",
+        "travis/ai/providers/transport_families/anthropic.py",
+        "travis/ai/providers/transport_families/azure_responses.py",
+        "travis/ai/providers/transport_families/bedrock.py",
+        "travis/ai/providers/transport_families/chat_completions.py",
+        "travis/ai/providers/transport_families/google.py",
+        "travis/ai/providers/transport_families/mistral.py",
+        "travis/ai/providers/transport_families/responses.py",
+        "travis/ai/providers/transport_families/unsupported.py",
+        "travis/ai/providers/transport_registry.py",
+        "travis/ai/providers/transports.py",
+    }
+
+    assert expected <= included

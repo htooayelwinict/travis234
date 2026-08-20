@@ -102,6 +102,7 @@ def test_compatibility_surface_reexports_registry_function_and_unsupported_owner
 
     assert providers.get_transport is get_transport
     assert transports.UnsupportedTransport is UnsupportedTransport
+    assert transports.get_transport is get_transport
     assert transports.get_transport("chat_completions") is get_transport("openai-completions")
 
 
