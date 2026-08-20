@@ -279,20 +279,20 @@ async def _prepared_position(manager: object, path: str, value: dict[str, object
     return {"line": line, "character": character}
 
 
-async def _execute_read_action(
+def _position_arg(args: dict[str, object], name: str) -> dict[str, object]:
+    value = args[name]
+    if not isinstance(value, dict):
+        raise ValueError(f"lsp {name} must be a position")
+    return value
+
+
+async def _request_document_read_action(
     manager: LanguageServiceManager,
     workspace: Path,
     action: str,
     args: dict[str, object],
     signal,
-    action_store: ActionTokenStore,
-) -> dict[str, object]:
-    if action == "status":
-        return manager.status()
-    if action == "symbols" and isinstance(args.get("query"), str):
-        raw = await manager.workspace_request("workspace/symbol", {"query": args["query"]}, signal=signal)
-        return {"symbols": _normalize_symbols(raw, workspace=workspace, encoding="utf-16", default_path=None)}
-
+) -> tuple[Path, object]:
     path_arg = _path_arg(args)
     path = _resolve_workspace_path(workspace, path_arg)
     uri = path.as_uri()
@@ -319,8 +319,8 @@ async def _execute_read_action(
             params["newName"] = args["newName"]
         raw = await manager.request(path, method, params, signal=signal)
     else:
-        start = await _prepared_position(manager, path_arg, args["start"])  # type: ignore[arg-type]
-        end = await _prepared_position(manager, path_arg, args["end"])  # type: ignore[arg-type]
+        start = await _prepared_position(manager, path_arg, _position_arg(args, "start"))
+        end = await _prepared_position(manager, path_arg, _position_arg(args, "end"))
         raw = await manager.request(
             path,
             "textDocument/codeAction",
@@ -331,7 +331,90 @@ async def _execute_read_action(
             },
             signal=signal,
         )
+    return path, raw
 
+
+def _diagnostic_sort_key(item: dict[str, object]) -> tuple[int, int, str]:
+    range_value = item.get("range")
+    if not isinstance(range_value, dict):
+        return (0, 0, str(item.get("message", "")))
+    start = range_value.get("start")
+    if not isinstance(start, dict):
+        return (0, 0, str(item.get("message", "")))
+    line = start.get("line")
+    character = start.get("character")
+    return (
+        line if isinstance(line, int) and not isinstance(line, bool) else 0,
+        character if isinstance(character, int) and not isinstance(character, bool) else 0,
+        str(item.get("message", "")),
+    )
+
+
+def _normalize_diagnostics(raw: object, path: Path, encoding: str) -> list[dict[str, object]]:
+    items = raw.get("items", []) if isinstance(raw, dict) else []
+    diagnostics: list[dict[str, object]] = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        normalized_range = _normalized_range(path, item.get("range"), encoding)
+        if normalized_range is None or not isinstance(item.get("message"), str):
+            continue
+        diagnostic = {"range": normalized_range, "message": item["message"]}
+        for key in ("severity", "source", "code"):
+            if isinstance(item.get(key), (str, int)) and not isinstance(item.get(key), bool):
+                diagnostic[key] = item[key]
+        diagnostics.append(diagnostic)
+    diagnostics.sort(key=_diagnostic_sort_key)
+    return diagnostics
+
+
+def _normalize_code_actions(
+    raw: object,
+    *,
+    action_store: ActionTokenStore,
+    path_arg: str,
+    server_generation: int,
+    config_generation: int,
+) -> list[dict[str, object]]:
+    actions: list[dict[str, object]] = []
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict) or not isinstance(item.get("title"), str):
+            continue
+        token = action_store.create(
+            item,
+            path=path_arg,
+            server_generation=server_generation,
+            config_generation=config_generation,
+        )
+        actions.append(
+            {
+                "title": item["title"],
+                "kind": item.get("kind"),
+                "hasEdit": isinstance(item.get("edit"), dict),
+                "hasCommand": isinstance(item.get("command"), dict),
+                "actionToken": token.token,
+            }
+        )
+    actions.sort(key=lambda item: (str(item["title"]).casefold(), str(item.get("kind", ""))))
+    return actions
+
+
+async def _execute_read_action(
+    manager: LanguageServiceManager,
+    workspace: Path,
+    action: str,
+    args: dict[str, object],
+    signal,
+    action_store: ActionTokenStore,
+) -> dict[str, object]:
+    if action == "status":
+        return manager.status()
+    if action == "symbols" and isinstance(args.get("query"), str):
+        raw = await manager.workspace_request("workspace/symbol", {"query": args["query"]}, signal=signal)
+        return {"symbols": _normalize_symbols(raw, workspace=workspace, encoding="utf-16", default_path=None)}
+
+    path_arg = _path_arg(args)
+    path, raw = await _request_document_read_action(manager, workspace, action, args, signal)
     context = manager.response_context(path)
     base = {
         "generation": context["generation"],
@@ -346,43 +429,16 @@ async def _execute_read_action(
     if action == "symbols":
         return {**base, "symbols": _normalize_symbols(raw, workspace=workspace, encoding=encoding, default_path=path)}
     if action == "diagnostics":
-        items = raw.get("items", []) if isinstance(raw, dict) else []
-        diagnostics: list[dict[str, object]] = []
-        for item in items if isinstance(items, list) else []:
-            if not isinstance(item, dict):
-                continue
-            normalized_range = _normalized_range(path, item.get("range"), encoding)
-            if normalized_range is None or not isinstance(item.get("message"), str):
-                continue
-            diagnostic = {"range": normalized_range, "message": item["message"]}
-            for key in ("severity", "source", "code"):
-                if isinstance(item.get(key), (str, int)) and not isinstance(item.get(key), bool):
-                    diagnostic[key] = item[key]
-            diagnostics.append(diagnostic)
-        diagnostics.sort(key=lambda item: (item["range"]["start"]["line"], item["range"]["start"]["character"], item["message"]))  # type: ignore[index]
-        return {**base, "diagnostics": diagnostics}
+        return {**base, "diagnostics": _normalize_diagnostics(raw, path, encoding)}
     if action == "rename_preview":
         return {**base, "workspaceEdit": raw}
-    actions = []
-    for item in raw if isinstance(raw, list) else []:
-        if not isinstance(item, dict) or not isinstance(item.get("title"), str):
-            continue
-        token = action_store.create(
-            item,
-            path=path_arg,
-            server_generation=int(context["generation"]),
-            config_generation=int(context.get("configGeneration", 1)),
-        )
-        actions.append(
-            {
-                "title": item["title"],
-                "kind": item.get("kind"),
-                "hasEdit": isinstance(item.get("edit"), dict),
-                "hasCommand": isinstance(item.get("command"), dict),
-                "actionToken": token.token,
-            }
-        )
-    actions.sort(key=lambda item: (str(item["title"]).casefold(), str(item.get("kind", ""))))
+    actions = _normalize_code_actions(
+        raw,
+        action_store=action_store,
+        path_arg=path_arg,
+        server_generation=int(context["generation"]),
+        config_generation=int(context.get("configGeneration", 1)),
+    )
     return {**base, "actions": actions}
 
 

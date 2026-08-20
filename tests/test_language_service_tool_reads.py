@@ -9,8 +9,10 @@ import pytest
 from tests._support_coding_agent import faux_model
 from travis.coding_agent.agent_session import AgentSession
 from travis.coding_agent.artifacts import ArtifactRegistry
+from travis.coding_agent.language_services import tool as language_service_tool
 from travis.coding_agent.language_services.tool import LSP_SCHEMA, create_lsp_tool_definition
 from travis.coding_agent.language_services.types import LanguageServiceLimits
+from travis.coding_agent.language_services.workspace_edit import ActionTokenStore
 from travis.coding_agent.settings_manager import SettingsManager
 
 
@@ -43,6 +45,16 @@ class RecordingManager:
             "positionEncoding": "utf-16",
             "documentHash": hashlib.sha256(raw).hexdigest(),
         }
+
+
+class PreparingManager(RecordingManager):
+    def __init__(self, workspace: Path, responses: dict[str, object] | None = None) -> None:
+        super().__init__(workspace, responses)
+        self.prepared: list[tuple[str, int, int]] = []
+
+    async def prepare_position(self, path: str, line: int, character: int) -> dict[str, int]:
+        self.prepared.append((path, line, character))
+        return {"line": line + 10, "character": character + 20}
 
 
 def _run(coro):
@@ -209,6 +221,154 @@ def test_workspace_symbols_are_deterministically_sorted(tmp_path: Path) -> None:
     payload, _ = _json_result(definition, {"action": "symbols", "query": "a"})
 
     assert [symbol["name"] for symbol in payload["symbols"]] == ["Alpha", "Zulu"]
+
+
+def test_references_and_rename_use_prepared_positions_and_exact_request_params(tmp_path: Path) -> None:
+    source = tmp_path / "main.py"
+    source.write_text("value = 1\n", encoding="utf-8")
+    manager = PreparingManager(
+        tmp_path,
+        {
+            "textDocument/references": [],
+            "textDocument/rename": {"changes": {}},
+        },
+    )
+    definition = create_lsp_tool_definition(manager, ArtifactRegistry(), tmp_path)
+
+    references, _ = _json_result(
+        definition,
+        {"action": "references", "path": "main.py", "line": 1, "character": 2},
+    )
+    rename = _run(
+        language_service_tool._execute_read_action(
+            manager,
+            tmp_path,
+            "rename_preview",
+            {
+                "action": "rename_preview",
+                "path": "main.py",
+                "line": 3,
+                "character": 4,
+                "newName": "renamed",
+            },
+            None,
+            ActionTokenStore(),
+        )
+    )
+
+    uri = source.as_uri()
+    assert manager.prepared == [("main.py", 1, 2), ("main.py", 3, 4)]
+    assert manager.calls == [
+        (
+            "textDocument/references",
+            {
+                "textDocument": {"uri": uri},
+                "position": {"line": 11, "character": 22},
+                "context": {"includeDeclaration": True},
+            },
+        ),
+        (
+            "textDocument/rename",
+            {
+                "textDocument": {"uri": uri},
+                "position": {"line": 13, "character": 24},
+                "newName": "renamed",
+            },
+        ),
+    ]
+    assert references["locations"] == []
+    assert references["omittedOutsideWorkspace"] == 0
+    assert rename["workspaceEdit"] == {"changes": {}}
+
+
+def test_code_actions_prepare_range_filter_sort_and_bind_tokens(tmp_path: Path) -> None:
+    source = tmp_path / "main.py"
+    source.write_text("value = 1\n", encoding="utf-8")
+    manager = PreparingManager(
+        tmp_path,
+        {
+            "textDocument/codeAction": [
+                {"title": "Zulu", "kind": "quickfix", "command": {"command": "z"}},
+                {"title": 42, "edit": {}},
+                {"title": "alpha", "edit": {"changes": {}}},
+                "invalid",
+            ]
+        },
+    )
+    definition = create_lsp_tool_definition(manager, ArtifactRegistry(), tmp_path)
+
+    payload, _ = _json_result(
+        definition,
+        {
+            "action": "code_actions",
+            "path": "main.py",
+            "start": {"line": 0, "character": 1},
+            "end": {"line": 0, "character": 5},
+        },
+    )
+
+    assert manager.prepared == [("main.py", 0, 1), ("main.py", 0, 5)]
+    assert manager.calls == [
+        (
+            "textDocument/codeAction",
+            {
+                "textDocument": {"uri": source.as_uri()},
+                "range": {
+                    "start": {"line": 10, "character": 21},
+                    "end": {"line": 10, "character": 25},
+                },
+                "context": {"diagnostics": []},
+            },
+        )
+    ]
+    assert [action["title"] for action in payload["actions"]] == ["alpha", "Zulu"]
+    assert payload["actions"][0]["hasEdit"] is True
+    assert payload["actions"][0]["hasCommand"] is False
+    assert payload["actions"][0]["kind"] is None
+    assert payload["actions"][1]["hasEdit"] is False
+    assert payload["actions"][1]["hasCommand"] is True
+    assert payload["actions"][1]["kind"] == "quickfix"
+    assert all(
+        str(action["actionToken"]).startswith("lsp-action-") and len(str(action["actionToken"])) == 43
+        for action in payload["actions"]
+    )
+
+
+def test_diagnostics_filter_invalid_items_and_sort_normalized_ranges(tmp_path: Path) -> None:
+    source = tmp_path / "main.py"
+    source.write_text("abc\ndef\n", encoding="utf-8")
+    valid_range = {
+        "start": {"line": 0, "character": 1},
+        "end": {"line": 0, "character": 2},
+    }
+    manager = RecordingManager(
+        tmp_path,
+        {
+            "textDocument/diagnostic": {
+                "items": [
+                    {"range": valid_range, "message": "z-last", "severity": True},
+                    {"range": valid_range, "message": "a-first", "severity": 2, "source": "fixture", "code": 7},
+                    {"range": valid_range, "message": 42},
+                    {"message": "missing range"},
+                    "invalid",
+                ]
+            }
+        },
+    )
+    definition = create_lsp_tool_definition(manager, ArtifactRegistry(), tmp_path)
+
+    payload, _ = _json_result(definition, {"action": "diagnostics", "path": "main.py"})
+
+    assert payload["diagnostics"] == [
+        {
+            "range": valid_range,
+            "message": "a-first",
+            "severity": 2,
+            "source": "fixture",
+            "code": 7,
+        },
+        {"range": valid_range, "message": "z-last"},
+    ]
 
 
 def test_oversized_normalized_result_becomes_readable_artifact(tmp_path: Path) -> None:
