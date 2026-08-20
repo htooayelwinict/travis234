@@ -175,6 +175,248 @@ def _parse_codex_responses_sse_chunks(
 
     pending_events: list[Any] = []
 
+    def record_response_created(event: dict[str, object]) -> None:
+        response = event.get("response")
+        if isinstance(response, dict) and isinstance(response.get("id"), str):
+            message.response_id = response["id"]
+
+    def add_output_item(event: dict[str, object]) -> Iterator[object]:
+        item = event.get("item")
+        output_index = event.get("output_index")
+        if isinstance(item, dict) and isinstance(output_index, int):
+            yield from create_slot(output_index, item)
+
+    def apply_text_delta(event: dict[str, object]) -> Iterator[object]:
+        output_index = event.get("output_index")
+        if not isinstance(output_index, int):
+            return
+        slot = output_slots.get(output_index)
+        if slot is None:
+            return
+        kind, content_index = slot
+        block = message.content[content_index]
+        if kind != "text" or not isinstance(block, TextContent):
+            return
+        delta = event.get("delta")
+        if not isinstance(delta, str) or not delta:
+            return
+        block.text += delta
+        yield TextDeltaEvent(content_index=content_index, delta=delta, partial=message)
+
+    def apply_thinking_delta(event: dict[str, object]) -> Iterator[object]:
+        if not include_reasoning:
+            return
+        output_index = event.get("output_index")
+        if not isinstance(output_index, int):
+            return
+        slot = output_slots.get(output_index)
+        if slot is None:
+            return
+        kind, content_index = slot
+        block = message.content[content_index]
+        if kind != "thinking" or not isinstance(block, ThinkingContent):
+            return
+        delta = event.get("delta")
+        if not isinstance(delta, str) or not delta:
+            return
+        block.thinking += delta
+        yield ThinkingDeltaEvent(content_index=content_index, delta=delta, partial=message)
+
+    def append_reasoning_separator(event: dict[str, object]) -> Iterator[object]:
+        if not include_reasoning:
+            return
+        output_index = event.get("output_index")
+        if not isinstance(output_index, int):
+            return
+        slot = output_slots.get(output_index)
+        if slot is None:
+            return
+        kind, content_index = slot
+        block = message.content[content_index]
+        if kind != "thinking" or not isinstance(block, ThinkingContent):
+            return
+        block.thinking += "\n\n"
+        yield ThinkingDeltaEvent(content_index=content_index, delta="\n\n", partial=message)
+
+    def apply_tool_delta(event: dict[str, object]) -> Iterator[object]:
+        output_index = event.get("output_index")
+        if not isinstance(output_index, int):
+            return
+        slot = output_slots.get(output_index)
+        if slot is None:
+            return
+        kind, content_index = slot
+        block = message.content[content_index]
+        if kind != "toolCall" or not isinstance(block, ToolCall):
+            return
+        delta = event.get("delta")
+        if not isinstance(delta, str):
+            return
+        tool_arg_bufs[content_index] = tool_arg_bufs.get(content_index, "") + delta
+        arguments_preview = _parse_streaming_json_preview(
+            tool_arg_bufs[content_index],
+            tool_arg_previews.get(content_index),
+        )
+        tool_arg_previews[content_index] = arguments_preview
+        block.arguments = arguments_preview
+        yield ToolcallDeltaEvent(content_index=content_index, delta=delta, partial=message)
+
+    def finish_tool_arguments(event: dict[str, object]) -> Iterator[object]:
+        output_index = event.get("output_index")
+        if not isinstance(output_index, int):
+            return
+        slot = output_slots.get(output_index)
+        if slot is None:
+            return
+        kind, content_index = slot
+        block = message.content[content_index]
+        if kind != "toolCall" or not isinstance(block, ToolCall):
+            return
+        arguments = event.get("arguments")
+        if not isinstance(arguments, str):
+            return
+        previous = tool_arg_bufs.get(content_index, "")
+        tool_arg_bufs[content_index] = arguments
+        block.arguments = _parse_streaming_json(arguments)
+        tool_arg_previews.pop(content_index, None)
+        if arguments.startswith(previous):
+            delta = arguments[len(previous):]
+            if delta:
+                yield ToolcallDeltaEvent(content_index=content_index, delta=delta, partial=message)
+
+    def finish_text_item(
+        item: dict[str, object],
+        content_index: int,
+        block: TextContent,
+    ) -> TextEndEvent:
+        parts = item.get("content")
+        if isinstance(parts, list):
+            text = "".join(
+                str(part.get("text") or part.get("refusal") or "")
+                for part in parts
+                if isinstance(part, dict)
+            )
+            if text:
+                block.text = text
+        item_id = item.get("id")
+        if isinstance(item_id, str) and item_id:
+            phase = item.get("phase") if item.get("phase") in {"commentary", "final_answer"} else None
+            block.text_signature = encode_text_signature(item_id, phase)
+        return TextEndEvent(
+            content_index=content_index,
+            content=block.text,
+            partial=message,
+        )
+
+    def finish_thinking_item(
+        item: dict[str, object],
+        content_index: int,
+        block: ThinkingContent,
+    ) -> ThinkingEndEvent:
+        summary = item.get("summary")
+        if isinstance(summary, list):
+            text = "\n\n".join(
+                str(part.get("text") or "")
+                for part in summary
+                if isinstance(part, dict) and part.get("text")
+            )
+            if text:
+                block.thinking = text
+        block.thinking_signature = json.dumps(item)
+        item_id = item.get("id")
+        if isinstance(item_id, str) and item_id:
+            reasoning_blocks_by_id[item_id] = block
+        return ThinkingEndEvent(
+            content_index=content_index,
+            content=block.thinking,
+            partial=message,
+        )
+
+    def finish_tool_item(
+        item: dict[str, object],
+        content_index: int,
+        block: ToolCall,
+    ) -> ToolcallEndEvent:
+        raw_arguments = item.get("arguments")
+        if isinstance(raw_arguments, str):
+            tool_arg_bufs[content_index] = raw_arguments
+        block.arguments = _parse_complete_tool_arguments(
+            tool_arg_bufs.get(content_index, "")
+        ) or {}
+        return ToolcallEndEvent(
+            content_index=content_index,
+            tool_call=block,
+            partial=message,
+        )
+
+    def finish_output_item(event: dict[str, object]) -> Iterator[object]:
+        item = event.get("item")
+        output_index = event.get("output_index")
+        if not isinstance(item, dict) or not isinstance(output_index, int):
+            return
+        pending_events.clear()
+        slot = get_slot(output_index, item)
+        while pending_events:
+            yield pending_events.pop(0)
+        if slot is None:
+            return
+        kind, content_index = slot
+        block = message.content[content_index]
+        if kind == "text" and isinstance(block, TextContent):
+            yield finish_text_item(item, content_index, block)
+        elif kind == "thinking" and isinstance(block, ThinkingContent):
+            yield finish_thinking_item(item, content_index, block)
+        elif kind == "toolCall" and isinstance(block, ToolCall):
+            yield finish_tool_item(item, content_index, block)
+        output_slots.pop(output_index, None)
+
+    def finish_response(event: dict[str, object]) -> DoneEvent | ErrorEvent | None:
+        nonlocal completed, usage
+        response = event.get("response")
+        if not isinstance(response, dict):
+            return None
+        completed = True
+        backfill_reasoning_signatures(response.get("output"))
+        if isinstance(response.get("id"), str):
+            message.response_id = response["id"]
+        usage = _merge_responses_usage(usage, response.get("usage"))
+        incomplete_details = response.get("incomplete_details")
+        incomplete_reason = (
+            incomplete_details.get("reason")
+            if isinstance(incomplete_details, dict)
+            and isinstance(incomplete_details.get("reason"), str)
+            else None
+        )
+        reason, error_message = _map_responses_status(
+            response.get("status"),
+            incomplete_reason,
+        )
+        if reason == "stop" and any(isinstance(block, ToolCall) for block in message.content):
+            reason = "toolUse"
+        message.usage = usage
+        message.stop_reason = reason
+        if reason == "error":
+            message.error_message = error_message
+            return ErrorEvent(reason="error", error=message)
+        return DoneEvent(reason=reason, message=message)
+
+    def failed_response(event: dict[str, object]) -> ErrorEvent:
+        message.stop_reason = "error"
+        response = event.get("response")
+        error = response.get("error") if isinstance(response, dict) else None
+        if isinstance(error, dict):
+            message.error_message = str(error.get("message") or error.get("code") or "Provider response failed")
+        else:
+            message.error_message = "Provider response failed"
+        return ErrorEvent(reason="error", error=message)
+
+    def generic_error(event: dict[str, object]) -> ErrorEvent:
+        message.stop_reason = "error"
+        code = event.get("code")
+        detail = event.get("message")
+        message.error_message = f"Error Code {code}: {detail}" if code or detail else "Unknown error"
+        return ErrorEvent(reason="error", error=message)
+
     try:
         payloads = _iter_sse_data(lines, data_idle_timeout_seconds=data_idle_timeout_seconds, clock=clock)
         for payload in payloads:
@@ -186,218 +428,39 @@ def _parse_codex_responses_sse_chunks(
                 continue
             event_type = event.get("type")
             if event_type == "response.created":
-                response = event.get("response")
-                if isinstance(response, dict) and isinstance(response.get("id"), str):
-                    message.response_id = response["id"]
+                record_response_created(event)
                 continue
             if event_type == "response.output_item.added":
-                item = event.get("item")
-                if isinstance(item, dict) and isinstance(event.get("output_index"), int):
-                    yield from create_slot(event["output_index"], item)
+                yield from add_output_item(event)
                 continue
             if event_type in ("response.output_text.delta", "response.refusal.delta"):
-                output_index = event.get("output_index")
-                if not isinstance(output_index, int):
-                    continue
-                slot = output_slots.get(output_index)
-                if slot is None:
-                    continue
-                kind, content_index = slot
-                if kind != "text" or not isinstance(message.content[content_index], TextContent):
-                    continue
-                delta = event.get("delta")
-                if not isinstance(delta, str) or not delta:
-                    continue
-                block = message.content[content_index]
-                block.text += delta
-                yield TextDeltaEvent(content_index=content_index, delta=delta, partial=message)
+                yield from apply_text_delta(event)
                 continue
             if event_type in ("response.reasoning_summary_text.delta", "response.reasoning_text.delta"):
-                if not include_reasoning:
-                    continue
-                output_index = event.get("output_index")
-                if not isinstance(output_index, int):
-                    continue
-                slot = output_slots.get(output_index)
-                if slot is None:
-                    continue
-                kind, content_index = slot
-                if kind != "thinking" or not isinstance(message.content[content_index], ThinkingContent):
-                    continue
-                delta = event.get("delta")
-                if not isinstance(delta, str) or not delta:
-                    continue
-                block = message.content[content_index]
-                block.thinking += delta
-                yield ThinkingDeltaEvent(content_index=content_index, delta=delta, partial=message)
+                yield from apply_thinking_delta(event)
                 continue
             if event_type == "response.reasoning_summary_part.done":
-                if not include_reasoning:
-                    continue
-                output_index = event.get("output_index")
-                if not isinstance(output_index, int):
-                    continue
-                slot = output_slots.get(output_index)
-                if slot is None:
-                    continue
-                kind, content_index = slot
-                if kind != "thinking" or not isinstance(message.content[content_index], ThinkingContent):
-                    continue
-                message.content[content_index].thinking += "\n\n"
-                yield ThinkingDeltaEvent(content_index=content_index, delta="\n\n", partial=message)
+                yield from append_reasoning_separator(event)
                 continue
             if event_type == "response.function_call_arguments.delta":
-                output_index = event.get("output_index")
-                if not isinstance(output_index, int):
-                    continue
-                slot = output_slots.get(output_index)
-                if slot is None:
-                    continue
-                kind, content_index = slot
-                if kind != "toolCall" or not isinstance(message.content[content_index], ToolCall):
-                    continue
-                delta = event.get("delta")
-                if not isinstance(delta, str):
-                    continue
-                tool_arg_bufs[content_index] = tool_arg_bufs.get(content_index, "") + delta
-                arguments_preview = _parse_streaming_json_preview(
-                    tool_arg_bufs[content_index],
-                    tool_arg_previews.get(content_index),
-                )
-                tool_arg_previews[content_index] = arguments_preview
-                message.content[content_index].arguments = arguments_preview
-                yield ToolcallDeltaEvent(content_index=content_index, delta=delta, partial=message)
+                yield from apply_tool_delta(event)
                 continue
             if event_type == "response.function_call_arguments.done":
-                output_index = event.get("output_index")
-                if not isinstance(output_index, int):
-                    continue
-                slot = output_slots.get(output_index)
-                if slot is None:
-                    continue
-                kind, content_index = slot
-                if kind != "toolCall" or not isinstance(message.content[content_index], ToolCall):
-                    continue
-                arguments = event.get("arguments")
-                if isinstance(arguments, str):
-                    previous = tool_arg_bufs.get(content_index, "")
-                    tool_arg_bufs[content_index] = arguments
-                    message.content[content_index].arguments = _parse_streaming_json(arguments)
-                    tool_arg_previews.pop(content_index, None)
-                    if arguments.startswith(previous):
-                        delta = arguments[len(previous):]
-                        if delta:
-                            yield ToolcallDeltaEvent(content_index=content_index, delta=delta, partial=message)
+                yield from finish_tool_arguments(event)
                 continue
             if event_type == "response.output_item.done":
-                item = event.get("item")
-                output_index = event.get("output_index")
-                if not isinstance(item, dict) or not isinstance(output_index, int):
-                    continue
-                pending_events.clear()
-                slot = get_slot(output_index, item)
-                while pending_events:
-                    yield pending_events.pop(0)
-                if slot is None:
-                    continue
-                kind, content_index = slot
-                if kind == "text" and isinstance(message.content[content_index], TextContent):
-                    parts = item.get("content")
-                    if isinstance(parts, list):
-                        text = "".join(
-                            str(part.get("text") or part.get("refusal") or "")
-                            for part in parts
-                            if isinstance(part, dict)
-                        )
-                        if text:
-                            message.content[content_index].text = text
-                    item_id = item.get("id")
-                    if isinstance(item_id, str) and item_id:
-                        phase = item.get("phase") if item.get("phase") in {"commentary", "final_answer"} else None
-                        message.content[content_index].text_signature = encode_text_signature(item_id, phase)
-                    yield TextEndEvent(
-                        content_index=content_index,
-                        content=message.content[content_index].text,
-                        partial=message,
-                    )
-                elif kind == "thinking" and isinstance(message.content[content_index], ThinkingContent):
-                    summary = item.get("summary")
-                    if isinstance(summary, list):
-                        text = "\n\n".join(
-                            str(part.get("text") or "")
-                            for part in summary
-                            if isinstance(part, dict) and part.get("text")
-                        )
-                        if text:
-                            message.content[content_index].thinking = text
-                    message.content[content_index].thinking_signature = json.dumps(item)
-                    item_id = item.get("id")
-                    if isinstance(item_id, str) and item_id:
-                        reasoning_blocks_by_id[item_id] = message.content[content_index]
-                    yield ThinkingEndEvent(
-                        content_index=content_index,
-                        content=message.content[content_index].thinking,
-                        partial=message,
-                    )
-                elif kind == "toolCall" and isinstance(message.content[content_index], ToolCall):
-                    raw_arguments = item.get("arguments")
-                    if isinstance(raw_arguments, str):
-                        tool_arg_bufs[content_index] = raw_arguments
-                    message.content[content_index].arguments = _parse_complete_tool_arguments(
-                        tool_arg_bufs.get(content_index, "")
-                    ) or {}
-                    yield ToolcallEndEvent(
-                        content_index=content_index,
-                        tool_call=message.content[content_index],
-                        partial=message,
-                    )
-                output_slots.pop(output_index, None)
+                yield from finish_output_item(event)
                 continue
             if event_type in ("response.completed", "response.incomplete"):
-                response = event.get("response")
-                if isinstance(response, dict):
-                    completed = True
-                    backfill_reasoning_signatures(response.get("output"))
-                    if isinstance(response.get("id"), str):
-                        message.response_id = response["id"]
-                    usage = _merge_responses_usage(usage, response.get("usage"))
-                    incomplete_details = response.get("incomplete_details")
-                    incomplete_reason = (
-                        incomplete_details.get("reason")
-                        if isinstance(incomplete_details, dict)
-                        and isinstance(incomplete_details.get("reason"), str)
-                        else None
-                    )
-                    reason, error_message = _map_responses_status(
-                        response.get("status"),
-                        incomplete_reason,
-                    )
-                    if reason == "stop" and any(isinstance(block, ToolCall) for block in message.content):
-                        reason = "toolUse"
-                    message.usage = usage
-                    message.stop_reason = reason
-                    if reason == "error":
-                        message.error_message = error_message
-                        yield ErrorEvent(reason="error", error=message)
-                    else:
-                        yield DoneEvent(reason=reason, message=message)
+                terminal_event = finish_response(event)
+                if terminal_event is not None:
+                    yield terminal_event
                     return
             if event_type == "response.failed":
-                message.stop_reason = "error"
-                response = event.get("response")
-                error = response.get("error") if isinstance(response, dict) else None
-                if isinstance(error, dict):
-                    message.error_message = str(error.get("message") or error.get("code") or "Provider response failed")
-                else:
-                    message.error_message = "Provider response failed"
-                yield ErrorEvent(reason="error", error=message)
+                yield failed_response(event)
                 return
             if event_type == "error":
-                message.stop_reason = "error"
-                code = event.get("code")
-                detail = event.get("message")
-                message.error_message = f"Error Code {code}: {detail}" if code or detail else "Unknown error"
-                yield ErrorEvent(reason="error", error=message)
+                yield generic_error(event)
                 return
     except TimeoutError as error:
         message.stop_reason = "error"
