@@ -84,6 +84,7 @@ def test_parse_model_pattern_handles_colon_model_ids_and_thinking_suffixes() -> 
     assert with_thinking.warning is None
     assert invalid_suffix.model is OPENROUTER_QWEN_EXACTO
     assert invalid_suffix.thinking_level is None
+    assert invalid_suffix.warning is not None
     assert 'Invalid thinking level "random"' in invalid_suffix.warning
 
 
@@ -99,6 +100,61 @@ def test_resolve_cli_model_prefers_provider_split_but_preserves_raw_openrouter_i
     assert provider_split.model is zai
     assert raw_openrouter_id.error is None
     assert raw_openrouter_id.model is OPENROUTER_GPT4O_EXTENDED
+
+
+def test_resolve_cli_model_uses_auth_to_choose_raw_id_or_inferred_provider() -> None:
+    inferred = _model("zai", "glm-5")
+    raw_id = _model("vercel-ai-gateway", "zai/glm-5")
+    models = [*ALL_MODELS, inferred, raw_id]
+
+    authenticated_raw = resolve_cli_model(
+        cli_model="zai/glm-5",
+        model_registry=Registry(
+            models,
+            authenticated={(raw_id.provider, raw_id.id)},
+        ),
+    )
+    authenticated_inferred = resolve_cli_model(
+        cli_model="zai/glm-5",
+        model_registry=Registry(
+            models,
+            authenticated={(inferred.provider, inferred.id)},
+        ),
+    )
+
+    assert authenticated_raw.model is raw_id
+    assert authenticated_raw.thinking_level is None
+    assert authenticated_raw.warning is None
+    assert authenticated_raw.error is None
+    assert authenticated_inferred.model is inferred
+    assert authenticated_inferred.thinking_level is None
+    assert authenticated_inferred.warning is None
+    assert authenticated_inferred.error is None
+
+
+def test_resolve_cli_model_strips_explicit_provider_prefix_before_matching() -> None:
+    result = resolve_cli_model(
+        cli_provider="openai",
+        cli_model="openai/gpt-4o",
+        model_registry=Registry(ALL_MODELS),
+    )
+
+    assert result.model is OPENAI_GPT4O
+    assert result.thinking_level is None
+    assert result.warning is None
+    assert result.error is None
+
+
+def test_resolve_cli_model_returns_empty_result_without_cli_model() -> None:
+    registry = Registry(ALL_MODELS)
+
+    for cli_model in (None, ""):
+        result = resolve_cli_model(cli_model=cli_model, model_registry=registry)
+
+        assert result.model is None
+        assert result.thinking_level is None
+        assert result.warning is None
+        assert result.error is None
 
 
 def test_resolve_cli_model_builds_custom_provider_model_and_strips_valid_thinking_suffix() -> None:
