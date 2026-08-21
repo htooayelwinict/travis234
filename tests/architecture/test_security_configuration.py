@@ -38,7 +38,8 @@ def test_source_ci_runs_strict_security_gates_without_global_suppression() -> No
     joined = "\n".join(_commands(workflow))
 
     assert "bandit -r travis -lll -f json" in joined
-    assert "pip-audit --strict" in joined
+    assert "uv export --locked --all-extras --dev --no-emit-project" in joined
+    assert "pip-audit --strict --requirement" in joined
     assert "continue-on-error" not in source
     assert "bandit -r travis -lll -f json ||" not in joined
     assert "pip-audit --strict ||" not in joined
@@ -56,7 +57,8 @@ def test_scheduled_dependency_audit_is_locked_read_only_and_fail_visible() -> No
     assert triggers["schedule"]
     assert workflow["permissions"] == {"contents": "read"}
     assert "uv sync --locked --all-extras --dev" in joined
-    assert "pip-audit --strict" in joined
+    assert "uv export --locked --all-extras --dev --no-emit-project" in joined
+    assert "pip-audit --strict --requirement" in joined
     assert "continue-on-error" not in source
     assert "|| true" not in source
     assert "printenv" not in source

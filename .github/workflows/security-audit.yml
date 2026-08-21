@@ -23,6 +23,7 @@ jobs:
       - name: Sync locked environment
         run: uv sync --locked --all-extras --dev
       - name: Audit locked dependencies
-        run: >-
-          uv run --locked --all-extras --dev
-          pip-audit --strict
+        run: |
+          audit_requirements="$RUNNER_TEMP/travis234-audit-requirements.txt"
+          uv export --locked --all-extras --dev --no-emit-project --no-hashes --format requirements-txt --output-file "$audit_requirements"
+          uv run --locked --all-extras --dev pip-audit --strict --requirement "$audit_requirements"

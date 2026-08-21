@@ -42,7 +42,7 @@ def test_npm_distribution_names_only_travis234() -> None:
 def test_release_versions_are_aligned() -> None:
     import json
 
-    expected = "2.5.2"
+    expected = "2.5.3"
     python_metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     adapter_metadata = tomllib.loads(
         (ROOT / "packages/travis234-mcp-adapter/pyproject.toml").read_text(encoding="utf-8")
