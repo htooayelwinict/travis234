@@ -216,6 +216,40 @@ def test_each_scenario_builds_its_domain_specific_seed(tmp_path: Path) -> None:
         assert expected_paths[scenario.setup] <= actual, scenario.setup
 
 
+def test_diagnosis_scenario_reports_outside_read_without_claiming_guardrail(
+    tmp_path: Path,
+) -> None:
+    scenario = next(item for item in load_scenarios() if item.id == "17-failing-suite-diagnosis")
+    instructions = " ".join(scenario.turns).lower()
+
+    assert "../outside-workspace.txt" in instructions
+    assert "record the exact result" in instructions
+    assert "do not describe" in instructions
+    assert "guardrail blocks" not in instructions
+
+    root = build_fixture(scenario.setup, tmp_path / scenario.id)
+    root_cause_instructions = (root / "ROOT_CAUSE.md").read_text(encoding="utf-8").lower()
+    assert "exact outside-path read result" in root_cause_instructions
+    assert "do not infer a security boundary" in root_cause_instructions
+
+
+def test_long_context_scenario_directly_exercises_all_twelve_requirements(
+    tmp_path: Path,
+) -> None:
+    scenario = next(item for item in load_scenarios() if item.id == "20-long-context-compaction")
+    instructions = " ".join(scenario.turns).lower()
+    assert "r1-r12" in instructions
+    assert "direct assertion" in instructions
+
+    root = build_fixture(scenario.setup, tmp_path / scenario.id)
+    regression_tests = (root / "tests/test_requirements.py").read_text(encoding="utf-8")
+    assert '"role": "owner"' in regression_tests
+    assert 'pytest.raises(ValueError, match="role")' in regression_tests
+    assert "updated = service.update(" in regression_tests
+    assert 'updated["created_at"] == created["created_at"]' in regression_tests
+    assert 'service.events[-1]["action"] == "update"' in regression_tests
+
+
 def test_reports_keep_verifier_failures_primary_and_redact_secret_shapes(tmp_path: Path) -> None:
     results = [
         ScenarioResult(

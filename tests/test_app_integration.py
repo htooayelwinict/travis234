@@ -10,7 +10,7 @@ import pytest
 
 from travis.agent.types import AgentTool, AgentToolResult
 from travis.app import CodingApp
-from travis.app import _assistant_prompt_tokens
+from travis.app import _assistant_prompt_tokens, _model_summarizer
 from travis.ai.context_estimate import estimate_context_tokens
 from travis.ai.event_stream import create_assistant_message_event_stream
 from travis.ai.types import (
@@ -42,6 +42,86 @@ def setup_function() -> None:
 
 def _python_command(source: str) -> str:
     return f"{shlex.quote(sys.executable)} -c {shlex.quote(source)}"
+
+
+def test_model_summarizer_retries_incomplete_stream_once() -> None:
+    model = faux_model()
+    calls = 0
+
+    def complete(active_model, _context, _options):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return AssistantMessage(
+                content=[],
+                api=active_model.api,
+                provider=active_model.provider,
+                model=active_model.id,
+                usage=empty_usage(),
+                stop_reason="error",
+                error_message="Stream ended without finish_reason",
+            )
+        return AssistantMessage(
+            content=[TextContent(text="## Goal\nPreserve the active work.")],
+            api=active_model.api,
+            provider=active_model.provider,
+            model=active_model.id,
+            usage=empty_usage(),
+            stop_reason="stop",
+        )
+
+    summarize = _model_summarizer(model, complete_fn=complete)
+
+    assert summarize("summarize this conversation") == "## Goal\nPreserve the active work."
+    assert calls == 2
+
+
+def test_model_summarizer_does_not_retry_nontransient_error() -> None:
+    model = faux_model()
+    calls = 0
+
+    def complete(active_model, _context, _options):
+        nonlocal calls
+        calls += 1
+        return AssistantMessage(
+            content=[],
+            api=active_model.api,
+            provider=active_model.provider,
+            model=active_model.id,
+            usage=empty_usage(),
+            stop_reason="error",
+            error_message="authentication failed",
+        )
+
+    summarize = _model_summarizer(model, complete_fn=complete)
+
+    with pytest.raises(RuntimeError, match="authentication failed"):
+        summarize("summarize this conversation")
+    assert calls == 1
+
+
+def test_model_summarizer_stops_after_second_incomplete_stream() -> None:
+    model = faux_model()
+    calls = 0
+
+    def complete(active_model, _context, _options):
+        nonlocal calls
+        calls += 1
+        return AssistantMessage(
+            content=[],
+            api=active_model.api,
+            provider=active_model.provider,
+            model=active_model.id,
+            usage=empty_usage(),
+            stop_reason="error",
+            error_message="Stream ended without finish_reason",
+        )
+
+    summarize = _model_summarizer(model, complete_fn=complete)
+
+    with pytest.raises(RuntimeError, match="Stream ended without finish_reason"):
+        summarize("summarize this conversation")
+    assert calls == 2
 
 
 def test_session_factory_is_injected_through_initial_and_replacement_construction(

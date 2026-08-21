@@ -923,6 +923,7 @@ def _model_summarizer(
 ):
     if complete_fn is None:
         raise ValueError("summarization requires an injected model runtime")
+
     def summarize(prompt: str) -> str:
         active_model = model() if callable(model) else model
         active_thinking_level = thinking_level() if callable(thinking_level) else thinking_level
@@ -941,16 +942,20 @@ def _model_summarizer(
                 else None
             ),
         )
-        response = complete_fn(
-            active_model,
-            Context(
-                system_prompt=SUMMARIZATION_SYSTEM_PROMPT,
-                messages=[UserMessage(content=[TextContent(text=prompt)], timestamp=now_ms())],
-            ),
-            options,
+        context = Context(
+            system_prompt=SUMMARIZATION_SYSTEM_PROMPT,
+            messages=[UserMessage(content=[TextContent(text=prompt)], timestamp=now_ms())],
         )
+        response = complete_fn(active_model, context, options)
+        error_message = response.error_message or "Summarization failed"
+        if (
+            response.stop_reason == "error"
+            and error_message == "Stream ended without finish_reason"
+        ):
+            response = complete_fn(active_model, context, options)
+            error_message = response.error_message or "Summarization failed"
         if response.stop_reason == "error":
-            raise RuntimeError(response.error_message or "Summarization failed")
+            raise RuntimeError(error_message)
         return "\n".join(block.text for block in response.content if isinstance(block, TextContent))
 
     return summarize
