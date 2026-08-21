@@ -52,6 +52,19 @@ def test_source_ci_triggers_and_permissions_are_least_privilege() -> None:
                 assert re.search(r"@v\d+$", str(step["uses"]))
 
 
+def test_github_owned_python_workflow_actions_use_node24_runtimes() -> None:
+    observed: set[str] = set()
+    for workflow_path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+        source = workflow_path.read_text(encoding="utf-8")
+        for action, major in re.findall(
+            r"uses:\s*actions/(checkout|setup-python)@v(\d+)", source
+        ):
+            observed.add(action)
+            assert int(major) >= 7, f"{workflow_path.name} uses actions/{action}@v{major}"
+
+    assert observed == {"checkout", "setup-python"}
+
+
 def test_source_ci_runs_locked_quality_root_adapter_npm_and_build_gates() -> None:
     workflow, _source = _workflow()
     commands = _run_commands(workflow)
